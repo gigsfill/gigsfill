@@ -8,6 +8,33 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-05-09 — DMARC tightened from monitor-only to quarantine (conservative ramp).** DMARC was at `p=none` since launch, with rua aggregate reports going to jcarta@gigsfill.com. Operator confirmed reports show only legitimate sources passing (mailgun, bluehost, droplet IP 50.87.222.88 — all in the SPF record). Updated the `_dmarc.gigsfill.com` TXT record at GoDaddy from:
+  ```
+  v=DMARC1; p=none; adkim=r; aspf=r; rua=mailto:jcarta@gigsfill.com;
+  ```
+  to:
+  ```
+  v=DMARC1; p=quarantine; pct=25; sp=quarantine; adkim=r; aspf=r; rua=mailto:jcarta@gigsfill.com;
+  ```
+  - `p=quarantine` — failing mail goes to the recipient's spam folder instead of inbox
+  - `pct=25` — only 25% of failing mail gets quarantined initially. Conservative ramp so an overlooked legit sender doesn't kill mail flow on day one
+  - `sp=quarantine` — same policy applies to subdomains (e.g. mg.gigsfill.com) so attackers can't bypass via a subdomain spoof
+  - alignment kept at `adkim=r aspf=r` (relaxed) — strict alignment would risk breaking mail where the From: header and Return-Path differ in subdomain (mailgun's bounce path is on a subdomain)
+  - rua= unchanged so reports still flow
+
+  **Confirmed live** on the authoritative GoDaddy nameserver after operator save. Public resolvers may serve the old `p=none` value until the 1h TTL expires, then start picking up `p=quarantine`.
+
+  **Next step (after 7 clean days):** drop the `pct=25` (= pct=100, full enforcement). After another 30 clean days, consider `p=reject` for the strongest enforcement.
+
+- **2026-05-09 — Backup self-test automation: daily decrypt + integrity check.** We had encrypted offsite backups running but had never validated the round-trip. Classic "backups exist but nobody tested restore" disaster scenario. New script `/usr/local/bin/gigsfill-backup-verify.sh` runs at 04:30 UTC daily (1h after the offsite push at 03:30):
+  1. Picks the latest `.gz.enc` from `/var/lib/gigsfill-backups/`
+  2. Decrypts with the passphrase at `/opt/gigsfill/.backup_passphrase`
+  3. Gunzips
+  4. `PRAGMA integrity_check;` — must equal `ok`
+  5. Compares row counts of users/gigs/venues/artists/transactions vs the live DB. Backup must have <= live counts (live grows during the day; backup having MORE rows would imply corruption)
+  6. On any failure, sends an alert to `admin_alert_email` (jcarta@gigsfill.com) via the platform SMTP config and exits non-zero
+  7. Cleans up the temp restore directory via shell trap
+  Smoke-tested on the live droplet: verifier returned `[verify] ✓ Restored backend.db.2026-05-09.gz.enc OK (28M, integrity_check=ok, row counts sane)`. Full backup pipeline now: 03:00 local → 03:30 encrypt+push offsite → 04:30 verify restore.
 - **2026-05-09 — Admin XSS hardening: escape user-controlled data before innerHTML.** [admin-init.js](app/static/js/admin-init.js) and [admin-db.js](app/static/js/admin-db.js) rendered registered-user data (artist names, venue names, emails, ticket subjects/descriptions/replies, generic DB cell values) directly via innerHTML template literals with no escaping. A malicious user could register an artist name like `<img src=x onerror=fetch('/api/admin/...')>` and that script would execute the next time any admin opened the dashboard or DB tools — privilege escalation to admin via the analytics widgets, recent-bookings list, top-artists/top-venues lists, recent-signups list, support-ticket modal (header + thread + reply form), accounting table, and the DB cell renderer.
   - Wrapped every user-data interpolation with the global `esc()` helper from [security.js](app/static/js/security.js) (already loaded before admin scripts in admin.html, so no new file load).
   - The DB tools cell renderer was a particularly broad surface (every column of every table). The literal NULL marker (`<em>null</em>`) is the only HTML the renderer should produce; everything else flows through `escAttr` now.
