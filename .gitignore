@@ -5,6 +5,8 @@
 *.pem
 *.key
 *_secret*
+.backup_passphrase
+*.passphrase
 
 # ─── Database files (production DB lives only on the droplet) ──────────────
 backend.db
