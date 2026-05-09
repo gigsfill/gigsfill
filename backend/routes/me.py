@@ -367,11 +367,21 @@ def get_my_venue(user=Depends(get_current_user), db=Depends(get_db)):
 def delete_preview(user=Depends(get_current_user), db=Depends(get_db)):
     """Get info needed for delete account modal: owned entities and booked gig counts"""
     user_id = user.id
-    
-    # Get owned artists with booked gig counts
+
+    # Booked-gig count must include multi-slot bookings (gig_slots.artist_id),
+    # not just legacy single-slot (gigs.artist_id). Without the slot leg the
+    # artist sees "0 upcoming gigs" before deletion even when they have
+    # multi-slot bookings — they could delete their account thinking nothing
+    # will be cancelled, then the venue is left waiting for a ghost.
+    # COUNT(DISTINCT g.id) so a gig where the artist took two slots counts once.
     artists = db.execute(text("""
-        SELECT a.id, a.name, 
-            (SELECT COUNT(*) FROM gigs g WHERE g.artist_id = a.id AND g.status = 'booked' AND g.date >= date('now')) as booked_gigs
+        SELECT a.id, a.name,
+            (SELECT COUNT(DISTINCT g.id)
+             FROM gigs g
+             LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = a.id AND gs.status = 'booked'
+             WHERE (g.artist_id = a.id OR gs.id IS NOT NULL)
+               AND g.status = 'booked'
+               AND g.date >= date('now')) as booked_gigs
         FROM artists a WHERE a.user_id = :uid
     """), {"uid": user_id}).mappings().fetchall()
     
@@ -407,15 +417,24 @@ def delete_account(data: dict = Body(default={}), user=Depends(get_current_user)
             
             # Find booked gigs
             if etype == "artist":
+                # Must catch multi-slot bookings (gig_slots.artist_id), not just
+                # legacy single-slot (gigs.artist_id). Without the slot leg,
+                # deleting an artist account leaves multi-slot bookings live —
+                # the venue keeps waiting for an artist that no longer exists,
+                # no cancellation email fires, transactions don't get cleaned.
+                # DISTINCT so a gig where the artist took two slots is processed once.
                 booked = db.execute(text("""
-                    SELECT g.id, g.date, g.venue_id, v.venue_name, v.user_id as venue_user_id,
-                           a.name as artist_name, u_venue.email as venue_email
+                    SELECT DISTINCT g.id, g.date, g.venue_id, v.venue_name, v.user_id as venue_user_id,
+                           :aname as artist_name, u_venue.email as venue_email
                     FROM gigs g
                     LEFT JOIN venues v ON g.venue_id = v.id
-                    LEFT JOIN artists a ON g.artist_id = a.id
+                    LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :eid AND gs.status = 'booked'
                     LEFT JOIN users u_venue ON v.user_id = u_venue.id
-                    WHERE g.artist_id = :eid AND g.status = 'booked'
-                """), {"eid": eid}).mappings().fetchall()
+                    WHERE (g.artist_id = :eid OR gs.id IS NOT NULL)
+                      AND g.status = 'booked'
+                """), {"eid": eid, "aname": (db.execute(text(
+                    "SELECT name FROM artists WHERE id = :aid"
+                ), {"aid": eid}).scalar() or "")}).mappings().fetchall()
             else:  # venue
                 booked = db.execute(text("""
                     SELECT g.id, g.date, g.artist_id, g.venue_id, v.venue_name,

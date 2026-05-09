@@ -560,15 +560,29 @@ async def get_admin_dashboard_stats(admin=Depends(check_admin)):
     gig_clicks_7d            = q("SELECT COUNT(*) FROM public_activity WHERE event_type='gig_click' AND created_at > datetime('now','-7 days')")
 
     # ── Top lists ────────────────────────────────────────────────────
+    # "Bookings" = distinct artist-venue performance commitments. For
+    # single-slot, that's a row in `gigs` with artist_id set. For multi-slot,
+    # each booked `gig_slot` is its own commitment (a 3-slot gig with 2
+    # booked artists is 2 bookings, not 1). Without the slot leg, multi-slot
+    # bookings were silently dropped from the top lists — artists who only
+    # do multi-slot work would be invisible to the admin analytics view.
     top_venues_booked = qa("""
-        SELECT v.venue_name, COUNT(g.id) as bookings
-        FROM gigs g JOIN venues v ON g.venue_id=v.id
-        WHERE g.artist_id IS NOT NULL
+        SELECT v.venue_name, COUNT(*) as bookings FROM (
+            SELECT venue_id FROM gigs WHERE artist_id IS NOT NULL
+            UNION ALL
+            SELECT g.venue_id FROM gig_slots gs JOIN gigs g ON g.id = gs.gig_id
+            WHERE gs.artist_id IS NOT NULL AND gs.status = 'booked'
+        ) b
+        JOIN venues v ON v.id = b.venue_id
         GROUP BY v.id ORDER BY bookings DESC LIMIT 8
     """)
     top_artists_booked = qa("""
-        SELECT a.name, COUNT(g.id) as bookings
-        FROM gigs g JOIN artists a ON g.artist_id=a.id
+        SELECT a.name, COUNT(*) as bookings FROM (
+            SELECT artist_id FROM gigs WHERE artist_id IS NOT NULL
+            UNION ALL
+            SELECT artist_id FROM gig_slots WHERE artist_id IS NOT NULL AND status = 'booked'
+        ) b
+        JOIN artists a ON a.id = b.artist_id
         GROUP BY a.id ORDER BY bookings DESC LIMIT 8
     """)
     top_cities = qa("""
@@ -577,13 +591,26 @@ async def get_admin_dashboard_stats(admin=Depends(check_admin)):
           AND created_at > datetime('now','-30 days')
         GROUP BY city, state ORDER BY searches DESC LIMIT 8
     """)
+    # Recent bookings: union single-slot (gigs.artist_id) with multi-slot
+    # (gig_slots.artist_id). For multi-slot, each booked slot shows as its
+    # own row with that slot's pay. We don't have a `booked_at` column on
+    # gig_slots, so multi-slot rows order by slot creation time — same
+    # imprecision the original single-slot path had (it used g.created_at,
+    # not booking time). "Recent" here is best-effort, not exact.
     recent_bookings = qa("""
-        SELECT g.id, g.date, g.pay, a.name as artist_name, v.venue_name
-        FROM gigs g
-        JOIN artists a ON g.artist_id=a.id
-        JOIN venues v ON g.venue_id=v.id
-        WHERE g.artist_id IS NOT NULL
-        ORDER BY g.created_at DESC LIMIT 10
+        SELECT g.id, g.date, b.pay,
+               a.name as artist_name, v.venue_name
+        FROM (
+            SELECT id as gig_id, artist_id, pay, created_at FROM gigs WHERE artist_id IS NOT NULL
+            UNION ALL
+            SELECT gs.gig_id, gs.artist_id, gs.pay, gs.created_at
+            FROM gig_slots gs
+            WHERE gs.artist_id IS NOT NULL AND gs.status = 'booked'
+        ) b
+        JOIN gigs g ON g.id = b.gig_id
+        JOIN artists a ON a.id = b.artist_id
+        JOIN venues v ON v.id = g.venue_id
+        ORDER BY b.created_at DESC LIMIT 10
     """)
     recent_signups = qa("""
         SELECT id, email, created_at,
