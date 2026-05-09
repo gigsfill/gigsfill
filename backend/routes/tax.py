@@ -272,26 +272,53 @@ def generate_1099s(venue_id: int, data: dict, user=Depends(get_current_user), db
         venue_address = ", ".join(filter(None, [venue_w9["address_line_1"], venue_w9["city"], venue_w9["state"], venue_w9["zip_code"]]))
         venue_tin_last4 = venue_w9["tin_last4"] or ""
     
+    # 1099 earnings = actual paid-out amount per artist for this venue this tax year.
+    # Sum from `transactions` (the source of truth for money movement) — NOT
+    # `gigs.pay` which is the listed pay and ignores per-artist overrides
+    # plus completely missed multi-slot gigs (where g.artist_id IS NULL and
+    # the booked artist lives on `gig_slots.artist_id`). Uses
+    #   - transaction_type IN ('artist_payout', 'single'): the new model
+    #     per-slot child rows + the legacy combined rows from before May 2026
+    #   - status='paid': the row actually transferred to the artist's Stripe
+    #     account; 'scheduled' rows haven't fired yet, 'pending_transfer' is
+    #     awaiting retry, and we don't 1099 either of those
+    # Filtering by `g.date` year matches the calendar-year basis the IRS expects.
+    # COUNT(DISTINCT t.gig_id) so a multi-slot gig where one artist booked two
+    # slots counts as one gig — not two — for the gig_count column.
+    # 60000 cents = $600 threshold (IRS 1099-NEC reporting floor).
     earnings = db.execute(text("""
-        SELECT g.artist_id, a.name as artist_name, SUM(COALESCE(g.pay, 0)) as total_pay, COUNT(*) as gig_count
-        FROM gigs g JOIN artists a ON a.id = g.artist_id
-        WHERE g.venue_id = :vid AND g.status = 'booked' AND g.artist_id IS NOT NULL AND substr(g.date, 1, 4) = :year
-        GROUP BY g.artist_id HAVING total_pay >= 600
+        SELECT t.artist_id, a.name as artist_name,
+               SUM(t.amount_cents) as total_cents,
+               COUNT(DISTINCT t.gig_id) as gig_count
+        FROM transactions t
+        JOIN artists a ON a.id = t.artist_id
+        JOIN gigs g ON g.id = t.gig_id
+        WHERE g.venue_id = :vid
+          AND t.transaction_type IN ('artist_payout', 'single')
+          AND t.status = 'paid'
+          AND t.artist_id IS NOT NULL
+          AND substr(g.date, 1, 4) = :year
+        GROUP BY t.artist_id, a.name
+        HAVING total_cents >= 60000
     """), {"vid": venue_id, "year": str(tax_year)}).mappings().fetchall()
-    
+
     generated = []
     for e in earnings:
         artist_w9 = db.execute(
             text("SELECT tin_last4, address_line_1, city, state, zip_code FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :aid ORDER BY tax_year DESC LIMIT 1"),
             {"aid": e["artist_id"]}
         ).mappings().first()
-        
+
         artist_address = ""
         artist_tin_last4 = ""
         if artist_w9:
             artist_address = ", ".join(filter(None, [artist_w9["address_line_1"], artist_w9["city"], artist_w9["state"], artist_w9["zip_code"]]))
             artist_tin_last4 = artist_w9["tin_last4"] or ""
-        
+
+        # total_cents already in cents — store as-is, NO rounding/truncation.
+        # The previous code did `int(total_pay) * 100` which lost any cents.
+        earnings_cents = int(e["total_cents"])
+
         db.execute(text("""
             INSERT INTO tax_1099s (venue_id, artist_id, tax_year, total_earnings_cents, gig_count,
                 artist_name, artist_tin_last4, artist_address, venue_name, venue_address, venue_tin_last4, status)
@@ -303,11 +330,11 @@ def generate_1099s(venue_id: int, data: dict, user=Depends(get_current_user), db
                 status = CASE WHEN tax_1099s.status = 'sent' THEN 'sent' ELSE 'generated' END
         """), {
             "vid": venue_id, "aid": e["artist_id"], "year": tax_year,
-            "earnings": int(e["total_pay"]) * 100, "gigs": e["gig_count"], "aname": e["artist_name"],
+            "earnings": earnings_cents, "gigs": e["gig_count"], "aname": e["artist_name"],
             "atin": artist_tin_last4, "aaddr": artist_address,
             "vname": venue["name"], "vaddr": venue_address, "vtin": venue_tin_last4
         })
-        generated.append({"artist_id": e["artist_id"], "artist_name": e["artist_name"], "total": int(e["total_pay"])})
+        generated.append({"artist_id": e["artist_id"], "artist_name": e["artist_name"], "total_cents": earnings_cents})
     
     db.commit()
     return {"status": "generated", "tax_year": tax_year, "count": len(generated), "artists": generated}
