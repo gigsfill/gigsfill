@@ -1160,32 +1160,38 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
 
-      // Artist column: show who is booked, or OPEN, for any gig state
+      // Artist column: show who is booked, or OPEN, for any gig state.
+      // Multi-slot needs to surface every booked artist (not just the first)
+      // and indicate when some slots are still open. Mirrors venue day-list.
       let artistDisplay = '';
       const isOpenState = gigClass === 'open' || gigClass === 'blast-open' || gigClass === 'waitlist-pending' || gigClass === 'waitlisted-mine';
-      
-      // Try to find the booked artist — check gig.artist_id first, then slots
-      const resolvedArtistId = g.artist_id || (() => {
-        const bs = (g.slots || []).find(s => s.artist_id && (s.status === 'booked' || s.status === 'pending_contract'));
-        return bs ? bs.artist_id : null;
-      })();
-      const resolvedArtistName = g.artist_name || (() => {
-        const bs = (g.slots || []).find(s => s.artist_name && (s.status === 'booked' || s.status === 'pending_contract'));
-        return bs ? bs.artist_name : null;
-      })();
 
-      if (isOpenState) {
+      const _slots = g.slots || [];
+      const _isMulti = _slots.length > 1;
+      const _bookedSlots = _slots.filter(s => s.artist_id && (s.status === 'booked' || s.status === 'pending_contract'));
+      const _openCount = _slots.filter(s => s.status === 'open').length;
+      const _renderArtistLink = (aId, aName) => aId
+        ? `<a href="/app/artist-profile.html?artist_id=${aId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor || '#fff'};text-decoration:underline;font-weight:600;">${aName}</a>`
+        : `<span style="font-weight:600;">${aName}</span>`;
+
+      if (_isMulti && _bookedSlots.length > 0) {
+        const _names = _bookedSlots.map(s => _renderArtistLink(s.artist_id, s.artist_name || 'Booked')).join(', ');
+        const _openBadge = _openCount > 0
+          ? `<span style="opacity:0.7;font-weight:500;margin-left:6px;">· ${_openCount} open</span>`
+          : '';
+        artistDisplay = _names + _openBadge;
+      } else if (_isMulti && _bookedSlots.length === 0 && _openCount > 0) {
+        artistDisplay = `<span style="opacity:0.75;">OPEN · ${_openCount} slots</span>`;
+      } else if (isOpenState) {
         artistDisplay = `<span style="opacity:0.75;">OPEN</span>`;
-      } else if (resolvedArtistName) {
-        const isMe = parseInt(artistId) === parseInt(resolvedArtistId);
-        const nameLabel = resolvedArtistName;
-        if (resolvedArtistId) {
-          artistDisplay = `<a href="/app/artist-profile.html?artist_id=${resolvedArtistId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor || '#fff'};text-decoration:underline;font-weight:600;">${nameLabel}</a>`;
-        } else {
-          artistDisplay = `<span style="font-weight:600;">${nameLabel}</span>`;
+      } else {
+        const resolvedArtistId = g.artist_id || (_bookedSlots[0] && _bookedSlots[0].artist_id) || null;
+        const resolvedArtistName = g.artist_name || (_bookedSlots[0] && _bookedSlots[0].artist_name) || null;
+        if (resolvedArtistName) {
+          artistDisplay = _renderArtistLink(resolvedArtistId, resolvedArtistName);
+        } else if (gigClass === 'booked-other' || gigClass === 'pending-contract') {
+          artistDisplay = `<span style="opacity:0.75;">Booked</span>`;
         }
-      } else if (!isOpenState && (gigClass === 'booked-other' || gigClass === 'pending-contract')) {
-        artistDisplay = `<span style="opacity:0.75;">Booked</span>`;
       }
 
       content += `

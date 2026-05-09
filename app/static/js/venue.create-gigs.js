@@ -1133,14 +1133,40 @@ async function renderCalendar() {
       const fmt = t => { if (!t) return ''; const [h,m] = t.split(':').map(Number); return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h>=12?'PM':'AM'); };
       const time = fmt(g.start_time) + (g.end_time ? ' \u2013 ' + fmt(g.end_time) : '');
 
-      // Artist: from gig or booked slot
+      // Artist column. Multi-slot needs more nuance than the single-row
+      // shows-first-artist-only behavior we had before:
+      //   - all open slots                → "OPEN · N slots"
+      //   - all booked                    → "Sarah, John"  (each linked)
+      //   - mixed (some booked, N open)   → "Sarah, John · 1 open"
+      // Single-slot rolls into the booked / open / waitlist branches as
+      // before. The link wrap is per-artist so each name jumps to that
+      // profile.
+      const _slots = g.slots || [];
+      const _isMulti = _slots.length > 1;
+      const _bookedSlots = _slots.filter(s => s.artist_id && (
+        s.status === 'booked' || s.status === 'pending_contract' || s.status === 'pending_venue_approval'
+      ));
+      const _openCount = _slots.filter(s => s.status === 'open').length;
+      const _renderArtistLink = (aId, aName) => aId
+        ? `<a href="/app/artist-profile.html?artist_id=${aId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">${aName}</a>`
+        : `<span style="font-weight:600;">${aName}</span>`;
+
       let artistDisplay = '';
-      if (isBooked || isPendingContract || isPendingApproval) {
-        const bookedSlot = (g.slots || []).find(s => s.artist_id && (s.status === 'booked' || s.status === 'pending_contract' || s.status === 'pending_venue_approval'));
+      if (_isMulti && _bookedSlots.length > 0) {
+        const _names = _bookedSlots.map(s => _renderArtistLink(s.artist_id, s.artist_name || 'Booked')).join(', ');
+        const _openBadge = _openCount > 0
+          ? `<span style="opacity:0.7;font-weight:500;margin-left:6px;">· ${_openCount} open</span>`
+          : '';
+        artistDisplay = _names + _openBadge;
+      } else if (_isMulti && _bookedSlots.length === 0 && _openCount > 0) {
+        artistDisplay = `<span style="opacity:0.75;">OPEN · ${_openCount} slots</span>`;
+      } else if (isBooked || isPendingContract || isPendingApproval) {
+        // Single-slot booked path
+        const bookedSlot = _bookedSlots[0];
         const aId = (bookedSlot && bookedSlot.artist_id) || g.artist_id;
         const aName = (bookedSlot && bookedSlot.artist_name) || g.artist_name;
         if (aName && aId) {
-          artistDisplay = `<a href="/app/artist-profile.html?artist_id=${aId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">${aName}</a>`;
+          artistDisplay = _renderArtistLink(aId, aName);
         } else if (aName) {
           artistDisplay = `<span style="font-weight:600;">${aName}</span>`;
         } else {
