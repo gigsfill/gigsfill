@@ -2,7 +2,7 @@
 Entity Users Routes
 Handles multi-user access for Artists and Venues
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import logging
 from sqlalchemy import text
 from datetime import datetime
@@ -14,6 +14,7 @@ import json
 from backend.db import get_db
 from backend.routes.auth import get_current_user
 from backend.email_service import EmailService
+from backend.rate_limiter import limiter, RATE_EMAIL_SEND
 logger = logging.getLogger("gigsfill.entity_users")
 
 router = APIRouter()
@@ -268,27 +269,33 @@ def lookup_user_by_email(
 # INVITE USER TO ENTITY
 # ============================================
 @router.post("/api/entity-users/artist/{artist_id}/invite")
+@limiter.limit(RATE_EMAIL_SEND)
 async def invite_user_to_artist(
+    request: Request,
     artist_id: int,
     data: dict,
     user=Depends(get_current_user),
     db=Depends(get_db)
 ):
-    """Invite a user to have access to this artist"""
+    """Invite a user to have access to this artist. Rate-limited 10/min."""
     return await _invite_user_to_entity('artist', artist_id, data, user, db)
 
 @router.post("/api/entity-users/venue/{venue_id}/invite")
+@limiter.limit(RATE_EMAIL_SEND)
 async def invite_user_to_venue(
+    request: Request,
     venue_id: int,
     data: dict,
     user=Depends(get_current_user),
     db=Depends(get_db)
 ):
-    """Invite a user to have access to this venue"""
+    """Invite a user to have access to this venue. Rate-limited 10/min."""
     return await _invite_user_to_entity('venue', venue_id, data, user, db)
 
 @router.post("/api/entity-invitations/{invitation_id}/reinvite")
+@limiter.limit(RATE_EMAIL_SEND)
 async def reinvite_user(
+    request: Request,
     invitation_id: int,
     user=Depends(get_current_user),
     db=Depends(get_db)

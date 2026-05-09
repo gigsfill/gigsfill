@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from backend.db import get_db
 from backend.routes.auth import get_current_user
+from backend.rate_limiter import limiter, RATE_EMAIL_SEND
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,8 +91,15 @@ def track_affiliate_click(code: str, redirect_to: str = "/", db=Depends(get_db))
 # ── Send Recommend Email ──────────────────────────────────────────────────────
 
 @router.post("/api/affiliate/recommend")
+@limiter.limit(RATE_EMAIL_SEND)
 async def send_recommend_email(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
-    """Send a GigsFill recommendation email on behalf of a user."""
+    """Send a GigsFill recommendation email on behalf of a user.
+
+    Rate-limited (May 2026 audit): 10/minute per IP. Without this, a single
+    authenticated account could blast hundreds of recommend-emails through
+    our SMTP, exhausting Bluehost's daily quota and putting the platform's
+    sender reputation at risk.
+    """
     data = await request.json()
     recipient_email = (data.get("recipient_email") or "").strip().lower()
     personal_note   = (data.get("personal_note") or "").strip()
@@ -204,8 +212,9 @@ def get_my_recommend_emails(user=Depends(get_current_user), db=Depends(get_db)):
 
 
 @router.post("/api/affiliate/resend-recommend/{email_id}")
-async def resend_recommend_email(email_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Resend a recommendation email."""
+@limiter.limit(RATE_EMAIL_SEND)
+async def resend_recommend_email(request: Request, email_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+    """Resend a recommendation email. Rate-limited 10/minute (see send_recommend_email)."""
     row = db.execute(text("""
         SELECT id, recipient_email, recipient_name, affiliate_code
         FROM affiliate_recommend_emails WHERE id = :id AND sender_user_id = :uid

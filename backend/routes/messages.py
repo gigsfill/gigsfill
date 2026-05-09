@@ -12,10 +12,11 @@ Endpoints:
   GET    /api/me/messages/unread-count         — badge count for header nav
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from backend.routes.auth import get_current_user
 from backend.db import get_db
+from backend.rate_limiter import limiter, RATE_EMAIL_SEND
 
 logger = logging.getLogger("gigsfill.messages")
 router = APIRouter()
@@ -281,9 +282,14 @@ def get_messages(gig_id: int, artist_id: int = None, user=Depends(get_current_us
 
 # ── SEND MESSAGE ──────────────────────────────────────────────────────────────
 @router.post("/api/gigs/{gig_id}/messages")
-def send_message(gig_id: int, data: dict,
+@limiter.limit(RATE_EMAIL_SEND)
+def send_message(request: Request, gig_id: int, data: dict,
                  user=Depends(get_current_user), db=Depends(get_db)):
-    """Send a message in a gig thread. Triggers email notification to the other party."""
+    """Send a message in a gig thread. Triggers email notification to the other party.
+
+    Rate-limited (May 2026 audit): 10/minute per IP. Each message sends an
+    email; without a cap, a malicious user could grief the counterparty's
+    inbox or burn through SMTP quota."""
     _ensure_gig_messages_table(db)
     role, entity_id, sender_name = _get_user_role_for_gig(db, gig_id, user.id)
 

@@ -1755,19 +1755,30 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
     sig_header = request.headers.get("stripe-signature", "")
 
     # --- Verify signature ---
+    # construct_event also enforces replay protection: it checks the
+    # timestamp on the Stripe-Signature header and rejects payloads older
+    # than ~5 minutes, so an attacker can't capture a real webhook and
+    # replay it later.
+    #
+    # SECURITY (May 2026 audit): the previous code had an `else` branch
+    # that fell through to `json.loads(payload)` when webhook_secret was
+    # empty — meaning if the secret was ever cleared (admin mistake,
+    # migration bug, env var unset), the endpoint silently accepted
+    # unsigned webhooks. An attacker could then forge a
+    # `payment_intent.succeeded` event to falsely mark a charge as paid.
+    # Now: refuse to process any webhook if the secret isn't configured.
+    # The fallback was dev-only convenience and is no longer worth the
+    # production risk.
     webhook_secret = _webhook_get_secret(db)
-    if webhook_secret:
-        try:
-            import stripe as stripe_lib
-            event = stripe_lib.Webhook.construct_event(payload, sig_header, webhook_secret)
-        except Exception as e:
-            logger.warning(f"Stripe webhook signature failed: {e}")
-            raise HTTPException(400, "Invalid webhook signature")
-    else:
-        try:
-            event = json.loads(payload)
-        except Exception:
-            raise HTTPException(400, "Invalid JSON payload")
+    if not webhook_secret:
+        logger.error("Stripe webhook hit with NO admin_stripe_webhook_secret configured — refusing to process")
+        raise HTTPException(503, "Webhook signature verification not configured")
+    try:
+        import stripe as stripe_lib
+        event = stripe_lib.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except Exception as e:
+        logger.warning(f"Stripe webhook signature failed: {e}")
+        raise HTTPException(400, "Invalid webhook signature")
 
     event_type = _webhook_get(event, "type")
     logger.info(f"Stripe webhook: {event_type}")
