@@ -426,7 +426,15 @@ def process_payouts_now():
                 )
                 if retry_charge_id:
                     retry_kwargs["source_transaction"] = retry_charge_id
-                transfer = stripe.Transfer.create(**retry_kwargs)
+                # Same idempotency key as the original payout attempt — if
+                # the prior transfer actually succeeded but our DB wasn't
+                # updated (e.g., process killed between Stripe ack and
+                # SQL commit), Stripe returns the existing transfer
+                # instead of creating a duplicate.
+                transfer = stripe.Transfer.create(
+                    idempotency_key=f"payout_{txn_id}_transfer",
+                    **retry_kwargs,
+                )
                 conn.execute(
                     "UPDATE transactions SET status = 'transferred', stripe_transfer_id = ?, processed_at = ?, notes = ? WHERE id = ?",
                     (transfer.id, utcnow_naive().isoformat(), f"Retry succeeded (was {txn['status']})", txn_id)
@@ -677,7 +685,13 @@ def _transfer_to_artists(conn, stripe, payout_rows, charge_id, venue_id, parent_
             )
             if charge_id:
                 transfer_kwargs["source_transaction"] = charge_id
-            transfer = stripe.Transfer.create(**transfer_kwargs)
+            # Idempotency key: prevents duplicate transfers if a network
+            # hiccup causes us to retry an already-succeeded Stripe call.
+            # Tied to the payout transaction row id, which is unique.
+            transfer = stripe.Transfer.create(
+                idempotency_key=f"payout_{payout_id}_transfer",
+                **transfer_kwargs,
+            )
             conn.execute(
                 "UPDATE transactions SET status = 'transferred', stripe_transfer_id = ?, processed_at = ? WHERE id = ?",
                 (transfer.id, utcnow_naive().isoformat(), payout_id)

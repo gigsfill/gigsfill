@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-05-09 — Stripe idempotency keys on every charge/transfer site.** Of 6 PaymentIntent/Transfer creation sites, only 1 used `idempotency_key=` (the main scheduler venue charge). The other 5 were exposed to duplicate-charge risk if a network hiccup made us retry an already-succeeded Stripe call, or if a downstream race fired the same trigger twice. Added idempotency keys to:
+  - [payout_scheduler.py:680](backend/payout_scheduler.py) — main artist payout transfer (`payout_{id}_transfer`)
+  - [payout_scheduler.py:429](backend/payout_scheduler.py) — stalled-transfer retry path (same key as original — Stripe returns the existing transfer if the original succeeded but our DB wasn't updated)
+  - [affiliate.py:824](backend/routes/affiliate.py) — quarterly affiliate payout (`aff_payout_{id}`)
+  - [stripe_connect.py:531](backend/routes/stripe_connect.py) — venue charge from booking flow (`gig_{id}_slot_{id}_artist_{id}_charge`)
+  - [stripe_connect.py:854](backend/routes/stripe_connect.py) — payment-cancellation platform fee (`gig_{id}_cancel_fee`)
+  - [stripe_connect.py:1083](backend/routes/stripe_connect.py) — payment reinstatement (`txn_{id}_reinstate`)
+  Stripe enforces idempotency by key for 24 hours after first use, so retries within that window get the original result instead of a duplicate operation.
 - **2026-05-09 — Production hardening pass: webhook replay, log rotation, SMTP rate limits, fail2ban.**
   - **Stripe webhook signature/replay**: [stripe_connect.py](backend/routes/stripe_connect.py) used `stripe.Webhook.construct_event` (which already enforces both HMAC verification AND a 5-minute timestamp tolerance, so replay protection was implicit). But the previous code had a fallback `else: event = json.loads(payload)` when `webhook_secret` was empty — meaning if the secret was ever cleared (admin mistake, env var unset, migration wipe), the endpoint silently accepted unsigned webhooks. An attacker could then forge `payment_intent.succeeded` to mark a charge paid that wasn't. Removed the fallback; the endpoint now refuses (503) any webhook when the secret isn't configured.
   - **Log rotation**: new `/etc/logrotate.d/gigsfill` rotates `/var/log/gigsfill-backup.log` weekly with 12-week retention, gzipped. Logrotate dry-run validates clean. Explicit `su root syslog` directive because `/var/log` is group-writable on this box.

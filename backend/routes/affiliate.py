@@ -821,12 +821,16 @@ def run_quarterly_affiliate_payouts(db):
 
             if has_stripe and has_account:
                 try:
+                    # Idempotency key tied to (payout_id) — if a network blip
+                    # makes us retry, Stripe returns the existing transfer
+                    # instead of creating a duplicate quarterly payout.
                     transfer = stripe.Transfer.create(
                         amount=total,
                         currency="usd",
                         destination=stripe_row["affiliate_stripe_connect_account_id"],
                         metadata={"type": "affiliate_payout", "user_id": str(uid), "quarter": quarter},
-                        description=f"GigsFill affiliate payout {quarter}"
+                        description=f"GigsFill affiliate payout {quarter}",
+                        idempotency_key=f"aff_payout_{payout_id}",
                     )
                     transfer_id = transfer.id
                     db.execute(text("""

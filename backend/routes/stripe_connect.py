@@ -526,7 +526,9 @@ def charge_booking(data: dict, user=Depends(get_current_user), db=Depends(get_db
     payment_intent_id = None
     
     if payments_live:
-        # Create PaymentIntent - charge venue
+        # Create PaymentIntent - charge venue. Idempotency key tied to the
+        # specific (gig, slot, artist) so the same booking can't be charged
+        # twice if a retry/double-submit reaches us.
         try:
             payment_intent = stripe.PaymentIntent.create(
                 amount=venue_charge_cents,
@@ -535,6 +537,7 @@ def charge_booking(data: dict, user=Depends(get_current_user), db=Depends(get_db
                 payment_method=venue_settings["stripe_payment_method_id"],
                 off_session=True,
                 confirm=True,
+                idempotency_key=f"gig_{gig_id}_slot_{slot_id or 'single'}_artist_{artist_id}_charge",
                 metadata={
                     "gig_id": str(gig_id),
                     "slot_id": str(slot_id) if slot_id else "",
@@ -848,6 +851,9 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
         
         if venue_settings and venue_settings.get("stripe_payment_method_id"):
             try:
+                # Idempotency key on the gig-cancellation fee — if the venue
+                # double-clicks "Cancel Payment", they're charged the
+                # platform fee once, not twice.
                 pi = stripe_mod.PaymentIntent.create(
                     amount=venue_fee_cents,
                     currency="usd",
@@ -855,6 +861,7 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
                     payment_method=venue_settings["stripe_payment_method_id"],
                     off_session=True,
                     confirm=True,
+                    idempotency_key=f"gig_{gig_id}_cancel_fee",
                     metadata={
                         "gig_id": str(gig_id),
                         "type": "payment_cancellation_platform_fee",
@@ -1073,6 +1080,9 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
             raise HTTPException(400, "No payment card on file")
         
         try:
+            # Idempotency key on the reinstatement charge — guards against
+            # the venue accidentally being charged twice if the request is
+            # retried after a network blip.
             pi = stripe_mod.PaymentIntent.create(
                 amount=reinstate_charge_cents,
                 currency="usd",
@@ -1080,6 +1090,7 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
                 payment_method=venue_settings["stripe_payment_method_id"],
                 off_session=True,
                 confirm=True,
+                idempotency_key=f"txn_{txn['id']}_reinstate",
                 metadata={
                     "gig_id": str(txn["gig_id"]),
                     "type": "payment_reinstatement",
