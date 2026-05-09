@@ -153,10 +153,16 @@
     
         columns.forEach((col, ci) => {
           const val = row[ci];
+          // Audit fix May 2026: HTML-escape cell display before innerHTML
+          // injection. Without this, any DB row containing HTML chars
+          // (an artist name like `<img src=x onerror=...>`) would execute
+          // in the admin's browser when they viewed the table — potential
+          // privilege escalation since admin context can run admin actions.
+          // The literal NULL marker is the only HTML we ever want to render.
           const display = val === null ? '<em style="color:#475569;">null</em>'
-                        : String(val).length > 120 ? String(val).substring(0, 120) + '…'
-                        : String(val);
-    
+                        : String(val).length > 120 ? escAttr(String(val).substring(0, 120)) + '…'
+                        : escAttr(String(val));
+
           if (isEditing) {
             const isNull = val === null;
             const inputVal = isNull ? '' : String(val);

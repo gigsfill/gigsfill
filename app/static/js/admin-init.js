@@ -6,6 +6,13 @@ setTimezone('America/Los_Angeles');
 // Cache is NOT cleared on every load — that would destroy user preferences.
 // Only clear specific stale keys if needed.
 
+// HTML-escape user-controlled strings before innerHTML interpolation. Uses
+// the global `esc()` helper from security.js (loaded before this file in
+// admin.html). Without escaping, a malicious user could register a name like
+// `<img src=x onerror=fetch('/...')>` to execute scripts in any admin's
+// browser session — privilege escalation since admin context can run admin
+// actions. Audit fix May 2026.
+
 let currentDataType = null;
 let currentPage = 1;
 let totalPages = 1;
@@ -103,8 +110,8 @@ async function loadAnalytics() {
     if (d.recent_bookings && d.recent_bookings.length) {
       rb.innerHTML = d.recent_bookings.map(b => `
         <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <span style="color:var(--text-white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;">${b.artist_name}</span>
-          <span style="color:var(--text-gray);white-space:nowrap;font-size:0.68rem;">${b.venue_name ? b.venue_name.substring(0,18) : ''} · ${b.date ? b.date.substring(5) : ''}</span>
+          <span style="color:var(--text-white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;">${esc(b.artist_name)}</span>
+          <span style="color:var(--text-gray);white-space:nowrap;font-size:0.68rem;">${b.venue_name ? esc(b.venue_name.substring(0,18)) : ''} · ${b.date ? esc(b.date.substring(5)) : ''}</span>
         </div>`).join('');
     } else { rb.innerHTML = '<p style="color:var(--text-gray);font-size:0.72rem;">No bookings yet</p>'; }
 
@@ -113,7 +120,7 @@ async function loadAnalytics() {
     if (d.top_artists_booked && d.top_artists_booked.length) {
       ta.innerHTML = d.top_artists_booked.map((a,i) => `
         <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <span style="color:var(--text-white);">${i+1}. ${a.name}</span>
+          <span style="color:var(--text-white);">${i+1}. ${esc(a.name)}</span>
           <span style="color:var(--cyan);font-weight:700;">${a.bookings}</span>
         </div>`).join('');
     } else { ta.innerHTML = '<p style="color:var(--text-gray);">No data yet</p>'; }
@@ -123,7 +130,7 @@ async function loadAnalytics() {
     if (d.top_venues_booked && d.top_venues_booked.length) {
       tv.innerHTML = d.top_venues_booked.map((v,i) => `
         <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <span style="color:var(--text-white);">${i+1}. ${v.venue_name}</span>
+          <span style="color:var(--text-white);">${i+1}. ${esc(v.venue_name)}</span>
           <span style="color:var(--cyan);font-weight:700;">${v.bookings}</span>
         </div>`).join('');
     } else { tv.innerHTML = '<p style="color:var(--text-gray);">No data yet</p>'; }
@@ -135,8 +142,8 @@ async function loadAnalytics() {
       const roleIcon  = r => r==='artist' ? '🎤' : r==='venue' ? '🏛️' : '👤';
       rs.innerHTML = d.recent_signups.map(u => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <span style="color:var(--text-white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${roleIcon(u.role)} ${u.email}</span>
-          <span style="color:${roleColor(u.role)};font-size:0.65rem;font-weight:600;text-transform:uppercase;">${u.role}</span>
+          <span style="color:var(--text-white);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${roleIcon(u.role)} ${esc(u.email)}</span>
+          <span style="color:${roleColor(u.role)};font-size:0.65rem;font-weight:600;text-transform:uppercase;">${esc(u.role)}</span>
         </div>`).join('');
     } else { rs.innerHTML = '<p style="color:var(--text-gray);">No signups yet</p>'; }
 
@@ -374,11 +381,11 @@ function renderSupportTickets() {
           return `
             <tr style="cursor: pointer;" onclick="showTicketDetail(${t.id})">
               <td style="padding: 6px 8px; font-size: 0.75rem; white-space: nowrap; font-weight: 600; color: var(--cyan);">#${(t.id + 99999)}</td>
-              <td style="padding: 6px 8px; font-size: 0.75rem; white-space: nowrap;">${date}</td>
-              <td style="padding: 6px 8px; white-space: nowrap;">${t.user_name || t.user_email || '--'}</td>
-              <td style="padding: 6px 8px; white-space: nowrap;"><span style="background: rgba(6,182,212,0.15); color: var(--cyan); padding: 1px 6px; border-radius: 3px; font-size: 0.65rem; text-transform: uppercase;">${t.category || '--'}</span></td>
-              <td style="padding: 6px 8px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${t.subject || '--'}${t.reply_count ? ` <span style="background: rgba(6,182,212,0.2); color: var(--cyan); padding: 0 5px; border-radius: 8px; font-size: 0.6rem; font-weight: 600;">${t.reply_count}</span>` : ''}</td>
-              <td style="padding: 6px 8px;"><span style="color: ${statusColor}; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">${t.status || 'open'}</span></td>
+              <td style="padding: 6px 8px; font-size: 0.75rem; white-space: nowrap;">${esc(date)}</td>
+              <td style="padding: 6px 8px; white-space: nowrap;">${esc(t.user_name || t.user_email || '--')}</td>
+              <td style="padding: 6px 8px; white-space: nowrap;"><span style="background: rgba(6,182,212,0.15); color: var(--cyan); padding: 1px 6px; border-radius: 3px; font-size: 0.65rem; text-transform: uppercase;">${esc(t.category || '--')}</span></td>
+              <td style="padding: 6px 8px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(t.subject || '--')}${t.reply_count ? ` <span style="background: rgba(6,182,212,0.2); color: var(--cyan); padding: 0 5px; border-radius: 8px; font-size: 0.6rem; font-weight: 600;">${t.reply_count}</span>` : ''}</td>
+              <td style="padding: 6px 8px;"><span style="color: ${statusColor}; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">${esc(t.status || 'open')}</span></td>
             </tr>
           `;
         }).join('')}
@@ -423,12 +430,12 @@ function showTicketDetail(ticketId) {
       <div style="padding: 20px 28px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;">
         <div style="display: flex; justify-content: space-between; align-items: start;">
           <div>
-            <h3 style="margin: 0 0 6px; color: var(--text-white); font-size: 1rem;">Ticket #${ticket.id} — ${ticket.subject || 'No subject'}</h3>
+            <h3 style="margin: 0 0 6px; color: var(--text-white); font-size: 1rem;">Ticket #${ticket.id} — ${esc(ticket.subject || 'No subject')}</h3>
             <div style="display: flex; gap: 16px; font-size: 0.75rem; color: var(--text-gray);">
-              <span>${ticket.user_name || ''} (${ticket.user_email || ''})</span>
-              <span>${ticket.category || ''}</span>
-              <span>${date}</span>
-              <span style="color: ${statusColor}; font-weight: 600; text-transform: uppercase;">${ticket.status || 'open'}</span>
+              <span>${esc(ticket.user_name || '')} (${esc(ticket.user_email || '')})</span>
+              <span>${esc(ticket.category || '')}</span>
+              <span>${esc(date)}</span>
+              <span style="color: ${statusColor}; font-weight: 600; text-transform: uppercase;">${esc(ticket.status || 'open')}</span>
             </div>
           </div>
           <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
@@ -448,7 +455,7 @@ function showTicketDetail(ticketId) {
         <textarea id="ticketReplyBody" rows="3" placeholder="Type your reply..." 
           style="width: 100%; padding: 10px 14px; background: #151b28; border: 1px solid #333; border-radius: 8px; color: var(--text-white); font-size: 0.8rem; resize: vertical; box-sizing: border-box; min-height: 70px; font-family: inherit; line-height: 1.5;"></textarea>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
-          <span style="font-size: 0.65rem; color: var(--text-gray);">Reply will be emailed to ${ticket.user_email || 'user'} via platform email settings</span>
+          <span style="font-size: 0.65rem; color: var(--text-gray);">Reply will be emailed to ${esc(ticket.user_email || 'user')} via platform email settings</span>
           <button id="ticketSendBtn" onclick="sendTicketReply(${ticket.id})" 
             style="padding: 8px 20px; background: var(--cyan); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: 600;">
             Send Reply
@@ -482,13 +489,13 @@ async function loadTicketThread(ticket) {
   html += `
     <div style="margin-bottom: 16px;">
       <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-        <span style="display: inline-block; width: 28px; height: 28px; border-radius: 50%; background: #7c3aed; color: white; text-align: center; line-height: 28px; font-size: 0.7rem; font-weight: 600; flex-shrink: 0;">${(ticket.user_name || 'U').charAt(0).toUpperCase()}</span>
-        <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-white);">${ticket.user_name || ticket.user_email || 'User'}</span>
-        <span style="font-size: 0.65rem; color: var(--text-gray);">${origDate}</span>
+        <span style="display: inline-block; width: 28px; height: 28px; border-radius: 50%; background: #7c3aed; color: white; text-align: center; line-height: 28px; font-size: 0.7rem; font-weight: 600; flex-shrink: 0;">${esc((ticket.user_name || 'U').charAt(0).toUpperCase())}</span>
+        <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-white);">${esc(ticket.user_name || ticket.user_email || 'User')}</span>
+        <span style="font-size: 0.65rem; color: var(--text-gray);">${esc(origDate)}</span>
         <span style="background: rgba(124,58,237,0.15); color: #a78bfa; padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; text-transform: uppercase;">Original</span>
       </div>
       <div style="margin-left: 36px; background: rgba(124,58,237,0.06); border: 1px solid rgba(124,58,237,0.15); border-radius: 8px; padding: 14px 16px;">
-        <div style="font-size: 0.8rem; color: var(--text-white); line-height: 1.6; white-space: pre-wrap;">${ticket.description || ''}</div>
+        <div style="font-size: 0.8rem; color: var(--text-white); line-height: 1.6; white-space: pre-wrap;">${esc(ticket.description || '')}</div>
       </div>
     </div>`;
   
@@ -508,13 +515,13 @@ async function loadTicketThread(ticket) {
     html += `
       <div style="margin-bottom: 16px;">
         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-          <span style="display: inline-block; width: 28px; height: 28px; border-radius: 50%; background: ${avatarBg}; color: white; text-align: center; line-height: 28px; font-size: 0.7rem; font-weight: 600; flex-shrink: 0;">${avatar}</span>
-          <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-white);">${name}</span>
-          <span style="font-size: 0.65rem; color: var(--text-gray);">${rDate}</span>
-          <span style="background: ${labelBg}; color: ${labelColor}; padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; text-transform: uppercase;">${label}</span>
+          <span style="display: inline-block; width: 28px; height: 28px; border-radius: 50%; background: ${avatarBg}; color: white; text-align: center; line-height: 28px; font-size: 0.7rem; font-weight: 600; flex-shrink: 0;">${esc(avatar)}</span>
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-white);">${esc(name)}</span>
+          <span style="font-size: 0.65rem; color: var(--text-gray);">${esc(rDate)}</span>
+          <span style="background: ${labelBg}; color: ${labelColor}; padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; text-transform: uppercase;">${esc(label)}</span>
         </div>
         <div style="margin-left: 36px; background: ${bubbleBg}; border: 1px solid ${bubbleBorder}; border-radius: 8px; padding: 14px 16px;">
-          <div style="font-size: 0.8rem; color: var(--text-white); line-height: 1.6; white-space: pre-wrap;">${r.body || ''}</div>
+          <div style="font-size: 0.8rem; color: var(--text-white); line-height: 1.6; white-space: pre-wrap;">${esc(r.body || '')}</div>
         </div>
       </div>`;
   }
@@ -752,10 +759,10 @@ function renderAccountingTable() {
     const profitColor = t.gigsfill_profit_cents > 0 ? '#10b981' : (t.gigsfill_profit_cents < 0 ? '#ef4444' : 'var(--text-muted)');
 
     html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
-    html += `<td style="padding:6px 8px;color:var(--text-gray);white-space:nowrap;">${t.gig_date || ''}</td>`;
-    html += `<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;font-size:0.73rem;">${timeStr}</td>`;
-    html += `<td style="padding:6px 8px;color:var(--text-white);overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;" title="${t.venue_name}">${t.venue_name}</td>`;
-    html += `<td style="padding:6px 8px;color:var(--text-white);overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;" title="${t.artist_name}">${t.artist_name}</td>`;
+    html += `<td style="padding:6px 8px;color:var(--text-gray);white-space:nowrap;">${esc(t.gig_date || '')}</td>`;
+    html += `<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;font-size:0.73rem;">${esc(timeStr)}</td>`;
+    html += `<td style="padding:6px 8px;color:var(--text-white);overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;" title="${esc(t.venue_name)}">${esc(t.venue_name)}</td>`;
+    html += `<td style="padding:6px 8px;color:var(--text-white);overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;" title="${esc(t.artist_name)}">${esc(t.artist_name)}</td>`;
     html += `<td style="padding:6px 8px;"><span style="color:${sColor};font-weight:600;font-size:0.73rem;">${sLabel}</span></td>`;
     html += `<td style="padding:6px 8px;text-align:right;color:var(--text-white);">${_cents(t.gig_fee_cents)}</td>`;
     html += `<td style="padding:6px 8px;text-align:right;color:#f59e0b;">${_cents(t.venue_fee_cents)}</td>`;
