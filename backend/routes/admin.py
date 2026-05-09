@@ -359,9 +359,14 @@ def get_gigs(admin=Depends(check_admin), db=Depends(get_db)):
     columns = db.execute(text("PRAGMA table_info(gigs)")).fetchall()
     has_split_pay = any(col[1] == 'pay_dollars' for col in columns)
     
+    # Multi-slot gigs have gigs.artist_id=NULL, so the LEFT JOIN to artists
+    # used to leave artist_name as '--' even when slots had booked artists.
+    # COALESCE with a GROUP_CONCAT subquery on gig_slots surfaces booked
+    # artist names (comma-joined) for multi-slot. Single-slot path
+    # (g.artist_id set) takes precedence.
     if has_split_pay:
         rows = db.execute(text("""
-            SELECT 
+            SELECT
                 g.id,
                 g.date,
                 g.start_time,
@@ -369,7 +374,13 @@ def get_gigs(admin=Depends(check_admin), db=Depends(get_db)):
                 g.pay_dollars,
                 g.pay_cents,
                 g.status,
-                a.name as artist_name,
+                COALESCE(
+                    a.name,
+                    (SELECT GROUP_CONCAT(a2.name, ', ')
+                     FROM gig_slots gs
+                     JOIN artists a2 ON a2.id = gs.artist_id
+                     WHERE gs.gig_id = g.id AND gs.status = 'booked' AND gs.artist_id IS NOT NULL)
+                ) as artist_name,
                 v.venue_name,
                 v.city,
                 v.state,
@@ -414,14 +425,20 @@ def get_gigs(admin=Depends(check_admin), db=Depends(get_db)):
             })
     else:
         rows = db.execute(text("""
-            SELECT 
+            SELECT
                 g.id,
                 g.date,
                 g.start_time,
                 g.end_time,
                 g.pay,
                 g.status,
-                a.name as artist_name,
+                COALESCE(
+                    a.name,
+                    (SELECT GROUP_CONCAT(a2.name, ', ')
+                     FROM gig_slots gs
+                     JOIN artists a2 ON a2.id = gs.artist_id
+                     WHERE gs.gig_id = g.id AND gs.status = 'booked' AND gs.artist_id IS NOT NULL)
+                ) as artist_name,
                 v.venue_name,
                 v.city,
                 v.state,

@@ -2131,17 +2131,23 @@ def get_artist_earnings_summary(artist_id: int, user=Depends(get_current_user), 
     """), {"aid": artist_id}).mappings().first()
     pending_payout = (row["total"] or 0) / 100
 
-    # Gig count
+    # Gig count — use DISTINCT t.gig_id so multi-slot gigs where the artist
+    # took multiple slots count as one gig (each slot creates its own
+    # artist_payout transaction). Without DISTINCT, a 2-slot booking by the
+    # same artist on one gig inflates the count to 2.
     row = db.execute(text(f"""
-        SELECT COUNT(*) as n FROM transactions t JOIN gigs g ON t.gig_id = g.id
+        SELECT COUNT(DISTINCT t.gig_id) as n FROM transactions t JOIN gigs g ON t.gig_id = g.id
         WHERE {base_where} AND t.status IN ('paid','transferred')
     """), {"aid": artist_id}).mappings().first()
     gigs_completed = row["n"] or 0
 
-    # Per-venue breakdown
+    # Per-venue breakdown — same DISTINCT t.gig_id treatment so a venue
+    # where the artist booked two slots on one gig shows gig_count=1, not 2.
+    # The total_payout_cents SUM is correct as-is (sum across all transactions
+    # is the right earnings figure).
     rows = db.execute(text(f"""
         SELECT v.venue_name, v.id as venue_id,
-               COUNT(*) as gig_count,
+               COUNT(DISTINCT t.gig_id) as gig_count,
                COALESCE(SUM(t.artist_payout_cents),0) as total_payout_cents,
                MAX(g.date) as last_gig
         FROM transactions t
