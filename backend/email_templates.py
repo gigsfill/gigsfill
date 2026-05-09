@@ -1312,26 +1312,7 @@ TEMPLATES = {
 <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td>
 <td style="padding: 6px 0; font-size: 14px; color: #dc2626; font-weight: bold;">{{date}}</td>
 </tr>
-<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Time</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{start_time}} &#8211; {{end_time}}</td>
-</tr>
-<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Pay</td>
-<td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">${{pay}}</td>
-</tr>
-{{#artist_type}}<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Type</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artist_type}}</td>
-</tr>{{/artist_type}}
-{{#band_formats}}<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Lineup</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{band_formats}}</td>
-</tr>{{/band_formats}}
-{{#styles}}<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Styles</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{styles}}</td>
-</tr>{{/styles}}
+{{slots_html}}
 <tr>
 <td colspan="2" style="padding: 0; border-top: 1px solid #e5e7eb;"></td>
 </tr>
@@ -1412,11 +1393,7 @@ TEMPLATES = {
 <tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Address</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_address_link}}</td></tr>
 {{#title}}<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Title</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{title}}</td></tr>{{/title}}
 <tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td></tr>
-<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Time</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{start_time}} &#8211; {{end_time}}</td></tr>
-<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Pay</td><td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">${{pay}}</td></tr>
-{{#artist_type}}<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Type</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artist_type}}</td></tr>{{/artist_type}}
-{{#band_formats}}<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Lineup</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{band_formats}}</td></tr>{{/band_formats}}
-{{#styles}}<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Styles</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{styles}}</td></tr>{{/styles}}
+{{slots_html}}
 <tr><td colspan="2" style="padding: 4px 0; border-top: 1px solid #e5e7eb;"></td></tr>
 <tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Capacity</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_capacity}}</td></tr>
 <tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Arrival</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{arrival_info}}</td></tr>

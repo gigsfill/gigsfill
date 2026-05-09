@@ -80,12 +80,37 @@ def create_notification(db, user_id: int, notification_type: str, title: str,
 def notify_gig_booked(db, gig_details: dict, gig_id: int, venue_id: int, artist_id: int):
     """
     Create booking notifications for ALL artist and venue users (entity_users aware).
+
+    Multi-slot disambiguation (May 2026): if the gig has more than one slot,
+    append "Slot N" to the message so the venue can immediately tell which
+    of their slots was just filled. Activity Center already splits messages
+    on "Slot" into two lines so this renders nicely.
     """
     from backend.utils import get_all_entity_users
+    from sqlalchemy import text as _t
     time_str = format_time_12hr(gig_details.get("start_time"))
     venue_name = gig_details.get("venue_name", "venue")
     artist_name = gig_details.get("artist_name", "artist")
     date = gig_details.get("date", "")
+
+    # Look up slot_number for this artist on multi-slot gigs (best-effort).
+    # Empty string for single-slot — keeps the legacy message phrasing intact.
+    slot_suffix = ""
+    try:
+        total_slots = db.execute(
+            _t("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid"),
+            {"gid": gig_id}
+        ).scalar() or 0
+        if total_slots > 1:
+            sn = db.execute(_t(
+                "SELECT slot_number FROM gig_slots "
+                "WHERE gig_id = :gid AND artist_id = :aid AND status IN ('booked','pending_contract') "
+                "ORDER BY slot_number LIMIT 1"
+            ), {"gid": gig_id, "aid": artist_id}).scalar()
+            if sn:
+                slot_suffix = f". Slot {sn}"
+    except Exception:
+        pass
 
     artist_users = get_all_entity_users(db, "artist", artist_id)
     venue_users  = get_all_entity_users(db, "venue",  venue_id)
@@ -98,11 +123,11 @@ def notify_gig_booked(db, gig_details: dict, gig_id: int, venue_id: int, artist_
         uid = u["user_id"]
         if uid in shared_ids:
             create_notification(db, uid, "gig_booked", "Gig Booked",
-                f"Your artist {artist_name} booked your venue {venue_name} on {date} at {time_str}",
+                f"Your artist {artist_name} booked your venue {venue_name} on {date} at {time_str}{slot_suffix}",
                 gig_id=gig_id, venue_id=venue_id, artist_id=artist_id)
         else:
             create_notification(db, uid, "gig_booked", "Gig Booked",
-                f"You booked a gig at {venue_name} on {date} at {time_str}",
+                f"You booked a gig at {venue_name} on {date} at {time_str}{slot_suffix}",
                 gig_id=gig_id, venue_id=venue_id, artist_id=artist_id)
 
     for u in venue_users:
@@ -110,7 +135,7 @@ def notify_gig_booked(db, gig_details: dict, gig_id: int, venue_id: int, artist_
         if uid in shared_ids:
             continue  # already notified above
         create_notification(db, uid, "gig_booked", "Gig Booked",
-            f"{artist_name} booked your gig on {date} at {time_str}",
+            f"{artist_name} booked your gig on {date} at {time_str}{slot_suffix}",
             gig_id=gig_id, venue_id=venue_id, artist_id=artist_id)
 
 

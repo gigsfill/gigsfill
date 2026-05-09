@@ -394,14 +394,35 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks) {
     opacity = '0.4';
   }
 
-  // Pay display
+  // Pay display — rendered as a green pill matching the venue-side modal so
+  // multi-slot gigs read consistently across both views. Visibility rules
+  // unchanged: artists see pay only for their own slot or open & bookable
+  // slots (other slots' negotiated pay isn't artist-facing).
   let payHtml = '';
   if (slot.pay) {
     const showPay = isMySlot || (isOpen && rel === 'open_bookable');
     if (showPay) {
-      payHtml = `<span style="color:#22c55e;margin-left:8px;font-size:0.8rem;">Pay: $${parseFloat(slot.pay).toFixed(2)}</span>`;
+      payHtml = `<span style="color:#22c55e;font-weight:700;font-size:0.8rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(slot.pay).toFixed(2)}</span>`;
     }
   }
+
+  // Type / formats / styles for slot.artist_type — shown on its own line so
+  // the header row stays uncluttered. Mirrors the venue-side three-line
+  // layout (Slot N · time · pay  /  type info  /  artist row).
+  const _slotType = slot.artist_type || data.artist_type || '';
+  let typeInfoText = '';
+  if (_slotType) {
+    typeInfoText = `${icon} ${_esc(_slotType)}`;
+    if (_slotType === 'Live Band') {
+      const fmts = slot.band_formats || data.band_formats || '';
+      const stls = slot.styles || data.styles || '';
+      if (fmts) typeInfoText += ` · ${_esc(fmts)}`;
+      if (stls) typeInfoText += ` · ${_esc(stls)}`;
+    }
+  }
+  const typeInfoHtml = typeInfoText
+    ? `<div style="margin-top:5px;color:var(--text-muted);font-size:0.78rem;line-height:1.4;font-style:italic;">${typeInfoText}</div>`
+    : '';
 
   // Right-side content per relationship
   let rightHtml = '';
@@ -642,15 +663,15 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks) {
   }
 
   return `
-    <div style="padding:10px 12px;background:${bgColor};border:1px solid ${borderColor};border-radius:6px;margin-bottom:6px;opacity:${opacity};">
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <div>
-          <span style="font-weight:600;color:#a78bfa;font-size:0.85rem;">${icon} Slot ${slot.slot_number}</span>
-          <span style="color:var(--text-muted);margin-left:8px;font-size:0.85rem;">${slotTime}</span>
-          ${payHtml}
-        </div>
+    <div style="padding:10px 12px 10px 10px;background:${bgColor};border:1px solid ${borderColor};border-left:3px solid #a855f7;border-radius:6px;margin-bottom:6px;opacity:${opacity};">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-weight:700;color:#a855f7;font-size:0.85rem;letter-spacing:0.3px;">Slot ${slot.slot_number}</span>
+        <span style="color:#cbd5e1;font-size:0.85rem;">${slotTime}</span>
+        ${payHtml}
+        <span style="flex:1;"></span>
         <div>${rightHtml}</div>
       </div>
+      ${typeInfoHtml}
       ${extraHtml}
     </div>`;
 }

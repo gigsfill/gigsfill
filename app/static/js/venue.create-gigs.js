@@ -2348,22 +2348,30 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     
     const bookedCount = slots.filter(s => s.status === 'booked').length;
     const totalSlots = slots.length;
-    
-    // Use effective pay (venue override for artist) when we have an artist; otherwise gig base pay
-    let payDisplay = gig.pay != null && gig.pay !== '' ? '$' + parseFloat(gig.pay).toFixed(2) : '';
-    const artistIdForPay = gig.artist_id || (slots.find(s => s.status === 'booked') || {}).artist_id;
-    if (artistIdForPay) {
-      try {
-        const payRes = await fetch('/api/gigs/' + gig.id + '/effective-pay?artist_id=' + artistIdForPay, { credentials: 'include' });
-        if (payRes.ok) {
-          const payData = await payRes.json();
-          if (payData.pay != null) payDisplay = '$' + Number(payData.pay).toFixed(2);
-        }
-      } catch (e) { console.error('Effective pay (multi-slot):', e); }
+    const isMultiSlot = totalSlots > 1;
+
+    // Pay display: single-slot shows one line at the top (with effective-pay
+    // override applied if an artist is booked). Multi-slot omits the top line
+    // entirely — pay can differ per slot, so it's rendered inline on each
+    // slot row below using `slot.pay` directly (already reflects per-artist
+    // overrides applied at booking time).
+    let payDisplay = '';
+    if (!isMultiSlot) {
+      payDisplay = gig.pay != null && gig.pay !== '' ? '$' + parseFloat(gig.pay).toFixed(2) : '';
+      const artistIdForPay = gig.artist_id || (slots.find(s => s.status === 'booked') || {}).artist_id;
+      if (artistIdForPay) {
+        try {
+          const payRes = await fetch('/api/gigs/' + gig.id + '/effective-pay?artist_id=' + artistIdForPay, { credentials: 'include' });
+          if (payRes.ok) {
+            const payData = await payRes.json();
+            if (payData.pay != null) payDisplay = '$' + Number(payData.pay).toFixed(2);
+          }
+        } catch (e) { console.error('Effective pay (single-slot):', e); }
+      }
     }
-    
+
     gigArtistInfo.style.display = "block";
-    
+
     let html = `
       <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 0.95rem; line-height: 1.6; margin-bottom: 16px;">
         <div style="font-weight: 600;">Date:</div>
@@ -2399,6 +2407,12 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         if (fmts) typeInfo += ` · ${fmts}`;
         if (stls) typeInfo += ` · ${stls}`;
       }
+      // Per-slot pay shown only on multi-slot gigs (single-slot uses the
+      // top-of-modal Pay line). slot.pay already reflects any per-artist
+      // override applied at booking — see _apply_slot_booking.
+      const slotPayHtml = (isMultiSlot && slot.pay != null && slot.pay !== '')
+        ? `<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(slot.pay).toFixed(2)}</span>`
+        : '';
 
       if (isBooked) {
         const _aname = (slot.artist_name || 'Artist').replace(/['"]/g, '');
@@ -2413,17 +2427,19 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           style="background:transparent;border:1px solid rgba(245,158,11,0.4);color:#f59e0b;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;white-space:nowrap;">Rate Artist</button>`;
 
         html += `
-          <div style="padding:9px 14px;margin-bottom:6px;background:${bg};border:1px solid ${color}33;border-radius:6px;font-size:0.85rem;">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              <span style="font-weight:700;min-width:56px;">Slot ${slot.slot_number}</span>
-              <span style="min-width:140px;">${formatTime12Hour(slot.start_time)} – ${formatTime12Hour(slot.end_time)}</span>
-              ${typeInfo ? `<span style="color:var(--text-muted);font-size:0.78rem;flex:1;">${typeInfo}</span>` : '<span style="flex:1;"></span>'}
+          <div style="padding:9px 14px 9px 12px;margin-bottom:6px;background:${bg};border:1px solid ${color}33;border-left:3px solid #a855f7;border-radius:6px;font-size:0.85rem;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span style="font-weight:700;min-width:56px;color:#a855f7;letter-spacing:0.3px;">Slot ${slot.slot_number}</span>
+              <span style="color:#cbd5e1;">${formatTime12Hour(slot.start_time)} – ${formatTime12Hour(slot.end_time)}</span>
+              ${slotPayHtml}
+              <span style="flex:1;"></span>
               ${cancelBtn}
             </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-left:62px;">
+            ${typeInfo ? `<div style="margin-top:5px;color:var(--text-muted);font-size:0.78rem;line-height:1.4;font-style:italic;">${typeInfo}</div>` : ''}
+            <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">
               <span style="color:var(--text-muted);font-size:0.78rem;margin-right:4px;">Artist:</span>
               <a href="/app/artist-profile.html?artist_id=${slot.artist_id}" target="_blank"
-                 style="color:${color};font-weight:600;font-size:0.82rem;text-decoration:none;flex:1;">${slot.artist_name}</a>
+                 style="color:${color};font-weight:600;font-size:0.82rem;text-decoration:none;flex:1;min-width:120px;">${slot.artist_name}</a>
               ${msgBtn}
               ${rateBtn}
             </div>
@@ -2432,11 +2448,15 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         `;
       } else {
         html += `
-          <div style="display:flex;align-items:center;padding:9px 14px;margin-bottom:6px;background:${bg};border:1px solid ${color}33;border-radius:6px;font-size:0.85rem;gap:6px;flex-wrap:wrap;">
-            <span style="font-weight:700;min-width:56px;">Slot ${slot.slot_number}</span>
-            <span style="min-width:140px;">${formatTime12Hour(slot.start_time)} – ${formatTime12Hour(slot.end_time)}</span>
-            ${typeInfo ? `<span style="color:var(--text-muted);font-size:0.78rem;flex:1;">${typeInfo}</span>` : '<span style="flex:1;"></span>'}
-            <span style="color:#22c55e;font-weight:600;font-size:0.85rem;">Open</span>
+          <div style="padding:9px 14px 9px 12px;margin-bottom:6px;background:${bg};border:1px solid ${color}33;border-left:3px solid #a855f7;border-radius:6px;font-size:0.85rem;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span style="font-weight:700;min-width:56px;color:#a855f7;letter-spacing:0.3px;">Slot ${slot.slot_number}</span>
+              <span style="color:#cbd5e1;">${formatTime12Hour(slot.start_time)} – ${formatTime12Hour(slot.end_time)}</span>
+              ${slotPayHtml}
+              <span style="flex:1;"></span>
+              <span style="color:#22c55e;font-weight:700;font-size:0.78rem;background:rgba(34,197,94,0.12);padding:2px 10px;border-radius:10px;border:1px solid rgba(34,197,94,0.3);">Open</span>
+            </div>
+            ${typeInfo ? `<div style="margin-top:5px;color:var(--text-muted);font-size:0.78rem;line-height:1.4;font-style:italic;">${typeInfo}</div>` : ''}
           </div>
         `;
       }

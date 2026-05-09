@@ -84,6 +84,24 @@ def verify_session_token(token: str) -> int:
         raise HTTPException(status_code=401, detail="Invalid session")
 
 
+def verify_session_token_with_iat(token: str):
+    """Verify a session token; return (user_id, issued_at_naive_utc).
+
+    issued_at is naive-UTC to match the storage convention everywhere else
+    (utcnow_naive). Used by `get_current_user` to compare against
+    `users.password_changed_at` and reject sessions issued before a password
+    change/reset (H1/H2 audit fix, May 2026)."""
+    try:
+        data, ts_aware = _serializer.loads(token, max_age=SESSION_MAX_AGE, return_timestamp=True)
+        # itsdangerous returns aware UTC; strip tz for parity with utcnow_naive
+        ts_naive = ts_aware.replace(tzinfo=None) if ts_aware is not None else None
+        return int(data["uid"]), ts_naive
+    except SignatureExpired:
+        raise HTTPException(status_code=401, detail="Session expired — please log in again")
+    except (BadSignature, KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+
 def should_renew_token(token: str) -> bool:
     """Return True if the session token is more than halfway through its lifetime.
     Implements rolling/sliding expiry — active users never get unexpectedly logged out.
@@ -161,8 +179,37 @@ class UpdateUserRequest(BaseModel):
 # PASSWORD HASHING UTILITIES
 # ============================================
 
+BCRYPT_MAX_BYTES = 72  # bcrypt silently truncates input past 72 bytes
+
+def validate_password_or_raise(password: str, *, min_chars: int = 6) -> None:
+    """Reject passwords that bcrypt would silently truncate.
+
+    Audit fix (May 2026, H8): bcrypt operates on the first 72 *bytes* of the
+    input and ignores everything past that. A 100-char password and the same
+    string truncated at byte 72 produce identical hashes — meaning the user
+    thinks they have entropy past byte 72 but they don't, and a long password
+    can be silently weakened. UTF-8 makes byte length differ from char length
+    (e.g. emojis are 4 bytes each), so we check the encoded byte length.
+
+    This is a boundary check at signup / password-change / reset / invitation
+    accept time. We intentionally do NOT enforce on verify_password — existing
+    users whose hashes were computed under the old behavior must still be able
+    to log in (bcrypt.checkpw will keep doing the same truncation it always
+    did)."""
+    if not isinstance(password, str) or len(password) < min_chars:
+        raise HTTPException(400, f"Password must be at least {min_chars} characters")
+    if len(password.encode("utf-8")) > BCRYPT_MAX_BYTES:
+        raise HTTPException(
+            400,
+            f"Password is too long ({BCRYPT_MAX_BYTES}-byte UTF-8 max). "
+            "If you use emojis or accented characters, each can count as 2-4 bytes."
+        )
+
+
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
+    """Hash a password using bcrypt. Caller should have validated via
+    validate_password_or_raise; this function does not re-validate to avoid
+    coupling. bcrypt itself truncates at 72 bytes (BCRYPT_MAX_BYTES)."""
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
     return hashed.decode('utf-8')
@@ -178,18 +225,34 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 # DEPENDENCY: CURRENT USER (Signed Session)
 # ============================================
 
+def _reject_if_password_rotated(user, token_iat):
+    """Raise 401 if the session token was issued before the user's last
+    password change (forces re-login on every device after a password
+    change/reset). Tolerant of legacy users with NULL password_changed_at —
+    those rows skip the check (they predate the column being added)."""
+    pcat = getattr(user, "password_changed_at", None)
+    if pcat is None or token_iat is None:
+        return
+    # Allow a small clock-skew grace (5 seconds) so the device that just
+    # changed the password and got a fresh cookie isn't immediately kicked
+    # if the cookie's timestamp lands a hair before the DB write.
+    if token_iat + timedelta(seconds=5) < pcat:
+        raise HTTPException(status_code=401, detail="Session invalidated — please log in again")
+
+
 def get_current_user(session_token: str | None = Cookie(default=None)):
     """Dependency to get current authenticated user from signed session cookie."""
     if not session_token:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    user_id = verify_session_token(session_token)
+    user_id, token_iat = verify_session_token_with_iat(session_token)
 
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             raise HTTPException(status_code=401, detail="Invalid session")
+        _reject_if_password_rotated(user, token_iat)
         return user
     finally:
         db.close()
@@ -200,10 +263,14 @@ def get_optional_user(session_token: str | None = Cookie(default=None)):
     if not session_token:
         return None
     try:
-        user_id = verify_session_token(session_token)
+        user_id, token_iat = verify_session_token_with_iat(session_token)
         db = SessionLocal()
         try:
-            return db.query(User).filter(User.id == user_id).first()
+            user = db.query(User).filter(User.id == user_id).first()
+            if user is None:
+                return None
+            _reject_if_password_rotated(user, token_iat)
+            return user
         finally:
             db.close()
     except Exception:
@@ -314,10 +381,9 @@ def signup(request: Request, data: dict, response: Response):
         
         if not email or not password:
             raise HTTPException(400, "Email and password required")
-        
-        if len(password) < 6:
-            raise HTTPException(400, "Password must be at least 6 characters")
-            
+
+        validate_password_or_raise(password)
+
         if role not in ["artist", "venue"]:
             raise HTTPException(400, "Role must be 'artist' or 'venue'")
 
@@ -818,7 +884,7 @@ class ChangePasswordRequest(BaseModel):
 
 @router.post("/api/change-password")
 @limiter.limit("5/minute")
-def change_password(request: Request, data: ChangePasswordRequest, user=Depends(get_current_user)):
+def change_password(request: Request, response: Response, data: ChangePasswordRequest, user=Depends(get_current_user)):
     """Change user password.
 
     Audit fix (May 2026): rate-limited to 5/minute. Authenticated brute-force
@@ -826,9 +892,17 @@ def change_password(request: Request, data: ChangePasswordRequest, user=Depends(
     lockout only fires on `/api/login`). With a stolen session cookie an
     attacker could grind through current_password attempts to lock in
     account takeover before the user noticed.
+
+    Audit fix (May 2026, H1/H2): stamp users.password_changed_at to the wall
+    clock on success. `get_current_user` rejects any session token issued
+    before that timestamp, so every other device the account is logged in on
+    is immediately kicked. The requesting browser gets a fresh cookie below
+    so they don't lock themselves out.
     """
     db = SessionLocal()
     try:
+        validate_password_or_raise(data.new_password)
+
         # Verify current password
         if not verify_password(data.current_password, user.password):
             raise HTTPException(401, "Current password is incorrect")
@@ -836,11 +910,16 @@ def change_password(request: Request, data: ChangePasswordRequest, user=Depends(
         # Hash new password
         new_hashed = hash_password(data.new_password)
 
-        # Update password
+        # Update password and stamp rotation time
         db.query(User).filter(User.id == user.id).update({
-            "password": new_hashed
+            "password": new_hashed,
+            "password_changed_at": utcnow_naive(),
         })
         db.commit()
+
+        # Re-issue session cookie so this browser keeps a valid token
+        # (its old cookie predates password_changed_at and would be rejected)
+        set_session_cookie(response, user.id)
 
         return {"ok": True}
 
@@ -902,8 +981,11 @@ def forgot_password(request: Request, data: dict):
             # Don't reveal that the email doesn't exist
             return {"ok": True, "message": "If an account exists with that email, a reset link has been sent."}
 
-        # Generate signed reset token
-        reset_token = _reset_serializer.dumps({"uid": user.id, "email": email})
+        # Generate signed reset token. Each token gets a random `jti` claim
+        # so /api/reset-password can mark it consumed (single-use guard, H9).
+        import secrets as _secrets
+        jti = _secrets.token_urlsafe(16)
+        reset_token = _reset_serializer.dumps({"uid": user.id, "email": email, "jti": jti})
 
         # Build reset URL
         base_url = _get_base_url(db)
@@ -1025,14 +1107,14 @@ def reset_password(request: Request, data: dict):
     if not token or not new_password:
         raise HTTPException(400, "Token and new password required")
 
-    if len(new_password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
+    validate_password_or_raise(new_password)
 
     # Verify token
     try:
         payload = _reset_serializer.loads(token, max_age=RESET_TOKEN_MAX_AGE)
         user_id = int(payload["uid"])
         token_email = payload.get("email", "")
+        token_jti = payload.get("jti", "")
     except SignatureExpired:
         raise HTTPException(400, "Reset link has expired. Please request a new one.")
     except (BadSignature, KeyError, TypeError, ValueError):
@@ -1040,6 +1122,18 @@ def reset_password(request: Request, data: dict):
 
     db = SessionLocal()
     try:
+        # H9 audit fix (May 2026): single-use guard. If this token's jti has
+        # already been consumed, reject. Pre-H9 tokens have no jti — those
+        # remain replayable until they expire (1h), and only ever existed in
+        # the small window before this fix shipped.
+        if token_jti:
+            already = db.execute(
+                text("SELECT 1 FROM used_reset_tokens WHERE jti = :j"),
+                {"j": token_jti}
+            ).first()
+            if already:
+                raise HTTPException(400, "This reset link has already been used. Please request a new one.")
+
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             raise HTTPException(400, "Invalid reset link")
@@ -1048,9 +1142,33 @@ def reset_password(request: Request, data: dict):
         if token_email and user.email != token_email:
             raise HTTPException(400, "Invalid reset link")
 
-        # Hash and update password
+        # Hash and update password; stamp password_changed_at so every
+        # session token issued before now is rejected (forces re-login on
+        # every device — important when reset is triggered because of a
+        # suspected compromise). H1/H2 audit fix, May 2026.
         new_hashed = hash_password(new_password)
-        db.query(User).filter(User.id == user_id).update({"password": new_hashed})
+        db.query(User).filter(User.id == user_id).update({
+            "password": new_hashed,
+            "password_changed_at": utcnow_naive(),
+        })
+
+        # Mark this token consumed (single-use). Best-effort: failure to
+        # record shouldn't block the reset itself, but it does open a tiny
+        # replay window — log loudly if it ever happens.
+        if token_jti:
+            try:
+                db.execute(
+                    text("INSERT INTO used_reset_tokens (jti) VALUES (:j)"),
+                    {"j": token_jti}
+                )
+                # Opportunistic prune of jti rows older than the token TTL
+                db.execute(text(
+                    "DELETE FROM used_reset_tokens "
+                    "WHERE used_at < datetime('now', '-2 hours')"
+                ))
+            except Exception as _e:
+                logger.error(f"[H9] failed to record used reset jti={token_jti}: {_e}")
+
         db.commit()
 
         return {"ok": True, "message": "Password reset successfully"}

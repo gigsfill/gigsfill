@@ -798,9 +798,9 @@ def accept_invitation(
     
     if not all([first_name, last_name, email, password]):
         raise HTTPException(400, "Missing required fields")
-    
-    if len(password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
+
+    from backend.routes.auth import validate_password_or_raise
+    validate_password_or_raise(password)
     
     # Check if email already exists
     existing = db.execute(

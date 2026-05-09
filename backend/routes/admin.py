@@ -604,6 +604,18 @@ async def update_email_template(request: Request, admin=Depends(check_admin), db
     """Update or create email template — upserts by template_key"""
     data = await request.json()
     template_type = data.get('template_type')
+    new_subject = data.get('subject')
+    new_body = data.get('body')
+
+    # Capture before-state for audit
+    before_row = None
+    try:
+        before_row = db.execute(
+            text("SELECT subject, body FROM email_templates WHERE template_key = :k OR notification_type = :k LIMIT 1"),
+            {"k": template_type}
+        ).mappings().first()
+    except Exception:
+        pass
 
     try:
         db.execute(
@@ -615,10 +627,19 @@ async def update_email_template(request: Request, admin=Depends(check_admin), db
                     body = excluded.body,
                     updated_at = CURRENT_TIMESTAMP
             """),
-            {'type': template_type, 'subj': data.get('subject'), 'body': data.get('body')}
+            {'type': template_type, 'subj': new_subject, 'body': new_body}
         )
-        
+
         db.commit()
+
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "update_email_template",
+            target_table="email_templates", target_id=template_type,
+            before=(dict(before_row) if before_row else None),
+            after={"subject": new_subject, "body": new_body},
+            request=request,
+        )
         return {"ok": True}
     except Exception as e:
         db.rollback()
@@ -809,6 +830,16 @@ async def update_payment_settings(request: Request, admin=Depends(check_admin), 
     
     SENSITIVE_PAYMENT_KEYS = {'admin_stripe_secret_key', 'admin_stripe_webhook_secret'}
 
+    # Capture before-state for audit (mask sensitive values; we record the
+    # fact a secret changed without ever storing the secret itself)
+    _audit_before, _audit_after = {}, {}
+    for key in payment_keys:
+        existing_val = db.execute(
+            text("SELECT setting_value FROM platform_settings WHERE setting_key = :k"),
+            {"k": key}
+        ).scalar()
+        _audit_before[key] = '••••••••' if (key in SENSITIVE_PAYMENT_KEYS and existing_val) else (existing_val or '')
+
     # Audit fix (May 2026): validate numeric / enum settings before write.
     # Without this, admin could persist 'platform_fee_percent=-50' (negative
     # fees turn into 0 via max(), so commissions silently go to zero) or
@@ -861,12 +892,12 @@ async def update_payment_settings(request: Request, admin=Depends(check_admin), 
             if key in SENSITIVE_PAYMENT_KEYS and value.startswith("•"):
                 continue
             _validate(key, value)
-            
+
             existing = db.execute(
                 text("SELECT id FROM platform_settings WHERE setting_key = :key"),
                 {"key": key}
             ).first()
-            
+
             if existing:
                 db.execute(
                     text("UPDATE platform_settings SET setting_value = :val WHERE setting_key = :key"),
@@ -877,8 +908,25 @@ async def update_payment_settings(request: Request, admin=Depends(check_admin), 
                     text("INSERT INTO platform_settings (setting_key, setting_value) VALUES (:key, :val)"),
                     {"key": key, "val": value}
                 )
-    
+            _audit_after[key] = '••••••••' if key in SENSITIVE_PAYMENT_KEYS else value
+
     db.commit()
+
+    if _audit_after:
+        from backend.utils import log_admin_action
+        # Trim before-state to only the keys actually changed, and only
+        # record entries where value differs from before
+        changed_before = {k: _audit_before.get(k, '') for k in _audit_after.keys()
+                          if _audit_before.get(k, '') != _audit_after[k]}
+        changed_after = {k: v for k, v in _audit_after.items()
+                         if _audit_before.get(k, '') != v}
+        if changed_after:
+            log_admin_action(
+                db, admin, "update_payment_settings",
+                target_table="platform_settings",
+                before=changed_before, after=changed_after,
+                request=request,
+            )
     return {"ok": True}
 
 # ==========================================
@@ -1101,6 +1149,23 @@ async def toggle_venue_payment_override(request: Request, admin=Depends(check_ad
 
     # Recalculate all pending transactions for this venue's gigs
     _recalculate_venue_pending_transactions(db, venue_id, suspend)
+
+    try:
+        from backend.utils import log_admin_action
+        # Override rows only exist when suspended (DELETE on un-suspend),
+        # so before-state is just "did a row exist?"
+        log_admin_action(
+            db, admin,
+            "toggle_venue_payment_override",
+            target_table="venue_payment_overrides",
+            target_id=venue_id,
+            before={"payments_suspended": bool(existing)},
+            after={"payments_suspended": bool(suspend)},
+            metadata={"venue_id": venue_id, "venue_name": venue[1], "notes": notes},
+            request=request,
+        )
+    except Exception:
+        pass
 
     return {"ok": True, "payments_suspended": suspend, "venue_name": venue[1]}
 

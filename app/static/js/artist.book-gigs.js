@@ -1129,14 +1129,36 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Hover title from same logic as calendar bubbles
       const rowTooltip = gigClass === 'blast-open' ? '' : getGigHoverTitle(g, gigClass);
 
-      // Pay: only show for own booked gig or open/bookable gig
+      // Pay: only show for own booked gig or open/bookable gig.
+      // For multi-slot gigs, gig.pay is just slot 1's pay — misleading. So:
+      //   - if artist is booked into a specific slot, show that slot's pay
+      //     (preferring effective override the venue may have set for them)
+      //   - otherwise, show a $min – $max range across slots if they differ;
+      //     a single value if all slots have the same pay
       const canSeeDayPay = gigClass === 'booked-mine' || gigClass === 'open' || gigClass === 'blast-open' || gigClass === 'pending-venue-approval';
-      const effectivePay = getEffectivePay(g);
-      const payDisplay = canSeeDayPay && effectivePay > 0
-        ? (effectivePay > (parseFloat(g.pay)||0)
+      let payDisplay = '—';
+      if (canSeeDayPay) {
+        const slots = g.slots || [];
+        const isMulti = slots.length > 1;
+        const effectivePay = getEffectivePay(g);
+        if (isMulti) {
+          if (gigClass === 'booked-mine') {
+            const mySlot = slots.find(s => parseInt(s.artist_id) === parseInt(artistId));
+            const myPay = (mySlot && parseFloat(mySlot.pay)) || effectivePay;
+            payDisplay = myPay > 0 ? `$${myPay.toFixed(2)}` : '—';
+          } else {
+            const pays = slots.map(s => parseFloat(s.pay) || 0).filter(p => p > 0);
+            if (pays.length) {
+              const min = Math.min(...pays), max = Math.max(...pays);
+              payDisplay = (min === max) ? `$${min.toFixed(2)}` : `$${min.toFixed(2)} – $${max.toFixed(2)}`;
+            }
+          }
+        } else if (effectivePay > 0) {
+          payDisplay = effectivePay > (parseFloat(g.pay) || 0)
             ? `<span style="color:#a855f7;">$${effectivePay.toFixed(2)}</span>`
-            : `$${effectivePay.toFixed(2)}`)
-        : '—';
+            : `$${effectivePay.toFixed(2)}`;
+        }
+      }
 
       // Artist column: show who is booked, or OPEN, for any gig state
       let artistDisplay = '';

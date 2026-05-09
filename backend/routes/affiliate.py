@@ -1064,6 +1064,12 @@ async def manual_link_affiliate(request: Request, user=Depends(get_current_user)
     if not venue:
         raise HTTPException(404, "Venue not found")
 
+    # Capture pre-existing referral for audit (INSERT OR REPLACE blows it away)
+    before_row = db.execute(text(
+        "SELECT affiliate_user_id, link_method, initial_rate_percent, reduced_rate_percent, reduced_after_days "
+        "FROM affiliate_referrals WHERE venue_id = :vid"
+    ), {"vid": venue_id}).mappings().first()
+
     init_rate    = _aff_setting(db, "affiliate_rate_percent", 1.0)
     reduced_rate = _aff_setting(db, "affiliate_reduced_rate_percent", 0.5)
     reduced_days = int(_aff_setting(db, "affiliate_reduced_after_days", 365))
@@ -1077,6 +1083,23 @@ async def manual_link_affiliate(request: Request, user=Depends(get_current_user)
         """), {"auid": aff_user[0], "vid": venue_id, "init": init_rate,
                "red": reduced_rate, "days": reduced_days, "admin_id": user.id})
         db.commit()
+
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "manual_link_affiliate",
+            target_table="affiliate_referrals", target_id=venue_id,
+            before=(dict(before_row) if before_row else None),
+            after={
+                "affiliate_user_id": aff_user[0],
+                "affiliate_code": affiliate_code,
+                "link_method": "manual",
+                "initial_rate_percent": init_rate,
+                "reduced_rate_percent": reduced_rate,
+                "reduced_after_days": reduced_days,
+            },
+            metadata={"venue_id": venue_id},
+            request=request,
+        )
         return {"ok": True}
     except Exception as e:
         db.rollback()
@@ -1084,10 +1107,23 @@ async def manual_link_affiliate(request: Request, user=Depends(get_current_user)
 
 
 @router.delete("/api/admin/affiliate/referrals/{referral_id}")
-def delete_referral(referral_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+def delete_referral(request: Request, referral_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     _check_admin(user)
+    before_row = db.execute(text(
+        "SELECT id, affiliate_user_id, venue_id, link_method, initial_rate_percent, reduced_rate_percent, reduced_after_days "
+        "FROM affiliate_referrals WHERE id = :rid"
+    ), {"rid": referral_id}).mappings().first()
+
     db.execute(text("DELETE FROM affiliate_referrals WHERE id = :rid"), {"rid": referral_id})
     db.commit()
+
+    from backend.utils import log_admin_action
+    log_admin_action(
+        db, user, "delete_referral",
+        target_table="affiliate_referrals", target_id=referral_id,
+        before=(dict(before_row) if before_row else None),
+        request=request,
+    )
     return {"ok": True}
 
 
@@ -1112,6 +1148,14 @@ async def run_payouts_manual(request: Request, user=Depends(get_current_user), d
     _check_admin(user)
     try:
         run_quarterly_affiliate_payouts(db)
+
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "run_payouts_manual",
+            target_table="affiliate_payouts",
+            metadata={"quarter": _get_quarter()},
+            request=request,
+        )
         return {"ok": True, "message": "Payout run complete"}
     except Exception as e:
         raise HTTPException(500, str(e))

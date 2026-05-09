@@ -23,6 +23,7 @@ class User(Base):
     phone = Column(String)
     is_admin = Column(Boolean, default=False)  # Migrated from TEXT 'true'/'false' to INTEGER 0/1 on 2026-05-08; SQLAlchemy Boolean reads existing values correctly via type coercion.
     affiliate_code = Column(String, unique=True)
+    password_changed_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

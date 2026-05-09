@@ -622,6 +622,23 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_log_target ON admin_audit_log(target_table, target_id)")
 
     # ==========================================
+    # USED RESET TOKENS (H9 single-use guard, May 2026)
+    # ==========================================
+    # Reset password tokens carry a `jti` claim (random uuid). After a token
+    # is consumed by /api/reset-password, its jti is recorded here. The route
+    # rejects any token whose jti is already present — preventing replay if a
+    # link is leaked (URL-bar history, email forwarding, browser sync, etc).
+    # Rows older than RESET_TOKEN_MAX_AGE (1h) are pruned opportunistically
+    # at write time; the index supports both lookup and pruning.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS used_reset_tokens (
+            jti TEXT PRIMARY KEY,
+            used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_used_reset_tokens_used_at ON used_reset_tokens(used_at)")
+
+    # ==========================================
     # NOTIFICATIONS
     # ==========================================
     cursor.execute("""
@@ -1508,6 +1525,10 @@ def setup_database():
     _add_columns(c_aff, "users", [
         "affiliate_code TEXT",
         "last_login TIMESTAMP",
+        # password_changed_at: when set, every session token issued before this
+        # timestamp is treated as invalid (forces re-login on every device after
+        # password change / reset). See verify_session_token in auth.py.
+        "password_changed_at TIMESTAMP",
     ])
 
     # Backfill affiliate codes for existing users who don't have one
