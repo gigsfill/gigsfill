@@ -1,0 +1,13 @@
+# GigsFill Environment Configuration
+# ====================================
+# Copy to /opt/gigsfill/.env on the server
+
+# Redis for rate limiting (installed by setup_do.sh)
+RATELIMIT_STORAGE_URI=redis://localhost:6379
+
+# Environment flag
+GIGSFILL_ENV=production
+
+# PostgreSQL (set this when ready to migrate from SQLite)
+# DATABASE_URL=postgresql://doadmin:PASSWORD@db-xxx.db.ondigitalocean.com:25060/gigsfill?sslmode=require
+DATABASE_URL=

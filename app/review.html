@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leave a Review — GigsFill</title>
+  <link rel="icon" href="/app/static/img/favicon.png" type="image/png">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0e1a;
+      --card: #1a2235;
+      --border: rgba(255,255,255,0.08);
+      --text-white: #f0f4ff;
+      --text-gray: #8b95a8;
+      --cyan: #06b6d4;
+      --amber: #f59e0b;
+      --green: #10b981;
+      --red: #ef4444;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text-white);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .logo-wrap {
+      margin-bottom: 32px;
+      text-align: center;
+    }
+    .logo-wrap img { height: 40px; width: auto; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      width: 100%;
+      max-width: 460px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--cyan);
+      margin-bottom: 6px;
+    }
+    .card-sub {
+      font-size: 0.85rem;
+      color: var(--text-gray);
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    .card-sub strong { color: var(--text-white); }
+    .label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-gray);
+      margin-bottom: 8px;
+    }
+    /* Stars */
+    #starRow {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .star {
+      font-size: 2.4rem;
+      cursor: pointer;
+      color: #444;
+      transition: transform 0.1s, color 0.1s;
+      user-select: none;
+      line-height: 1;
+    }
+    .star.lit { color: var(--amber); transform: scale(1.1); }
+    #starLabel { font-size: 0.8rem; color: var(--text-gray); height: 18px; margin-bottom: 18px; }
+    #starError { color: var(--red); font-size: 0.78rem; margin-bottom: 12px; display: none; }
+    textarea {
+      width: 100%;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-white);
+      font-family: inherit;
+      font-size: 0.88rem;
+      padding: 10px 13px;
+      resize: vertical;
+      min-height: 90px;
+      outline: none;
+      transition: border-color 0.2s;
+      margin-bottom: 20px;
+    }
+    textarea:focus { border-color: var(--cyan); }
+    .btn-row { display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+    .btn-submit {
+      padding: 10px 28px;
+      background: var(--cyan);
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-submit.amber { background: var(--amber); }
+    #submitMsg { font-size: 0.82rem; flex: 1; }
+    /* States */
+    #loadingState, #errorState, #successState { text-align: center; padding: 16px 0; }
+    #loadingState { color: var(--text-gray); }
+    #errorState { color: var(--red); }
+    #successState .big-check { font-size: 3rem; margin-bottom: 12px; }
+    #successState .success-title { font-size: 1.1rem; font-weight: 700; color: var(--green); margin-bottom: 8px; }
+    #successState .success-sub { font-size: 0.85rem; color: var(--text-gray); margin-bottom: 24px; }
+    .login-btn {
+      display: inline-block;
+      padding: 10px 28px;
+      background: rgba(6,182,212,0.15);
+      border: 1px solid rgba(6,182,212,0.4);
+      border-radius: 7px;
+      color: var(--cyan);
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .login-btn:hover { background: rgba(6,182,212,0.25); }
+  </style>
+</head>
+<body>
+
+<div class="logo-wrap">
+  <img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" onerror="this.style.display='none'">
+</div>
+
+<div class="card">
+  <div id="loadingState">Loading your review…</div>
+  <div id="errorState" style="display:none;"></div>
+
+  <div id="reviewForm" style="display:none;">
+    <div class="card-title" id="formTitle"></div>
+    <div class="card-sub" id="formSub"></div>
+
+    <div class="label">Rating *</div>
+    <div id="starRow">
+      <span class="star" data-val="1">☆</span>
+      <span class="star" data-val="2">☆</span>
+      <span class="star" data-val="3">☆</span>
+      <span class="star" data-val="4">☆</span>
+      <span class="star" data-val="5">☆</span>
+    </div>
+    <div id="starLabel"></div>
+    <div id="starError">Please select a star rating.</div>
+
+    <div class="label">Comments <span style="font-weight:400;text-transform:none;color:var(--text-gray);">(optional)</span></div>
+    <textarea id="reviewText" placeholder="Share your experience…" maxlength="1000"></textarea>
+
+    <div class="btn-row">
+      <div id="submitMsg"></div>
+      <button class="btn-submit" id="submitBtn">Submit Review</button>
+    </div>
+  </div>
+
+  <div id="successState" style="display:none;">
+    <div class="big-check">✅</div>
+    <div class="success-title">Review Submitted!</div>
+    <div class="success-sub">Thank you — your review helps make GigsFill better for everyone.</div>
+    <a href="/app/login.html" class="login-btn">Log in to GigsFill →</a>
+  </div>
+</div>
+
+<script>
+(async function() {
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token');
+
+  const loadingEl  = document.getElementById('loadingState');
+  const errorEl    = document.getElementById('errorState');
+  const formEl     = document.getElementById('reviewForm');
+  const successEl  = document.getElementById('successState');
+
+  function showError(msg) {
+    loadingEl.style.display = 'none';
+    errorEl.style.display = '';
+    errorEl.innerHTML = '<div style="font-size:1.5rem;margin-bottom:12px;">⚠️</div><div style="font-weight:600;margin-bottom:8px;">Invalid Link</div><div style="font-size:0.85rem;color:var(--text-gray);">' + msg + '</div>';
+  }
+
+  if (!token) { showError('No review token found. Please use the link from your email.'); return; }
+
+  // Load review context from token
+  let ctx;
+  try {
+    const res = await fetch('/api/review-link?token=' + encodeURIComponent(token));
+    if (res.status === 410) { showError('This review link has already been used or has expired.'); return; }
+    if (!res.ok) { showError('This review link is invalid or has expired.'); return; }
+    ctx = await res.json();
+  } catch(e) {
+    showError('Could not load review. Please try again later.');
+    return;
+  }
+
+  // Show form
+  loadingEl.style.display = 'none';
+  formEl.style.display = '';
+
+  const isVenueRatesArtist = ctx.direction === 'venue_rates_artist';
+  const titleEl = document.getElementById('formTitle');
+  const subEl   = document.getElementById('formSub');
+  const submitBtn = document.getElementById('submitBtn');
+
+  if (isVenueRatesArtist) {
+    titleEl.textContent = 'How was ' + ctx.artist_name + '? ⭐';
+    titleEl.style.color = 'var(--amber)';
+    subEl.innerHTML = 'Your gig <strong>' + esc(ctx.gig_title) + '</strong> on <strong>' + fmtDate(ctx.gig_date) + '</strong> is complete. Share your experience with this artist.';
+    submitBtn.classList.add('amber');
+  } else {
+    titleEl.textContent = 'How was ' + ctx.venue_name + '? ⭐';
+    titleEl.style.color = 'var(--cyan)';
+    subEl.innerHTML = 'Your gig <strong>' + esc(ctx.gig_title) + '</strong> at <strong>' + esc(ctx.venue_name) + '</strong> on <strong>' + fmtDate(ctx.gig_date) + '</strong> is complete. Share your experience.';
+  }
+
+  // Stars
+  const stars = document.querySelectorAll('.star');
+  const starLabels = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
+  let selected = 0;
+
+  function renderStars(n) {
+    stars.forEach(s => {
+      const v = parseInt(s.dataset.val);
+      s.textContent = v <= n ? '★' : '☆';
+      s.classList.toggle('lit', v <= n);
+    });
+    document.getElementById('starLabel').textContent = n > 0 ? starLabels[n] : '';
+  }
+
+  stars.forEach(s => {
+    s.addEventListener('mouseover', () => renderStars(parseInt(s.dataset.val)));
+    s.addEventListener('mouseout',  () => renderStars(selected));
+    s.addEventListener('click', () => {
+      selected = parseInt(s.dataset.val);
+      renderStars(selected);
+      document.getElementById('starError').style.display = 'none';
+    });
+  });
+
+  // Submit
+  submitBtn.addEventListener('click', async () => {
+    if (!selected) {
+      document.getElementById('starError').style.display = '';
+      return;
+    }
+    const reviewText = document.getElementById('reviewText').value.trim();
+    const msg = document.getElementById('submitMsg');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting…';
+    msg.textContent = '';
+
+    try {
+      const res = await fetch('/api/review-link/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, rating: selected, review_text: reviewText })
+      });
+      if (res.status === 410) {
+        msg.textContent = 'This link has already been used.';
+        msg.style.color = 'var(--red)';
+        submitBtn.disabled = false; submitBtn.textContent = 'Submit Review';
+        return;
+      }
+      if (!res.ok) throw new Error('Submission failed');
+
+      // Success — show success state, then redirect to login after 3s
+      formEl.style.display = 'none';
+      successEl.style.display = '';
+      setTimeout(() => { window.location.href = '/app/login.html'; }, 4000);
+
+    } catch(e) {
+      msg.textContent = 'Submission failed. Please try again.';
+      msg.style.color = 'var(--red)';
+      submitBtn.disabled = false; submitBtn.textContent = 'Submit Review';
+    }
+  });
+
+  function esc(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function fmtDate(d) {
+    if (!d) return '';
+    const [y,m,day] = d.split('-');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[parseInt(m)-1] + ' ' + parseInt(day) + ', ' + y;
+  }
+})();
+</script>
+
+</body>
+</html>

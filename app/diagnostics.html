@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html><head><title>GigsFill Diagnostics</title>
+<style>
+body { background: #0d1117; color: #c9d1d9; font-family: monospace; padding: 20px; }
+.pass { color: #3fb950; } .fail { color: #f85149; } .warn { color: #d29922; }
+h2 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+pre { background: #161b22; padding: 12px; border-radius: 6px; overflow-x: auto; }
+</style></head><body>
+<script>
+  (async function() {
+    const res = await fetch('/api/me', { credentials: 'include' });
+    const me = await res.json();
+  })();
+</script>
+<h1>🔧 GigsFill Diagnostics</h1>
+<div id="results">Running checks...</div>
+<script>
+// Admin-only: verify session before running diagnostics
+(async () => {
+  try {
+    const r = await fetch('/api/me', { credentials: 'include' });
+    if (!r.ok) { window.location.href = '/app/index.html'; return; }
+    const me = await r.json();
+    if (!me.is_admin) { window.location.href = '/app/index.html'; return; }
+    runDiagnostics();
+  } catch (e) {
+    window.location.href = '/app/index.html';
+  }
+})();
+
+const results = [];
+function log(msg, cls) { results.push(`<div class="${cls}">${msg}</div>`); }
+function show() { document.getElementById('results').innerHTML = results.join(''); }
+
+async function runDiagnostics() {
+  // 1. Check Service Worker
+  log('<h2>Service Worker</h2>', '');
+  if ('serviceWorker' in navigator) {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    log(`Registrations: ${regs.length}`, regs.length > 0 ? 'pass' : 'warn');
+    for (const reg of regs) {
+      log(`  Scope: ${reg.scope}`, '');
+      if (reg.active) log(`  Active SW: ${reg.active.scriptURL}`, 'pass');
+      if (reg.waiting) log(`  ⚠️ WAITING SW (needs tab close/refresh): ${reg.waiting.scriptURL}`, 'fail');
+    }
+    // Check cache
+    const cacheNames = await caches.keys();
+    log(`Cache names: ${JSON.stringify(cacheNames)}`, '');
+    for (const name of cacheNames) {
+      const cache = await caches.open(name);
+      const keys = await cache.keys();
+      const jsKeys = keys.filter(k => k.url.includes('.js'));
+      log(`  ${name}: ${keys.length} entries (${jsKeys.length} JS files)`, '');
+      jsKeys.forEach(k => log(`    ${k.url}`, ''));
+    }
+  } else {
+    log('No service worker support', 'warn');
+  }
+
+  // 2. Check signup-new-init.js
+  log('<h2>Signup Page</h2>', '');
+  try {
+    const resp = await fetch('/app/static/js/signup-new-init.js?cache_bust=' + Date.now());
+    const text = await resp.text();
+    const hasSelectRole = text.includes('function selectRole');
+    const hasEventListener = text.includes("card.addEventListener('click'");
+    const hasDataRole = text.includes('card.dataset.role');
+    log(`signup-new-init.js loaded: ${resp.ok} (${text.length} bytes)`, resp.ok ? 'pass' : 'fail');
+    log(`  Has selectRole function: ${hasSelectRole}`, hasSelectRole ? 'pass' : 'fail');
+    log(`  Has click event listeners: ${hasEventListener}`, hasEventListener ? 'pass' : 'fail');
+    log(`  Uses data-role: ${hasDataRole}`, hasDataRole ? 'pass' : 'fail');
+    log(`  First 200 chars: <pre>${text.substring(0, 200)}</pre>`, '');
+  } catch(e) { log(`Failed to fetch: ${e}`, 'fail'); }
+
+  // 3. Check signup HTML
+  try {
+    const resp = await fetch('/app/signup-new.html?cache_bust=' + Date.now());
+    const text = await resp.text();
+    const hasOnclick = text.includes('onclick="selectRole');
+    const hasDataRole = text.includes('data-role="artist"');
+    log(`signup-new.html loaded: ${resp.ok}`, resp.ok ? 'pass' : 'fail');
+    log(`  Has old onclick handlers: ${hasOnclick}`, hasOnclick ? 'fail' : 'pass');
+    log(`  Has data-role attributes: ${hasDataRole}`, hasDataRole ? 'pass' : 'fail');
+    if (hasOnclick) log('  ⚠️ OLD VERSION! HTML still has onclick instead of data-role', 'fail');
+  } catch(e) { log(`Failed to fetch: ${e}`, 'fail'); }
+
+  // 4. Check venue.create-gigs.js
+  log('<h2>Venue Create Gigs</h2>', '');
+  try {
+    const resp = await fetch('/app/static/js/venue.create-gigs.js?cache_bust=' + Date.now());
+    const text = await resp.text();
+    const hasSlotArtistType = text.includes('slot-artist-type');
+    const hasPerSlotData = text.includes('slot.artist_type');
+    log(`venue.create-gigs.js loaded: ${resp.ok} (${text.length} bytes)`, resp.ok ? 'pass' : 'fail');
+    log(`  Has per-slot artist type dropdown: ${hasSlotArtistType}`, hasSlotArtistType ? 'pass' : 'fail');
+    log(`  Uses slot.artist_type: ${hasPerSlotData}`, hasPerSlotData ? 'pass' : 'fail');
+    if (!hasSlotArtistType) log('  ⚠️ OLD VERSION! No per-slot artist type', 'fail');
+  } catch(e) { log(`Failed to fetch: ${e}`, 'fail'); }
+
+  // 5. Check database columns via API
+  log('<h2>Database (gig_slots)</h2>', '');
+  try {
+    // Try to load a recent gig's slots to see if artist_type field exists
+    const gigsResp = await fetch('/api/gigs?limit=1');
+    if (gigsResp.ok) {
+      const gigs = await gigsResp.json();
+      log(`API accessible, found ${Array.isArray(gigs) ? gigs.length : 'N/A'} gigs`, 'pass');
+    }
+  } catch(e) { log(`API check: ${e}`, 'warn'); }
+
+  // 6. Check sw.js version
+  log('<h2>sw.js Version</h2>', '');
+  try {
+    const resp = await fetch('/sw.js?cache_bust=' + Date.now());
+    const text = await resp.text();
+    const match = text.match(/CACHE_NAME\s*=\s*'([^']+)'/);
+    const version = match ? match[1] : 'unknown';
+    const isV3 = version === 'gigsfill-v3';
+    log(`sw.js cache version: ${version}`, isV3 ? 'pass' : 'fail');
+    if (!isV3) log('  ⚠️ OLD sw.js deployed! Should be gigsfill-v3', 'fail');
+  } catch(e) { log(`Failed: ${e}`, 'fail'); }
+
+  // 7. Nuclear option button
+  log('<h2>Actions</h2>', '');
+  log('<button onclick="nukeCache()" style="background:#f85149; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer; font-size:16px;">🔥 NUKE ALL CACHES &amp; UNREGISTER SW</button>', '');
+  log('<div id="nukeResult"></div>', '');
+
+  show();
+}
+
+async function nukeCache() {
+  const el = document.getElementById('nukeResult');
+  let msgs = [];
+  // Unregister all service workers
+  const regs = await navigator.serviceWorker.getRegistrations();
+  for (const reg of regs) {
+    await reg.unregister();
+    msgs.push('Unregistered SW: ' + reg.scope);
+  }
+  // Delete all caches
+  const names = await caches.keys();
+  for (const name of names) {
+    await caches.delete(name);
+    msgs.push('Deleted cache: ' + name);
+  }
+  msgs.push('✅ All cleared! Refreshing in 2 seconds...');
+  el.innerHTML = '<pre class="pass">' + msgs.join('\n') + '</pre>';
+  setTimeout(() => location.reload(), 2000);
+}
+
+// runDiagnostics() called after auth check above
+</script></body></html>

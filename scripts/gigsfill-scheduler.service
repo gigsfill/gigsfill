@@ -1,0 +1,42 @@
+[Unit]
+Description=GigsFill Background Scheduler (payouts + email blasts)
+Documentation=Runs the payout_scheduler and email scheduler in a single dedicated process so they're never duplicated across uvicorn workers. The main API service (gigsfill.service) does NOT run schedulers.
+After=network.target redis.service gigsfill.service
+Wants=redis.service
+# We don't strictly require the API to be up, but if it isn't, schedulers
+# will still try to charge venues and send emails — that's fine. After= is
+# just a soft ordering hint.
+
+[Service]
+Type=exec
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/gigsfill
+EnvironmentFile=/opt/gigsfill/.env
+# This is the only flag that turns the schedulers on. Without it, even
+# this service would no-op (defensive — see backend/main.py).
+Environment=GIGSFILL_RUN_SCHEDULERS=1
+
+ExecStart=/opt/gigsfill/venv/bin/python -m backend.scheduler_main
+
+# Graceful shutdown: scheduler_main installs SIGTERM/SIGINT handlers that
+# flip a flag to break the main sleep loop. Daemon threads die with the
+# process. Give it 30s to exit cleanly before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Same resource limits as the API service
+LimitNOFILE=65536
+LimitNPROC=4096
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gigsfill-scheduler
+
+[Install]
+WantedBy=multi-user.target

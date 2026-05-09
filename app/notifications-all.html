@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+<title>All Notifications | GigsFill</title>
+
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+<script src="/app/static/js/auth.guard.js"></script>
+<script src="/app/static/js/timezone-utils.js"></script>
+<script src="/app/static/js/notifications-all.js" type="module"></script>
+
+<script src="/app/static/js/time-format.js"></script>
+
+<link href="/app/static/css/gigsfill-modern.css" rel="stylesheet"/>
+<link href="/app/static/css/mobile.css" rel="stylesheet"/>
+</head>
+<body class="dark-ui">
+
+  <header class="app-header">
+    <div class="header-inner">
+        <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+        <div class="header-actions">
+          
+<button class="btn ghost" onclick="window.history.back()">← Back</button>
+</div>
+</div>
+</header>
+<script src="/app/static/js/user-dropdown.js"></script>
+
+<main class="container" style="max-width: 1400px; margin: 0 auto;">
+<!-- Header & Filters Section -->
+<section class="panel" style="margin-bottom: 20px;">
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+<h2 style="margin: 0;">🔔 All Notifications</h2>
+<div style="display: flex; gap: 12px;">
+<select class="dark-dropdown" id="typeFilter">
+<option value="all">All Types</option>
+<option value="gig_cancelled">❌ Gig Cancelled</option>
+<option value="preferred_approved">✅ Preferred Approved</option>
+<option value="preferred_denied">❌ Preferred Denied</option>
+<option value="preferred_request">📋 Preferred Request</option>
+<option value="gig_booked">🎉 Gig Booked</option>
+</select>
+<select class="dark-dropdown" id="readFilter">
+<option value="all">All</option>
+<option value="unread">Unread Only</option>
+<option value="read">Read Only</option>
+</select>
+<button class="btn primary" id="markAllRead">Mark All Read</button>
+</div>
+</div>
+<!-- Stats Grid - Compact -->
+<div id="summaryStats" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+<!-- Stats will be populated here -->
+</div>
+</section>
+<!-- Notifications List Section - Full Width Below -->
+<section class="panel">
+<div id="notificationsList">
+<p style="color: var(--text-muted); text-align: center;">Loading notifications...</p>
+</div>
+</section>
+</main>
+<style>
+  /* Force proper layout - notifications below filters */
+  main.container {
+    display: block !important;
+    max-width: 1400px !important;
+    margin: 0 auto !important;
+  }
+  
+  main.container > .panel {
+    width: 100% !important;
+    display: block !important;
+  }
+  
+  /* Dark dropdown styling - COMPLETE */
+  .dark-dropdown {
+    padding: 8px 12px !important;
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid rgba(255,255,255,0.2) !important;
+    border-radius: 6px !important;
+    color: white !important;
+    font-family: inherit !important;
+    cursor: pointer !important;
+    transition: all 0.2s !important;
+  }
+  
+  .dark-dropdown:hover {
+    background: rgba(255,255,255,0.08) !important;
+    border-color: rgba(255,255,255,0.3) !important;
+  }
+  
+  .dark-dropdown:focus {
+    outline: none !important;
+    border-color: var(--accent-cyan) !important;
+  }
+  
+  /* CRITICAL: Option background styling */
+  .dark-dropdown option {
+    background-color: #1a1f2e !important;
+    color: white !important;
+    padding: 8px !important;
+  }
+  
+  /* Additional browser-specific option styling */
+  select.dark-dropdown {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url('data:image/svg+xml;utf8,<svg fill="white" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 32px !important;
+  }
+  
+  /* Ensure stats and list don't go side by side */
+  #summaryStats {
+    display: grid !important;
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 16px !important;
+    margin-bottom: 0 !important;
+  }
+  
+  #notificationsList {
+    display: block !important;
+    width: 100% !important;
+  }
+</style>
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

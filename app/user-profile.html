@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+  <title>Profile - GigsFill</title>
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    .profile-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    
+    .profile-title {
+      font-size: 2rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 32px;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+    
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      background: transparent;
+      border: none;
+      color: var(--text-gray);
+      cursor: pointer;
+      font: 600 0.875rem 'Inter', sans-serif;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+      margin-bottom: -1px;
+      flex-shrink: 0;
+    }
+    
+    .tab:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.03);
+    }
+    
+    .tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      background: rgba(6,182,212,0.1);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .content-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      margin-bottom: 24px;
+    }
+    
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    
+    .form-grid .field {
+      margin-bottom: 0;
+    }
+    
+    .form-grid-full {
+      grid-column: 1 / -1;
+    }
+    
+    .entity-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 12px;
+      cursor: pointer;
+    }
+    
+    .entity-item:hover {
+      background: rgba(255,255,255,0.04);
+    }
+    
+    /* v96: Drag and drop styles */
+    .entity-item.draggable {
+      cursor: default;
+    }
+    
+    .entity-item.dragging {
+      opacity: 0.5;
+      background: rgba(139, 92, 246, 0.1);
+      border: 1px dashed var(--purple);
+    }
+    
+    .entity-item.drag-over {
+      border: 2px solid var(--cyan);
+      background: rgba(6, 182, 212, 0.1);
+    }
+    
+    .drag-handle {
+      cursor: grab;
+      padding: 8px;
+      margin-right: 12px;
+      color: var(--text-gray);
+      opacity: 0.5;
+      transition: opacity 0.2s;
+      user-select: none;
+    }
+    
+    .drag-handle:hover {
+      opacity: 1;
+      color: var(--cyan);
+    }
+    
+    .drag-handle:active {
+      cursor: grabbing;
+    }
+    
+    .entity-item-content {
+      flex: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+    }
+    
+    /* Modal Styles */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 20px;
+    }
+    
+    .modal-content {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .modal-header h3 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: var(--text);
+    }
+    
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-gray);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      line-height: 1;
+    }
+    
+    .modal-close:hover {
+      color: var(--text);
+    }
+    
+    .modal-body {
+      padding: 24px;
+    }
+    
+    .modal-error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #f87171;
+      padding: 12px 24px;
+      margin: 0;
+      display: none;
+    }
+    
+    .modal-error.show {
+      display: block;
+    }
+    
+    .modal-step {
+      background: rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.6);
+      transition: all 0.2s;
+    }
+    
+    .modal-step.active {
+      background: var(--cyan);
+      color: white;
+    }
+    
+    .modal-step-content {
+      display: none;
+      padding: 24px;
+    }
+    
+    .modal-step-content.active {
+      display: block;
+    }
+    
+    /* FIX: Dropdown options need explicit hex colors (browsers ignore CSS variables) */
+    select {
+      background: #151b28 !important;
+      border: 1px solid #333 !important;
+    }
+    select option {
+      background: #151b28;
+      color: #ffffff;
+      text-align: center;
+    }
+    
+    /* Match input background to dropdown background */
+    .modal-content input, .modal-content textarea {
+      background: #151b28 !important;
+    }
+    
+    /* Helper text - darker, smaller, italic */
+    .helper-text {
+      font-size: 0.75rem;
+      font-style: italic;
+      color: #64748b;
+      text-transform: none !important;
+      font-weight: 400;
+      margin-left: 8px;
+    }
+    
+    /* Inline text - same as label but NOT uppercase */
+    .inline-text {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #e2e8f0;
+      text-transform: none !important;
+    }
+    
+    /* Tight dropdowns for Yes/No */
+    .tight-select {
+      width: auto !important;
+      min-width: 60px;
+      padding: 4px 8px !important;
+      text-align: center;
+    }
+    
+    /* Arrival type dropdown */
+    .arrival-select {
+      width: auto !important;
+      min-width: 150px;
+      padding: 4px 8px !important;
+      text-align: center;
+    }
+    
+    /* Pay field sizes */
+    .pay-fields { display: flex; align-items: center; gap: 8px; }
+    .pay-dollars { width: 100px !important; text-align: right; }
+    .pay-cents { width: 45px !important; text-align: center; }
+    
+    /* Capacity field */
+    .capacity-field { width: 90px !important; text-align: center; }
+    
+    /* Frequency field */
+    .frequency-field { width: 70px !important; text-align: center; }
+    
+    /* Section dividers */
+    .section-divider { 
+      height: 1px; 
+      background: linear-gradient(90deg, transparent, #8b5cf6, #06b6d4, transparent); 
+      margin: 24px 0; 
+      opacity: 0.3; 
+    }
+
+    @media (max-width: 768px) {
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+      <div class="header-actions">
+        <a class="btn ghost" href="/app/admin.html" id="adminButton" style="display:none;">Admin</a>
+        <button class="btn ghost" onclick="logout()">Sign Out</button>
+      </div>
+    </div>
+  </header>
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/auth.guard.js"></script>
+<script src="/app/static/js/api-globals.js"></script>
+<script src="/app/static/js/email-verify-banner.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+  <script src="/app/static/js/user-dropdown.js"></script>
+
+  <div class="profile-container">
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('user-settings')">User Settings</button>
+      <button class="tab" onclick="switchTab('my-artists')">My Artists <span id="artistCount">(0)</span></button>
+      <button class="tab" onclick="switchTab('my-venues')">My Venues <span id="venueCount">(0)</span></button>
+      <button class="tab" onclick="switchTab('email')">Notifications</button>
+      <button class="tab" onclick="switchTab('affiliates')">Affiliates</button>
+    </div>
+
+    <!-- USER SETTINGS TAB -->
+    <div class="tab-content active" id="user-settings-tab">
+      <div class="content-card">
+        <h2 class="section-header" style="text-align:left;">Account Information</h2>
+        <form id="userSettingsForm" onsubmit="saveUserSettings(event)">
+          <div class="form-grid">
+            <div class="field">
+              <label>First Name</label>
+              <input type="text" id="firstName" required>
+            </div>
+            <div class="field">
+              <label>Last Name</label>
+              <input type="text" id="lastName" required>
+            </div>
+            <div class="field form-grid-full">
+              <label>Email</label>
+              <input type="email" id="userEmail" required>
+            </div>
+            <div class="field form-grid-full">
+              <label>Phone</label>
+              <input type="tel" id="phone" placeholder="(555) 123-4567">
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 1rem; margin-top: 20px;">
+            <button class="btn primary" type="submit">Save Changes</button>
+            <div id="inlineSaveIndicator" style="opacity: 0; color: #06b6d4; font-weight: 600; transition: opacity 0.3s;">
+              ✓ Changes saved
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="content-card">
+        <h2 class="section-header" style="text-align:left;">Change Password</h2>
+        <form id="passwordForm">
+          <div class="form-grid">
+            <div class="field">
+              <label>Current Password</label>
+              <input type="password" id="currentPassword" required autocomplete="current-password">
+            </div>
+            <div class="field">
+              <label>New Password</label>
+              <input type="password" id="newPassword" required minlength="6" autocomplete="new-password">
+            </div>
+            <div class="field">
+              <label>Confirm New Password</label>
+              <input type="password" id="confirmPassword" required minlength="6" autocomplete="new-password">
+            </div>
+          </div>
+          <button class="btn primary" type="submit" style="margin-top: 20px;">Update Password</button>
+        </form>
+      </div>
+
+      <!-- Delete Account -->
+      <div class="content-card" style="border: 1px solid rgba(239,68,68,0.3); margin-top: 24px;">
+        <h2 class="section-header" style="text-align:left;color: #ef4444;">Delete Account</h2>
+        <p style="color: var(--text-gray); font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
+          Permanently delete your account and all associated data. This action cannot be undone.
+        </p>
+        <button class="btn" onclick="openDeleteAccountModal()" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4);">Delete My Account</button>
+      </div>
+    </div>
+
+    <!-- MY ARTISTS TAB -->
+    <div class="tab-content" id="my-artists-tab">
+      <div class="content-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h2 class="section-header" style="margin: 0;">My Artist Profiles</h2>
+          <button class="btn primary" onclick="openAddArtistModal()">+ Add Artist</button>
+        </div>
+        <div id="artistsList">
+          <p style="color: var(--text-gray);">Loading...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- MY VENUES TAB -->
+    <div class="tab-content" id="my-venues-tab">
+      <div class="content-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h2 class="section-header" style="margin: 0;">My Venue Profiles</h2>
+          <button class="btn primary" onclick="openAddVenueModal()">+ Add Venue</button>
+        </div>
+        <div id="venuesList">
+          <p style="color: var(--text-gray);">Loading...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- NOTIFICATIONS TAB -->
+    <div class="tab-content" id="email-tab">
+      <div class="content-card">
+        <h2 class="section-header">Notification Preferences</h2>
+        
+        <!-- SMS Setup Section (hidden - carrier gateways unreliable, re-enable with Twilio later) -->
+        <div id="smsSetupSection" style="display:none; background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 8px; padding: 16px 20px; margin-bottom: 28px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+            <span style="font-size: 1.1rem;">📱</span>
+            <strong style="color: var(--cyan); font-size: 0.9rem;">Text Message Setup</strong>
+          </div>
+          <p style="color: var(--text-gray); font-size: 0.82rem; margin-bottom: 14px;">Select your carrier to enable SMS notifications via your phone number on file. Texts are sent through your carrier's email-to-SMS gateway — no extra services needed.</p>
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 200px;">
+              <label style="font-size: 0.78rem; color: var(--text-gray); display: block; margin-bottom: 4px;">Mobile Carrier</label>
+              <select id="smsCarrierSelect" onchange="updateSmsCarrier(this.value)" style="width: 100%; padding: 8px 12px; background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem;">
+                <option value="">— Select Carrier —</option>
+              </select>
+            </div>
+            <div id="smsPhoneDisplay" style="flex: 1; min-width: 150px;">
+              <label style="font-size: 0.78rem; color: var(--text-gray); display: block; margin-bottom: 4px;">Phone Number</label>
+              <span id="smsPhoneNumber" style="color: var(--text); font-size: 0.85rem;">Not set</span>
+            </div>
+            <div id="smsStatusBadge" style="align-self: flex-end;"></div>
+          </div>
+        </div>
+        
+        <div id="artistEmailPreferences"></div>
+        <div id="venueEmailPreferences"></div>
+      </div>
+    </div>
+
+  <!-- AFFILIATES TAB -->
+  <div class="tab-content" id="affiliates-tab" style="display:none;">
+
+    <!-- Recommend button -->
+    <div class="content-card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;font-size:0.85rem;color:var(--text);">Recommend GigsFill to a Venue</h3>
+        <button onclick="toggleRecommendForm()" id="affRecommendToggle"
+          style="padding:6px 16px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.4);border-radius:6px;color:var(--cyan);font-size:0.78rem;cursor:pointer;font-weight:600;">
+          + Recommend
+        </button>
+      </div>
+
+      <!-- Recommend form (hidden by default) -->
+      <div id="affRecommendForm" style="display:none;margin-bottom:16px;padding:14px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:160px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Recipient Name (optional)</label>
+              <input type="text" id="affRecipName" placeholder="John's Bar & Grill"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+            <div style="flex:1;min-width:180px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Email Address <span style="color:#ef4444;">*</span></label>
+              <input type="email" id="affRecipEmail" placeholder="venue@example.com"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+          </div>
+          <div>
+            <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Personal Note (optional)</label>
+            <textarea id="affPersonalNote" rows="2" placeholder="Hey, I've been using GigsFill for booking gigs — you should check it out!"
+              style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);resize:vertical;box-sizing:border-box;"></textarea>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <button onclick="sendAffRecommend()"
+              style="padding:7px 20px;background:rgba(6,182,212,0.2);border:1px solid rgba(6,182,212,0.5);border-radius:6px;color:var(--cyan);font-size:0.78rem;font-weight:600;cursor:pointer;">
+              Send Recommendation →
+            </button>
+            <span id="affSendResult" style="font-size:0.75rem;opacity:0;transition:opacity .3s;color:#10b981;"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sent emails list -->
+      <div id="affEmailsList" style="min-height:40px;"></div>
+    </div>
+
+    <!-- Header row: code + Stripe status -->
+    <div class="content-card" style="margin-bottom:12px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+        <div>
+          <div style="font-size:0.72rem;color:var(--text-gray);margin-bottom:4px;">Your Affiliate Code</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <code id="affMyCode" style="font-size:1.2rem;font-weight:700;color:#c4b5fd;letter-spacing:.08em;">—</code>
+            <button onclick="copyAffCode()" style="padding:4px 12px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.4);border-radius:5px;color:#c4b5fd;font-size:0.72rem;cursor:pointer;">Copy Link</button>
+          </div>
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;">Share this link: <span id="affShareUrl" style="color:var(--cyan);"></span></div>
+        </div>
+        <div id="affStripeBlock" style="width:50%;min-width:260px;max-width:500px;">
+          <div id="affStripeStatus" style="font-size:0.75rem;color:#f59e0b;padding:12px 16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;">
+            <div style="margin-bottom:8px;">⚠️ Set up Stripe to receive payouts</div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px;">
+                <label style="font-size:0.68rem;color:var(--text-gray);">Use existing artist account</label>
+                <select id="affExistingStripeSelect"
+                  style="padding:5px 8px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.75rem;cursor:pointer;">
+                  <option value="">Choose existing account…</option>
+                </select>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
+                <label style="font-size:0.68rem;color:var(--text-gray);">Or connect new</label>
+                <button onclick="startAffStripeOnboard()"
+                  style="padding:5px 14px;background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.5);border-radius:5px;color:#fbbf24;font-size:0.72rem;cursor:pointer;white-space:nowrap;">
+                  Connect Stripe →
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div id="affMyStats" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;"></div>
+
+
+
+    <!-- Referred venues + earnings -->
+    <div class="content-card" style="margin-bottom:16px;">
+      <h3 style="margin:0 0 12px;font-size:0.85rem;color:var(--text);">Referred Venues &amp; Earnings</h3>
+      <div id="affReferralsList" style="min-height:40px;">
+        <div style="text-align:center;padding:20px;color:var(--text-gray);font-size:0.8rem;">Loading…</div>
+      </div>
+    </div>
+
+    <!-- W9 / Tax Info -->
+    <div class="content-card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;font-size:0.85rem;color:var(--text);">Tax Information (W-9)</h3>
+        <span id="affW9Status" style="font-size:0.72rem;padding:3px 10px;border-radius:12px;background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.3);">Not Filed</span>
+      </div>
+      <div style="font-size:0.75rem;color:var(--text-gray);margin-bottom:14px;line-height:1.6;">
+        Required for affiliate payouts. If your annual affiliate earnings exceed the IRS reporting threshold, we'll issue a 1099-NEC.
+        Your TIN is encrypted and stored securely.
+      </div>
+
+      <!-- W9 form (collapsed by default) -->
+      <div id="affW9Form" style="display:none;padding:14px;background:rgba(139,92,246,0.04);border:1px solid rgba(139,92,246,0.2);border-radius:8px;margin-bottom:14px;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:180px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Legal Name <span style="color:#ef4444;">*</span></label>
+              <input type="text" id="w9TaxName" placeholder="Full legal name or business name"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+            <div style="flex:1;min-width:160px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Business Name (if different)</label>
+              <input type="text" id="w9BusinessName" placeholder="DBA / LLC name"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:160px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Tax Classification <span style="color:#ef4444;">*</span></label>
+              <select id="w9Classification" style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);">
+                <option value="">Select…</option>
+                <option value="individual">Individual / Sole Proprietor</option>
+                <option value="c_corp">C Corporation</option>
+                <option value="s_corp">S Corporation</option>
+                <option value="partnership">Partnership</option>
+                <option value="llc_single">LLC (Single Member)</option>
+                <option value="llc_multi">LLC (Multi Member)</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:120px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">TIN Type <span style="color:#ef4444;">*</span></label>
+              <select id="w9TinType" style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);">
+                <option value="ssn">SSN</option>
+                <option value="ein">EIN</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:140px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">TIN (9 digits, no dashes) <span style="color:#ef4444;">*</span></label>
+              <input type="password" id="w9Tin" placeholder="•••••••••" maxlength="9"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div style="flex:2;min-width:200px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Street Address</label>
+              <input type="text" id="w9Address1" placeholder="123 Main St"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+            <div style="flex:1;min-width:120px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">City</label>
+              <input type="text" id="w9City" placeholder="City"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+            <div style="flex:0 0 70px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">State</label>
+              <input type="text" id="w9State" placeholder="CA" maxlength="2"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;text-transform:uppercase;">
+            </div>
+            <div style="flex:0 0 90px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">ZIP</label>
+              <input type="text" id="w9Zip" placeholder="90210" maxlength="10"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+          </div>
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.75rem;color:var(--text-gray);line-height:1.5;">
+            <input type="checkbox" id="w9Certified" style="margin-top:2px;flex-shrink:0;">
+            Under penalty of perjury, I certify that the information provided is correct and that I am not subject to backup withholding.
+          </label>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <button onclick="saveAffW9()" style="padding:7px 20px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.5);border-radius:6px;color:#c4b5fd;font-size:0.78rem;font-weight:600;cursor:pointer;">
+              Save W-9
+            </button>
+            <span id="affW9SaveResult" style="font-size:0.75rem;opacity:0;transition:opacity .3s;color:#10b981;"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- W9 filed summary (shown when filed) -->
+      <div id="affW9Filed" style="display:none;font-size:0.78rem;color:var(--text-gray);">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span id="affW9Summary"></span>
+          <button onclick="toggleAffW9Form()" style="padding:4px 12px;background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:5px;color:#c4b5fd;font-size:0.72rem;cursor:pointer;">Update W-9</button>
+        </div>
+      </div>
+
+      <button id="affW9ToggleBtn" onclick="toggleAffW9Form()"
+        style="padding:6px 16px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.4);border-radius:6px;color:#c4b5fd;font-size:0.75rem;cursor:pointer;font-weight:600;">
+        + File W-9
+      </button>
+
+      <!-- 1099 History -->
+      <div id="affTaxHistory" style="margin-top:16px;display:none;">
+        <div style="font-size:0.72rem;font-weight:700;color:var(--text-gray);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">1099 History</div>
+        <div id="aff1099List"></div>
+      </div>
+    </div>
+
+    <!-- Payout history -->
+    <div class="content-card" style="margin-bottom:16px;">
+      <h3 style="margin:0 0 12px;font-size:0.85rem;color:var(--text);">Payout History</h3>
+      <div id="affPayoutHistory" style="min-height:40px;">
+        <div style="text-align:center;padding:16px;color:var(--text-gray);font-size:0.8rem;">Loading…</div>
+      </div>
+      <div style="margin-top:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+        <div id="affPayoutScheduleInfo" style="font-size:0.72rem;color:var(--text-gray);line-height:1.7;">
+          <strong style="color:var(--text);">Payout Schedule:</strong> Apr 1 · Jul 1 · Oct 1 · Dec 31<br>
+          <strong style="color:var(--text);">Earnings on:</strong> 1% of each gig fee for venues you referred (reduces to 0.5% after 1 year)<br>
+          <strong style="color:var(--text);">Minimum payout:</strong> $50 — smaller balances roll over to next quarter
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end affiliates-tab -->
+  </div><!-- end profile-container -->
+
+<footer>
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+  <!-- ADD ARTIST MODAL -->
+  <div id="addArtistModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content" style="max-width: 550px;">
+      <div class="modal-header">
+        <h3>Add New Artist</h3>
+        <button class="modal-close" onclick="closeAddArtistModal()">&times;</button>
+      </div>
+      <div id="artistModalError" class="modal-error"></div>
+      <div class="modal-body">
+        <div class="field">
+          <label class="required">Artist/Band Name</label>
+          <input type="text" id="modal_artistName" placeholder="The Blue Notes">
+        </div>
+        <div class="field">
+          <label class="required">Artist Type</label>
+          <select id="modal_artistType" onchange="toggleModalBandFormats()">
+            <option value="">Select Type</option>
+            <option value="Live Band">Live Band</option>
+            <option value="DJ">DJ</option>
+            <option value="Comedian">Comedian</option>
+            <option value="Trivia Host">Trivia Host</option>
+          </select>
+        </div>
+        <div id="modal_bandFormatsField" class="field" style="display: none;">
+          <label class="required">Styles (select at least one)</label>
+          <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Country">
+              <span>Country</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Hip-Hop">
+              <span>Hip-Hop</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Indie">
+              <span>Indie</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Jazz">
+              <span>Jazz</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Latin">
+              <span>Latin</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Pop">
+              <span>Pop</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Reggae">
+              <span>Reggae</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_artist_style" value="Rock">
+              <span>Rock</span>
+            </label>
+          </div>
+        </div>
+        <div id="modal_lineupField" class="field" style="display: none;">
+          <label class="required">Lineup (select at least one)</label>
+          <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_band_format" value="Solo">
+              <span>Solo</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_band_format" value="Duo">
+              <span>Duo</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_band_format" value="Trio">
+              <span>Trio</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="modal_band_format" value="Full Band">
+              <span>Full Band</span>
+            </label>
+          </div>
+        </div>
+        <div class="field">
+          <label class="required">City</label>
+          <div style="position:relative;">
+          <input type="text" id="modal_artistCity" placeholder="Los Angeles" autocomplete="off">
+          </div>
+        </div>
+        <div class="field">
+          <label class="required">State</label>
+          <select id="modal_artistState">
+            <option value="">Select State</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Bio (optional)</label>
+          <textarea id="modal_artistBio" rows="3" placeholder="Tell us about yourself..."></textarea>
+        </div>
+        <div class="field">
+          <label>Booking Contact</label>
+          <select id="modal_artistBookingContact">
+            <option value="self">Loading...</option>
+          </select>
+        </div>
+        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
+          <button type="button" class="btn ghost" onclick="closeAddArtistModal()">Cancel</button>
+          <button type="button" class="btn primary" onclick="submitArtistModal()">Create Artist</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD VENUE MODAL -->
+  <div id="addVenueModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>Add New Venue</h3>
+        <button class="modal-close" onclick="closeAddVenueModal()">&times;</button>
+      </div>
+      <div id="venueModalError" class="modal-error"></div>
+      
+      <!-- Step Indicators -->
+      <div style="display: flex; justify-content: center; gap: 12px; padding: 16px 24px;">
+        <div id="modal_venueStep1Indicator" class="modal-step active" style="width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600;">1</div>
+        <div id="modal_venueStep2Indicator" class="modal-step" style="width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600;">2</div>
+      </div>
+      
+      <!-- Step 1: Venue Details (from signup step3-venue) -->
+      <div id="modal_venueStep1" class="modal-step-content active">
+        <div class="field">
+          <label class="required">Venue Name</label>
+          <input type="text" id="modal_venueName" placeholder="The Blue Note">
+        </div>
+        <div class="field">
+          <label class="required">Address</label>
+          <input type="text" id="modal_venueAddress" placeholder="123 Main St">
+        </div>
+        <div class="field">
+          <label class="required">City</label>
+          <div style="position:relative;">
+          <input type="text" id="modal_venueCity" placeholder="Los Angeles" autocomplete="off">
+          </div>
+        </div>
+        <div class="field">
+          <label class="required">State</label>
+          <select id="modal_venueState">
+            <option value="">Select State</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="required">Zip Code</label>
+          <input type="text" id="modal_venueZip" placeholder="90001" maxlength="5" oninput="formatZipCode(this)" pattern="[0-9]{5}">
+        </div>
+        <div class="field">
+          <label>Description (optional)</label>
+          <textarea id="modal_venueDescription" rows="3" placeholder="Tell us about your venue..."></textarea>
+        </div>
+        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
+          <button type="button" class="btn ghost" onclick="closeAddVenueModal()">Cancel</button>
+          <button type="button" class="btn primary" onclick="nextModalVenueStep()">Next →</button>
+        </div>
+      </div>
+      
+      <!-- Step 2: Venue Details & Requirements (from signup step4-venue) -->
+      <div id="modal_venueStep2" class="modal-step-content">
+        <div class="field">
+          <label class="required">Default Artist Pay <span class="helper-text">Standard payment for artists at your venue</span></label>
+          <div class="pay-fields">
+            <span class="inline-text">$</span>
+            <input type="text" id="modal_venueDefaultPayDollars" class="pay-dollars" placeholder="500" oninput="formatModalPayDollars(this)" maxlength="6">
+            <span class="inline-text">.</span>
+            <input type="text" id="modal_venueDefaultPayCents" class="pay-cents" value="00" maxlength="2" oninput="formatModalPayCents(this)">
+          </div>
+        </div>
+        <div class="section-divider"></div>
+        <div class="field">
+          <label class="required">Performance Frequency <span class="helper-text">How often can the same artist perform? (0 = unlimited)</span></label>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="inline-text">1 Time Every</span>
+            <input type="number" id="modal_venueFrequency" min="0" max="365" step="1" class="frequency-field" placeholder="30" oninput="formatModalFrequency(this)">
+            <span class="inline-text">Days</span>
+          </div>
+        </div>
+        <div class="section-divider"></div>
+        <div class="field">
+          <label class="required">Venue Capacity</label>
+          <input type="text" id="modal_venueCapacity" class="capacity-field" placeholder="100" oninput="formatModalCapacity(this)" maxlength="6">
+        </div>
+        <!-- STAGE -->
+        <div class="section-divider"></div>
+        <div class="field">
+          <label>Venue Has a Stage?</label>
+          <select id="modal_venueHasStage" onchange="toggleModalStageDetails()" class="tight-select">
+            <option value="0" selected>No</option>
+            <option value="1">Yes</option>
+          </select>
+        </div>
+        <div id="modal_stageDetails" style="display: none; margin-left: 20px;">
+          <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+            <label style="display: flex; align-items: center; gap: 6px;">
+              <input type="number" id="modal_venueStageWidth" min="0" max="999" step="1" style="width: 80px;" placeholder="20">
+              <span class="inline-text">ft wide</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px;">
+              <input type="number" id="modal_venueStageDepth" min="0" max="999" step="1" style="width: 80px;" placeholder="15">
+              <span class="inline-text">ft deep</span>
+            </label>
+          </div>
+          <textarea id="modal_venueSetupLocation" placeholder="Stage / setup description" style="min-height: 50px; max-height: 70px;"></textarea>
+        </div>
+        <!-- SOUND -->
+        <div class="section-divider"></div>
+        <div class="field">
+          <label>Sound Equipment Provided?</label>
+          <select id="modal_venueHasSoundEquipment" onchange="toggleModalSoundDetails()" class="tight-select">
+            <option value="0" selected>No</option>
+            <option value="1">Yes</option>
+          </select>
+        </div>
+        <div id="modal_soundDetails" style="display: none; margin-left: 20px;">
+          <textarea id="modal_venueSoundEquipmentDesc" placeholder="Sound equipment details" style="min-height: 50px; max-height: 70px;"></textarea>
+          <div class="field" style="margin-top: 12px;">
+            <label>Sound Engineer?</label>
+            <select id="modal_venueHasSoundEngineer" onchange="toggleModalEngineerDetails()" class="tight-select">
+              <option value="0" selected>No</option>
+              <option value="1">Yes</option>
+            </select>
+          </div>
+          <div id="modal_engineerDetails" style="display: none; margin-top: 12px;">
+            <textarea id="modal_venueSoundEngineerDetails" placeholder="Sound engineer details" style="min-height: 50px; max-height: 70px;"></textarea>
+          </div>
+        </div>
+        <!-- LIGHTING -->
+        <div class="section-divider"></div>
+        <div class="field">
+          <label>Lighting Provided?</label>
+          <select id="modal_venueHasLighting" onchange="toggleModalLightingDetails()" class="tight-select">
+            <option value="0" selected>No</option>
+            <option value="1">Yes</option>
+          </select>
+        </div>
+        <div id="modal_lightingDetails" style="display: none; margin-left: 20px;">
+          <textarea id="modal_venueLightingDesc" placeholder="Lighting details" style="min-height: 50px; max-height: 70px;"></textarea>
+        </div>
+        <!-- BAR TAB -->
+        <div class="section-divider"></div>
+        <div class="field">
+          <label>Bar Tab <span class="helper-text">Bar tab details for artists, if any</span></label>
+          <textarea id="modal_venueBarTabDetails" placeholder="Enter bar tab details for artists, if any..." style="min-height: 50px; max-height: 70px;"></textarea>
+        </div>
+        <!-- FOOD TAB -->
+        <div class="section-divider"></div>
+        <div class="field">
+          <label>Food Tab <span class="helper-text">Food tab details for artists, if any</span></label>
+          <textarea id="modal_venueFoodTabDetails" placeholder="Enter food tab details for artists, if any..." style="min-height: 50px; max-height: 70px;"></textarea>
+        </div>
+        <!-- ARRIVAL TIME -->
+        <div class="section-divider"></div>
+        <div class="field" style="margin-top: 20px;">
+          <label>Load In / Out:</label>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <select id="modal_venueArrivalType" onchange="toggleModalArrivalDetails()" class="arrival-select">
+              <option value="flexible" selected>Flexible</option>
+              <option value="no_earlier_than">No Earlier Than…</option>
+            </select>
+            <div id="modal_arrivalDetails" style="display: none;">
+              <div style="display: flex; gap: 4px; align-items: center;">
+                <select id="modal_venueArrivalHour" class="tight-select">
+                  <option value="">--</option>
+                  <option>1</option><option>2</option><option>3</option>
+                  <option>4</option><option>5</option><option>6</option>
+                  <option>7</option><option>8</option><option>9</option>
+                  <option>10</option><option>11</option><option selected>12</option>
+                </select>
+                <select id="modal_venueArrivalPeriod" class="tight-select">
+                  <option value="PM" selected>PM</option>
+                  <option value="AM">AM</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+        <textarea id="modal_venueLoadInOut" placeholder="Load in / load out details" style="margin-left: 20px; min-height: 50px; max-height: 70px;"></textarea>
+        
+        <div style="margin: 16px 0 12px 0; padding: 12px; background: rgba(139,92,246,0.06); border: 1px solid rgba(139,92,246,0.15); border-radius: 8px;">
+          <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+            <input type="checkbox" id="modal_venueProCertified" style="width: 18px; height: 18px; min-width: 18px; margin-top: 3px; accent-color: #8b5cf6;">
+            <span style="font-size: 0.72rem; color: var(--text-gray); line-height: 1.5;">I represent and warrant that this venue maintains active public performance licenses from all applicable Performing Rights Organizations ("PROs"), including but not limited to ASCAP, BMI, SESAC, GMR, and any other organization required for the lawful public performance of musical works at this venue. I understand that maintaining such licenses is solely the responsibility of the venue. <span style="color: #ef4444;">*</span></span>
+          </label>
+        </div>
+        
+        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
+          <button type="button" class="btn ghost" onclick="prevModalVenueStep()">← Back</button>
+          <button type="button" class="btn primary" onclick="submitVenueModal()">Create Venue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app/static/js/modals.js"></script>
+  <script src="/app/static/js/city-autocomplete.js"></script>
+  <script src="/app/static/js/user-profile.js"></script>
+  <script src="/app/static/js/user-affiliate.js"></script>
+  
+
+  <!-- Delete Account Modal -->
+  <div class="modal-overlay" id="deleteAccountModal" style="display:none;background:rgba(0,0,0,0.85);backdrop-filter:blur(4px);z-index:10000;">
+    <div style="background:var(--card);border:1px solid rgba(239,68,68,0.4);border-radius:12px;padding:28px;max-width:520px;width:90%;max-height:85vh;overflow-y:auto;">
+      <h2 style="color:#ef4444;margin:0 0 8px;font-size:1.1rem;">⚠️ Delete Account</h2>
+      <p style="color:var(--text-gray);font-size:0.85rem;line-height:1.5;margin:0 0 20px;">
+        This will permanently delete your user account and all associated data. This action <strong style="color:#ef4444;">cannot be undone</strong>.
+      </p>
+
+      <div id="deleteEntitiesSection" style="display:none;">
+        <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:14px;margin-bottom:16px;">
+          <p style="color:var(--text);font-size:0.85rem;font-weight:600;margin:0 0 10px;">
+            You are the owner of the following profiles. Check any you want to delete:
+          </p>
+          <div id="deleteEntitiesList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+        <div id="bookedGigsWarning" style="display:none;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;margin-bottom:16px;">
+          <p style="color:#f59e0b;font-size:0.82rem;font-weight:600;margin:0;">
+            ⚠️ Checked profiles have upcoming booked gigs. These will be automatically cancelled and the other party will be notified by email.
+          </p>
+        </div>
+      </div>
+
+      <div style="margin-bottom:20px;">
+        <label style="display:block;font-size:0.82rem;color:var(--text-gray);margin-bottom:6px;">Type <strong style="color:#ef4444;">DELETE</strong> to confirm:</label>
+        <input type="text" id="deleteConfirmInput" placeholder="DELETE" autocomplete="off" style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.9rem;box-sizing:border-box;">
+      </div>
+
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button class="btn ghost" onclick="document.getElementById('deleteAccountModal').style.display='none'">Cancel</button>
+        <button class="btn" id="confirmDeleteBtn" disabled onclick="executeDeleteAccount()" style="background:#ef4444;color:#fff;border:none;opacity:0.4;cursor:not-allowed;">Delete Account</button>
+      </div>
+    </div>
+  </div>
+
+  
+
+<script src="/app/static/js/user-profile-init.js"></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>

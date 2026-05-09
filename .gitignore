@@ -1,0 +1,56 @@
+# ─── Secrets — NEVER commit ────────────────────────────────────────────────
+.env
+.env.*
+.secret_key
+*.pem
+*.key
+*_secret*
+
+# ─── Database files (production DB lives only on the droplet) ──────────────
+backend.db
+backend.db-shm
+backend.db-wal
+backend_BU_*.db
+*.sqlite
+*.sqlite3
+
+# ─── Python artifacts ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ─── Virtual environment ───────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ─── Backup files left by manual cp / sed work ─────────────────────────────
+*.bak
+*.bak-*
+*.orig
+*.tmp
+
+# ─── User-uploaded media (lives on disk, will move to object storage later) ─
+app/static/uploads/
+
+# ─── Editor / OS noise ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ─── Build artifacts / logs ────────────────────────────────────────────────
+*.log
+node_modules/
+dist/
+build/
+
+# ─── Misc ──────────────────────────────────────────────────────────────────
+0
+g.pay

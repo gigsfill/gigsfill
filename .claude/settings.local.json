@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -w \"\\\\nHTTP %{http_code}\\\\n\" http://127.0.0.1:8001/health)",
+      "Bash(journalctl -u gigsfill --since \"60 seconds ago\" --no-pager)",
+      "Bash(sqlite3 -column -header /opt/gigsfill/backend.db \"SELECT id, status, scheduled_process_at, processed_at, amount_cents, parent_transaction_id, transaction_type FROM transactions WHERE id IN \\(287, 288\\);\")",
+      "Bash(sqlite3 -column -header /opt/gigsfill/backend.db \"SELECT id, gig_id, status, scheduled_process_at, transaction_type FROM transactions WHERE status IN \\('scheduled', 'test', 'charge_retry'\\) AND scheduled_process_at <= '2026-05-08 01:00:00' ORDER BY scheduled_process_at;\")",
+      "Bash(systemctl is-active *)",
+      "Bash(sqlite3 /opt/gigsfill/backend.db \"SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN \\('payments_enabled','test_mode','maintenance_mode'\\);\")",
+      "Bash(journalctl -u gigsfill-scheduler --since \"30 minutes ago\" --no-pager)",
+      "Bash(grep -n \"txn 287\\\\|287\\\\b\\\\|\\\\$10\\\\|\\\\$15\" /opt/gigsfill/gigsfill-claude-doc.md)",
+      "Bash(ps -eo pid,user,rss,comm --sort=-rss)",
+      "Bash(sudo du -shx /var/log)",
+      "Bash(sudo find /var/log -type f -size +50M -exec ls -lah {} \\\\;)",
+      "Bash(journalctl --vacuum-time=14d)",
+      "Read(//var/log/**)",
+      "Bash(rm -f /var/log/btmp.1)",
+      "Bash(curl -s http://127.0.0.1:8001/health)",
+      "Read(//etc/systemd/**)",
+      "Bash(journalctl --disk-usage)",
+      "Read(//etc/logrotate.d/**)",
+      "Bash(sudo ls /etc/cron.d/ /etc/cron.daily/ /etc/cron.hourly/ /etc/cron.weekly/)",
+      "Bash(sudo crontab -l)",
+      "Bash(sqlite3 /opt/gigsfill/backend.db \"SELECT 'gig_email_log: ' || COUNT\\(*\\) FROM gig_email_log UNION ALL SELECT 'notifications: ' || COUNT\\(*\\) FROM notifications UNION ALL SELECT 'public_activity: ' || COUNT\\(*\\) FROM public_activity UNION ALL SELECT 'venue_email_history: ' || COUNT\\(*\\) FROM venue_email_history UNION ALL SELECT 'gig_messages: ' || COUNT\\(*\\) FROM gig_messages UNION ALL SELECT 'support_ticket_replies: ' || COUNT\\(*\\) FROM support_ticket_replies UNION ALL SELECT 'onboarding_visits: ' || COUNT\\(*\\) FROM onboarding_visits;\")",
+      "Read(//usr/local/bin/**)",
+      "Bash(sudo du -shx /var/backups)",
+      "Bash(journalctl --since \"3 days ago\" --no-pager)",
+      "Bash(sudo du -shx /backups)",
+      "Bash(sudo ls -la /backups)",
+      "Bash(sudo find /backups -name \"backend.db.*\")",
+      "Bash(sudo find /backups -name \"backend.db.*\" -printf \"%s\\\\n\")",
+      "Bash(awk '{s+=$1} END {printf \"total %.1f MB\\\\n\", s/1024/1024}')"
+    ]
+  }
+}

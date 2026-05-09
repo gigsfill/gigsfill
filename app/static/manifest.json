@@ -1,0 +1,32 @@
+{
+  "name": "GigsFill – Live Music, Booked Right",
+  "short_name": "GigsFill",
+  "description": "Connect musicians with venues for live music bookings.",
+  "start_url": "/app/index.html",
+  "display": "standalone",
+  "background_color": "#0f1419",
+  "theme_color": "#0f1419",
+  "orientation": "any",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/app/static/img/gigsfill-logo_square.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/app/static/img/gigsfill-logo_square.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/app/static/img/gigsfill-logo_square.png",
+      "sizes": "any",
+      "type": "image/png"
+    }
+  ],
+  "categories": ["entertainment", "music"],
+  "lang": "en-US"
+}

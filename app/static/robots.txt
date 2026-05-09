@@ -1,0 +1,20 @@
+User-agent: *
+Allow: /
+Allow: /app/index.html
+Allow: /app/public-gigs.html
+Allow: /app/artist-profile.html
+Allow: /app/venue-profile.html
+Allow: /app/venue-discovery.html
+Allow: /app/signup-new.html
+
+Disallow: /api/
+Disallow: /app/admin.html
+Disallow: /app/artist-book-gigs.html
+Disallow: /app/artist-edit.html
+Disallow: /app/venue-create-gigs.html
+Disallow: /app/venue-edit.html
+Disallow: /app/venue-email-center.html
+Disallow: /app/notifications-all.html
+Disallow: /app/user-profile.html
+
+Sitemap: https://gigsfill.com/sitemap.xml

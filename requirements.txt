@@ -1,0 +1,21 @@
+# GigsFill backend dependencies
+# Install: pip install -r requirements.txt
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+sqlalchemy>=2.0.0
+python-multipart>=0.0.6
+bcrypt>=4.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+stripe>=7.0.0
+
+# Security
+itsdangerous>=2.1.0
+slowapi>=0.1.9
+email-validator>=2.0.0
+
+# Scale-up additions
+redis>=5.0.0           # Rate limiter backend + caching
+psycopg2-binary>=2.9.0 # PostgreSQL driver
+alembic>=1.13.0        # DB migrations (future use)

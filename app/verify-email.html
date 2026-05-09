@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Verify Your Email – GigsFill</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    .verify-container {
+      max-width: 480px;
+      margin: 80px auto;
+      padding: 0 20px;
+      text-align: center;
+    }
+    .verify-card {
+      background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 48px 40px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .verify-icon {
+      font-size: 3.5rem;
+      margin-bottom: 20px;
+    }
+    .verify-card h1 {
+      color: #e5e5e5;
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin: 0 0 12px;
+    }
+    .verify-card p {
+      color: #9ca3af;
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin: 0 0 8px;
+    }
+    .verify-email-addr {
+      color: #06b6d4;
+      font-weight: 600;
+    }
+    .btn-resend {
+      display: inline-block;
+      margin-top: 28px;
+      padding: 12px 28px;
+      background: #06b6d4;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn-resend:hover { opacity: 0.85; }
+    .btn-resend:disabled { opacity: 0.5; cursor: default; }
+    .divider {
+      border: none;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      margin: 28px 0;
+    }
+    .links {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .links a {
+      color: #6b7280;
+      font-size: 0.8rem;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .links a:hover { color: #9ca3af; }
+    #statusMsg {
+      min-height: 20px;
+      font-size: 0.82rem;
+      margin-top: 10px;
+    }
+    .status-ok  { color: #22c55e; }
+    .status-err { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="logo">
+        <img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;">
+      </div>
+    </div>
+  </header>
+
+  <div class="verify-container">
+    <div class="verify-card">
+      <div class="verify-icon">✉️</div>
+      <h1>Please verify your email</h1>
+      <p>We sent a verification link to</p>
+      <p><span class="verify-email-addr" id="userEmail">your email address</span></p>
+      <p style="margin-top:12px;">Click the link in that email to activate your account. Check your spam folder if you don't see it.</p>
+
+      <button class="btn-resend" id="resendBtn" onclick="resendVerification()">
+        Resend Verification Email
+      </button>
+      <div id="statusMsg"></div>
+
+      <hr class="divider">
+      <div class="links">
+        <a href="/app/user-profile.html">Update email address</a>
+        <a href="#" onclick="logout(); return false;">Log out</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app/static/js/security.js"></script>
+  <script>
+    // Load user email to display
+    (async function() {
+      try {
+        const res = await fetch('/api/me', { credentials: 'include' });
+        if (!res.ok) { window.location.href = '/app/index.html'; return; }
+        const me = await res.json();
+        if (!me || !me.id) { window.location.href = '/app/index.html'; return; }
+        // If they somehow got here already verified, send them to profile
+        if (me.email_verified) {
+          window.location.href = '/app/user-profile.html';
+          return;
+        }
+        if (me.email) {
+          document.getElementById('userEmail').textContent = me.email;
+        }
+      } catch (_) {
+        window.location.href = '/app/index.html';
+      }
+    })();
+
+    async function resendVerification() {
+      const btn = document.getElementById('resendBtn');
+      const msg = document.getElementById('statusMsg');
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      msg.textContent = '';
+      msg.className = '';
+      try {
+        const res = await fetch('/api/resend-verification-email', {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (res.ok) {
+          msg.textContent = '✓ Sent! Check your inbox (and spam folder).';
+          msg.className = 'status-ok';
+          btn.textContent = 'Email Sent';
+          // Re-enable after 30s
+          setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = 'Resend Verification Email';
+            msg.textContent = '';
+          }, 30000);
+        } else {
+          throw new Error('failed');
+        }
+      } catch (_) {
+        msg.textContent = 'Failed to send. Please try again.';
+        msg.className = 'status-err';
+        btn.disabled = false;
+        btn.textContent = 'Resend Verification Email';
+      }
+    }
+
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+      document.cookie = 'session_token=; Max-Age=0; path=/';
+      document.cookie = 'user_id=; Max-Age=0; path=/';
+      window.location.href = '/app/index.html';
+    }
+  </script>
+  <script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

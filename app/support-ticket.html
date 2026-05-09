@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Support Ticket - GigsFill</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    .ticket-container { max-width: 700px; margin: 30px auto; padding: 0 20px; }
+    .ticket-header { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
+    .ticket-header h2 { margin: 0 0 8px; font-size: 1.05rem; color: var(--text-white); }
+    .ticket-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.75rem; color: var(--text-gray); }
+    .ticket-meta .status { font-weight: 600; text-transform: uppercase; }
+    .status-open { color: #f59e0b; }
+    .status-closed { color: #10b981; }
+    
+    .thread { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
+    .msg { margin-bottom: 18px; }
+    .msg:last-child { margin-bottom: 0; }
+    .msg-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .msg-avatar { width: 30px; height: 30px; border-radius: 50%; color: white; text-align: center; line-height: 30px; font-size: 0.7rem; font-weight: 600; flex-shrink: 0; }
+    .msg-name { font-size: 0.8rem; font-weight: 600; color: var(--text-white); }
+    .msg-date { font-size: 0.65rem; color: var(--text-gray); }
+    .msg-badge { padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; text-transform: uppercase; font-weight: 600; }
+    .msg-body { margin-left: 38px; border-radius: 8px; padding: 14px 16px; font-size: 0.8rem; color: var(--text-white); line-height: 1.6; white-space: pre-wrap; }
+    
+    .msg-user .msg-avatar { background: #7c3aed; }
+    .msg-user .msg-badge { background: rgba(124,58,237,0.15); color: #a78bfa; }
+    .msg-user .msg-body { background: rgba(124,58,237,0.06); border: 1px solid rgba(124,58,237,0.15); }
+    
+    .msg-admin .msg-avatar { background: #06b6d4; }
+    .msg-admin .msg-badge { background: rgba(6,182,212,0.15); color: #06b6d4; }
+    .msg-admin .msg-body { background: rgba(6,182,212,0.06); border: 1px solid rgba(6,182,212,0.15); }
+    
+    .reply-box { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; }
+    .reply-box textarea { width: 100%; padding: 12px 14px; background: #151b28; border: 1px solid #333; border-radius: 8px; color: var(--text-white); font-size: 0.85rem; resize: vertical; box-sizing: border-box; min-height: 100px; font-family: inherit; line-height: 1.5; }
+    .reply-box textarea:focus { outline: none; border-color: var(--cyan); }
+    .reply-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+    .reply-actions .hint { font-size: 0.7rem; color: var(--text-gray); }
+    .btn-send { padding: 10px 24px; background: var(--cyan); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
+    .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .closed-banner { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); border-radius: 8px; padding: 14px 20px; text-align: center; color: #10b981; font-size: 0.8rem; }
+    
+    .loading { text-align: center; padding: 60px 20px; color: var(--text-gray); }
+    .error { text-align: center; padding: 60px 20px; color: #ef4444; }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <a href="/" style="text-decoration: none;"><div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div></a>
+      <div class="header-actions"></div>
+    </div>
+  </header>
+
+  <div class="ticket-container" id="ticketApp">
+    <div class="loading" id="loadingState">Loading your support ticket...</div>
+  </div>
+
+<footer>
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+  <script src="/app/static/js/modals.js"></script>
+  <script src="/app/static/js/support-ticket-init.js"></script>
+  <script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

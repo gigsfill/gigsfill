@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Find Venues – GigsFill</title>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta name="description" content="Discover live music venues near you. Filter by city, state, capacity, amenities, and more. Find your next gig on GigsFill.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://gigsfill.com/app/venue-discovery.html">
+<link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+<meta name="theme-color" content="#0f1419">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Find Venues for Live Music – GigsFill">
+<meta property="og:description" content="Discover live music venues near you. Filter by city, capacity, amenities, and more.">
+<meta property="og:url" content="https://gigsfill.com/app/venue-discovery.html">
+<meta property="og:site_name" content="GigsFill">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Find Venues for Live Music – GigsFill">
+<meta name="twitter:description" content="Discover live music venues near you on GigsFill.">
+
+<style>
+    .search-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .search-bar input,
+    .search-bar select {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .filters {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .filter-chip {
+      padding: 8px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.875rem;
+    }
+
+    .filter-chip:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .filter-chip.active {
+      background: var(--accent-cyan);
+      border-color: var(--accent-cyan);
+      color: #000000 !important;  /* Black text on cyan */
+      font-weight: 700;
+    }
+
+    .venue-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      transition: all 0.2s;
+    }
+
+    .venue-card:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--accent-cyan);
+      transform: translateY(-2px);
+    }
+
+    .venue-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      margin-bottom: 12px;
+    }
+
+    .venue-name {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+
+    .venue-location {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    .venue-details {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--glass-border);
+    }
+
+    .detail-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+    }
+
+    .detail-icon {
+      color: var(--accent-cyan);
+    }
+
+    .status-badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .status-approved {
+      background: rgba(16, 185, 129, 0.2);
+      color: #10b981;
+    }
+
+    .status-pending {
+      background: rgba(245, 158, 11, 0.2);
+      color: #f59e0b;
+    }
+
+    .status-none {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+    }
+
+    .no-results {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+    }
+
+    .stats-row {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .stat-card {
+      flex: 1;
+      min-width: 200px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      margin-bottom: 8px;
+    }
+
+    .stat-label {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+  </style>
+
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+<script src="/app/static/js/time-format.js"></script>
+
+<link href="/app/static/css/gigsfill-modern.css" rel="stylesheet"/>
+<link href="/app/static/css/mobile.css" rel="stylesheet"/>
+</head>
+<body class="dark-ui">
+<header class="app-header">
+<div class="header-inner">
+<div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+<div class="header-actions">
+<a class="btn ghost" href="/app/venue-email-center.html">📧 Email Center</a>
+<a class="btn ghost" href="/app/user-profile.html">User Profile</a>
+<button class="btn ghost" onclick="logout()">Logout</button>
+</div>
+</div>
+</header>
+<script src="/app/static/js/user-dropdown.js"></script>
+<main class="container">
+<div class="dusk-column">
+<!-- Stats -->
+<div class="stats-row">
+<div class="stat-card">
+<div class="stat-value" id="totalVenues">0</div>
+<div class="stat-label">Total Venues</div>
+</div>
+<div class="stat-card">
+<div class="stat-value" id="approvedVenues">0</div>
+<div class="stat-label">Approved</div>
+</div>
+<div class="stat-card">
+<div class="stat-value" id="pendingVenues">0</div>
+<div class="stat-label">Pending</div>
+</div>
+</div>
+<!-- Search Bar -->
+<section class="panel">
+<h2>Find Venues</h2>
+<div class="search-bar">
+<input id="searchInput" placeholder="Search by name..." type="text"/>
+<input id="cityInput" placeholder="City..." type="text"/>
+<select id="stateSelect">
+<option value="">All States</option>
+<option value="CA">California</option>
+<option value="NY">New York</option>
+<option value="TX">Texas</option>
+<option value="FL">Florida</option>
+<!-- Add more states as needed -->
+</select>
+</div>
+<div class="filters">
+<div class="filter-chip" data-filter="all">All Venues</div>
+<div class="filter-chip" data-filter="has_stage">Has Stage</div>
+<div class="filter-chip" data-filter="has_sound">Sound Equipment</div>
+<div class="filter-chip" data-filter="has_lighting">Lighting</div>
+</div>
+</section>
+<!-- Venues List -->
+<section class="panel">
+<div id="venuesList"></div>
+</section>
+</div>
+</main>
+<script src="/app/static/js/auth.guard.js"></script>
+<script src="/app/static/js/api-globals.js"></script>
+<script src="/app/static/js/city-autocomplete.js"></script>
+<script src="/app/static/js/venue.discovery.js" type="module"></script>
+
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/venue-discovery-init.js"></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+[Unit]
+Description=GigsFill FastAPI Application (API only — schedulers run in gigsfill-scheduler.service)
+Documentation=This unit runs the public-facing API on port 8001 with --workers 2. The background payout and email schedulers run in the separate gigsfill-scheduler.service, gated by the GIGSFILL_RUN_SCHEDULERS env var. This unit does NOT set that var, so schedulers are inert here.
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=exec
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/gigsfill
+EnvironmentFile=/opt/gigsfill/.env
+
+ExecStart=/opt/gigsfill/venv/bin/uvicorn backend.main:app \
+    --host 0.0.0.0 \
+    --port 8001 \
+    --workers 2 \
+    --loop uvloop \
+    --log-level info \
+    --access-log \
+    --no-use-colors
+
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+LimitNOFILE=65536
+LimitNPROC=4096
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gigsfill
+
+[Install]
+WantedBy=multi-user.target

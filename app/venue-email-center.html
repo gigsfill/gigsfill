@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+  <title>Email Center – GigsFill</title>
+
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    /* ========================================
+       PAGE CONTAINER
+       ======================================== */
+    .page-container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    
+    /* ========================================
+       TABS
+       ======================================== */
+    .ec-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 28px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+    .ec-tabs::-webkit-scrollbar { display: none; }
+    .ec-tab {
+      padding: 12px 24px;
+      background: transparent;
+      border: none;
+      color: var(--text-gray);
+      cursor: pointer;
+      font: 600 0.9rem 'Inter', sans-serif;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+      margin-bottom: -1px;
+      flex-shrink: 0;
+    }
+    .ec-tab:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.03);
+    }
+    .ec-tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      background: rgba(6,182,212,0.1);
+    }
+    .ec-tab-content { display: none; }
+    .ec-tab-content.active { display: block; }
+    
+    /* ========================================
+       CONTENT CARDS
+       ======================================== */
+    .content-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 32px;
+      margin-bottom: 20px;
+    }
+    
+    .content-card > h2 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--cyan);
+      margin: 0 0 20px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    
+    /* ========================================
+       SUCCESS/ERROR MESSAGES
+       ======================================== */
+    .success-message {
+      background: rgba(6, 182, 212, 0.1);
+      border: 1px solid var(--cyan);
+      color: var(--cyan);
+      padding: 14px 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    
+    .error-message {
+      background: rgba(220, 53, 69, 0.1);
+      border: 1px solid #dc3545;
+      color: #ff6b6b;
+      padding: 14px 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    
+    /* ========================================
+       VENUE SELECTOR
+       ======================================== */
+    .venue-selector {
+      margin-bottom: 24px;
+    }
+    
+    .venue-selector label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-gray);
+    }
+    
+    /* FIX: Dropdown options need explicit hex colors */
+    select {
+      background: #151b28 !important;
+      border: 1px solid #333 !important;
+    }
+    select option {
+      background: #151b28;
+      color: #ffffff;
+    }
+    
+    /* ========================================
+       RECIPIENTS SECTION
+       ======================================== */
+    .recipients-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    
+    .recipients-header h3 {
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--text);
+      margin: 0;
+    }
+    
+    .select-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    
+    .select-controls button {
+      width: 100px; /* Fixed width for consistent sizing */
+      padding: 6px 12px;
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      border-radius: 6px;
+      color: var(--purple);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    
+    .select-controls button:hover {
+      background: rgba(139, 92, 246, 0.25);
+      border-color: var(--purple);
+    }
+    
+    .selected-count {
+      font-size: 0.8125rem;
+      color: var(--cyan);
+      font-weight: 600;
+    }
+    
+    .recipients-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 240px;
+      overflow-y: auto;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    
+    .recipient-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .recipient-card:hover {
+      background: rgba(139, 92, 246, 0.1);
+      border-color: var(--purple);
+    }
+    
+    .recipient-card.selected {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: var(--purple);
+    }
+    
+    .recipient-checkbox {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--purple);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    
+    .artist-name {
+      font-weight: 600;
+      font-size: 0.8125rem;
+      color: var(--text);
+      flex: 1;
+    }
+    
+    .artist-email {
+      font-size: 0.75rem;
+      color: var(--text-gray);
+      text-align: right;
+    }
+    
+    /* ========================================
+       EMAIL FORM
+       ======================================== */
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-gray);
+    }
+    
+    .form-group input,
+    .form-group textarea {
+      width: 100%;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.9375rem;
+      font-family: inherit;
+    }
+    
+    .form-group input:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: var(--cyan);
+      background: rgba(255, 255, 255, 0.04);
+    }
+    
+    .form-group textarea {
+      min-height: 180px;
+      resize: vertical;
+    }
+    
+    .char-counter {
+      text-align: right;
+      font-size: 0.75rem;
+      color: var(--text-gray);
+      margin-top: 4px;
+    }
+    
+    .email-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      align-items: center;
+      margin-top: 20px;
+    }
+    
+    .email-sent-msg {
+      color: var(--cyan);
+      font-weight: 600;
+      font-size: 0.875rem;
+      margin-right: auto;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    
+    .email-sent-msg.show {
+      opacity: 1;
+    }
+    
+    /* Use standard btn styling from gigsfill.css */
+    
+    /* ========================================
+       EMAIL HISTORY
+       ======================================== */
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    
+    .history-header h2 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--cyan);
+      margin: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    
+    .pagination-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      color: var(--text-gray);
+    }
+    
+    .pagination-btn {
+      width: 24px;
+      height: 24px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .pagination-btn:hover:not(:disabled) {
+      background: rgba(139, 92, 246, 0.2);
+      border-color: var(--purple);
+    }
+    
+    .pagination-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+    
+    .history-table-header {
+      display: grid;
+      grid-template-columns: 180px 160px 1fr 90px;
+      gap: 12px;
+      padding: 8px 12px;
+      background: rgba(139, 92, 246, 0.1);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 6px;
+      margin-bottom: 6px;
+    }
+    
+    .history-col {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-gray);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .history-col.sortable {
+      cursor: pointer;
+      user-select: none;
+      transition: color 0.2s;
+    }
+    
+    .history-col.sortable:hover {
+      color: var(--purple);
+    }
+    
+    .sort-arrow {
+      font-size: 0.625rem;
+      margin-left: 4px;
+      opacity: 0.5;
+    }
+    
+    .sort-arrow:not(:empty) {
+      opacity: 1;
+      color: var(--cyan);
+    }
+    
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+    
+    .history-item {
+      display: grid;
+      grid-template-columns: 180px 160px 1fr 90px;
+      gap: 12px;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      align-items: center;
+    }
+    
+    .history-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+    }
+    
+    .history-sent {
+      font-size: 0.75rem;
+      color: var(--text-gray);
+    }
+    
+    .history-artist {
+      font-size: 0.8125rem;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .history-subject {
+      font-size: 0.8125rem;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    /* ========================================
+       EMAIL DETAIL MODAL
+       ======================================== */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    }
+    
+    .modal-overlay.hidden {
+      display: none;
+    }
+    
+    .modal {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      max-width: 600px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    
+    .modal h2 {
+      margin: 0 0 16px 0;
+      font-size: 1.25rem;
+      color: var(--text);
+    }
+    
+    .modal-meta {
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+      font-size: 0.9375rem;
+    }
+    
+    .modal-meta .label {
+      font-weight: 600;
+      color: var(--text-gray);
+    }
+    
+    .modal-meta .value {
+      color: var(--text);
+    }
+    
+    .modal-body {
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      white-space: pre-wrap;
+      line-height: 1.6;
+      color: var(--text);
+    }
+    
+    .modal-actions {
+      margin-top: 20px;
+      text-align: right;
+    }
+    
+    /* ========================================
+       EMPTY STATE
+       ======================================== */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-gray);
+    }
+    
+    .empty-state svg {
+      width: 56px;
+      height: 56px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+    
+    .empty-state h3 {
+      margin: 0 0 8px 0;
+      color: var(--text);
+      font-size: 1.125rem;
+    }
+    
+    .empty-state p {
+      margin: 0;
+      font-size: 0.9375rem;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-gray);
+    }
+    
+    /* ========================================
+       RESPONSIVE
+       ======================================== */
+    @media (max-width: 768px) {
+      .recipient-card {
+        flex-wrap: wrap;
+      }
+      
+      .artist-name {
+        flex: 1 1 auto;
+      }
+      
+      .artist-email {
+        width: 100%;
+        text-align: left;
+        margin-left: 28px;
+        margin-top: -4px;
+      }
+      
+      .recipients-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      
+      .select-controls {
+        width: 100%;
+        justify-content: space-between;
+      }
+    }
+    
+    /* ========================================
+       INVITED ARTISTS TRACKER
+       ======================================== */
+    .inv-stats {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .inv-stat {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 20px;
+      text-align: center;
+      flex: 1;
+    }
+    .inv-stat-num {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .inv-stat-num.pending { color: #f59e0b; }
+    .inv-stat-num.signed-up { color: #22c55e; }
+    .inv-stat-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-gray);
+      margin-top: 2px;
+    }
+    .inv-table-header {
+      display: grid;
+      grid-template-columns: 1fr 120px 140px 100px;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(6,182,212,0.1);
+      border: 1px solid rgba(6,182,212,0.3);
+      border-radius: 6px;
+      margin-bottom: 6px;
+    }
+    .inv-col {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-gray);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .inv-row {
+      display: grid;
+      grid-template-columns: 1fr 120px 140px 100px;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      align-items: center;
+    }
+    .inv-row:last-child { border-bottom: none; }
+    .inv-email {
+      font-size: 0.85rem;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .inv-status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 10px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .inv-status-badge.pending {
+      background: rgba(245,158,11,0.15);
+      color: #f59e0b;
+      border: 1px solid rgba(245,158,11,0.3);
+    }
+    .inv-status-badge.signed-up {
+      background: rgba(34,197,94,0.15);
+      color: #22c55e;
+      border: 1px solid rgba(34,197,94,0.3);
+    }
+    .inv-date {
+      font-size: 0.78rem;
+      color: var(--text-gray);
+    }
+    .inv-resend-btn {
+      background: transparent;
+      border: 1px solid rgba(6,182,212,0.4);
+      color: var(--cyan);
+      padding: 4px 12px;
+      border-radius: 5px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .inv-resend-btn:hover {
+      background: rgba(6,182,212,0.15);
+      border-color: var(--cyan);
+    }
+    .inv-resend-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .inv-empty {
+      text-align: center;
+      padding: 30px;
+      color: var(--text-gray);
+      font-size: 0.85rem;
+    }
+    .inv-invite-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--cyan);
+      color: #fff;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .inv-invite-btn:hover { background: #0891b2; }
+    @media (max-width: 700px) {
+      .inv-table-header, .inv-row {
+        grid-template-columns: 1fr 90px 100px 80px;
+        gap: 4px;
+      }
+      .inv-stats { flex-wrap: wrap; }
+    }
+  </style>
+  
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+  <script src="/app/static/js/auth.guard.js"></script>
+  <script src="/app/static/js/timezone-utils.js"></script>
+</head>
+
+<body>
+
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+      <div class="header-actions" id="headerActions"></div>
+    </div>
+  </header>
+  <script src="/app/static/js/user-dropdown.js"></script>
+
+  <main class="page-container">
+
+    <!-- Success/Error Messages -->
+    <div id="successMessage" class="success-message"></div>
+    <div id="errorMessage" class="error-message"></div>
+
+    <!-- TABS -->
+    <div class="ec-tabs">
+      <button class="ec-tab active" onclick="switchEmailTab('send-email')">Send Email</button>
+      <button class="ec-tab" onclick="switchEmailTab('invite-artists')">Invite Artists</button>
+    </div>
+
+    <!-- SEND EMAIL TAB -->
+    <div class="ec-tab-content active" id="send-email-tab">
+
+    <!-- Compose Email -->
+    <div class="content-card">
+      <h2>Compose Email</h2>
+      
+      <!-- Venue Selector (if multiple venues) -->
+      <div id="venueSelectorContainer" class="venue-selector" style="display: none;">
+        <label for="venueSelect">Send from Venue</label>
+        <select id="venueSelect">
+          <option value="">Loading venues...</option>
+        </select>
+      </div>
+      
+      <!-- Recipients Section -->
+      <div id="recipientsSection" style="display: none;">
+        <div class="recipients-header">
+          <h3>Select Recipients</h3>
+          <div class="select-controls">
+            <span id="selectedCount" class="selected-count">0 selected</span>
+            <button id="toggleSelectBtn" onclick="toggleAllArtists()">Select All</button>
+          </div>
+        </div>
+        <div id="recipientsGrid" class="recipients-grid">
+          <div class="loading">Loading preferred artists...</div>
+        </div>
+      </div>
+      
+      <!-- Email Form -->
+      <div id="emailFormContainer" style="display: none; margin-top: 24px;">
+        <div class="form-group">
+          <label for="emailSubject">Subject</label>
+          <input type="text" id="emailSubject" placeholder="Enter email subject..." maxlength="200">
+          <div class="char-counter"><span id="subjectCount">0</span>/200</div>
+        </div>
+        
+        <div class="form-group">
+          <label for="emailBody">Message</label>
+          <textarea id="emailBody" placeholder="Compose your message to artists..."></textarea>
+          <div class="char-counter"><span id="bodyCount">0</span>/5000</div>
+        </div>
+        
+        <div class="email-actions">
+          <span id="emailSentMsg" class="email-sent-msg"></span>
+          <button class="btn primary" id="sendEmailBtn" onclick="sendEmail()" disabled>Send Email</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Email History -->
+    <div class="content-card">
+      <div class="history-header">
+        <h2>Recent Emails</h2>
+        <div class="pagination-controls">
+          <button class="pagination-btn" id="prevPageBtn" onclick="prevPage()" disabled>‹</button>
+          <span id="pageInfo">1 / 1</span>
+          <button class="pagination-btn" id="nextPageBtn" onclick="nextPage()" disabled>›</button>
+        </div>
+      </div>
+      
+      <div class="history-table-header">
+        <div class="history-col sent sortable" onclick="toggleSort('sent_at')">
+          Sent <span class="sort-arrow" id="sort-sent_at">▼</span>
+        </div>
+        <div class="history-col artist sortable" onclick="toggleSort('artist')">
+          Artist <span class="sort-arrow" id="sort-artist"></span>
+        </div>
+        <div class="history-col subject sortable" onclick="toggleSort('subject')">
+          Subject <span class="sort-arrow" id="sort-subject"></span>
+        </div>
+        <div class="history-col"></div>
+      </div>
+      
+      <div id="emailHistory" class="history-list">
+        <div class="loading">Loading email history...</div>
+      </div>
+    </div>
+
+    </div><!-- /send-email-tab -->
+
+    <!-- INVITE ARTISTS TAB -->
+    <div class="ec-tab-content" id="invite-artists-tab">
+
+    <div class="content-card" id="invitedArtistsSection">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <h2 style="margin:0;">Invited Artists</h2>
+        <button class="inv-invite-btn" onclick="openInviteArtistsModal(event)">+ Invite Artists</button>
+      </div>
+      
+      <p style="color:#9ca3af;font-size:0.85rem;margin:0 0 20px;line-height:1.5;">
+        Invite artists you work with to join GigsFill. Track who has signed up and send reminders to those who haven't.
+      </p>
+      
+      <div class="inv-stats">
+        <div class="inv-stat">
+          <div class="inv-stat-num" id="invTotalCount">0</div>
+          <div class="inv-stat-label">Total Invited</div>
+        </div>
+        <div class="inv-stat">
+          <div class="inv-stat-num pending" id="invPendingCount">0</div>
+          <div class="inv-stat-label">Pending</div>
+        </div>
+        <div class="inv-stat">
+          <div class="inv-stat-num signed-up" id="invSignedUpCount">0</div>
+          <div class="inv-stat-label">Signed Up</div>
+        </div>
+      </div>
+      
+      <div class="inv-table-header">
+        <div class="inv-col">Email</div>
+        <div class="inv-col">Status</div>
+        <div class="inv-col">Invited</div>
+        <div class="inv-col">Action</div>
+      </div>
+      <div id="invitedArtistsList">
+        <div class="inv-empty">No artists invited yet. Click <strong>+ Invite Artists</strong> above to get started!</div>
+      </div>
+    </div>
+
+    </div><!-- /invite-artists-tab -->
+
+  </main>
+
+  <!-- Email Detail Modal -->
+  <div class="modal-overlay hidden" id="emailDetailModal">
+    <div class="modal">
+      <div id="emailDetailBody"></div>
+      <div class="modal-actions">
+        <button class="btn ghost" onclick="document.getElementById('emailDetailModal').classList.add('hidden')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app/static/js/venue-email-center.js"></script>
+
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+  <title>Edit Artist – GigsFill</title>
+
+  
+  
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    /* FIX: Dropdown options need explicit hex colors (browsers ignore CSS variables) */
+    select {
+      background: #151b28 !important;
+      border: 1px solid #333 !important;
+    }
+    select option {
+      background: #151b28;
+      color: #ffffff;
+    }
+
+    /* ========================================
+       PROFILE CONTAINER
+       ======================================== */
+    .profile-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px 16px;
+    }
+    
+    .profile-title {
+      font-size: 1.2rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    
+    /* ========================================
+       CONTENT CARDS - TIGHTER SPACING
+       ======================================== */
+    .content-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 10px;
+    }
+    
+    /* Section header with inline description */
+    .section-header-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    
+    .section-header-row h2 {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 0;
+    }
+    
+    .section-header-row .description {
+      font-size: 0.75rem;
+      font-style: italic;
+      color: var(--text-gray);
+    }
+    
+    /* Standalone h2 for sections */
+    .content-card > h2 {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--cyan);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    /* ========================================
+       FORM ROW LAYOUT (like Social Media)
+       ======================================== */
+    .form-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .form-row label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+    }
+    
+    /* City/State row */
+    .form-row-multi {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    
+    .form-row-multi label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+    }
+    
+    .form-row-multi label:first-child {
+      width: 100px;
+      flex-shrink: 0;
+    }
+    
+    /* ========================================
+       PROFILE PICTURE
+       ======================================== */
+    .profile-pic-wrapper {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 8px;
+    }
+    
+    .profile-pic {
+      width: 100%;
+      max-width: 700px;
+      height: 140px;
+      object-fit: contain;
+      background: var(--card, #111);
+      border-radius: 12px;
+      cursor: pointer;
+      border: 2px solid var(--border);
+      transition: border-color 0.2s;
+    }
+    
+    .profile-pic:hover {
+      border-color: var(--cyan);
+    }
+    
+    /* ========================================
+       INLINE FORM ROWS
+       ======================================== */
+    .inline-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    
+    .inline-row label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+      white-space: nowrap;
+    }
+    
+    /* ========================================
+       SOCIAL MEDIA - Single column layout
+       ======================================== */
+    .social-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .social-row {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .social-row label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+    }
+    
+    /* ========================================
+       HIDDEN CLASS
+       ======================================== */
+    .hidden {
+      display: none !important;
+    }
+    
+    /* ========================================
+       MEDIA GRID - Pictures & Videos
+       ======================================== */
+    .media-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .media-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    
+    .media-card:hover {
+      border-color: var(--purple);
+    }
+    
+    .media-card img {
+      width: 100%;
+      height: 120px;
+      object-fit: cover;
+      display: block;
+    }
+    
+    .media-overlay {
+      padding: 8px;
+      background: rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .drag-handle {
+      cursor: grab;
+      font-size: 16px;
+      color: var(--text-gray);
+      user-select: none;
+      text-align: center;
+    }
+    
+    .drag-handle:active {
+      cursor: grabbing;
+    }
+    
+    .media-title {
+      width: 100%;
+      padding: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      text-align: center;
+      font-size: 0.8125rem;
+    }
+    
+    .media-title:focus {
+      outline: none;
+      border-color: var(--cyan);
+      background: rgba(255, 255, 255, 0.08);
+    }
+    
+    .delete-btn {
+      width: 100%;
+      padding: 8px;
+      background: #dc3545;
+      border: none;
+      border-radius: 6px;
+      color: white;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.2s;
+    }
+    
+    .delete-btn:hover {
+      background: #c82333;
+    }
+
+    .media-card.dragging {
+      opacity: 0.4;
+    }
+    
+    /* ========================================
+       AUDIO SECTION - Skinny horizontal rows
+       MUST OVERRIDE .media-card styles
+       ======================================== */
+    .audio-container {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 8px !important;
+      margin-top: 16px !important;
+    }
+    
+    .audio-row {
+      display: flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
+      gap: 12px !important;
+      padding: 8px 12px !important;
+      background: rgba(255, 255, 255, 0.02) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 8px !important;
+      overflow: visible !important;
+      max-width: none !important;
+      width: 100% !important;
+    }
+    
+    .audio-row:hover {
+      border-color: var(--purple) !important;
+    }
+    
+    .audio-row .drag-handle {
+      flex: 0 0 auto !important;
+      cursor: grab !important;
+      font-size: 16px !important;
+      color: var(--text-gray) !important;
+      user-select: none !important;
+    }
+    
+    .audio-row .drag-handle:active {
+      cursor: grabbing !important;
+    }
+    
+    .audio-row.dragging {
+      opacity: 0.4 !important;
+    }
+    
+    .audio-row .media-title {
+      flex: 0 0 250px !important;
+      max-width: 250px !important;
+      width: 250px !important;
+      height: auto !important;
+      padding: 6px 10px !important;
+      font-size: 0.8rem !important;
+      text-align: left !important;
+    }
+    
+    .audio-row audio {
+      flex: 1 1 auto !important;
+      min-width: 150px !important;
+      height: 32px !important;
+    }
+    
+    .audio-row .delete-btn {
+      flex: 0 0 auto !important;
+      width: auto !important;
+      padding: 6px 12px !important;
+      font-size: 0.7rem !important;
+    }
+    
+    /* Kill any overlay styling on audio rows */
+    .audio-row .media-overlay,
+    .audio-row .center-overlay {
+      display: none !important;
+    }
+    
+    /* ========================================
+       ADD MEDIA SECTION
+       ======================================== */
+    .add-media-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    
+    .add-media-row input[type="text"] {
+      flex: 1;
+      min-width: 200px;
+    }
+    
+    /* ========================================
+       STYLES & LINEUP
+       ======================================== */
+    .band-formats {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    
+    .band-formats.hidden {
+      display: none;
+    }
+    
+    .band-formats label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+      color: var(--text);
+      cursor: pointer;
+    }
+    
+    .band-formats input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--purple);
+    }
+    
+    /* ========================================
+       RESPONSIVE
+       ======================================== */
+    @media (max-width: 768px) {
+      .form-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+      
+      .form-row-multi {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      
+      .form-row-multi label:first-child {
+        width: auto;
+      }
+      
+      .inline-row {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      
+      .media-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      }
+      
+      .social-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+      
+      .audio-row {
+        flex-wrap: wrap;
+      }
+      
+      .audio-row .media-title {
+        flex: 1 1 100%;
+        max-width: none;
+      }
+      
+      .audio-row audio {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+    }
+
+    /* ========================================
+       COMPACT OVERRIDES — match venue-create-gigs density
+       ======================================== */
+    input[type="text"], input[type="email"], input[type="url"], input[type="tel"],
+    input[type="number"], input[type="date"], input[type="time"],
+    select, textarea {
+      font-size: 0.8rem !important;
+      padding: 5px 8px !important;
+    }
+    textarea {
+      padding: 6px 8px !important;
+    }
+    textarea.single-line {
+      min-height: 34px;
+    }
+    .btn {
+      font-size: 0.75rem !important;
+      padding: 5px 12px !important;
+    }
+    .btn.primary {
+      font-size: 0.8rem !important;
+      padding: 8px 20px !important;
+    }
+    input[type="checkbox"] {
+      width: 16px !important;
+      height: 16px !important;
+      min-width: 16px !important;
+    }
+  </style>
+  
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+  <script src="/app/static/js/auth.guard.js"></script>
+  <script src="/app/static/js/api-globals.js"></script>
+  <script src="/app/static/js/time-format.js"></script>
+  <script src="/app/static/js/city-autocomplete.js"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=3"></script>
+  
+</head>
+
+<body>
+
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+      <div class="header-actions">
+        <a class="btn ghost" id="bookGigsBtn" href="/app/artist-book-gigs.html">Book Gigs</a>
+        <a class="btn ghost" id="artistProfileBtn" href="/app/artist-profile.html" target="_blank">Artist Profile</a>
+        <a class="btn ghost" href="/app/user-profile.html">User Profile</a>
+        <button class="btn ghost" onclick="logout()">Logout</button>
+      </div>
+    </div>
+  </header>
+  <script src="/app/static/js/user-dropdown.js"></script>
+
+  <main class="profile-container">
+
+    <!-- SECTION 1: PROFILE PICTURE -->
+    <div class="content-card">
+      <div class="profile-pic-wrapper">
+        <img
+          id="profilePic"
+          class="profile-pic"
+          src="/app/static/img/profile-placeholder.svg"
+          alt="Profile picture"
+          onerror="this.onerror=null;this.src='/app/static/img/profile-placeholder.svg';"
+        />
+      </div>
+      <input id="profilePicInput" type="file" accept="image/*" hidden />
+    </div>
+
+    <!-- SECTION 2: BASIC INFORMATION -->
+    <div class="content-card">
+      <h2>Basic Information</h2>
+      <div class="form-rows">
+        <div class="form-row">
+          <label>Artist Name</label>
+          <input type="text" id="name" />
+        </div>
+        <div class="form-row-multi">
+          <label>City</label>
+          <input type="text" id="city" maxlength="35" style="width:220px;" />
+          <label style="font-size:0.8rem; white-space:nowrap;">State</label>
+          <select id="state" style="width: 70px;">
+            <option value="">--</option>
+            <option value="AL">AL</option><option value="AK">AK</option>
+            <option value="AZ">AZ</option><option value="AR">AR</option>
+            <option value="CA">CA</option><option value="CO">CO</option>
+            <option value="CT">CT</option><option value="DE">DE</option>
+            <option value="FL">FL</option><option value="GA">GA</option>
+            <option value="HI">HI</option><option value="ID">ID</option>
+            <option value="IL">IL</option><option value="IN">IN</option>
+            <option value="IA">IA</option><option value="KS">KS</option>
+            <option value="KY">KY</option><option value="LA">LA</option>
+            <option value="ME">ME</option><option value="MD">MD</option>
+            <option value="MA">MA</option><option value="MI">MI</option>
+            <option value="MN">MN</option><option value="MS">MS</option>
+            <option value="MO">MO</option><option value="MT">MT</option>
+            <option value="NE">NE</option><option value="NV">NV</option>
+            <option value="NH">NH</option><option value="NJ">NJ</option>
+            <option value="NM">NM</option><option value="NY">NY</option>
+            <option value="NC">NC</option><option value="ND">ND</option>
+            <option value="OH">OH</option><option value="OK">OK</option>
+            <option value="OR">OR</option><option value="PA">PA</option>
+            <option value="RI">RI</option><option value="SC">SC</option>
+            <option value="SD">SD</option><option value="TN">TN</option>
+            <option value="TX">TX</option><option value="UT">UT</option>
+            <option value="VT">VT</option><option value="VA">VA</option>
+            <option value="WA">WA</option><option value="WV">WV</option>
+            <option value="WI">WI</option><option value="WY">WY</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 3: ARTIST TYPE -->
+    <div class="content-card">
+      <h2>Artist Type</h2>
+      <select id="artist_type" style="width: 200px;"></select>
+      <div id="bandFormatsBlock" class="band-formats hidden"></div>
+    </div>
+
+    <!-- SECTION 4: BIO -->
+    <div class="content-card">
+      <h2>Bio</h2>
+      <textarea id="bio" rows="3" style="width: 100%;"></textarea>
+      <div style="display: flex; gap: 12px; margin-top: 12px; align-items: center;">
+        <button id="saveBioBtn" class="btn primary">Save Bio</button>
+        <span id="bioStatus" style="font-size: 0.8rem; color: var(--text-gray);"></span>
+      </div>
+    </div>
+
+    <!-- SECTION 5: BOOKING CONTACT -->
+    <div class="content-card">
+      <h2>Booking Contact</h2>
+      <select id="booking_contact" style="width: 100%;"></select>
+    </div>
+
+    <!-- SECTION 6: SOCIAL MEDIA -->
+    <div class="content-card">
+      <h2>Social Media</h2>
+      <div class="social-grid">
+        <div class="social-row">
+          <label>Spotify</label>
+          <input id="spotify_url" type="text" placeholder="https://open.spotify.com/artist/..." />
+        </div>
+        <div class="social-row">
+          <label>Instagram</label>
+          <input id="instagram_url" type="text" placeholder="https://www.instagram.com/..." />
+        </div>
+        <div class="social-row">
+          <label>Facebook</label>
+          <input id="facebook_url" type="text" placeholder="https://www.facebook.com/..." />
+        </div>
+        <div class="social-row">
+          <label>YouTube</label>
+          <input id="youtube_url" type="text" placeholder="https://www.youtube.com/..." />
+        </div>
+        <div class="social-row">
+          <label>Twitter/X</label>
+          <input id="twitter_url" type="text" placeholder="https://twitter.com/..." />
+        </div>
+        <div class="social-row">
+          <label>TikTok</label>
+          <input id="tiktok_url" type="text" placeholder="https://www.tiktok.com/@..." />
+        </div>
+        <div class="social-row">
+          <label>Website</label>
+          <input id="website_url" type="text" placeholder="https://www.yourwebsite.com" />
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 7: PICTURES -->
+    <div class="content-card">
+      <h2>Pictures</h2>
+      <button id="addPicBtn" class="btn primary">+ Add Picture</button>
+      <input id="picInput" type="file" accept="image/*" hidden />
+      <div id="pictures" class="media-grid"></div>
+    </div>
+
+    <!-- SECTION 8: AUDIO -->
+    <div class="content-card">
+      <h2>Audio</h2>
+      <button id="addAudioBtn" class="btn primary">+ Add Audio</button>
+      <input id="audioInput" type="file" accept="audio/*" hidden />
+      <div id="audio" class="audio-container"></div>
+    </div>
+
+    <!-- SECTION 9: VIDEOS -->
+    <div class="content-card">
+      <h2>Videos</h2>
+      <div class="add-media-row">
+        <input id="videoUrl" type="text" placeholder="YouTube / Vimeo URL" />
+        <button id="addVideoBtn" class="btn primary">+ Add Video</button>
+      </div>
+      <div id="videos" class="media-grid"></div>
+    </div>
+
+  <!-- SECTION 7: AVAILABILITY / BLACKOUT DATES -->
+  <div class="content-card" id="availabilitySection" style="display:none;">
+    <h2>Availability</h2>
+    <div id="availabilityContainer"></div>
+  </div>
+
+  </main>
+
+  
+
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/artist-availability.js"></script>
+<script src="/app/static/js/artist-edit-init.js"></script>
+<script src="/app/static/js/onboarding-checklist.js" defer></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

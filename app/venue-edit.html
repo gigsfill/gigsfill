@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+  <title>Edit Venue – GigsFill</title>
+
+  
+  
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    /* FIX: Dropdown options need explicit hex colors (browsers ignore CSS variables) */
+    select {
+      background: #151b28 !important;
+      border: 1px solid #333 !important;
+    }
+    select option {
+      background: #151b28;
+      color: #ffffff;
+      text-align: center;
+    }
+    
+    /* Yes/No dropdown sizing */
+    #has_stage, #has_sound_equipment, #has_sound_engineer, #has_lighting {
+      width: auto !important;
+      padding: 6px 12px !important;
+    }
+    
+    /* Artist Frequency dropdown */
+    #artistFrequencyMode {
+      width: auto !important;
+      min-width: 90px;
+    }
+    
+    /* Artist Frequency days input */
+    #artistFrequencyDays {
+      width: 60px !important;
+      text-align: center !important;
+    }
+
+    /* ========================================
+       PROFILE CONTAINER
+       ======================================== */
+    .profile-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px 16px;
+    }
+    
+    .profile-title {
+      font-size: 1.2rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    
+    /* ========================================
+       CONTENT CARDS - TIGHTER SPACING
+       ======================================== */
+    .content-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 10px;
+    }
+    
+    /* Section header with inline description */
+    .section-header-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    
+    .section-header-row h2 {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 0;
+    }
+    
+    .section-header-row .description {
+      font-size: 0.75rem;
+      font-style: italic;
+      color: var(--text-gray);
+    }
+    
+    /* Standalone h2 for sections */
+    .content-card > h2 {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--cyan);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    /* ========================================
+       FORM ROW LAYOUT (like Social Media)
+       ======================================== */
+    .form-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .form-row label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+    }
+    
+    /* City/State/Zip row */
+    .form-row-multi {
+      display: grid;
+      grid-template-columns: 120px 1fr 60px 80px 80px 120px;
+      gap: 12px;
+      align-items: center;
+    }
+    
+    .form-row-multi label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+    }
+    
+    /* ========================================
+       PROFILE PICTURE
+       ======================================== */
+    .profile-pic-wrapper {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 8px;
+    }
+    
+    .profile-pic {
+      width: 100%;
+      max-width: 700px;
+      height: 140px;
+      object-fit: contain;
+      background: var(--card, #111);
+      border-radius: 12px;
+      cursor: pointer;
+      border: 2px solid var(--border);
+      transition: border-color 0.2s;
+    }
+    
+    .profile-pic:hover {
+      border-color: var(--cyan);
+    }
+    
+    /* ========================================
+       INLINE FORM ROWS (for toggle sections)
+       ======================================== */
+    .inline-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    
+    .inline-row label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+      white-space: nowrap;
+    }
+    
+    /* Toggle section label - matches h2 styling */
+    .toggle-label {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 0;
+    }
+    
+    /* ========================================
+       TEXTAREA STYLING
+       ======================================== */
+    textarea.single-line {
+      min-height: 42px;
+    }
+    
+    .conditional-textarea {
+      margin-top: 6px;
+    }
+    
+    /* ========================================
+       SOCIAL MEDIA - Single column layout
+       ======================================== */
+    .social-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .social-row {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .social-row label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-gray);
+    }
+    
+    /* ========================================
+       HIDDEN CLASS
+       ======================================== */
+    .hidden {
+      display: none !important;
+    }
+    
+    /* ========================================
+       MEDIA GRID - Pictures & Videos
+       ======================================== */
+    .media-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .media-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    
+    .media-card:hover {
+      border-color: var(--purple);
+    }
+    
+    .media-card img {
+      width: 100%;
+      height: 120px;
+      object-fit: cover;
+      display: block;
+    }
+    
+    .media-overlay {
+      padding: 8px;
+      background: rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .drag-handle {
+      cursor: grab;
+      font-size: 16px;
+      color: var(--text-gray);
+      user-select: none;
+      text-align: center;
+    }
+    
+    .drag-handle:active {
+      cursor: grabbing;
+    }
+    
+    .media-title {
+      width: 100%;
+      padding: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      text-align: center;
+      font-size: 0.8125rem;
+    }
+    
+    .media-title:focus {
+      outline: none;
+      border-color: var(--cyan);
+      background: rgba(255, 255, 255, 0.08);
+    }
+    
+    .delete-btn {
+      width: 100%;
+      padding: 8px;
+      background: #dc3545;
+      border: none;
+      border-radius: 6px;
+      color: white;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.2s;
+    }
+    
+    .delete-btn:hover {
+      background: #c82333;
+    }
+
+    .media-card.dragging {
+      opacity: 0.4;
+    }
+    
+    /* ========================================
+       ADD MEDIA SECTION
+       ======================================== */
+    .add-media-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    
+    .add-media-row input[type="text"] {
+      flex: 1;
+      min-width: 200px;
+    }
+    
+    /* ========================================
+       RESPONSIVE
+       ======================================== */
+    @media (max-width: 768px) {
+      .form-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+      
+      .form-row-multi {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+      
+      .inline-row {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      
+      .media-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      }
+      
+      .social-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+    }
+
+    /* ========================================
+       COMPACT OVERRIDES
+       ======================================== */
+    input[type="text"], input[type="email"], input[type="url"], input[type="tel"],
+    input[type="number"], input[type="date"], input[type="time"],
+    select, textarea {
+      font-size: 0.8rem !important;
+      padding: 5px 8px !important;
+    }
+    textarea {
+      padding: 6px 8px !important;
+    }
+    textarea.single-line {
+      min-height: 34px;
+    }
+    .btn {
+      font-size: 0.75rem !important;
+      padding: 5px 12px !important;
+    }
+    .btn.primary {
+      font-size: 0.8rem !important;
+      padding: 8px 20px !important;
+    }
+    input[type="checkbox"] {
+      width: 16px !important;
+      height: 16px !important;
+      min-width: 16px !important;
+    }
+  </style>
+  
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+  <script src="/app/static/js/auth.guard.js"></script>
+  <script src="/app/static/js/api-globals.js"></script>
+  <script src="/app/static/js/time-format.js"></script>
+  <script src="/app/static/js/city-autocomplete.js"></script>
+  <script defer src="/app/static/js/venue.edit.js"></script>
+  
+</head>
+
+<body>
+
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+      <div class="header-actions">
+        <a class="btn ghost" id="createGigsBtn" href="/app/venue-create-gigs.html">Create Gigs</a>
+        <a class="btn ghost" id="venueProfileBtn" href="/app/venue-profile.html" target="_blank">Venue Profile</a>
+        <a class="btn ghost" href="/app/user-profile.html">User Profile</a>
+        <button class="btn ghost" onclick="logout()">Sign Out</button>
+      </div>
+    </div>
+  </header>
+  <script src="/app/static/js/user-dropdown.js"></script>
+
+  <div class="profile-container">
+    <div class="content-card">
+      <div class="profile-pic-wrapper">
+        <img
+          id="profilePic"
+          class="profile-pic"
+          src="/app/static/img/profile-placeholder.svg"
+          alt="Profile picture"
+          onerror="this.onerror=null;this.src='/app/static/img/profile-placeholder.svg';"
+        />
+        <input id="profilePicInput" type="file" accept="image/*" hidden />
+      </div>
+    </div>
+
+    <!-- SECTION 2: VENUE DETAILS -->
+    <div class="content-card">
+      <h2>Venue Details</h2>
+      <div class="form-rows">
+        <div class="form-row">
+          <label>Venue Name</label>
+          <input type="text" id="venue_name" />
+        </div>
+        
+        <div class="form-row">
+          <label>Address Line 1</label>
+          <input type="text" id="address_line_1" />
+        </div>
+        
+        <div class="form-row">
+          <label>Address Line 2</label>
+          <input type="text" id="address_line_2" />
+        </div>
+        
+        <div class="form-row-multi">
+          <label>City</label>
+          <input type="text" id="city" />
+          <label style="text-align: right;">State</label>
+          <select id="state" style="width: 80px;">
+            <option value="">--</option>
+            <option value="AL">AL</option><option value="AK">AK</option>
+            <option value="AZ">AZ</option><option value="AR">AR</option>
+            <option value="CA">CA</option><option value="CO">CO</option>
+            <option value="CT">CT</option><option value="DE">DE</option>
+            <option value="FL">FL</option><option value="GA">GA</option>
+            <option value="HI">HI</option><option value="ID">ID</option>
+            <option value="IL">IL</option><option value="IN">IN</option>
+            <option value="IA">IA</option><option value="KS">KS</option>
+            <option value="KY">KY</option><option value="LA">LA</option>
+            <option value="ME">ME</option><option value="MD">MD</option>
+            <option value="MA">MA</option><option value="MI">MI</option>
+            <option value="MN">MN</option><option value="MS">MS</option>
+            <option value="MO">MO</option><option value="MT">MT</option>
+            <option value="NE">NE</option><option value="NV">NV</option>
+            <option value="NH">NH</option><option value="NJ">NJ</option>
+            <option value="NM">NM</option><option value="NY">NY</option>
+            <option value="NC">NC</option><option value="ND">ND</option>
+            <option value="OH">OH</option><option value="OK">OK</option>
+            <option value="OR">OR</option><option value="PA">PA</option>
+            <option value="RI">RI</option><option value="SC">SC</option>
+            <option value="SD">SD</option><option value="TN">TN</option>
+            <option value="TX">TX</option><option value="UT">UT</option>
+            <option value="VT">VT</option><option value="VA">VA</option>
+            <option value="WA">WA</option><option value="WV">WV</option>
+            <option value="WI">WI</option><option value="WY">WY</option>
+          </select>
+          <label style="text-align: right;">Zip Code</label>
+          <input type="text" id="postal_code" inputmode="numeric" style="width: 120px;" />
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 3: VENUE CAPACITY -->
+    <div class="content-card">
+      <h2>Venue Capacity</h2>
+      <div class="form-row">
+        <label>Capacity</label>
+        <input type="text" id="venue_size" inputmode="numeric" placeholder="Maximum number of guests" />
+      </div>
+    </div>
+
+    <!-- SECTION 4: ARTIST FREQUENCY -->
+    <div class="content-card">
+      <div class="section-header-row">
+        <h2>Artist Frequency</h2>
+        <span class="description">(Limit how often the same artist can perform at your venue)</span>
+      </div>
+      <div class="inline-row">
+        <select id="artistFrequencyMode">
+          <option value="none">No Limit</option>
+          <option value="limit">Limit</option>
+        </select>
+        
+        <div id="artistFrequencyLimit" class="hidden" style="display: flex; gap: 8px; align-items: center;">
+          <span style="color: var(--text-gray);">1 Performance Every</span>
+          <input id="artistFrequencyDays" type="text" inputmode="numeric" placeholder="##" />
+          <span style="color: var(--text-gray);">days</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 5: DEFAULT PAY -->
+    <div class="content-card">
+      <div class="section-header-row">
+        <h2>Default Pay</h2>
+        <span class="description">(Default pay amount for new gigs)</span>
+      </div>
+      <div class="pay-fields">
+        <span>$</span>
+        <input id="default_pay_dollars" type="text" inputmode="numeric" placeholder="0" class="pay-dollars" />
+        <span>.</span>
+        <input id="default_pay_cents" type="text" inputmode="numeric" pattern="[0-9]{2}" maxlength="2" placeholder="00" class="pay-cents" />
+      </div>
+    </div>
+
+    <!-- SECTION 6: STAGE DETAILS -->
+    <div class="content-card">
+      <div class="inline-row">
+        <span class="toggle-label">Stage?</span>
+        <select id="has_stage">
+          <option value="false">No</option>
+          <option value="true">Yes</option>
+        </select>
+      </div>
+      <textarea id="setup_location_description" class="single-line conditional-textarea hidden" placeholder="Describe stage details and/or setup location for Artist..."></textarea>
+    </div>
+
+    <!-- SECTION 7: SOUND EQUIPMENT -->
+    <div class="content-card">
+      <div class="inline-row">
+        <span class="toggle-label">Sound Equipment?</span>
+        <select id="has_sound_equipment">
+          <option value="false">No</option>
+          <option value="true">Yes</option>
+        </select>
+      </div>
+      <textarea id="sound_equipment_description" class="single-line conditional-textarea hidden" placeholder="Describe sound equipment specs that Venue provides for Artist to use..."></textarea>
+    </div>
+
+    <!-- SECTION 8: SOUND ENGINEER -->
+    <div class="content-card hidden" id="sound-engineer-group">
+      <div class="inline-row">
+        <span class="toggle-label">Sound Engineer?</span>
+        <select id="has_sound_engineer">
+          <option value="false">No</option>
+          <option value="true">Yes</option>
+        </select>
+      </div>
+      <textarea id="sound_engineer_details" class="single-line conditional-textarea hidden" placeholder="Describe Sound Engineer details that Artist can use and cost (if any)..."></textarea>
+    </div>
+
+    <!-- SECTION 9: LIGHTING -->
+    <div class="content-card">
+      <div class="inline-row">
+        <span class="toggle-label">Lighting?</span>
+        <select id="has_lighting">
+          <option value="false">No</option>
+          <option value="true">Yes</option>
+        </select>
+      </div>
+      <textarea id="lighting_description" class="single-line conditional-textarea hidden" placeholder="Describe lighting specs that Venue provides for Artist to use..."></textarea>
+    </div>
+
+    <!-- SECTION 10: BAR TAB -->
+    <div class="content-card">
+      <div class="section-header-row">
+        <h2>Bar Tab</h2>
+        <span class="description">(Bar tab details for artists)</span>
+      </div>
+      <div class="field" style="margin-bottom: 0;">
+        <textarea id="bar_tab_details" class="single-line" placeholder="Enter bar tab details for artists, if any..."></textarea>
+      </div>
+    </div>
+
+    <!-- SECTION 11: FOOD TAB -->
+    <div class="content-card">
+      <div class="section-header-row">
+        <h2>Food Tab</h2>
+        <span class="description">(Food tab details for artists)</span>
+      </div>
+      <div class="field" style="margin-bottom: 0;">
+        <textarea id="food_tab_details" class="single-line" placeholder="Enter food tab details for artists, if any..."></textarea>
+      </div>
+    </div>
+
+    <!-- SECTION 12: LOAD IN/OUT -->
+    <div class="content-card">
+      <div class="section-header-row">
+        <h2>Load In / Out</h2>
+        <span class="description">(Arrival time and details)</span>
+      </div>
+      <div class="form-row" style="margin-bottom: 12px;">
+        <label>Arrival Time</label>
+        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+          <select id="arrival_time_type" style="width: 180px;">
+            <option value="flexible">Flexible</option>
+            <option value="no_earlier_than">No Earlier Than:</option>
+          </select>
+          
+          <div id="arrivalInline" class="hidden" style="display: flex; gap: 8px; align-items: center;">
+            <select id="arrival_no_earlier_than_hour" style="width: 85px; text-align: center;">
+              <option value="">--</option>
+              <option>1</option><option>2</option><option>3</option>
+              <option>4</option><option>5</option><option>6</option>
+              <option>7</option><option>8</option><option>9</option>
+              <option>10</option><option>11</option><option value="12" selected>12</option>
+            </select>
+            <select id="arrival_no_earlier_than_period" style="width: 85px; text-align: center;">
+              <option value="PM" selected>PM</option>
+              <option value="AM">AM</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <textarea id="load_in_out_details" class="single-line hidden" placeholder="Load In/Out Details..."></textarea>
+    </div>
+
+    <!-- SECTION 12B: PUBLIC PERFORMANCE LICENSING -->
+    <div class="content-card">
+      <div class="section-header-row">
+        <h2>Public Performance Licensing</h2>
+        <span class="description">(PRO licensing certification)</span>
+      </div>
+      
+      <div style="margin-bottom: 16px;">
+        <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
+          <input type="checkbox" id="pro_certified" style="width: 20px; height: 20px; min-width: 20px; margin-top: 3px; accent-color: #8b5cf6;">
+          <span style="font-size: 0.8rem; color: var(--text-gray); line-height: 1.6;">I represent and warrant that this venue maintains active public performance licenses from all applicable Performing Rights Organizations ("PROs"), including but not limited to ASCAP, BMI, SESAC, GMR, and any other organization required for the lawful public performance of musical works at this venue. I understand that maintaining such licenses is solely the responsibility of the venue.</span>
+        </label>
+      </div>
+      
+      <div id="proLicenseFields" style="margin-top: 16px;">
+        <div class="pro-license-row" style="display: grid; grid-template-columns: 90px 1fr 1fr auto; gap: 10px; align-items: center; margin-bottom: 8px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">ASCAP</span>
+          <input type="text" id="pro_ascap_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
+          <input type="date" id="pro_ascap_expiration" style="font-size: 0.85rem;">
+          <button class="btn ghost" onclick="uploadProLicense('ASCAP')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+        </div>
+        <div id="pro_ascap_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
+        
+        <div class="pro-license-row" style="display: grid; grid-template-columns: 90px 1fr 1fr auto; gap: 10px; align-items: center; margin-bottom: 8px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">BMI</span>
+          <input type="text" id="pro_bmi_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
+          <input type="date" id="pro_bmi_expiration" style="font-size: 0.85rem;">
+          <button class="btn ghost" onclick="uploadProLicense('BMI')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+        </div>
+        <div id="pro_bmi_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
+        
+        <div class="pro-license-row" style="display: grid; grid-template-columns: 90px 1fr 1fr auto; gap: 10px; align-items: center; margin-bottom: 8px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">SESAC</span>
+          <input type="text" id="pro_sesac_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
+          <input type="date" id="pro_sesac_expiration" style="font-size: 0.85rem;">
+          <button class="btn ghost" onclick="uploadProLicense('SESAC')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+        </div>
+        <div id="pro_sesac_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
+        
+        <div class="pro-license-row" style="display: grid; grid-template-columns: 90px 1fr 1fr auto; gap: 10px; align-items: center; margin-bottom: 8px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+          <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">GMR</span>
+          <input type="text" id="pro_gmr_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
+          <input type="date" id="pro_gmr_expiration" style="font-size: 0.85rem;">
+          <button class="btn ghost" onclick="uploadProLicense('GMR')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+        </div>
+        <div id="pro_gmr_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
+      </div>
+      
+      <div style="margin-top: 8px; min-height: 20px;">
+        <span id="proSaveStatus" style="font-size: 0.8rem; opacity: 0; transition: opacity 0.3s; color: #22c55e;"></span>
+      </div>
+      
+      <p style="font-size: 0.75rem; color: var(--text-gray); font-style: italic; line-height: 1.6; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border);">
+        Venue assumes all liability if they fail to maintain proper performing rights licenses with all applicable agencies. License documentation may be requested for verification purposes. Failure to maintain required licenses may result in suspension or removal from the platform.
+      </p>
+      
+      <input type="file" id="proLicenseFileInput" style="display: none;" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+    </div>
+
+    <!-- SECTION: FLYER SETTINGS -->
+    <div class="content-card">
+      <h2>Flyer Settings</h2>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <input type="checkbox" id="auto_flyers" style="accent-color:#8b5cf6;">
+        <span style="font-size:0.8rem;font-weight:500;color:var(--text-gray);">Automatically Create Flyers for All Gigs</span>
+      </div>
+      <div id="flyerTemplateRow" style="display:none;margin-left:26px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <label style="font-size:0.8rem;font-weight:500;color:var(--text-gray);white-space:nowrap;">Default Template:</label>
+          <select id="default_flyer_template_id" style="max-width:280px;">
+            <option value="">Built-in Default Template</option>
+          </select>
+        </div>
+        <p style="font-size:0.7rem;color:var(--text-gray);font-style:italic;margin-top:4px;">Template content auto-fills per gig. Also editable in the Flyer Editor.</p>
+      </div>
+    </div>
+
+    <!-- SECTION 14: SOCIAL MEDIA -->
+    <div class="content-card">
+      <h2>Social Media &amp; Links</h2>
+      <div class="social-grid">
+        <div class="social-row">
+          <label>Website</label>
+          <input id="website_url" type="text" placeholder="https://www.yourvenue.com" />
+        </div>
+        
+        <div class="social-row">
+          <label>Facebook</label>
+          <input id="facebook_url" type="text" placeholder="https://www.facebook.com/..." />
+        </div>
+        
+        <div class="social-row">
+          <label>Instagram</label>
+          <input id="instagram_url" type="text" placeholder="https://www.instagram.com/..." />
+        </div>
+        
+        <div class="social-row">
+          <label>Twitter/X</label>
+          <input id="twitter_url" type="text" placeholder="https://twitter.com/..." />
+        </div>
+        
+        <div class="social-row">
+          <label>Yelp</label>
+          <input id="yelp_url" type="text" placeholder="https://www.yelp.com/biz/..." />
+        </div>
+        
+        <div class="social-row">
+          <label>Google Maps</label>
+          <input id="google_maps_url" type="text" placeholder="https://goo.gl/maps/..." />
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 14: PICTURES -->
+    <div class="content-card">
+      <h2>Pictures</h2>
+      <div class="add-media-row">
+        <button id="addPicBtn" class="btn primary">+ Add Picture</button>
+        <input id="picInput" type="file" accept="image/*" hidden />
+      </div>
+      <div id="pictures" class="media-grid"></div>
+    </div>
+
+    <!-- SECTION 15: VIDEOS -->
+    <div class="content-card">
+      <h2>Videos</h2>
+      <div class="add-media-row">
+        <input id="videoUrl" type="text" placeholder="YouTube or Vimeo URL" />
+        <button id="addVideoBtn" class="btn primary">+ Add Video</button>
+      </div>
+      <div id="videos" class="media-grid"></div>
+    </div>
+
+  </div>
+
+<footer>
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+  
+
+  
+
+<script src="/app/static/js/venue-edit-init.js"></script>
+<script src="/app/static/js/onboarding-checklist.js" defer></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

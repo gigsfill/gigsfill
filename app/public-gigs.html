@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Find Live Music – GigsFill</title>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta name="description" content="Browse upcoming live music events near you. Find booked gigs at local venues with dates, times, and artist details on GigsFill.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://gigsfill.com/app/public-gigs.html">
+<link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+<meta name="theme-color" content="#0f1419">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Find Live Music Near You – GigsFill">
+<meta property="og:description" content="Browse upcoming live music events. Find booked gigs at local venues with dates, times, and artist details.">
+<meta property="og:url" content="https://gigsfill.com/app/public-gigs.html">
+<meta property="og:site_name" content="GigsFill">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Find Live Music Near You – GigsFill">
+<meta name="twitter:description" content="Browse upcoming live music events at local venues.">
+<link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+<style>
+    /* TABS STYLING - MATCHING USER-PROFILE */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      background: transparent;
+      border: none;
+      color: var(--text-gray);
+      cursor: pointer;
+      font: 600 0.875rem 'Inter', sans-serif;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+      margin-bottom: -1px;
+      flex-shrink: 0;
+    }
+    
+    .tab:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.03);
+    }
+    
+    .tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      background: rgba(6,182,212,0.1);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    /* ORIGINAL STYLES BELOW */
+    body {
+      overflow-x: hidden;
+    }
+    
+    /* Calendar styling */
+    .calendar-wrapper {
+      width: 100%;
+    }
+
+    .calendar-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .calendar-toolbar h2 {
+      margin: 0;
+      font-size: 1.5rem;
+      color: var(--text);
+    }
+
+    .calendar-toolbar button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+
+    .calendar-toolbar button:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+    }
+
+    .calendar-header {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      text-align: center;
+      color: var(--text-gray);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .calendar {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+    }
+
+    .day {
+      background: rgba(8, 11, 22, 0.97);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      min-height: 140px;
+      padding: 8px 4px;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.2s;
+    }
+
+    .day:hover {
+      background: rgba(18, 22, 38, 0.98);
+      border-color: rgba(124, 107, 255, 0.45);
+    }
+    
+    .day.today { border-color: var(--cyan); }
+    
+    /* v93: Past date styling */
+    .day.past-date {
+      opacity: 0.5;
+      background: rgba(0, 0, 0, 0.2);
+      cursor: default;
+    }
+    
+    .day.past-date:hover {
+      background: rgba(0, 0, 0, 0.2);
+      border-color: rgba(255,255,255,0.08);
+    }
+    
+    .day.past-date .day-number {
+      color: rgba(255, 255, 255, 0.3);
+    }
+    
+    /* Days from other months */
+    .day.other-month {
+      opacity: 0.3;
+      cursor: default;
+    }
+    
+    .day.other-month:hover {
+      background: rgba(8, 11, 22, 0.97);
+      border-color: rgba(255,255,255,0.08);
+    }
+    
+    .day.other-month .day-number {
+      color: rgba(255, 255, 255, 0.2);
+    }
+
+    .day-number {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .gig {
+      margin-top: 28px;
+      margin-bottom: 4px;
+      padding: 6px 4px;
+      border-radius: 5px;
+      font-size: 0.7rem;
+      color: #fff;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .gig:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .gig.open { background: #10b981; }
+    .gig.booked { background: #dc3545; }
+
+    /* Gigs container with custom scrollbar */
+    .gigs-container {
+      max-height: 110px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      margin-top: 26px;
+      padding-right: 4px;
+    }
+    
+    /* Custom scrollbar */
+    .gigs-container::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .gigs-container::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+    
+    .gigs-container::-webkit-scrollbar-thumb {
+      background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-pink) 100%);
+      border-radius: 3px;
+      transition: background 0.3s;
+    }
+    
+    .gigs-container::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(135deg, var(--accent-pink) 0%, var(--accent-cyan) 100%);
+    }
+    
+    /* Firefox scrollbar */
+    .gigs-container {
+      scrollbar-width: thin;
+      scrollbar-color: var(--accent-purple) rgba(0, 0, 0, 0.2);
+    }
+    
+    /* Tighter spacing between gigs */
+    .gigs-container .gig {
+      margin-top: 0;
+      margin-bottom: 4px;
+    }
+    
+    .gigs-container .gig:first-child {
+      margin-top: 0;
+    }
+    
+    .gigs-container .gig:last-child {
+      margin-bottom: 0;
+    }
+
+    /* MODAL - PROPERLY CENTERED WITH WHITE TEXT */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      padding: 20px;
+    }
+
+    .modal-overlay.hidden {
+      display: none;
+    }
+
+    .modal {
+      background: var(--card);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: 100%;
+      max-width: 600px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 16px 64px rgba(0, 0, 0, 0.7);
+    }
+    
+    /* Day modal sizes to fit its content */
+    .modal.day-modal {
+      width: fit-content;
+      max-width: 98vw;
+      min-width: min(860px, 98vw);
+    }
+
+    /* MODAL TITLES - Purple with gradient */
+    .modal h2,
+    .modal h3,
+    .modal p,
+    .modal label {
+      color: var(--text) !important;
+      margin-top: 0;
+      font-family: var(--font-primary);
+    }
+
+    /* MODAL TITLES - BRIGHT PURPLE GRADIENT */
+    #modalTitle {
+      font-size: 1.25rem !important;
+      font-weight: 700 !important;
+      background: linear-gradient(135deg, #a855f7, #06b6d4) !important;
+      background-clip: text !important;
+      -webkit-background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
+      margin-bottom: 0 !important;
+      padding-bottom: 12px !important;
+      letter-spacing: 0.3px !important;
+    }
+    
+    /* BOLD PURPLE SEPARATOR LINE */
+    .modal-separator {
+      height: 3px !important;
+      background: linear-gradient(90deg, #a855f7, #06b6d4, #a855f7) !important;
+      margin: 0 0 24px 0 !important;
+      border-radius: 2px !important;
+      box-shadow: 0 2px 8px rgba(168, 85, 247, 0.4) !important;
+    }
+    
+    /* Red warning boxes for frequency/denied/revoked */
+    .modal-warning-box {
+      margin: 20px 0;
+      padding: 16px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 8px;
+    }
+    
+    .modal-warning-box p {
+      color: #ef4444 !important;
+      margin: 0;
+      line-height: 1.6;
+    }
+    
+    .modal-warning-box strong {
+      color: #ef4444 !important;
+    }
+    
+    /* Booked by box styling */
+    .booked-by-box {
+      margin-bottom: 20px;
+      padding: 16px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 8px;
+    }
+    
+    .booked-by-box .label {
+      font-size: 0.875rem;
+      color: #ffffff;
+      margin-bottom: 4px;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+    
+    .booked-by-box a {
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 1.1rem;
+      text-decoration: none;
+    }
+    
+    .booked-by-box a:hover {
+      text-decoration: underline;
+    }
+    
+    .modal h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    #modalBody {
+      color: var(--text);
+      max-height: 500px;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    
+    /* Better styling for modal content labels */
+    #modalBody strong {
+      color: #a855f7 !important;
+      font-weight: 600;
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: inline-block;
+      margin-bottom: 4px;
+    }
+    
+    /* Modal data fields styling */
+    #modalBody p {
+      line-height: 1.8;
+      margin: 12px 0;
+    }
+    
+    #modalBody::-webkit-scrollbar {
+      width: 8px;
+    }
+    
+    #modalBody::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 4px;
+    }
+    
+    #modalBody::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+    
+    .modal h3 {
+      margin-bottom: 20px;
+      font-size: 1.1rem;
+    }
+
+    .modal label {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .modal input,
+    .modal textarea {
+      width: 100%;
+      font-family: var(--font-primary);
+      font-size: 0.9rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    
+    /* Force correct button styling in modals */
+    .modal-actions .btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    
+    .modal-actions .btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+    }
+    
+    .modal-actions .btn.primary {
+      background: var(--cyan);
+      border-color: var(--cyan);
+      color: #000;
+    }
+    
+    .modal-actions .btn.primary:hover {
+      background: #06a5ca;
+      border-color: #06a5ca;
+    }
+    
+    .modal-actions .btn.danger {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: #fff;
+    }
+    
+    .modal-actions .btn.danger:hover {
+      background: #dc2626;
+      border-color: #dc2626;
+    }
+    
+    .modal-actions .btn.ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    .modal-actions .btn.ghost:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+
+    /* OPEN gigs — dusk green - COPIED FROM ARTIST-BOOK-GIGS */
+    .calendar .gig.open {
+      background: linear-gradient(
+        135deg,
+        #10b981,
+        #059669
+      ) !important;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35) !important;
+      color: #000000 !important;
+    }
+
+    /* BOOKED gigs — dusk red */
+    .calendar .gig.booked {
+      background: linear-gradient(
+        135deg,
+        #ef4444,
+        #b91c1c
+      ) !important;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35) !important;
+    }
+
+    /* Hover lift (subtle, dusk-style) */
+    .calendar .gig:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }
+
+    /* PANEL STYLING - section backgrounds */
+    section.panel {
+      max-width: 1250px;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+
+    /* Gig pills — override calendar wipe - COPIED FROM ARTIST-BOOK-GIGS */
+    .calendar .gig {
+      background-color: transparent !important;
+      color: #ffffff !important;
+      border-radius: 6px !important;
+      padding: 2px 8px !important;
+      font-weight: 600 !important;
+      font-size: 0.65rem !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+
+    /* Search results container - COPIED FROM ARTIST-BOOK-GIGS */
+    #searchResults {
+      margin-top: 8px !important;
+      padding-top: 6px !important;
+      font-size: 0.8rem !important;
+      line-height: 1.6 !important;
+      color: #94a3b8 !important;
+      font-family: var(--font-primary) !important;
+    }
+
+    #searchResults * {
+      font-size: 0.8rem !important;
+    }
+
+    /* Make all search input fields smaller - COPIED FROM ARTIST-BOOK-GIGS */
+    #searchVenue,
+    #searchCity,
+    #searchArtist,
+    #mileRadius {
+      font-size: 0.8rem !important;
+      padding: 6px 12px !important;
+      font-family: var(--font-primary) !important;
+    }
+
+    /* =========================================
+       LOCK CALENDAR DAY WIDTHS (CRITICAL)
+       ========================================= */
+    .calendar {
+      grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+    }
+
+    .calendar .day {
+      width: 100% !important;
+      min-width: 0 !important;
+      box-sizing: border-box;
+    }
+
+    /* Prevent gigs from resizing cells */
+    .calendar .gig {
+      max-width: 100%;
+      overflow: hidden;
+    }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+    <div class="header-actions">
+      <a class="btn ghost" href="/app/index.html">Home</a>
+    </div>
+  </div>
+</header>
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+
+
+<div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
+
+<!-- SEARCH GIGS SECTION WITH PANEL BACKGROUND -->
+<section class="panel" style="margin-bottom: 16px;">
+  <!-- SEARCH GIGS TOGGLE LINK -->
+  <div style="margin-bottom: 12px;">
+    <a href="#" id="toggleSearchGigs" style="
+      color: var(--cyan);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    ">
+      <span id="searchToggleIcon">▼</span> Search Gigs
+    </a>
+  </div>
+
+  <!-- SEARCH GIGS EXPANDABLE CONTENT (Hidden by default) -->
+  <div id="searchGigsSection" style="display: block;">
+
+<!-- Row 1: City -->
+<div style="position: relative; display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+  <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">City</label>
+  <input type="text" id="searchCity" placeholder="City..." style="flex: 1;" autocomplete="off"/>
+</div>
+
+<!-- Row 2: Mile Radius -->
+<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+  <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Mile Radius</label>
+  <input type="number" id="mileRadius" placeholder="20" value="20" min="0" style="width: 80px;"/>
+</div>
+
+<!-- Row 3: Search by Venue -->
+<div style="position: relative; display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+  <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Search by Venue</label>
+  <input type="text" id="searchVenue" placeholder="Venue name..." style="flex: 1;" autocomplete="off"/>
+  <div id="venueAutocomplete" style="
+    position: absolute;
+    top: 100%;
+    left: 118px;
+    right: 0;
+    background: rgba(15, 20, 32, 0.98);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+    margin-top: 4px;
+  "></div>
+</div>
+
+<!-- Row 4: Search by Artist -->
+<div style="position: relative; display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+  <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Search by Artist</label>
+  <input type="text" id="searchArtist" placeholder="Artist name..." style="flex: 1;" autocomplete="off"/>
+  <div id="artistAutocomplete" style="
+    position: absolute;
+    top: 100%;
+    left: 118px;
+    right: 0;
+    background: rgba(15, 20, 32, 0.98);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+    margin-top: 4px;
+  "></div>
+</div>
+
+<!-- Row 5: Artist Type Filter - Inline Label -->
+<div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+  <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Artist Type</label>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;">
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Live Band" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Live Band</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="DJ" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">DJ</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Comedian" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Comedian</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Trivia Host" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Trivia Host</button>
+  </div>
+</div>
+
+<!-- Band Format Bubbles (shown when Live Band is active) - Inline Label -->
+<div id="bandFormatBubblesArtist" style="margin-bottom: 8px; display: none;">
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Band Format</label>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;">
+      <button class="band-format-filter-toggle" data-active="true" data-format="Solo" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Solo</button>
+      <button class="band-format-filter-toggle" data-active="true" data-format="Duo" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Duo</button>
+      <button class="band-format-filter-toggle" data-active="true" data-format="Trio" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Trio</button>
+      <button class="band-format-filter-toggle" data-active="true" data-format="Full Band" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Full Band</button>
+    </div>
+  </div>
+</div>
+
+<div style="display: flex; gap: 12px;">
+<button class="btn primary" id="applyFilters">Apply Filters</button>
+<button class="btn ghost" id="clearFilters">Clear Filters</button>
+</div>
+<div id="searchResults"></div>
+  </div>
+</section>
+
+<!-- CALENDAR - SEPARATE SECTION -->
+<section class="panel calendar-wrapper">
+<div class="calendar-toolbar">
+<button class="btn ghost" id="prevMonth">◀ Prev</button>
+<h2 id="monthLabel">Month YYYY</h2>
+<button class="btn ghost" id="nextMonth">Next ▶</button>
+</div>
+<div class="calendar-header">
+<div>Sun</div><div>Mon</div><div>Tue</div>
+<div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+</div>
+<div class="calendar" id="calendar"></div>
+</section>
+
+</div> <!-- Close book-gigs-container -->
+
+<footer>
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<!-- MODAL - EXACT COPY FROM ARTIST-BOOK-GIGS -->
+<div class="modal-overlay hidden" id="modalOverlay">
+<div class="modal">
+<h2 id="modalTitle">Gig Details</h2>
+<div id="modalBody"></div>
+<div class="modal-actions" id="modalActions">
+<button class="btn ghost" onclick="document.getElementById('modalOverlay').classList.add('hidden')">
+        Close
+      </button>
+</div>
+</div>
+</div>
+
+<script src="/app/static/js/city-autocomplete.js"></script>
+<script src="/app/static/js/public-gigs.js"></script>
+
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

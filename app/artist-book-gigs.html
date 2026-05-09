@@ -1,0 +1,2290 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Book Gigs – GigsFill</title>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+<style>
+    /* TABS STYLING - MATCHING USER-PROFILE */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      background: transparent;
+      border: none;
+      color: var(--text-gray);
+      cursor: pointer;
+      font: 600 0.875rem 'Inter', sans-serif;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+      margin-bottom: -1px;
+      flex-shrink: 0;
+    }
+    
+    .tab:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.03);
+    }
+    
+    .tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      background: rgba(6,182,212,0.1);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    /* W9 Form select styling */
+    .w9-select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px;
+      background: #151b28 !important;
+      border: 1px solid #333 !important;
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.9rem;
+      font-family: var(--font-primary);
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 8L1 3h10z'/%3E%3C/svg%3E") !important;
+      background-repeat: no-repeat !important;
+      background-position: right 12px center !important;
+      cursor: pointer;
+    }
+    .w9-select option {
+      background: #151b28;
+      color: #ffffff;
+    }
+
+    /* Gradient section titles - matches brand palette */
+    .gradient-title {
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* ORIGINAL STYLES BELOW */
+    body {
+      overflow-x: hidden;
+    }
+    
+    /* Calendar styling */
+    .calendar-wrapper {
+      width: 100%;
+    }
+
+    .calendar-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .calendar-toolbar h2 {
+      margin: 0;
+      font-size: 1.5rem;
+      color: var(--text);
+    }
+
+    .calendar-toolbar button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+
+    .calendar-toolbar button:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+    }
+
+    .calendar-header {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      text-align: center;
+      color: var(--text-gray);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .calendar {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+    }
+
+    .day {
+      background: rgba(8, 11, 22, 0.97);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      min-height: 140px;
+      padding: 8px 4px;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.2s;
+    }
+
+    .day:hover {
+      background: rgba(18, 22, 38, 0.98);
+      border-color: rgba(124, 107, 255, 0.45);
+    }
+    
+    .day.today { border-color: var(--cyan); }
+    
+    /* v93: Past date styling */
+    .day.past-date {
+      opacity: 0.5;
+      background: rgba(0, 0, 0, 0.2);
+      cursor: default;
+    }
+    
+    .day.past-date:hover {
+      background: rgba(0, 0, 0, 0.2);
+      border-color: rgba(255,255,255,0.08);
+    }
+    
+    .day.past-date .day-number {
+      color: rgba(255, 255, 255, 0.3);
+    }
+    
+    /* Days from other months */
+    .day.other-month {
+      opacity: 0.3;
+      cursor: default;
+    }
+    
+    .day.other-month:hover {
+      background: rgba(8, 11, 22, 0.97);
+      border-color: rgba(255,255,255,0.08);
+    }
+    
+    .day.other-month .day-number {
+      color: rgba(255, 255, 255, 0.2);
+    }
+
+    .day-number {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .gig {
+      margin-top: 28px;
+      margin-bottom: 4px;
+      padding: 6px 4px;
+      border-radius: 5px;
+      font-size: 0.7rem;
+      color: #fff;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .gig:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .gig.open { background: #10b981; }
+    .gig.booked { background: #dc3545; }
+
+    /* Gigs container with custom scrollbar */
+    .gigs-container {
+      max-height: 110px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      margin-top: 26px;
+      padding-right: 2px;
+    }
+    
+    /* Custom scrollbar */
+    .gigs-container::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .gigs-container::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+    
+    .gigs-container::-webkit-scrollbar-thumb {
+      background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-pink) 100%);
+      border-radius: 3px;
+      transition: background 0.3s;
+    }
+    
+    .gigs-container::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(135deg, var(--accent-pink) 0%, var(--accent-cyan) 100%);
+    }
+    
+    /* Firefox scrollbar */
+    .gigs-container {
+      scrollbar-width: thin;
+      scrollbar-color: var(--accent-purple) rgba(0, 0, 0, 0.2);
+    }
+    
+    /* Tighter spacing between gigs */
+    .gigs-container .gig {
+      margin-top: 0;
+      margin-bottom: 4px;
+    }
+    
+    .gigs-container .gig:first-child {
+      margin-top: 0;
+    }
+    
+    .gigs-container .gig:last-child {
+      margin-bottom: 0;
+    }
+
+    /* MODAL - PROPERLY CENTERED WITH WHITE TEXT */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      padding: 20px;
+    }
+
+    .modal-overlay.hidden {
+      display: none;
+    }
+
+    .modal {
+      background: var(--card);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: 100%;
+      max-width: 680px;
+      max-height: 95vh;
+      overflow-y: auto;
+      box-shadow: 0 16px 64px rgba(0, 0, 0, 0.7);
+    }
+    
+    /* Wider modal for day view with multiple gigs */
+    .modal.day-modal {
+      width: fit-content;
+      max-width: 98vw;
+      min-width: min(860px, 98vw);
+    }
+
+    /* MODAL TITLES - Purple with gradient */
+    .modal h2,
+    .modal h3,
+    .modal p,
+    .modal label {
+      color: var(--text) !important;
+      margin-top: 0;
+      font-family: var(--font-primary);
+    }
+
+    /* MODAL TITLES - BRIGHT PURPLE GRADIENT */
+    #modalTitle {
+      font-size: 1.25rem !important;
+      font-weight: 700 !important;
+      background: linear-gradient(135deg, #a855f7, #06b6d4) !important;
+      background-clip: text !important;
+      -webkit-background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
+      margin-bottom: 0 !important;
+      padding-bottom: 12px !important;
+      letter-spacing: 0.3px !important;
+    }
+    
+    /* BOLD PURPLE SEPARATOR LINE */
+    .modal-separator {
+      height: 3px !important;
+      background: linear-gradient(90deg, #a855f7, #06b6d4, #a855f7) !important;
+      margin: 0 0 24px 0 !important;
+      border-radius: 2px !important;
+      box-shadow: 0 2px 8px rgba(168, 85, 247, 0.4) !important;
+    }
+    
+    /* Red warning boxes for frequency/denied/revoked */
+    .modal-warning-box {
+      margin: 20px 0;
+      padding: 16px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 8px;
+    }
+    
+    .modal-warning-box p {
+      color: #ef4444 !important;
+      margin: 0;
+      line-height: 1.6;
+    }
+    
+    .modal-warning-box strong {
+      color: #ef4444 !important;
+    }
+    
+    /* Booked by box styling */
+    .booked-by-box {
+      margin-bottom: 20px;
+      padding: 16px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 8px;
+    }
+    
+    .booked-by-box .label {
+      font-size: 0.875rem;
+      color: #ffffff;
+      margin-bottom: 4px;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+    
+    .booked-by-box a {
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 1.1rem;
+      text-decoration: none;
+    }
+    
+    .booked-by-box a:hover {
+      text-decoration: underline;
+    }
+    
+    .modal h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    #modalBody {
+      color: var(--text);
+      max-height: 65vh;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    
+    /* Better styling for modal content labels */
+    #modalBody strong {
+      color: #a855f7 !important;
+      font-weight: 600;
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: inline-block;
+      margin-bottom: 4px;
+    }
+    
+    /* Modal data fields styling */
+    #modalBody p {
+      line-height: 1.8;
+      margin: 12px 0;
+    }
+    
+    #modalBody::-webkit-scrollbar {
+      width: 8px;
+    }
+    
+    #modalBody::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 4px;
+    }
+    
+    #modalBody::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+    
+    .modal h3 {
+      margin-bottom: 20px;
+      font-size: 1.1rem;
+    }
+
+    .modal label {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .modal input,
+    .modal textarea {
+      width: 100%;
+      font-family: var(--font-primary);
+      font-size: 0.9rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    
+    /* Force correct button styling in modals */
+    .modal-actions .btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    
+    .modal-actions .btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+    }
+    
+    .modal-actions .btn.primary {
+      background: var(--cyan);
+      border-color: var(--cyan);
+      color: #000;
+    }
+    
+    .modal-actions .btn.primary:hover {
+      background: #06a5ca;
+      border-color: #06a5ca;
+    }
+    
+    .modal-actions .btn.danger {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: #fff;
+    }
+    
+    .modal-actions .btn.danger:hover {
+      background: #dc2626;
+      border-color: #dc2626;
+    }
+    
+    .modal-actions .btn.ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    .modal-actions .btn.ghost:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+
+    /* Pay input wrapper */
+    .pay-input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pay-input-wrapper span {
+      font-size: 1.2rem;
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    .pay-input-wrapper input {
+      flex: 1;
+    }
+
+    /* Preferred Requests Section */
+    .preferred-requests-wrapper {
+      width: 100%;
+      margin-bottom: 0px; /* tight + intentional */
+    }
+
+    .preferred-requests-section {
+      background: var(--glass-bg);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 2px;
+    }
+
+    .preferred-requests-section h2 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: var(--text-primary);
+    }
+
+    .request-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+
+    .request-row:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .artist-name {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .artist-name a {
+      color: #ffffff;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .artist-name a:hover {
+      color: var(--accent-cyan);
+    }
+
+    .request-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* =====================================================
+      CALENDAR CELLS - MUCH DARKER (UPDATED)
+      ===================================================== */
+
+    /* The grid itself */
+    .calendar {
+      background: transparent !important;
+    }
+
+    /* EVERY grid cell — dusk theme matching venue-create-gigs */
+    .calendar > * {
+      background: rgba(8, 11, 22, 0.97) !important;
+      border: 1px solid rgba(255,255,255,0.08) !important;
+      border-radius: 10px !important;
+      color: #ffffff !important;
+    }
+
+    /* Hover (subtle dusk glow) */
+    .calendar > *:hover {
+      background: rgba(18, 22, 38, 0.98) !important;
+      border-color: rgba(124, 107, 255, 0.45) !important;
+    }
+    
+    /* Past dates */
+    .calendar > *.past-date {
+      background: rgba(0, 0, 0, 0.2) !important;
+      opacity: 0.5 !important;
+    }
+    
+    .calendar > *.past-date:hover {
+      background: rgba(0, 0, 0, 0.2) !important;
+      border-color: rgba(255,255,255,0.08) !important;
+    }
+
+    /* Day number */
+    .calendar .day-number {
+      color: rgba(255,255,255,0.55) !important;
+    }
+    
+    .calendar .past-date .day-number {
+      color: rgba(255,255,255,0.3) !important;
+    }
+
+    /* Kill ALL white defaults inside cells */
+    .calendar > * *,
+    .calendar > * *::before,
+    .calendar > * *::after {
+      background: transparent !important;
+      box-shadow: none !important;
+      color: inherit !important;
+    }
+
+    /* Empty / padding cells */
+    .calendar > *.empty,
+    .calendar > *:empty {
+      background: rgba(14, 17, 28, 0.6) !important;
+      border-color: rgba(255,255,255,0.04) !important;
+    }
+
+    /* Focus outlines */
+    .calendar > *:focus,
+    .calendar > *:focus-visible {
+      outline: none !important;
+      box-shadow: 0 0 0 1px rgba(124,107,255,0.4) !important;
+    }
+
+    /* =========================================
+   RESTORE GIG STATUS COLORS (FINAL)
+   ========================================= */
+
+    /* Gig pills — override calendar wipe */
+    .calendar .gig {
+      background-color: transparent !important; /* reset first */
+      color: #ffffff !important;
+      border-radius: 6px !important;
+      padding: 2px 8px !important;
+      font-weight: 600 !important;
+      font-size: 0.65rem !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+
+    /* OPEN gigs — dusk green */
+    .calendar .gig.open {
+      background: linear-gradient(
+        135deg,
+        #10b981,
+        #059669
+      ) !important;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35) !important;
+      color: #000000 !important;
+    }
+
+    /* BOOKED gigs — dusk red */
+    .calendar .gig.booked {
+      background: linear-gradient(
+        135deg,
+        #ef4444,
+        #b91c1c
+      ) !important;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35) !important;
+    }
+
+    /* BOOKED BY ME — electric cyan (my gigs) */
+    .calendar .gig.booked-mine {
+      background: linear-gradient(
+        135deg,
+        #00d9ff,
+        #00a8cc
+      ) !important;
+      box-shadow: 0 4px 12px rgba(0, 217, 255, 0.35) !important;
+      color: #000000 !important;
+    }
+
+    /* BOOKED BY OTHER — same as .booked (red) */
+    .calendar .gig.booked-other {
+      background: linear-gradient(
+        135deg,
+        #ef4444,
+        #b91c1c
+      ) !important;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35) !important;
+    }
+
+    /* PENDING CONTRACT — red like booked, slightly transparent */
+    .calendar .gig.pending-contract {
+      background: linear-gradient(
+        135deg,
+        #ef4444,
+        #b91c1c
+      ) !important;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25) !important;
+      opacity: 0.85;
+    }
+
+    /* MY PENDING CONTRACT — blinking blue, needs attention */
+    @keyframes gig-pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4); }
+      50% { opacity: 0.55; box-shadow: 0 4px 18px rgba(59, 130, 246, 0.7); }
+    }
+
+    /* PENDING VENUE APPROVAL — amber/gold pulse, awaiting venue response */
+    @keyframes gig-approval-pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 4px 14px rgba(0, 217, 255, 0.5); }
+      50% { opacity: 0.65; box-shadow: 0 4px 22px rgba(0, 217, 255, 0.9); }
+    }
+    .calendar .gig.pending-venue-approval {
+      background: linear-gradient(135deg, #00d9ff, #00a8cc) !important;
+      animation: gig-approval-pulse 1.5s ease-in-out infinite !important;
+      cursor: pointer;
+      color: #000000 !important;
+    }
+    .calendar .gig.pending-venue-approval:hover {
+      animation: none !important;
+      opacity: 1 !important;
+      box-shadow: 0 4px 20px rgba(0, 217, 255, 0.7) !important;
+    }
+    .gig-row.pending-venue-approval {
+      animation: gig-approval-pulse 1.5s ease-in-out infinite;
+    }
+
+    /* BLAST OPEN — urgent yellow/amber, open to anyone nearby */
+    @keyframes gig-blast-pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 4px 14px rgba(245, 158, 11, 0.5); }
+      50% { opacity: 0.6; box-shadow: 0 4px 22px rgba(245, 158, 11, 0.9); }
+    }
+    .calendar .gig.blast-open {
+      background: linear-gradient(135deg, #f59e0b, #d97706) !important;
+      /* No animation — amber color shows gig is hot/blasted without distracting blink */
+      cursor: pointer;
+      color: #000000 !important;
+    }
+    .calendar .gig.blast-open:hover {
+      opacity: 1 !important;
+      box-shadow: 0 4px 20px rgba(245, 158, 11, 0.7) !important;
+    }
+    .gig-row.blast-open {
+      /* No animation — amber color only */
+    }
+    .gig-row.blast-open:hover {
+      opacity: 1;
+    }
+    .calendar .gig.pending-contract-mine {
+      background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
+      animation: gig-pulse 1.8s ease-in-out infinite !important;
+      cursor: pointer;
+      color: #000000 !important;
+    }
+    .calendar .gig.pending-contract-mine:hover {
+      animation: none !important;
+      opacity: 1 !important;
+      box-shadow: 0 4px 16px rgba(59, 130, 246, 0.6) !important;
+    }
+    /* Day modal rows */
+    .gig-row.pending-contract-mine {
+      animation: gig-pulse 1.8s ease-in-out infinite;
+      color: #000000;
+    }
+    .gig-row.pending-contract-mine:hover {
+      animation: none;
+      opacity: 1;
+    }
+    .gig-row.booked-mine {
+      color: #000000;
+    }
+    .gig-row.pending-venue-approval {
+      color: #000000;
+    }
+
+    /* BLOCKED — dark gray (denied/revoked venues) */
+    .calendar .gig.blocked {
+      background: linear-gradient(
+        135deg,
+        #4b5563,
+        #374151
+      ) !important;
+      box-shadow: 0 4px 12px rgba(75, 85, 99, 0.35) !important;
+      opacity: 0.7;
+    }
+
+    /* STARTED gigs — dark, gig already underway */
+    .calendar .gig.started {
+      background: linear-gradient(
+        135deg,
+        #1f2937,
+        #111827
+      ) !important;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3) !important;
+      opacity: 0.6;
+      text-decoration: line-through;
+      text-decoration-color: rgba(255,255,255,0.3);
+    }
+
+    /* Hover lift (subtle, dusk-style) */
+    .calendar .gig:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }
+
+    /* =========================================
+   MATCH ARTIST BOOK GIGS LAYOUT
+   ========================================= */
+
+    /* Force vertical stacking */
+    .venue-create-gigs-page main.container {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 24px;
+      align-items: center; /* CENTER sections */
+    }
+
+    /* Control section width */
+    .venue-create-gigs-page main.container > section {
+      width: 100%;
+      max-width: 1250px; /* SAME as artist book gigs */
+    }
+
+    /* =========================================
+      LOCK CALENDAR DAY WIDTHS (CRITICAL)
+      ========================================= */
+
+    .venue-create-gigs-page .calendar {
+      grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+    }
+
+    .venue-create-gigs-page .calendar .day {
+      width: 100% !important;
+      min-width: 0 !important;
+      box-sizing: border-box;
+    }
+
+    /* Prevent gigs from resizing cells */
+    .venue-create-gigs-page .calendar .gig {
+      max-width: 100%;
+      overflow: hidden;
+    }
+
+        /* =========================================
+      CENTER & WIDTH-LOCK PREFERRED REQUESTS
+      ========================================= */
+
+    .venue-create-gigs-page .preferred-requests-wrapper {
+      display: flex;
+      justify-content: center;
+    }
+
+    .venue-create-gigs-page .preferred-requests-wrapper > section {
+      width: 100%;
+      max-width: 1250px; /* SAME as calendar */
+    }
+
+    /* REMOVE extra gap between preferred requests and calendar */
+    .venue-create-gigs-page main.container {
+      margin-top: 0 !important;
+      padding-top: 0 !important;
+    }
+
+    /* FIX CHECKBOXES SITE-WIDE */
+    input[type="checkbox"],
+    input[type="radio"] {
+      width: auto !important;
+      display: inline-flex;
+      align-items: center;
+      flex: none;
+    }
+
+    /* Labels: one line, never wrap */
+    .gig-input-field > label {
+      white-space: nowrap;
+      text-align: left;
+      font-size: 0.9rem;
+      opacity: 0.9;
+    }
+
+    /* Right column */
+    .gig-input-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Inputs behave */
+    .gig-input-control input,
+    .gig-input-control select,
+    .gig-input-control textarea {
+      width: 100%;
+    }
+
+        .gig-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .gig-row label {
+      min-width: 130px;
+      white-space: nowrap;
+    }
+
+    .gig-row .gig-input-control {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .gig-row input,
+    .gig-row select,
+    .gig-row textarea {
+      background: #0f1116;
+      color: #fff;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 4px 6px;
+    }
+
+    .gig-row textarea {
+      width: 100%;
+      resize: vertical;
+    }
+
+    /* ===============================
+   CLEAN MODAL SYSTEM (SELF-CONTAINED)
+   =============================== */
+
+  .modal-clean {
+    background: rgba(15, 20, 32, 0.98);
+    border-radius: 14px;
+    padding: 22px;
+    max-width: 680px;
+  }
+
+  /* Section wrapper inside modal */
+  .modal-clean .modal-section {
+    background: #1a1d22;
+    padding: 14px;
+    border-radius: 8px;
+  }
+
+  /* One row = label + field */
+  .modal-clean .modal-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+
+  /* Labels */
+  .modal-clean .modal-row > label {
+    color: #ffffff;
+    font-size: 14px;
+    white-space: nowrap;
+    opacity: 0.9;
+  }
+
+  /* Right-side controls */
+  .modal-clean .modal-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Inputs */
+  .modal-clean input,
+  .modal-clean select,
+  .modal-clean textarea {
+    background: #0f1116;
+    color: #ffffff;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 14px;
+  }
+
+  /* Textarea behaves */
+  .modal-clean textarea {
+    width: 100%;
+    resize: vertical;
+  }
+
+  /* Checkbox rows (band lineups, days, etc) */
+  .modal-clean .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .modal-clean .checkbox-row label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
+  /* Nested group (Recurring options) */
+  .modal-clean .subgroup {
+    margin-top: 12px;
+    padding: 12px;
+    background: #12151c;
+    border-radius: 6px;
+  }
+
+  /* Band Lineups — force single-line alignment */
+  .modal-clean .band-lineups-row {
+    flex-wrap: nowrap;        /* prevent wrapping */
+    gap: 16px;
+  }
+
+  .modal-clean .band-lineups-row label {
+    margin: 0;
+  }
+
+  /* FIX: checkboxes must be inline, not stacked */
+  .modal-clean .modal-control > label {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 0;
+  }
+
+  .days-row {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  /* ===============================
+   CUSTOM RADIO = SQUARE CHECKBOX
+   (Recurring "Ends" section)
+   =============================== */
+
+  .modal-clean input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+
+    width: 16px;
+    height: 16px;
+    border: 1px solid #555;
+    border-radius: 4px; /* <-- square */
+    background: #0f1116;
+    cursor: pointer;
+    position: relative;
+  }
+
+  /* Checked state */
+  .modal-clean input[type="radio"]:checked {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+
+  /* Checkmark */
+  .modal-clean input[type="radio"]:checked::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 5px;
+    width: 4px;
+    height: 8px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+
+  /* Focus fix (NO black flash) */
+  .modal-clean input[type="radio"]:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4);
+  }
+
+/* =====================================================
+   UNIVERSAL MODAL CHECKBOX / RADIO SYSTEM (SQUARE)
+   Applies to:
+   - Band Lineups
+   - Days (Mon–Sun)
+   - Recurring Ends options
+   ===================================================== */
+
+   .modal-clean input[type="checkbox"],
+  .modal-clean input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+
+  width: 16px;
+  height: 16px;
+  border: 1px solid #555;
+  border-radius: 4px; /* SQUARE */
+  background: #0f1116;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Checked state */
+.modal-clean input[type="checkbox"]:checked,
+.modal-clean input[type="radio"]:checked {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+/* Checkmark */
+.modal-clean input[type="checkbox"]:checked::after,
+.modal-clean input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Focus — FIXES BLACK FLASH */
+.modal-clean input[type="checkbox"]:focus,
+.modal-clean input[type="radio"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4);
+}
+
+/* =========================================
+   CENTER & WIDTH-LOCK SECTIONS (MATCH VENUE PAGE)
+   ========================================= */
+
+.artist-book-gigs-page .admin-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 2rem;
+  overflow-x: hidden;
+}
+
+.artist-book-gigs-page .admin-header {
+  margin-bottom: 2rem;
+}
+
+/* =========================================
+   LOCK CALENDAR DAY WIDTHS (CRITICAL)
+   ========================================= */
+
+.artist-book-gigs-page .calendar {
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+}
+
+.artist-book-gigs-page .calendar .day {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box;
+}
+
+/* Prevent gigs from resizing cells */
+.artist-book-gigs-page .calendar .gig {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* =========================================
+   CENTER & WIDTH-LOCK ACTIVITY CENTER
+   ========================================= */
+
+.artist-book-gigs-page .preferred-requests-wrapper {
+  display: flex;
+  justify-content: center;
+}
+
+.artist-book-gigs-page .preferred-requests-wrapper > section {
+  width: 100%;
+  max-width: 1250px; /* SAME as main sections */
+}
+
+/* REMOVE extra gap between activity center and main content */
+.artist-book-gigs-page main.container {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+/* =========================================
+   SEARCH GIGS SECTION IMPROVEMENTS
+   ========================================= */
+
+/* Make all search input fields smaller with same font as site */
+#searchVenue,
+#searchCity,
+#mileRadius,
+#minPay {
+  font-size: 0.8rem !important;
+  padding: 6px 12px !important;
+  font-family: var(--font-primary) !important;
+}
+
+/* Make amenity toggle buttons smaller */
+.amenity-toggle {
+  font-size: 0.75rem !important;
+  padding: 4px 8px !important;
+  font-family: var(--font-primary) !important;
+}
+
+/* Apply and Clear Filter buttons - SMALL like Activity Center bubbles */
+#applyFilters,
+#clearFilters {
+  padding: 6px 12px !important;
+  font-size: 0.75rem !important;
+  border-radius: 6px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  transition: all 0.2s !important;
+  font-family: var(--font-primary) !important;
+}
+
+#applyFilters {
+  background: rgba(34, 197, 94, 0.2) !important;
+  border: 1px solid rgba(34, 197, 94, 0.5) !important;
+  color: #22c55e !important;
+}
+
+#applyFilters:hover {
+  background: rgba(34, 197, 94, 0.3) !important;
+  border-color: #22c55e !important;
+}
+
+#clearFilters {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  color: var(--text-muted) !important;
+}
+
+#clearFilters:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Search results container - more space and better readability */
+#searchResults {
+  margin-top: 8px !important;
+  padding-top: 6px !important;
+  font-size: 0.8rem !important;
+  line-height: 1.6 !important;
+  color: #94a3b8 !important;
+  font-family: var(--font-primary) !important;
+}
+
+/* Make search results text smaller */
+#searchResults * {
+  font-size: 0.8rem !important;
+}
+
+/* Activity Center: Unread notifications get lighter background */
+.notification-item.unread,
+.notification.unread,
+[data-read="false"] {
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* ===== TAB STYLING ===== */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  padding: 12px 20px;
+  background: transparent;
+  border: none;
+  color: var(--text-gray);
+  cursor: pointer;
+  font: 600 0.875rem 'Inter', sans-serif;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+  white-space: nowrap;
+  margin-bottom: -1px;
+  flex-shrink: 0;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.03);
+}
+
+.tab.active {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+  background: rgba(6,182,212,0.1);
+}
+
+.tab-content {
+  display: none;
+  padding-bottom: 3rem;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.tab-content section.panel {
+  max-width: 1250px;
+  margin: 0 auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.tab span {
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+/* Legal/Taxes Sub-tabs — matches main .tab styling */
+.artist-legal-subtab {
+  padding: 12px 20px;
+  background: transparent;
+  border: none;
+  color: var(--text-gray, #94a3b8);
+  cursor: pointer;
+  font: 600 0.875rem 'Inter', sans-serif;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+  white-space: nowrap;
+  position: relative;
+  margin-bottom: -1px;
+  flex-shrink: 0;
+}
+.artist-legal-subtab:hover {
+  color: var(--text, #e5e5e5);
+  background: rgba(255, 255, 255, 0.02);
+}
+.artist-legal-subtab.active {
+  color: var(--cyan, #00d9ff);
+  border-bottom-color: var(--cyan, #00d9ff);
+  background: rgba(6,182,212,0.1);
+}
+.artist-legal-subtab-content { display: none; }
+.artist-legal-subtab-content.active { display: block; }
+  
+    /* ── Gig modal action buttons ─────────────────────────────────────── */
+    ._gig-btn-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 1.5rem;
+    }
+    ._gig-btn-row._center { justify-content: center; }
+    ._gig-btn {
+      font: 600 0.82rem/1 'Inter', sans-serif;
+      padding: 9px 18px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.18s;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 100px;
+      text-align: center;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    ._gig-btn-primary {
+      background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+      color: #fff;
+      border: none;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+    ._gig-btn-primary:hover {
+      box-shadow: 0 4px 16px rgba(139,92,246,0.4);
+      transform: translateY(-1px);
+    }
+    ._gig-btn-cyan {
+      background: rgba(6,182,212,0.1);
+      color: #06b6d4;
+      border: 1px solid rgba(6,182,212,0.4);
+    }
+    ._gig-btn-cyan:hover {
+      background: rgba(6,182,212,0.2);
+      transform: translateY(-1px);
+    }
+    ._gig-btn-purple {
+      background: rgba(139,92,246,0.1);
+      color: #c4b5fd;
+      border: 1px solid rgba(139,92,246,0.4);
+    }
+    ._gig-btn-purple:hover {
+      background: rgba(139,92,246,0.2);
+      transform: translateY(-1px);
+    }
+    ._gig-btn-ghost {
+      background: transparent;
+      color: #9ca3af;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    ._gig-btn-ghost:hover {
+      background: rgba(255,255,255,0.06);
+      color: #e5e7eb;
+      transform: translateY(-1px);
+    }
+    ._gig-btn-danger {
+      background: rgba(239,68,68,0.12);
+      color: #ef4444;
+      border: 1px solid rgba(239,68,68,0.35);
+    }
+    ._gig-btn-danger:hover {
+      background: rgba(239,68,68,0.22);
+      transform: translateY(-1px);
+    }
+</style>
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+<script src="/app/static/js/timezone-utils.js"></script>
+<script src="/app/static/js/auth.guard.js"></script>
+<script src="/app/static/js/api-globals.js"></script>
+<script src="/app/static/js/time-format.js"></script>
+<script src="/app/static/js/activity-center.js?v=99"></script>
+<script src="https://js.stripe.com/v3/" async></script>
+<script src="/app/static/js/artist-stripe-payment.js?v=6" defer></script>
+<script src="/app/static/js/flyer-overlay.js"></script>
+<!-- Block all artist-specific API calls until artist.book-gigs.js confirms access -->
+<script>
+  (function() {
+    var p = new URLSearchParams(window.location.search);
+    if (p.get('artist_id')) {
+      window._artistAccessDenied = true;
+    }
+  })();
+</script>
+    <script src="/app/static/js/artist.book-gigs.js?v=135" type="module"></script>
+
+<link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
+  <link href="/app/static/css/mobile.css" rel="stylesheet"/>
+</head>
+<body class="dark-ui artist-book-gigs-page artist-edit-page">
+
+  <header class="app-header">
+    <div class="header-inner">
+        <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+        <div class="header-actions">
+<a class="btn ghost" id="artistProfileBtn" target="_blank">Artist Profile</a>
+<a class="btn ghost" id="artistEditBtn">Edit Artist Profile</a>
+<button class="btn ghost" id="headerMsgBtn" onclick="showRecentMessages()" style="position:relative;display:none;">
+  Messages
+  <span class="msg-unread-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:9999px;font-size:0.6rem;font-weight:700;padding:2px 5px;min-width:16px;text-align:center;"></span>
+</button>
+</div>
+</div>
+</header>
+<script src="/app/static/js/user-dropdown.js"></script>
+
+<div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
+
+<!-- Tabs -->
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('calendar', this)">Calendar</button>
+  <button class="tab" onclick="switchTab('activity', this)">Activity Center <span id="activityBadge">(0)</span></button>
+  <button class="tab" onclick="switchTab('artists', this)">My Venues <span id="artistsBadge">(0)</span></button>
+  <button class="tab" onclick="switchTab('payments', this)">Payments</button>
+  <button class="tab" onclick="switchTab('taxes', this)">Legal/Taxes</button>
+  <button class="tab" onclick="switchTab('users', this)">Users <span id="usersBadge">(0)</span></button>
+  <button class="tab" onclick="switchTab('analytics', this)">Analytics</button>
+</div>
+
+<!-- TAB 1: CALENDAR -->
+<div class="tab-content active" id="calendar-tab">
+
+<!-- SEARCH GIGS SECTION WITH PANEL BACKGROUND -->
+<section class="panel" style="margin-bottom: 16px;">
+  <!-- SEARCH GIGS TOGGLE LINK -->
+  <div style="margin-bottom: 12px;">
+    <a href="#" id="toggleSearchGigs" style="
+      color: var(--cyan);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    ">
+      <span id="searchToggleIcon">▶</span> Search Gigs
+    </a>
+  </div>
+
+  <!-- SEARCH GIGS EXPANDABLE CONTENT (Hidden by default) -->
+  <div id="searchGigsSection" style="display: none;">
+
+<!-- Row 1: Venue, City, Mile Radius - Inline Labels -->
+<div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 12px; margin-bottom: 8px;">
+  <div style="position: relative; display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Search by Venue</label>
+    <input type="text" id="searchVenue" placeholder="Venue name..." style="flex: 1;" autocomplete="off"/>
+    <div id="venueAutocomplete" style="
+      position: absolute;
+      top: 100%;
+      left: 118px;
+      right: 0;
+      background: rgba(15, 20, 32, 0.98);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      margin-top: 4px;
+    "></div>
+  </div>
+  <div style="position: relative; display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 35px;">City</label>
+    <input type="text" id="searchCity" placeholder="City..." style="flex: 1;" autocomplete="off"/>
+    <div id="cityAutocomplete" style="
+      position: absolute;
+      top: 100%;
+      left: 43px;
+      right: 0;
+      background: rgba(15, 20, 32, 0.98);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      margin-top: 4px;
+    "></div>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 75px;">Mile Radius</label>
+    <input type="number" id="mileRadius" placeholder="20" value="20" min="0" style="flex: 1;"/>
+  </div>
+</div>
+
+<!-- Row 2: Min Pay, Amenities - Inline Labels -->
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 8px;">
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Minimum Pay ($)</label>
+    <input type="number" id="minPay" placeholder="0" value="0" min="0" style="flex: 1;"/>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 70px;">Has Stage?</label>
+    <button id="hasStage" class="amenity-toggle" data-active="false" style="
+      flex: 1;
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    ">Any</button>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 55px;">Sound?</label>
+    <button id="hasSoundEquipment" class="amenity-toggle" data-active="false" style="
+      flex: 1;
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    ">Any</button>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 60px;">Lighting?</label>
+    <button id="hasLighting" class="amenity-toggle" data-active="false" style="
+      flex: 1;
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    ">Any</button>
+  </div>
+</div>
+
+<!-- Row 3: Artist Type Filter - Inline Label -->
+<div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+  <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Artist Type</label>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;">
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Live Band" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Live Band</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="DJ" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">DJ</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Comedian" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Comedian</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Trivia Host" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Trivia Host</button>
+  </div>
+</div>
+
+<!-- Band Format Bubbles (shown when Live Band is active) - Inline Label -->
+<div id="bandFormatBubblesArtist" style="margin-bottom: 8px; display: none;">
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Lineup</label>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;">
+      <button class="band-format-filter-toggle" data-active="true" data-format="Solo" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Solo</button>
+      <button class="band-format-filter-toggle" data-active="true" data-format="Duo" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Duo</button>
+      <button class="band-format-filter-toggle" data-active="true" data-format="Trio" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Trio</button>
+      <button class="band-format-filter-toggle" data-active="true" data-format="Full Band" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Full Band</button>
+    </div>
+  </div>
+</div>
+
+<div style="display: flex; gap: 12px;">
+<button class="btn primary" id="applyFilters">Apply Filters</button>
+<button class="btn ghost" id="clearFilters">Clear Filters</button>
+</div>
+<div id="searchResults" style="margin-top: 4px; padding-top: 4px; padding-bottom: 0px; font-size: 0.85rem; color: var(--text-muted); font-style: italic;"></div>
+  </div>
+</section>
+
+<!-- CALENDAR -->
+<section class="panel calendar-wrapper">
+<div class="calendar-toolbar">
+<button class="btn ghost" id="prevMonth">◀ Prev</button>
+<h2 id="monthLabel">Month YYYY</h2>
+<button class="btn ghost" id="nextMonth">Next ▶</button>
+</div>
+<div style="text-align:right; padding: 0 0 8px 0;">
+  <a id="artistIcalBtn" href="#" download style="font-size:0.75rem; color:var(--text-muted); text-decoration:none; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; transition:all 0.2s;" onmouseover="this.style.borderColor='rgba(6,182,212,0.4)';this.style.color='#06b6d4'" onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📅 Export to Calendar (.ics)</a>
+</div>
+<div class="calendar-header">
+<div>Sun</div><div>Mon</div><div>Tue</div>
+<div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+</div>
+<div class="calendar" id="calendar"></div>
+</section>
+<!-- v73: My Artists Section (Match My Venues styling) -->
+</div>
+
+<!-- TAB 2: ACTIVITY CENTER -->
+<div class="tab-content" id="activity-tab">
+<section class="panel center">
+<div id="activityCenter">
+<p style="color: var(--text-muted);">Loading notifications…</p>
+</div>
+</section>
+</div>
+
+<!-- TAB 3: MY ARTISTS -->
+<div class="tab-content" id="artists-tab">
+<section class="panel">
+<div id="myVenuesRedesigned">
+<p style="text-align: center; color: var(--text-muted);">Loading venues...</p>
+</div>
+</section>
+
+</div>
+
+<!-- TAB 4: USERS -->
+<div class="tab-content" id="users-tab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 8px;">
+      <div style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <h2 class="section-header gradient-title" style="margin: 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Users</h2>
+        <span style="font-size: 0.75rem; font-style: italic; color: var(--text-gray); font-weight: 400;">(The following users have full access to this account)</span>
+      </div>
+      <button class="btn primary" onclick="entityUsersManager?.openInviteModal()">+ Invite User</button>
+    </div>
+    <div id="entityUsersList">
+      <p style="color: var(--text-muted); text-align: center;">Loading users...</p>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- TAB: PAYMENTS -->
+<div class="tab-content" id="payments-tab">
+<section class="panel">
+  <!-- Payout Info Notice -->
+  <div style="margin-bottom: 16px; padding: 14px 18px; border-radius: 8px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.8rem; line-height: 1.6; color: var(--text-gray); text-align: left;">
+    <strong style="color: #10b981;">💰 How Payouts Work:</strong> Your Gig Fee (minus the GigsFill service fee of <span id="artistFeePercent">…</span>%) is released to your bank the day after the gig is completed.
+  </div>
+
+  <!-- Stripe Connect Onboarding -->
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Payout Account</h2>
+    
+    <!-- Not Connected State -->
+    <div id="artistConnectNotSetup">
+      <div style="text-align: center; padding: 32px; background: rgba(255, 255, 255, 0.02); border-radius: 8px; border: 2px dashed rgba(255,255,255,0.15);">
+        <div style="font-size: 2.5rem; margin-bottom: 12px;">🏦</div>
+        <h3 style="font-size: 1rem; font-weight: 700; color: var(--text-white); margin-bottom: 8px;">Connect Your Payout Account</h3>
+        <p style="color: var(--text-gray); font-size: 0.85rem; margin-bottom: 20px; max-width: 400px; margin-left: auto; margin-right: auto;">
+          Connect your bank account through Stripe to receive automatic payouts. Stripe securely handles all your banking details — we never see or store them.
+        </p>
+        <button id="artistConnectBtn" onclick="artistStartConnect()" class="btn primary" style="font-size: 0.9rem; padding: 12px 28px;">
+          🔗 Connect with Stripe
+        </button>
+      </div>
+    </div>
+    
+    <!-- Pending Onboarding State -->
+    <div id="artistConnectPending" style="display: none;">
+      <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px; padding: 16px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span style="font-size: 1.5rem;">⏳</span>
+          <div>
+            <div style="font-size: 0.95rem; font-weight: 700; color: #f59e0b;">Onboarding Incomplete</div>
+            <p style="color: var(--text-gray); font-size: 0.8rem; margin: 4px 0 12px 0;">Please complete your Stripe onboarding to start receiving payouts.</p>
+            <button onclick="artistStartConnect()" class="btn primary" style="font-size: 0.8rem;">Complete Onboarding</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Connected State -->
+    <div id="artistConnectComplete" style="display: none;">
+      <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+              <span style="background: #10b981; color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.7rem; font-weight: 700;">✓ CONNECTED</span>
+              <span style="font-size: 0.95rem; font-weight: 700; color: var(--text-white);">Payout Account Active</span>
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-gray);">
+              Bank: <span id="artistBankName" style="color: var(--text-white);"></span> •••• <span id="artistBankLast4" style="color: var(--text-white);"></span>
+            </div>
+          </div>
+          <button onclick="artistOpenDashboard()" class="btn ghost" style="font-size: 0.75rem;">Stripe Dashboard →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- My Waitlists -->
+  <div class="content-card" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:16px;">
+    <h2 class="section-header" style="margin:0 0 16px;font-size:1rem;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.08em;">⏳ My Waitlists</h2>
+    <div id="artistWaitlistSection"><p style="color:var(--text-gray);font-size:0.85rem;">Loading...</p></div>
+  </div>
+
+  <!-- Payout Dashboard: KPI Summary -->
+  <div class="content-card" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:16px;">
+    <h2 class="section-header" style="margin:0 0 20px;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;">Payout Summary</h2>
+
+    <!-- KPI bubbles -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:24px;">
+      <div style="background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:1.5rem;font-weight:700;color:#10b981;" id="payKpiThisMonth">—</div>
+        <div style="font-size:0.7rem;color:var(--text-gray);">Earned This Month</div>
+      </div>
+      <div style="background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:1.5rem;font-weight:700;color:#10b981;" id="payKpiThisYear">—</div>
+        <div style="font-size:0.7rem;color:var(--text-gray);">Earned This Year</div>
+      </div>
+      <div style="background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:1.5rem;font-weight:700;color:var(--cyan);" id="payKpiAllTime">—</div>
+        <div style="font-size:0.7rem;color:var(--text-gray);">All-Time Earned</div>
+      </div>
+      <div style="background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:1.5rem;font-weight:700;color:#f59e0b;" id="payKpiPending">—</div>
+        <div style="font-size:0.7rem;color:var(--text-gray);">Pending Payout</div>
+      </div>
+      <div style="background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:16px;text-align:center;">
+        <div style="font-size:1.5rem;font-weight:700;color:var(--text);" id="payKpiGigs">—</div>
+        <div style="font-size:0.7rem;color:var(--text-gray);">Gigs Completed</div>
+      </div>
+    </div>
+
+    <!-- Two columns: monthly bar chart + per-venue breakdown -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="dashboard-grid">
+
+      <!-- Monthly bar chart -->
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <h3 style="font-size:0.8rem;font-weight:700;color:var(--text);margin:0 0 12px;text-transform:uppercase;letter-spacing:0.05em;">Earnings by Month</h3>
+        <div id="payByMonth"><p style="color:var(--text-gray);font-size:0.8rem;">Loading...</p></div>
+      </div>
+
+      <!-- Per-venue breakdown -->
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;">
+        <h3 style="font-size:0.8rem;font-weight:700;color:var(--text);margin:0 0 12px;text-transform:uppercase;letter-spacing:0.05em;">By Venue</h3>
+        <div id="payByVenue"><p style="color:var(--text-gray);font-size:0.8rem;">Loading...</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Earnings History -->
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:0 0 20px 0;">
+      <h2 class="section-header" style="margin:0;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;text-align:left;">EARNINGS HISTORY  <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);font-size:0.9rem;">(payouts are released at 5:00 PM the day after the gig)</span></h2>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="position:relative;">
+          <button onclick="var dd=document.getElementById('artistEarnExportDD');dd.style.display=dd.style.display==='block'?'none':'block';" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:var(--text-muted);padding:5px 14px;border-radius:6px;font-size:0.78rem;cursor:pointer;font-weight:500;">Export ▾</button>
+          <div id="artistEarnExportDD" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#1a1f2e;border:1px solid rgba(255,255,255,0.15);border-radius:6px;overflow:hidden;z-index:100;min-width:130px;box-shadow:0 4px 16px rgba(0,0,0,0.4);">
+            <div onclick="exportArtistEarnings('excel')" style="padding:8px 16px;font-size:0.8rem;color:var(--text);cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">📊 Excel (CSV)</div>
+            <div onclick="exportArtistEarnings('pdf')" style="padding:8px 16px;font-size:0.8rem;color:var(--text);cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">📄 PDF</div>
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:var(--text-gray);">
+          <span>Show:</span>
+          <select id="artistEarnShowFilter" onchange="if(window.setArtistEarnShow) window.setArtistEarnShow(this.value)" style="padding:6px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;">
+            <option value="all">All</option>
+            <option value="pending">Upcoming</option>
+            <option value="completed">Completed (past)</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div id="artistEarningsHistory" style="text-align: left;">
+      <p style="color: var(--text-muted); font-size: 0.875rem;">No earnings history yet</p>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- TAB 5: ANALYTICS -->
+<div class="tab-content" id="analytics-tab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Artist Analytics</h2>
+    
+    <!-- Stats Overview - Clickable Bubbles -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px;">
+      <div onclick="switchAnalyticsBubble('artist', 'viewers')" class="analytics-bubble active" id="artistBubble_viewers" style="background: rgba(139,92,246,0.2); border: 2px solid rgba(139,92,246,0.5); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="artistAnalyticsTotalClicks">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Total Gig Views</div>
+      </div>
+      <div onclick="switchAnalyticsBubble('artist', 'gigs')" class="analytics-bubble" id="artistBubble_gigs" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="artistAnalyticsUniqueVisitors">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Unique Viewers</div>
+      </div>
+      <div onclick="switchAnalyticsBubble('artist', 'recent7')" class="analytics-bubble" id="artistBubble_recent7" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="artistAnalytics7d">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Views (7 days)</div>
+      </div>
+      <div onclick="switchAnalyticsBubble('artist', 'recent30')" class="analytics-bubble" id="artistBubble_recent30" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="artistAnalytics30d">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Views (30 days)</div>
+      </div>
+    </div>
+    
+    <!-- Content sections (one visible at a time) -->
+    <div id="artistAnalyticsContent_viewers" class="analytics-content">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Where Your Viewers Are From</h3>
+      <div id="artistViewerCities">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No viewer data yet. Data will appear when people view your booked gigs on the public calendar.</p>
+      </div>
+    </div>
+    
+    <div id="artistAnalyticsContent_gigs" class="analytics-content" style="display: none;">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Most Viewed Gigs</h3>
+      <div id="artistPopularGigs">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No gig views yet</p>
+      </div>
+    </div>
+    
+    <div id="artistAnalyticsContent_recent7" class="analytics-content" style="display: none;">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Recent Activity (Last 7 Days)</h3>
+      <div id="artistRecentActivity7" style="max-height: 300px; overflow-y: auto;">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No recent activity</p>
+      </div>
+    </div>
+    
+    <div id="artistAnalyticsContent_recent30" class="analytics-content" style="display: none;">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Recent Activity (Last 30 Days)</h3>
+      <div id="artistRecentActivity30" style="max-height: 300px; overflow-y: auto;">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No recent activity</p>
+      </div>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- TAB 7: TAXES -->
+<div class="tab-content" id="taxes-tab">
+
+<!-- Sub-tab navigation -->
+<div style="display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); overflow-x:auto;">
+  <button class="artist-legal-subtab active" onclick="switchArtistLegalSubtab('artistContracts', this)">My Contracts</button>
+  <button class="artist-legal-subtab" onclick="switchArtistLegalSubtab('artistTaxInfo', this)">Tax Information</button>
+</div>
+
+<!-- Sub-tab: My Contracts -->
+<div class="artist-legal-subtab-content active" id="artistContracts-subtab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+      <div style="flex:1;">
+        <h2 class="section-header" style="margin: 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">EXECUTED CONTRACTS</h2>
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; color:var(--text-gray);">
+        <span>Show:</span>
+        <select id="artistContractsFilter" onchange="setArtistContractsFilter(this.value)" style="padding:6px 10px; background:var(--card); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:0.85rem;">
+          <option value="all">All</option>
+          <option value="pending">Upcoming</option>
+          <option value="completed">Completed (past)</option>
+        </select>
+      </label>
+    </div>
+    <div id="artistContractsList">
+      <p style="color: var(--text-muted); font-size: 0.85rem;">Loading contracts...</p>
+    </div>
+    <div id="artistContractsPagination" style="margin-top:12px; align-items:center; gap:12px; justify-content:flex-end; display:none;"></div>
+  </div>
+</section>
+</div>
+
+<!-- Sub-tab: Tax Information -->
+<div class="artist-legal-subtab-content" id="artistTaxInfo-subtab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">W-9 Tax Information</h2>
+    
+    <!-- W9 Status Display -->
+    <div id="w9Status" style="margin-bottom: 20px;"></div>
+    
+    <!-- W9 Form -->
+    <div id="w9FormSection" style="display: none;">
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px; line-height: 1.5;">
+        Complete the fields below to provide your W-9 tax information. This is the digital equivalent of IRS Form W-9 (Request for Taxpayer Identification Number and Certification). Hover over any field label for more info.
+      </p>
+      
+      <!-- Name -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Enter your full legal name exactly as it appears on your federal income tax return. For individuals, this is typically your first and last name.">Name (as shown on your income tax return) <span style="color: #ef4444;">*</span></label>
+          <input type="text" id="w9TaxName" placeholder="Full legal name" style="width: 100%; box-sizing: border-box;">
+        </div>
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="If you operate under a business name, trade name, or DBA (doing business as) that is different from your legal name above, enter it here. Leave blank if not applicable.">Business name / DBA (if different)</label>
+          <input type="text" id="w9BusinessName" placeholder="Business name (optional)" style="width: 100%; box-sizing: border-box;">
+        </div>
+      </div>
+      
+      <!-- Tax Classification -->
+      <div class="field" style="margin-bottom: 12px;">
+        <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Select the federal tax classification that applies to you. Most individual musicians should select 'Individual / Sole Proprietor'. If you formed an LLC or corporation for your music business, select the appropriate entity type.">Federal tax classification <span style="color: #ef4444;">*</span></label>
+        <select id="w9TaxClassification" class="w9-select">
+          <option value="">Select classification...</option>
+          <option value="individual">Individual / Sole Proprietor</option>
+          <option value="single_llc">Single-Member LLC</option>
+          <option value="c_corp">C Corporation</option>
+          <option value="s_corp">S Corporation</option>
+          <option value="partnership">Partnership</option>
+          <option value="trust_estate">Trust / Estate</option>
+          <option value="llc_c">LLC taxed as C Corp</option>
+          <option value="llc_s">LLC taxed as S Corp</option>
+          <option value="llc_p">LLC taxed as Partnership</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      
+      <!-- Other classification (shown only when "other" is selected) -->
+      <div class="field" id="w9OtherClassRow" style="margin-bottom: 12px; display: none;">
+        <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Describe your tax classification if none of the standard options apply.">Other classification</label>
+        <input type="text" id="w9OtherClassification" placeholder="Describe..." style="width: 100%; box-sizing: border-box;">
+      </div>
+      
+      <!-- Exemptions (optional) -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Most people leave this blank. Exempt payee codes (1-13) apply only to certain entities like tax-exempt organizations, government agencies, or corporations that are exempt from backup withholding. If you're an individual musician, skip this field.">Exempt payee code (if any)</label>
+          <input type="text" id="w9ExemptPayeeCode" placeholder="Leave blank if unsure" style="width: 100%; box-sizing: border-box;">
+        </div>
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Most people leave this blank. FATCA (Foreign Account Tax Compliance Act) exemption codes apply only to certain U.S. entities that are exempt from FATCA reporting, such as banks, registered investment companies, or government entities. If you're an individual musician, skip this field.">FATCA exemption code (if any)</label>
+          <input type="text" id="w9FatcaCode" placeholder="Leave blank if unsure" style="width: 100%; box-sizing: border-box;">
+        </div>
+      </div>
+      
+      <!-- Address -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Your street address where the IRS can mail correspondence. This is typically your home address or business address.">Address <span style="color: #ef4444;">*</span></label>
+          <input type="text" id="w9Address1" placeholder="Street address" style="width: 100%; box-sizing: border-box;">
+        </div>
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Apartment number, suite, unit, building, floor, or P.O. Box if applicable.">Address line 2</label>
+          <input type="text" id="w9Address2" placeholder="Apt, suite, etc. (optional)" style="width: 100%; box-sizing: border-box;">
+        </div>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="City or town associated with your mailing address.">City <span style="color: #ef4444;">*</span></label>
+          <input type="text" id="w9City" placeholder="City" style="width: 100%; box-sizing: border-box;">
+        </div>
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Select your state.">State <span style="color: #ef4444;">*</span></label>
+          <select id="w9State" class="w9-select">
+            <option value="">Select...</option>
+          </select>
+        </div>
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Your 5-digit ZIP code (or ZIP+4 format like 12345-6789).">ZIP code <span style="color: #ef4444;">*</span></label>
+          <input type="text" id="w9Zip" placeholder="ZIP" style="width: 100%; box-sizing: border-box;">
+        </div>
+      </div>
+      
+      <!-- TIN -->
+      <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 12px; margin-bottom: 16px;">
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Select SSN if you are an individual or sole proprietor. Select EIN if you have a business entity (LLC, corporation, partnership) with its own tax ID number.">TIN type <span style="color: #ef4444;">*</span></label>
+          <select id="w9TinType" class="w9-select">
+            <option value="ssn">Social Security Number (SSN)</option>
+            <option value="ein">Employer Identification Number (EIN)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray); margin-bottom: 4px; display: block; cursor: help;" title="Enter your 9-digit taxpayer identification number without dashes. For SSN this is your Social Security Number (e.g. 123456789). For EIN this is your Employer ID Number. This is stored encrypted and only the last 4 digits are displayed."><span id="w9TinLabel">SSN</span> <span style="color: #ef4444;">*</span> <span style="font-size: 0.75rem; font-style: italic; color: var(--text-muted); font-weight: 400;">* Enter 9 digits only, no hyphens.</span></label>
+          <input type="text" id="w9Tin" placeholder="Enter 9-digit number" maxlength="9" inputmode="numeric" pattern="[0-9]*" style="width: 100%; box-sizing: border-box; letter-spacing: 2px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0, 9);">
+        </div>
+      </div>
+      
+      <!-- Certification -->
+      <div style="background: rgba(139,92,246,0.08); border: 1px solid rgba(139,92,246,0.25); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 12px 0; line-height: 1.5;">
+          <strong style="color: var(--text);">Certification:</strong> Under penalties of perjury, I certify that: (1) The number shown on this form is my correct taxpayer identification number, (2) I am not subject to backup withholding, (3) I am a U.S. citizen or U.S. resident alien, and (4) The FATCA code(s) entered on this form (if any) are correct.
+        </p>
+        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem; color: var(--text);">
+          <input type="checkbox" id="w9Certify" style="width: 18px; height: 18px; accent-color: #8b5cf6;">
+          I certify the above information is correct <span style="color: #ef4444;">*</span>
+        </label>
+      </div>
+      
+      <!-- Actions -->
+      <div style="display: flex; gap: 12px;">
+        <button class="btn primary" id="w9SaveBtn" onclick="saveW9()">Save W-9</button>
+        <button class="btn ghost" id="w9CancelBtn" onclick="cancelW9Edit()" style="display: none;">Cancel</button>
+      </div>
+    </div>
+  </div>
+</section>
+</div>
+<!-- end artistTaxInfo-subtab -->
+
+</div>
+<!-- end taxes-tab -->
+
+</div> <!-- Close book-gigs-container -->
+
+<!-- MODAL -->
+<div class="modal-overlay hidden" id="modalOverlay">
+<div class="modal">
+<h2 id="modalTitle">Gig Details</h2>
+<div id="modalBody"></div>
+<div class="modal-actions" id="modalActions" style="display:none;">
+</div>
+</div>
+</div>
+
+<!-- Cancel Gig Confirmation Modal -->
+<div class="modal-overlay hidden" id="cancelModalOverlay">
+<div class="modal">
+<h2 style="color: #ef4444;">⚠️ Cancel Gig</h2>
+<div>
+<p>&nbsp;</p>
+<p>Cancelling a gig will most likely have a <strong>negative impact on your relationship</strong> with this venue. This may affect your future booking opportunities and preferred artist status with this venue.</p>
+</div>
+<div style="margin-top: 24px;">
+<label>Reason for Cancellation:</label>
+<textarea id="cancelReason" placeholder="Please explain why you need to cancel..."></textarea>
+</div>
+<div class="modal-actions">
+<button class="btn ghost" onclick="document.getElementById('cancelModalOverlay').classList.add('hidden')">
+        Keep Gig
+      </button>
+<button class="btn danger" id="confirmCancelBtn">
+        Confirm Cancellation
+      </button>
+</div>
+</div>
+</div>
+
+<!-- Slot Cancel Confirmation Modal -->
+<div class="modal-overlay hidden" id="slotCancelModalOverlay">
+<div class="modal">
+<h2 style="color: #ef4444;">⚠️ Cancel Slot</h2>
+<div class="modal-warning-box">
+<p>Cancelling a slot will most likely have a <strong>negative impact on your relationship</strong> with this venue. This may affect your future booking opportunities and preferred artist status with this venue.</p>
+</div>
+<div style="margin-top: 20px;">
+<label>Reason for Cancellation:</label>
+<textarea id="slotCancelReason" placeholder="Please explain why you need to cancel..." style="width: 100%; min-height: 80px; margin-top: 8px; padding: 10px; background: #151b28; border: 1px solid #333; border-radius: 6px; color: var(--text-white); font-size: 0.85rem; resize: vertical;"></textarea>
+</div>
+<div class="modal-actions">
+<button class="btn ghost" onclick="document.getElementById('slotCancelModalOverlay').classList.add('hidden')">
+        Keep Slot
+      </button>
+<button class="btn danger" id="confirmSlotCancelBtn">
+        Confirm Cancellation
+      </button>
+</div>
+</div>
+</div>
+
+<!-- Invite User Modal -->
+<div class="modal-overlay hidden" id="inviteUserModal">
+<div class="modal" style="max-width: 450px;">
+  <h2 id="inviteModalTitle" style="font-size: 1.125rem; margin-bottom: 24px; color: var(--text);">Invite a User</h2>
+  <div class="field">
+    <label style="color: var(--cyan); font-weight: 600;">Email Address</label>
+    <input type="email" id="inviteEmail" placeholder="user@email.com" />
+  </div>
+  <div id="inviteStatus" class="invite-status"></div>
+  <div class="modal-actions" style="margin-top: 24px;">
+    <button class="btn ghost" onclick="entityUsersManager?.closeInviteModal()">Cancel</button>
+    <button class="btn primary" id="sendInviteBtn" onclick="entityUsersManager?.sendInvitation()">Invite User</button>
+  </div>
+</div>
+</div>
+
+<!-- Payment Method Required Modal -->
+<div class="modal-overlay hidden" id="paymentRequiredModal">
+<div class="modal" style="max-width: 450px;">
+  <h2 style="font-size: 1.125rem; margin-bottom: 16px; color: var(--text);">Payment Method Required</h2>
+  <p style="color: var(--text-gray); margin-bottom: 24px; line-height: 1.6;">
+    You need to choose a payment method before you can book a gig!
+  </p>
+  <div class="modal-actions" style="margin-top: 24px;">
+    <button class="btn ghost" onclick="document.getElementById('paymentRequiredModal').classList.add('hidden')">Close</button>
+    <button class="btn primary" onclick="goToPaymentSettings()">Choose Payment Method</button>
+  </div>
+</div>
+</div>
+
+<style>
+/* Invite Status Styles */
+.invite-status {
+  min-height: 24px;
+  margin-top: 12px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-align: center;
+}
+.invite-status.sending { color: var(--cyan); }
+.invite-status.success { color: #22c55e; }
+.invite-status.error { color: #ef4444; }
+
+/* Entity Item Styles */
+.entity-item {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: all 0.2s;
+}
+.entity-item:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(6,182,212,0.3);
+}
+</style>
+
+<script src="/app/static/js/us-states.js"></script>
+<script src="/app/static/js/my-venues-redesign.js?v=6"></script>
+<script src="/app/static/js/entity-users.js?v=2"></script>
+
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/messages.js?v=3"></script>
+<script src="/app/static/js/review-modal.js?v=2"></script>
+<script src="/app/static/js/gig-modal.js"></script>
+<script src="/app/static/js/artist-book-gigs-init.js?v=7"></script>
+<script src="/app/static/js/onboarding-checklist.js?v=2" defer></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

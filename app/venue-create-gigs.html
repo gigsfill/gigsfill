@@ -1,0 +1,2637 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Create &amp; Manage Gigs – GigsFill</title>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+<style>
+    body {
+      overflow-x: hidden;
+    }
+    
+    /* Calendar styling */
+    .calendar-wrapper {
+      width: 100%;
+    }
+
+    .calendar-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--glass-border);
+    }
+
+    .calendar-toolbar h2 {
+      margin: 0;
+      font-size: 1.5rem;
+      color: var(--text);
+    }
+
+    .calendar-toolbar button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+
+    .calendar-toolbar button:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--accent-cyan);
+    }
+
+    .calendar-header {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--glass-border);
+    }
+
+    .calendar {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+    }
+
+    .day {
+      background: rgba(8, 11, 22, 0.97);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      min-height: 140px;
+      padding: 8px 4px;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.2s;
+    }
+
+    .day:hover {
+      background: rgba(18, 22, 38, 0.98);
+      border-color: rgba(124, 107, 255, 0.45);
+    }
+    
+    .day.today { border-color: var(--cyan); }
+    
+    /* v93: Past date styling */
+    .day.past-date {
+      opacity: 0.5;
+      background: rgba(0, 0, 0, 0.2);
+      cursor: default;
+    }
+    
+    .day.past-date:hover {
+      background: rgba(0, 0, 0, 0.2);
+      border-color: rgba(255,255,255,0.08);
+    }
+    
+    .day.past-date .day-number {
+      color: rgba(255, 255, 255, 0.3);
+    }
+    
+    /* Days from other months */
+    .day.other-month {
+      opacity: 0.3;
+      cursor: default;
+    }
+    
+    .day.other-month:hover {
+      background: rgba(8, 11, 22, 0.97);
+      border-color: rgba(255,255,255,0.08);
+    }
+    
+    .day.other-month .day-number {
+      color: rgba(255, 255, 255, 0.2);
+    }
+
+    .day-number {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .gig {
+      margin-top: 28px;
+      margin-bottom: 4px;
+      padding: 6px 4px;
+      border-radius: 5px;
+      font-size: 0.7rem;
+      color: #fff;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .gig:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .gig.open { background: #10b981; }
+    .gig.booked { background: #dc3545; }
+
+    /* Gigs container with custom scrollbar */
+    .gigs-container {
+      max-height: 110px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      margin-top: 26px;
+      padding-right: 2px;
+    }
+    
+    /* Custom scrollbar */
+    .gigs-container::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .gigs-container::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+    
+    .gigs-container::-webkit-scrollbar-thumb {
+      background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-pink) 100%);
+      border-radius: 3px;
+      transition: background 0.3s;
+    }
+    
+    .gigs-container::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(135deg, var(--accent-pink) 0%, var(--accent-cyan) 100%);
+    }
+    
+    /* Firefox scrollbar */
+    .gigs-container {
+      scrollbar-width: thin;
+      scrollbar-color: var(--accent-purple) rgba(0, 0, 0, 0.2);
+    }
+    
+    /* Tighter spacing between gigs */
+    .gigs-container .gig {
+      margin-top: 0;
+      margin-bottom: 4px;
+    }
+    
+    .gigs-container .gig:first-child {
+      margin-top: 0;
+    }
+    
+    .gigs-container .gig:last-child {
+      margin-bottom: 0;
+    }
+
+    /* MODAL - PROPERLY CENTERED WITH WHITE TEXT */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      padding: 20px;
+    }
+
+    .modal-overlay.hidden {
+      display: none;
+    }
+
+    .modal {
+      background: var(--card);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: 100%;
+      max-width: 720px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 16px 64px rgba(0, 0, 0, 0.7);
+    }
+    
+    /* Wider modal for day view with multiple gigs */
+    .modal.day-modal {
+      width: fit-content;
+      max-width: 98vw;
+      min-width: min(860px, 98vw);
+    }
+
+    /* MODAL TITLES - Purple with gradient */
+    .modal h2,
+    .modal h3,
+    .modal p,
+    .modal label {
+      color: var(--text) !important;
+      margin-top: 0;
+      font-family: var(--font-primary);
+    }
+
+    /* MODAL TITLES - BRIGHT PURPLE GRADIENT */
+    #modalTitle {
+      font-size: 1.25rem !important;
+      font-weight: 700 !important;
+      background: linear-gradient(135deg, #a855f7, #06b6d4) !important;
+      background-clip: text !important;
+      -webkit-background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
+      margin-bottom: 0 !important;
+      padding-bottom: 12px !important;
+      letter-spacing: 0.3px !important;
+    }
+    
+    /* BOLD PURPLE SEPARATOR LINE */
+    .modal-separator {
+      height: 3px !important;
+      background: linear-gradient(90deg, #a855f7, #06b6d4, #a855f7) !important;
+      margin: 0 0 24px 0 !important;
+      border-radius: 2px !important;
+      box-shadow: 0 2px 8px rgba(168, 85, 247, 0.4) !important;
+    }
+    
+    .modal h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    
+    #modalBody {
+      color: var(--text);
+      max-height: 500px;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    
+    /* Better styling for modal content labels */
+    #modalBody strong {
+      color: #a855f7 !important;
+      font-weight: 600;
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: inline-block;
+      margin-bottom: 4px;
+    }
+    
+    /* Modal data fields styling */
+    #modalBody p {
+      line-height: 1.8;
+      margin: 12px 0;
+    }
+    
+    #modalBody::-webkit-scrollbar {
+      width: 8px;
+    }
+    
+    #modalBody::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 4px;
+    }
+    
+    #modalBody::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+    
+    .modal h3 {
+      margin-bottom: 20px;
+      font-size: 1.1rem;
+    }
+
+    .modal label {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .modal input,
+    .modal textarea {
+      width: 100%;
+      font-family: var(--font-primary);
+      font-size: 0.9rem;
+    }
+
+    /* CRITICAL: White text in modals */
+    .modal h2,
+    .modal h3,
+    .modal p,
+    .modal label {
+      color: #ffffff !important;
+      margin-top: 0;
+      font-family: var(--font-primary);
+    }
+
+    .modal h2 {
+      font-size: 1.25rem;
+    }
+
+    .modal h3 {
+      margin-bottom: 20px;
+      font-size: 1.1rem;
+    }
+
+    .modal label {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .modal input,
+    .modal textarea {
+      width: 100%;
+      font-family: var(--font-primary);
+      font-size: 0.9rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      flex-wrap: wrap;
+    }
+    .modal-actions .btn {
+      flex: 1;
+      min-width: 0;
+      justify-content: center;
+      text-align: center;
+      white-space: nowrap;
+    }
+    
+    /* Force correct button styling in modals */
+    .modal-actions .btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 0.875rem;
+      transition: all 0.2s;
+      min-width: auto;
+    }
+    
+    .modal-actions .btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+    }
+    
+    .modal-actions .btn.primary {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      color: #fff;
+    }
+    
+    .modal-actions .btn.primary:hover {
+      background: #2563eb;
+      border-color: #2563eb;
+    }
+    
+    .modal-actions .btn.danger {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: #fff;
+    }
+    
+    .modal-actions .btn.danger:hover {
+      background: #dc2626;
+      border-color: #dc2626;
+    }
+    
+    .modal-actions .btn.ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    .modal-actions .btn.ghost:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+
+    /* Pay input wrapper */
+    .pay-input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pay-input-wrapper span {
+      font-size: 1.2rem;
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    .pay-input-wrapper input {
+      flex: 1;
+    }
+
+    /* Preferred Requests Section */
+    .preferred-requests-wrapper {
+      width: 100%;
+      margin-bottom: 0px; /* tight + intentional */
+    }
+
+    .preferred-requests-section {
+      background: var(--glass-bg);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 2px;
+    }
+
+    .preferred-requests-section h2 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: var(--text-primary);
+    }
+
+    .request-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+
+    .request-row:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .artist-name {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .artist-name a {
+      color: #ffffff;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .artist-name a:hover {
+      color: var(--accent-cyan);
+    }
+
+    .request-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* =====================================================
+      DUSK.FM–STYLE CALENDAR CELLS (HARD OVERRIDE)
+      ===================================================== */
+
+    /* The grid itself */
+    .calendar {
+      background: transparent !important;
+    }
+
+    /* EVERY grid cell — div, button, whatever */
+    .calendar > * {
+      background: rgba(8, 11, 22, 0.97) !important;
+      border: 1px solid rgba(255,255,255,0.08) !important;
+      border-radius: 10px !important;
+      color: #ffffff !important;
+    }
+
+    /* Hover (subtle dusk glow) */
+    .calendar > *:hover {
+      background: rgba(18, 22, 38, 0.98) !important;
+      border-color: rgba(124, 107, 255, 0.45) !important;
+    }
+
+    /* Day number */
+    .calendar .day-number {
+      color: rgba(255,255,255,0.55) !important;
+    }
+
+    /* Kill ALL white defaults inside cells */
+    .calendar > * *,
+    .calendar > * *::before,
+    .calendar > * *::after {
+      background: transparent !important;
+      box-shadow: none !important;
+      color: inherit !important;
+    }
+
+    /* Empty / padding cells */
+    .calendar > *.empty,
+    .calendar > *:empty {
+      background: rgba(14, 17, 28, 0.6) !important;
+      border-color: rgba(255,255,255,0.04) !important;
+    }
+
+    /* Focus outlines (browser default white) */
+    .calendar > *:focus,
+    .calendar > *:focus-visible {
+      outline: none !important;
+      box-shadow: 0 0 0 1px rgba(124,107,255,0.4) !important;
+    }
+
+    /* =========================================
+   RESTORE GIG STATUS COLORS (FINAL)
+   ========================================= */
+
+    /* Gig pills — override calendar wipe */
+    .calendar .gig {
+      background-color: transparent !important; /* reset first */
+      color: #ffffff !important;
+      border-radius: 6px !important;
+      padding: 2px 8px !important;
+      font-weight: 600 !important;
+      font-size: 0.65rem !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+
+    /* OPEN gigs — dusk green */
+    .calendar .gig.open {
+      background: linear-gradient(
+        135deg,
+        #10b981,
+        #059669
+      ) !important;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35) !important;
+      color: #000000 !important;
+    }
+
+    /* BOOKED gigs — dusk red */
+    .calendar .gig.booked {
+      background: linear-gradient(
+        135deg,
+        #ef4444,
+        #b91c1c
+      ) !important;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35) !important;
+    }
+
+    /* STARTED gigs — dark, gig already underway */
+    .calendar .gig.started {
+      background: linear-gradient(
+        135deg,
+        #1f2937,
+        #111827
+      ) !important;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3) !important;
+      opacity: 0.6;
+      text-decoration: line-through;
+      text-decoration-color: rgba(255,255,255,0.3);
+    }
+
+    .calendar .gig.cancelled {
+      background: linear-gradient(135deg, #4b5563, #374151) !important;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+      opacity: 0.55;
+      text-decoration: line-through;
+      text-decoration-color: rgba(255,255,255,0.4);
+      cursor: pointer;
+    }
+
+    /* PENDING VENUE APPROVAL — amber pulse, needs venue action */
+    @keyframes gig-approval-pulse-venue {
+      0%, 100% { opacity: 1; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.5); }
+      50% { opacity: 0.65; box-shadow: 0 4px 22px rgba(239, 68, 68, 0.9); }
+    }
+    .calendar .gig.pending-venue-approval {
+      background: linear-gradient(135deg, #ef4444, #b91c1c) !important;
+      animation: gig-approval-pulse-venue 1.5s ease-in-out infinite !important;
+      cursor: pointer;
+    }
+    .calendar .gig.pending-venue-approval:hover {
+      animation: none !important;
+      opacity: 1 !important;
+      box-shadow: 0 4px 20px rgba(239, 68, 68, 0.7) !important;
+    }
+
+    /* BLAST OPEN — urgent yellow, gig not booked yet, needs attention */
+    @keyframes gig-blast-pulse-venue {
+      0%, 100% { opacity: 1; filter: brightness(1) saturate(1); }
+      50% { opacity: 0.9; filter: brightness(1.8) saturate(0.35); }
+    }
+    .calendar .gig.blast-open {
+      background: linear-gradient(135deg, var(--blink-bg, #f59e0b), var(--blink-bg-end, var(--blink-bg, #d97706))) !important;
+      animation: gig-blast-pulse-venue 1.2s ease-in-out infinite !important;
+      cursor: pointer;
+      color: #000000 !important;
+    }
+    .calendar .gig.blast-open:hover {
+      animation: none !important;
+      opacity: 1 !important;
+    }
+
+    /* PENDING CONTRACT — blinking red, venue action required to countersign */
+    @keyframes gig-contract-pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.5); }
+      50% { opacity: 0.6; box-shadow: 0 4px 24px rgba(239, 68, 68, 1); }
+    }
+    .calendar .gig.pending-contract-venue {
+      background: linear-gradient(135deg, #ef4444, #b91c1c) !important;
+      animation: gig-contract-pulse 1.2s ease-in-out infinite !important;
+      cursor: pointer;
+    }
+    .calendar .gig.pending-contract-venue:hover {
+      animation: none !important;
+      opacity: 1 !important;
+      box-shadow: 0 4px 20px rgba(239, 68, 68, 0.8) !important;
+    }
+
+    /* WAITLIST PENDING — amber steady, gig is booked but waitlisted artists exist */
+    .calendar .gig.waitlist-pending {
+      background: linear-gradient(135deg, #b91c1c, #7f1d1d) !important;
+      box-shadow: 0 4px 12px rgba(185, 28, 28, 0.4) !important;
+      cursor: pointer;
+    }
+
+    /* Hover lift (subtle, dusk-style) */
+    .calendar .gig:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }
+
+    /* =========================================
+   MATCH ARTIST BOOK GIGS LAYOUT
+   ========================================= */
+
+    /* Force vertical stacking */
+    .venue-create-gigs-page .admin-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+      overflow-x: hidden;
+    }
+
+    .venue-create-gigs-page .admin-header {
+      margin-bottom: 2rem;
+    }
+
+    /* =========================================
+      LOCK CALENDAR DAY WIDTHS (CRITICAL)
+      ========================================= */
+
+    .venue-create-gigs-page .calendar {
+      grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+    }
+
+    .venue-create-gigs-page .calendar .day {
+      width: 100% !important;
+      min-width: 0 !important;
+      box-sizing: border-box;
+    }
+
+    /* Prevent gigs from resizing cells */
+    .venue-create-gigs-page .calendar .gig {
+      max-width: 100%;
+      overflow: hidden;
+    }
+
+        /* =========================================
+      CENTER & WIDTH-LOCK PREFERRED REQUESTS
+      ========================================= */
+
+    .venue-create-gigs-page .preferred-requests-wrapper {
+      display: flex;
+      justify-content: center;
+    }
+
+    .venue-create-gigs-page .preferred-requests-wrapper > section {
+      width: 100%;
+      max-width: 1250px; /* SAME as calendar */
+    }
+
+    /* REMOVE extra gap between preferred requests and calendar */
+    .venue-create-gigs-page main.container {
+      margin-top: 0 !important;
+      padding-top: 0 !important;
+    }
+
+    /* FIX CHECKBOXES SITE-WIDE */
+    input[type="checkbox"],
+    input[type="radio"] {
+      width: auto !important;
+      display: inline-flex;
+      align-items: center;
+      flex: none;
+    }
+
+    /* Labels: one line, never wrap */
+    .gig-input-field > label {
+      white-space: nowrap;
+      text-align: left;
+      font-size: 0.9rem;
+      opacity: 0.9;
+    }
+
+    /* Right column */
+    .gig-input-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Inputs behave */
+    .gig-input-control input,
+    .gig-input-control select,
+    .gig-input-control textarea {
+      width: 100%;
+    }
+
+        .gig-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .gig-row label {
+      min-width: 130px;
+      white-space: nowrap;
+    }
+
+    .gig-row .gig-input-control {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .gig-row input,
+    .gig-row select,
+    .gig-row textarea {
+      background: #0f1116;
+      color: #fff;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 0.9rem;
+      font-family: var(--font-primary);
+    }
+
+    .gig-row textarea {
+      width: 100%;
+      resize: vertical;
+    }
+
+    /* GLOBAL SELECT STYLING - Make all dropdowns dark and awesome */
+    select {
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background: #0f1116 !important;
+      color: #ffffff !important;
+      border: 1px solid #333 !important;
+      border-radius: 6px !important;
+      padding: 6px 12px !important;
+      padding-right: 32px !important;
+      font-family: var(--font-primary) !important;
+      font-size: 0.8rem !important;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M6 9L1 4h10z'/%3E%3C/svg%3E") !important;
+      background-repeat: no-repeat !important;
+      background-position: right 8px center !important;
+    }
+
+    select:focus {
+      outline: none !important;
+      border-color: #06b6d4 !important;
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2) !important;
+    }
+
+    /* Option elements inside select */
+    select option {
+      background: #0f1116 !important;
+      color: #ffffff !important;
+      padding: 8px !important;
+    }
+
+    /* ===============================
+   CLEAN MODAL SYSTEM (SELF-CONTAINED)
+   =============================== */
+
+  .modal-clean {
+    background: rgba(15, 20, 32, 0.98);
+    border-radius: 14px;
+    padding: 20px;
+    max-width: 680px;
+    font-family: var(--font-primary);
+  }
+
+  /* Modal title */
+  .modal-clean h2 {
+    font-family: var(--font-primary);
+    font-size: 1.25rem;
+    color: #ffffff;
+    margin-top: 0;
+    margin-bottom: 16px;
+  }
+
+  /* Section wrapper inside modal */
+  .modal-clean .modal-section {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  /* One row = label + field */
+  .modal-clean .modal-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+
+  /* Labels */
+  .modal-clean .modal-row > label {
+    color: #ffffff;
+    font-size: 0.8rem;
+    font-family: var(--font-primary);
+    white-space: nowrap;
+    opacity: 0.9;
+  }
+
+  /* Right-side controls */
+  .modal-clean .modal-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Inputs */
+  .modal-clean input,
+  .modal-clean select,
+  .modal-clean textarea {
+    background: #0f1116;
+    color: #ffffff;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    font-family: var(--font-primary);
+  }
+
+  /* Textarea behaves */
+  .modal-clean textarea {
+    width: 100%;
+    resize: vertical;
+  }
+
+  /* Select dropdowns - make them awesome and dark */
+  .modal-clean select {
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 32px;
+  }
+
+  .modal-clean select:focus {
+    outline: none;
+    border-color: #06b6d4;
+    box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+  }
+
+  /* Option elements inside select */
+  .modal-clean select option {
+    background: #0f1116;
+    color: #ffffff;
+    padding: 8px;
+  }
+
+  /* Checkbox rows (band lineups, days, etc) */
+  .modal-clean .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .modal-clean .checkbox-row label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
+  /* Nested group (Recurring options) */
+  .modal-clean .subgroup {
+    margin-top: 12px;
+    padding: 12px;
+    background: #12151c;
+    border-radius: 6px;
+  }
+
+  /* Band Lineups — force single-line alignment */
+  .modal-clean .band-lineups-row {
+    flex-wrap: nowrap;        /* prevent wrapping */
+    gap: 16px;
+  }
+
+  .modal-clean .band-lineups-row label {
+    margin: 0;
+  }
+
+  /* FIX: checkboxes must be inline, not stacked */
+  .modal-clean .modal-control > label {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 0;
+  }
+
+  .days-row {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  /* ===============================
+   CUSTOM RADIO = SQUARE CHECKBOX
+   (Recurring "Ends" section)
+   =============================== */
+
+  .modal-clean input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+
+    width: 16px;
+    height: 16px;
+    border: 1px solid #555;
+    border-radius: 4px; /* <-- square */
+    background: #0f1116;
+    cursor: pointer;
+    position: relative;
+  }
+
+  /* Checked state */
+  .modal-clean input[type="radio"]:checked {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+
+  /* Checkmark */
+  .modal-clean input[type="radio"]:checked::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 5px;
+    width: 4px;
+    height: 8px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+
+  /* Focus fix (NO black flash) */
+  .modal-clean input[type="radio"]:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4);
+  }
+
+/* =====================================================
+   UNIVERSAL MODAL CHECKBOX / RADIO SYSTEM (SQUARE)
+   Applies to:
+   - Band Lineups
+   - Days (Mon–Sun)
+   - Recurring Ends options
+   ===================================================== */
+
+   .modal-clean input[type="checkbox"],
+  .modal-clean input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+
+  width: 16px;
+  height: 16px;
+  border: 1px solid #555;
+  border-radius: 4px; /* SQUARE */
+  background: #0f1116;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Checked state */
+.modal-clean input[type="checkbox"]:checked,
+.modal-clean input[type="radio"]:checked {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+/* Checkmark */
+.modal-clean input[type="checkbox"]:checked::after,
+.modal-clean input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Focus — FIXES BLACK FLASH */
+.modal-clean input[type="checkbox"]:focus,
+.modal-clean input[type="radio"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4);
+}
+
+/* =========================================
+   SEARCH ARTISTS SECTION IMPROVEMENTS
+   ========================================= */
+
+/* Make all search input fields smaller with same font as site */
+#searchArtist,
+#searchArtistCity,
+#artistMileRadius {
+  font-size: 0.8rem !important;
+  padding: 6px 12px !important;
+  font-family: var(--font-primary) !important;
+}
+
+/* Make artist type toggle buttons smaller */
+.artist-type-toggle {
+  font-size: 0.75rem !important;
+  padding: 4px 8px !important;
+  font-family: var(--font-primary) !important;
+}
+
+/* Make band format toggle buttons smaller */
+.band-format-toggle {
+  font-size: 0.75rem !important;
+  padding: 4px 6px !important;
+  font-family: var(--font-primary) !important;
+}
+
+/* Apply and Clear Filter buttons - SMALL like Activity Center bubbles */
+#applyArtistFilters,
+#clearArtistFilters {
+  padding: 6px 12px !important;
+  font-size: 0.75rem !important;
+  border-radius: 6px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  transition: all 0.2s !important;
+  font-family: var(--font-primary) !important;
+}
+
+#applyArtistFilters {
+  background: rgba(34, 197, 94, 0.2) !important;
+  border: 1px solid rgba(34, 197, 94, 0.5) !important;
+  color: #22c55e !important;
+}
+
+#applyArtistFilters:hover {
+  background: rgba(34, 197, 94, 0.3) !important;
+  border-color: #22c55e !important;
+}
+
+#clearArtistFilters {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  color: var(--text-muted) !important;
+}
+
+#clearArtistFilters:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Search results container - more space and better readability */
+#artistSearchResults {
+  margin-top: 20px !important;
+  padding-top: 16px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+  font-size: 0.8rem !important;
+  line-height: 1.6 !important;
+  color: #94a3b8 !important;
+  font-family: var(--font-primary) !important;
+}
+
+/* Make search results text smaller */
+#artistSearchResults *,
+#artistResultsList * {
+  font-size: 0.8rem !important;
+}
+
+#artistResultsList {
+  font-size: 0.8rem !important;
+  margin-top: 16px !important;
+}
+
+#monthLabel {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+/* ===== TAB STYLING ===== */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  padding: 12px 20px;
+  background: transparent;
+  border: none;
+  color: var(--text-gray);
+  cursor: pointer;
+  font: 600 0.875rem 'Inter', sans-serif;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+  white-space: nowrap;
+  margin-bottom: -1px;
+  flex-shrink: 0;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.03);
+}
+
+.tab.active {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+  background: rgba(6,182,212,0.1);
+}
+
+.tab-content {
+  display: none;
+  padding-bottom: 3rem;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.tab-content section.panel {
+  max-width: 1250px;
+  margin: 0 auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.tab span {
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+/* Email Center Sub-tabs */
+.ec-subtabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.ec-subtab {
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  color: var(--text-gray);
+  cursor: pointer;
+  font: 600 0.8rem 'Inter', sans-serif;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  white-space: nowrap;
+  margin-bottom: -1px;
+}
+.ec-subtab:hover { color: var(--text); }
+.ec-subtab.active { color: var(--purple); border-bottom-color: var(--purple); }
+.ec-subtab-content { display: none; }
+.ec-subtab-content.active { display: block; }
+
+/* Legal/Taxes Sub-tabs — exactly matches main .tab styling */
+.legal-subtab {
+  padding: 12px 20px;
+  background: transparent;
+  border: none;
+  color: var(--text-gray);
+  cursor: pointer;
+  font: 600 0.875rem 'Inter', sans-serif;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+  white-space: nowrap;
+  position: relative;
+  margin-bottom: -1px;
+  flex-shrink: 0;
+}
+.legal-subtab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.02);
+}
+.legal-subtab.active {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+  background: rgba(6,182,212,0.1);
+}
+.legal-subtab-content { display: none; }
+.legal-subtab-content.active { display: block; }
+
+/* Invited Artists Tracker */
+.inv-row {
+  display: grid;
+  grid-template-columns: 1fr 120px 140px 100px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  align-items: center;
+}
+.inv-row:last-child { border-bottom: none; }
+.inv-email {
+  font-size: 0.85rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inv-status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.inv-status-badge.pending {
+  background: rgba(245,158,11,0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245,158,11,0.3);
+}
+.inv-status-badge.signed-up {
+  background: rgba(34,197,94,0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34,197,94,0.3);
+}
+.inv-date {
+  font-size: 0.78rem;
+  color: var(--text-gray);
+}
+.inv-resend-btn {
+  background: transparent;
+  border: 1px solid rgba(6,182,212,0.4);
+  color: var(--cyan);
+  padding: 4px 12px;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.inv-resend-btn:hover {
+  background: rgba(6,182,212,0.15);
+  border-color: var(--cyan);
+}
+.inv-resend-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.inv-empty {
+  text-align: center;
+  padding: 30px;
+  color: var(--text-gray);
+  font-size: 0.85rem;
+}
+
+/* Email center recipient cards */
+.recipient-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.recipient-card:hover { background: rgba(139,92,246,0.1); border-color: var(--purple); }
+.recipient-card.selected { background: rgba(139,92,246,0.15); border-color: var(--purple); }
+.recipient-checkbox { width: 16px; height: 16px; accent-color: var(--purple); cursor: pointer; flex-shrink: 0; }
+.artist-name { font-weight: 600; font-size: 0.8125rem; color: var(--text); flex: 1; }
+.artist-email { font-size: 0.75rem; color: var(--text-gray); text-align: right; }
+
+/* Email history items */
+.history-item {
+  display: grid;
+  grid-template-columns: 180px 160px 1fr 90px;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  align-items: center;
+}
+.history-item:hover { background: rgba(255,255,255,0.05); border-color: var(--cyan); }
+.history-sent { font-size: 0.75rem; color: var(--text-gray); }
+.history-artist { font-size: 0.8125rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-subject { font-size: 0.8125rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sort-arrow { font-size: 0.625rem; margin-left: 4px; opacity: 0.5; }
+.sort-arrow:not(:empty) { opacity: 1; color: var(--cyan); }
+
+/* Email center messages */
+.ec-msg-success { background: rgba(6,182,212,0.1); border: 1px solid var(--cyan); color: var(--cyan); padding: 14px 20px; border-radius: 8px; margin-bottom: 20px; }
+.ec-msg-error { background: rgba(220,53,69,0.1); border: 1px solid #dc3545; color: #ff6b6b; padding: 14px 20px; border-radius: 8px; margin-bottom: 20px; }
+
+/* Modal overlay fix for hidden class */
+.modal-overlay.hidden { display: none !important; }
+#emailSentMsg.show { opacity: 1 !important; }
+  </style>
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+<script src="/app/static/js/timezone-utils.js"></script>
+<script src="/app/static/js/auth.guard.js"></script>
+<script src="/app/static/js/time-format.js"></script>
+<link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
+  <link href="/app/static/css/mobile.css" rel="stylesheet"/>
+</head>
+<body class="dark-ui venue-create-gigs-page artist-edit-page">
+
+  <header class="app-header">
+    <div class="header-inner">
+        <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+        <div class="header-actions">
+          
+<a class="btn ghost" id="venueProfileBtn" target="_blank">Venue Profile</a>
+<a class="btn ghost" id="venueEditBtn">Edit Venue Profile</a>
+<button class="btn ghost" id="headerMsgBtn" onclick="showRecentMessages()" style="position:relative;display:none;">
+  Messages
+  <span class="msg-unread-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:9999px;font-size:0.6rem;font-weight:700;padding:2px 5px;min-width:16px;text-align:center;"></span>
+</button>
+</div>
+</div>
+</header>
+<script src="/app/static/js/user-dropdown.js"></script>
+
+<div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
+
+<!-- Tabs -->
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('calendar', this)">Calendar</button>
+  <button class="tab" onclick="switchTab('activity', this)">Activity Center <span id="activityBadge">(0)</span></button>
+  <button class="tab" onclick="switchTab('artists', this)">My Artists <span id="artistsBadge">(0)</span></button>
+  <button class="tab" onclick="switchTab('emailcenter', this)">Email Center</button>
+  <button class="tab" onclick="switchTab('payments', this)">Payments</button>
+  <button class="tab" onclick="switchTab('users', this)">Users <span id="usersBadge">(0)</span></button>
+  <button class="tab" onclick="switchTab('analytics', this)">Analytics</button>
+  <button class="tab" onclick="switchTab('taxes', this)">Legal/Taxes</button>
+</div>
+
+<!-- TAB 1: CALENDAR -->
+<div class="tab-content active" id="calendar-tab">
+
+<!-- SEARCH ARTISTS SECTION WITH PANEL BACKGROUND -->
+<section class="panel" style="margin-bottom: 16px;">
+  <!-- SEARCH ARTISTS TOGGLE LINK -->
+  <div style="margin-bottom: 12px;">
+    <a href="#" id="toggleSearchArtists" style="
+      color: var(--cyan);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    ">
+      <span id="searchToggleIcon">▶</span> Search Artists
+    </a>
+  </div>
+
+  <!-- SEARCH ARTISTS EXPANDABLE CONTENT (Hidden by default) -->
+  <div id="searchArtistsSection" style="display: none;">
+
+<!-- Row 1: Artist, City, Mile Radius - Inline Labels -->
+<div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 12px; margin-bottom: 8px;">
+  <div style="position: relative; display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 100px;">Search by Artist</label>
+    <input type="text" id="searchArtist" placeholder="Artist name..." style="flex: 1;" autocomplete="off"/>
+    <div id="artistAutocomplete" style="
+      position: absolute;
+      top: 100%;
+      left: 108px;
+      right: 0;
+      background: rgba(15, 20, 32, 0.98);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      margin-top: 4px;
+    "></div>
+  </div>
+  <div style="position: relative; display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 35px;">City</label>
+    <input type="text" id="searchArtistCity" placeholder="City..." style="flex: 1;" autocomplete="off"/>
+    <div id="artistCityAutocomplete" style="
+      position: absolute;
+      top: 100%;
+      left: 43px;
+      right: 0;
+      background: rgba(15, 20, 32, 0.98);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      margin-top: 4px;
+    "></div>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 75px;">Mile Radius</label>
+    <input type="number" id="artistMileRadius" placeholder="20" value="20" min="0" style="flex: 1;"/>
+  </div>
+</div>
+
+<!-- Row 2: Artist Types - Inline Label -->
+<div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+  <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 100px;">Artist Type</label>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;">
+    <button class="artist-type-toggle" data-active="false" data-type="Live Band" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Live Band</button>
+    <button class="artist-type-toggle" data-active="false" data-type="DJ" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">DJ</button>
+    <button class="artist-type-toggle" data-active="false" data-type="Comedian" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Comedian</button>
+    <button class="artist-type-toggle" data-active="false" data-type="Trivia Host" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Trivia Host</button>
+  </div>
+</div>
+
+<!-- Lineup Bubbles (shown when Live Band is active) - Inline Label -->
+<div id="bandFormatBubbles" style="margin-bottom: 8px; display: none;">
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 100px;">Lineup</label>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;">
+      <button class="band-format-toggle" data-active="true" data-format="Solo" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Solo</button>
+      <button class="band-format-toggle" data-active="true" data-format="Duo" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Duo</button>
+      <button class="band-format-toggle" data-active="true" data-format="Trio" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Trio</button>
+      <button class="band-format-toggle" data-active="true" data-format="Full Band" style="
+        padding: 4px 6px;
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 0.75rem;
+        font-weight: 500;
+      ">Full Band</button>
+    </div>
+  </div>
+</div>
+
+<div style="display: flex; gap: 12px;">
+<button class="btn primary" id="applyArtistFilters">Apply Filters</button>
+<button class="btn ghost" id="clearArtistFilters">Clear Filters</button>
+</div>
+<div id="artistSearchResults" style="margin-top: 4px; padding-top: 4px; padding-bottom: 0px; font-size: 0.85rem; color: var(--text-muted); font-style: italic;"></div>
+<!-- Artist Results List -->
+<div id="artistResultsList" style="margin-top: 8px;"></div>
+  </div>
+</section>
+
+<!-- CALENDAR -->
+<section class="panel calendar-wrapper">
+<div class="calendar-toolbar">
+<button class="btn ghost" id="prevMonth">◀ Prev</button>
+<h2 id="monthLabel">Month YYYY</h2>
+<button class="btn ghost" id="nextMonth">Next ▶</button>
+</div>
+<div style="text-align:right; padding: 0 0 8px 0;">
+  <a id="venueIcalBtn" href="#" download style="font-size:0.75rem; color:var(--text-muted); text-decoration:none; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; transition:all 0.2s;" onmouseover="this.style.borderColor='rgba(6,182,212,0.4)';this.style.color='#06b6d4'" onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📅 Export to Calendar (.ics)</a>
+</div>
+<div class="calendar-header">
+<div>Sun</div><div>Mon</div><div>Tue</div>
+<div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+</div>
+<div class="calendar" id="calendar"></div>
+</section>
+</div>
+<!-- TAB 2: ACTIVITY CENTER -->
+<div class="tab-content" id="activity-tab">
+<section class="panel center">
+<div id="venueActivityCenter">
+<p style="color: var(--text-muted);">Loading notifications…</p>
+</div>
+</section>
+</div>
+
+<!-- TAB 3: MY ARTISTS -->
+<div class="tab-content" id="artists-tab">
+<section class="panel">
+<div id="myArtists"></div>
+</section>
+</div>
+
+<!-- TAB: EMAIL CENTER -->
+<div class="tab-content" id="emailcenter-tab">
+<section class="panel">
+  <!-- Sub-tabs -->
+  <div class="ec-subtabs">
+    <button class="ec-subtab active" onclick="switchEmailSubTab('notifications', this)">Email Notifications</button>
+    <button class="ec-subtab" onclick="switchEmailSubTab('sendemail', this)">Send Email</button>
+    <button class="ec-subtab" onclick="switchEmailSubTab('inviteartists', this)">Invite Artists</button>
+  </div>
+
+  <!-- SUB-TAB 1: Email Notifications -->
+  <div class="ec-subtab-content active" id="ec-notifications">
+    <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px;">
+      <div style="margin-bottom: 16px;">
+        <span style="font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Automated Gig Emails</span>
+        <span style="font-size: 0.8rem; color: var(--text-gray); font-style: italic; margin-left: 10px;">(Configure automatic emails sent to artists about upcoming gigs at this venue.)</span>
+      </div>
+
+      <!-- ─── Gig Confirmation ─────────────────────────────────────────── -->
+      <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">🎵 Gig Confirmation Reminder</div>
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_gig_confirmation" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_gig_confirmation_val" min="1" max="52" value="1" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_gig_confirmation_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks">Week(s) Before</option><option value="days">Day(s) Before</option></select>
+        
+          
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Send confirmation email to the booked Artist reminding them of their upcoming gig.</div>
+
+      <!-- ─── Open Gig Notifications ──────────────────────────────────── -->
+      <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">📢 Open Gig Notifications</div>
+      <div style="font-size: 0.7rem; color: var(--text-gray); margin-bottom: 8px; padding: 0 14px; line-height: 1.3;">Email all Preferred Artists about unbooked gigs and lift frequency limitations so any Preferred Artist can book.</div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_4w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_4w_val" min="1" max="52" value="4" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_4w_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks" selected>Week(s) Before</option><option value="days">Day(s) Before</option><option value="hours">Hour(s) Before</option></select>
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_4w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_4w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">First notice to all Preferred Artists — open gig available, frequency limitation lifted.</div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_2w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_2w_val" min="1" max="52" value="2" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_2w_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks" selected>Week(s) Before</option><option value="days">Day(s) Before</option><option value="hours">Hour(s) Before</option></select>
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_2w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_2w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Second reminder — still-open gig, any Preferred Artist can book.</div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_1w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_1w_val" min="1" max="52" value="1" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_1w_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks" selected>Week(s) Before</option><option value="days">Day(s) Before</option><option value="hours">Hour(s) Before</option></select>
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_1w_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_1w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Third notice — final reminder before close-in blast window.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
+        <input type="number" id="notif_open_gig_1w_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles <em style="color: var(--cyan);">(Preferred Status &amp; Frequency Limits waived)</em></span>
+      </div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_36h" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_36h_val" min="1" max="168" value="36" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_36h_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="hours" selected>Hour(s) Before</option><option value="days">Day(s) Before</option><option value="weeks">Week(s) Before</option></select>
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_36h_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_36h_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Last-chance notice — still-open gig is approaching. Preferred Artists only unless blast-all is enabled below.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_blast_all" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
+        <input type="number" id="notif_open_gig_36h_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles <em style="color: var(--cyan);">(Preferred Status &amp; Frequency Limits waived)</em></span>
+      </div>
+
+      <!-- ─── Cancelled Gig Blast ──────────────────────────────────────── -->
+      <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">⚡ Cancelled Gig Blast</div>
+      <div style="font-size: 0.7rem; color: var(--text-gray); margin-bottom: 8px; padding: 0 14px; line-height: 1.3;">When a booked gig is cancelled and re-listed as open, automatically notify artists. (Artist-cancelled gigs always re-list; Venue-cancelled gigs only if "Keep Open" was selected.)</div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_cancelled_blast" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem; white-space: nowrap;">Send</span> <input type="number" id="notif_cancelled_blast_val" min="1" max="52" value="1" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_cancelled_blast_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="days">Day(s) Before</option><option value="weeks" selected>Week(s) Before</option><option value="hours">Hour(s) Before</option></select>
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_cancelled_blast_blink" checked onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_cancelled_blast_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Sends immediately to all Preferred Artists when a cancellation re-opens the gig — only if gig start is within the time window above.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_cancelled_blast_all" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
+        <input type="number" id="notif_cancelled_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles <em style="color: var(--cyan);">(Preferred Status &amp; Frequency Limits waived)</em></span>
+      </div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_radius_blast" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_radius_blast_val" min="1" max="168" value="36" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_radius_blast_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="hours" selected>Hour(s) Before</option><option value="days">Day(s) Before</option><option value="weeks">Week(s) Before</option></select>
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_radius_blast_blink" checked onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_radius_blast_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Sends immediately to all Preferred Artists when a cancellation re-opens the gig — only if gig start is within the time window above.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_radius_blast_all" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
+        <input type="number" id="notif_radius_blast_miles" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles <em style="color: var(--cyan);">(Preferred Status &amp; Frequency Limits waived)</em></span>
+      </div>
+
+      <!-- Save indicator -->
+      <div style="text-align: center; margin-top: 8px; color: var(--cyan); font-weight: 600; opacity: 0; transition: opacity 0.3s; font-size: 0.8rem;" id="emailNotifSaveIndicator">✓ Settings Saved</div>
+    </div>
+  </div>
+
+    <!-- SUB-TAB 2: Send Email (embedded email center) -->
+  <div class="ec-subtab-content" id="ec-sendemail">
+
+    <!-- Success/Error Messages -->
+    <div id="successMessage" class="ec-msg-success" style="display: none;"></div>
+    <div id="errorMessage" class="ec-msg-error" style="display: none;"></div>
+
+    <!-- Compose Email -->
+    <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+      <h2 style="font-size: 1rem; font-weight: 700; color: var(--cyan); margin: 0 0 20px 0; text-transform: uppercase; letter-spacing: 0.08em;">Compose Email</h2>
+      
+      <div id="venueSelectorContainer" class="venue-selector" style="display: none;">
+        <label for="venueSelect">Send from Venue</label>
+        <select id="venueSelect"><option value="">Loading venues...</option></select>
+      </div>
+      
+      <div id="recipientsSection" style="display: none;">
+        <div class="recipients-header">
+          <h3 style="font-size: 0.9375rem; font-weight: 600; color: var(--text); margin: 0;">Select Recipients</h3>
+          <div class="select-controls">
+            <span id="selectedCount" class="selected-count" style="font-size: 0.8125rem; color: var(--cyan); font-weight: 600;">0 selected</span>
+            <button id="toggleSelectBtn" onclick="toggleAllArtists()" style="padding: 6px 12px; background: rgba(139,92,246,0.15); border: 1px solid rgba(139,92,246,0.4); border-radius: 6px; color: var(--purple); font-size: 0.8125rem; cursor: pointer;">Select All</button>
+          </div>
+        </div>
+        <div id="recipientsGrid" class="recipients-grid" style="display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px;">
+          <div style="color: var(--text-gray); padding: 20px; text-align: center;">Loading preferred artists...</div>
+        </div>
+      </div>
+      
+      <div id="emailFormContainer" style="display: none; margin-top: 24px;">
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; margin-bottom: 8px; font-size: 0.875rem; font-weight: 600; color: var(--text-gray);">Subject</label>
+          <input type="text" id="emailSubject" placeholder="Enter email subject..." maxlength="200" style="width: 100%; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.9375rem; box-sizing: border-box;">
+          <div style="text-align: right; font-size: 0.75rem; color: var(--text-gray); margin-top: 4px;"><span id="subjectCount">0</span>/200</div>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; margin-bottom: 8px; font-size: 0.875rem; font-weight: 600; color: var(--text-gray);">Message</label>
+          <textarea id="emailBody" placeholder="Compose your message to artists..." style="width: 100%; min-height: 180px; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.9375rem; font-family: inherit; resize: vertical; box-sizing: border-box;"></textarea>
+          <div style="text-align: right; font-size: 0.75rem; color: var(--text-gray); margin-top: 4px;"><span id="bodyCount">0</span>/5000</div>
+        </div>
+        
+        <div style="display: flex; gap: 12px; justify-content: flex-end; align-items: center;">
+          <span id="emailSentMsg" style="color: var(--cyan); font-weight: 600; font-size: 0.875rem; margin-right: auto; opacity: 0; transition: opacity 0.3s;"></span>
+          <button class="btn primary" id="sendEmailBtn" onclick="sendEmail()" disabled>Send Email</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Email History -->
+    <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 style="font-size: 1rem; font-weight: 700; color: var(--cyan); margin: 0; text-transform: uppercase; letter-spacing: 0.08em;">Recent Emails</h2>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: var(--text-gray);">
+          <button class="pagination-btn" id="prevPageBtn" onclick="prevPage()" disabled style="width: 24px; height: 24px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center;">‹</button>
+          <span id="pageInfo">1 / 1</span>
+          <button class="pagination-btn" id="nextPageBtn" onclick="nextPage()" disabled style="width: 24px; height: 24px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center;">›</button>
+        </div>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: 180px 160px 1fr 90px; gap: 12px; padding: 8px 12px; background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.3); border-radius: 6px; margin-bottom: 6px;">
+        <div class="history-col sortable" onclick="toggleSort('sent_at')" style="font-size: 0.75rem; font-weight: 600; color: var(--text-gray); text-transform: uppercase; cursor: pointer;">Sent <span class="sort-arrow" id="sort-sent_at">▼</span></div>
+        <div class="history-col sortable" onclick="toggleSort('artist')" style="font-size: 0.75rem; font-weight: 600; color: var(--text-gray); text-transform: uppercase; cursor: pointer;">Artist <span class="sort-arrow" id="sort-artist"></span></div>
+        <div class="history-col sortable" onclick="toggleSort('subject')" style="font-size: 0.75rem; font-weight: 600; color: var(--text-gray); text-transform: uppercase; cursor: pointer;">Subject <span class="sort-arrow" id="sort-subject"></span></div>
+        <div></div>
+      </div>
+      
+      <div id="emailHistory" style="display: flex; flex-direction: column; gap: 4px; max-height: 340px; overflow-y: auto;">
+        <p style="color: var(--text-gray); text-align: center; padding: 20px;">Switch to this tab to load email history.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- SUB-TAB 3: Invite Artists -->
+  <div class="ec-subtab-content" id="ec-inviteartists">
+    <div class="content-card" id="invitedArtistsSection" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <h2 style="font-size:1rem;font-weight:700;color:var(--cyan);margin:0;text-transform:uppercase;letter-spacing:0.08em;">Invited Artists</h2>
+        <button onclick="openInviteArtistsModal(event)" style="display:inline-flex;align-items:center;gap:6px;background:var(--cyan);color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:0.8rem;font-weight:600;cursor:pointer;">+ Invite Artists</button>
+      </div>
+      
+      <p style="color:#9ca3af;font-size:0.85rem;margin:0 0 20px;line-height:1.5;">
+        Invite artists you work with to join GigsFill. Track who has signed up and send reminders to those who haven't.
+      </p>
+      
+      <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
+        <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;flex:1;min-width:80px;">
+          <div style="font-size:1.5rem;font-weight:700;color:var(--text);" id="invTotalCount">0</div>
+          <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-gray);margin-top:2px;">Total Invited</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;flex:1;min-width:80px;">
+          <div style="font-size:1.5rem;font-weight:700;color:#f59e0b;" id="invPendingCount">0</div>
+          <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-gray);margin-top:2px;">Pending</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;flex:1;min-width:80px;">
+          <div style="font-size:1.5rem;font-weight:700;color:#22c55e;" id="invSignedUpCount">0</div>
+          <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-gray);margin-top:2px;">Signed Up</div>
+        </div>
+      </div>
+      
+      <div style="display:grid;grid-template-columns:1fr 120px 140px 100px;gap:8px;padding:8px 12px;background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.3);border-radius:6px;margin-bottom:6px;">
+        <div style="font-size:0.75rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Email</div>
+        <div style="font-size:0.75rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Status</div>
+        <div style="font-size:0.75rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Invited</div>
+        <div style="font-size:0.75rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Action</div>
+      </div>
+      <div id="invitedArtistsList">
+        <div style="text-align:center;padding:30px;color:var(--text-gray);font-size:0.85rem;">No artists invited yet. Click <strong>+ Invite Artists</strong> above to get started!</div>
+      </div>
+    </div>
+  </div>
+
+</section>
+</div>
+
+<!-- Email Detail Modal -->
+<div class="modal-overlay hidden" id="emailDetailModal" style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 10000;">
+  <div style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; max-width: 720px; width: 90%; max-height: 80vh; overflow-y: auto;">
+    <div id="emailDetailBody"></div>
+    <div style="margin-top: 20px; text-align: right;">
+      <button class="btn ghost" onclick="document.getElementById('emailDetailModal').classList.add('hidden')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 4: USERS -->
+<div class="tab-content" id="users-tab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 8px;">
+      <div style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <h2 class="section-header" style="margin: 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Users</h2>
+        <span style="font-size: 0.75rem; font-style: italic; color: var(--text-gray); font-weight: 400;">(The following users have full access to this account)</span>
+      </div>
+      <button class="btn primary" onclick="entityUsersManager?.openInviteModal()">+ Invite User</button>
+    </div>
+    <div id="entityUsersList">
+      <p style="color: var(--text-muted); text-align: center;">Loading users...</p>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- TAB: PAYMENTS -->
+<div class="tab-content" id="payments-tab">
+<section class="panel">
+  <!-- Stripe Card Notice -->
+  <div style="margin-bottom: 16px; padding: 14px 18px; border-radius: 8px; background: rgba(99, 91, 255, 0.1); border: 1px solid rgba(99, 91, 255, 0.3); font-size: 0.8rem; line-height: 1.6; color: var(--text-gray); text-align: left;">
+    <strong style="color: #635bff;">💳 How Payments Work:</strong> The artist is paid automatically the day after the gig is completed. The payment includes the Gig Pay plus a GigsFill service fee of <span id="venueFeePercent">…</span>%.
+  </div>
+
+  <!-- Payment Card Setup -->
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <h2 class="section-header" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Payment Method</h2>
+    
+    <!-- Current Card Display -->
+    <div id="venueCurrentCard" style="display: none; margin-bottom: 20px;">
+      <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div style="font-size: 0.75rem; color: var(--text-gray); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Saved Card</div>
+          <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-white);">
+            <span id="venueCardBrand" style="text-transform: uppercase;"></span> •••• <span id="venueCardLast4"></span>
+          </div>
+          <div style="font-size: 0.8rem; color: var(--text-gray); margin-top: 2px;">Expires <span id="venueCardExp"></span></div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button onclick="venueUpdateCard()" class="btn ghost" style="font-size: 0.75rem;">Update</button>
+          <button onclick="venueRemoveCard()" class="btn danger" style="font-size: 0.75rem;">Remove</button>
+        </div>
+      </div>
+      <p style="color: var(--text-gray); font-size: 0.7rem; margin-top: 8px; margin-bottom: 0;">🔒 Card stored securely by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>. GigsFill never sees or stores your full card number.</p>
+    </div>
+    
+    <!-- Add Card Form -->
+    <div id="venueAddCardSection">
+      <p style="color: var(--text-gray); font-size: 0.85rem; margin-bottom: 16px; text-align: left;">
+        Add a credit or debit card to enable automatic payments for gig bookings.
+      </p>
+      <div id="venueCardElement" style="background: #151b28; border: 1px solid #333; border-radius: 6px; padding: 14px; margin-bottom: 16px;"></div>
+      <button id="venueAddCardBtn" onclick="venueSaveCard()" class="btn primary" style="font-size: 0.85rem;">
+        💳 Save Card
+      </button>
+      <div id="venueCardError" style="color: #ef4444; font-size: 0.8rem; margin-top: 8px; display: none;"></div>
+      <div id="venueCardSuccess" style="color: #10b981; font-size: 0.8rem; margin-top: 8px; display: none;">✓ Card saved successfully!</div>
+      <div style="margin-top: 14px; padding: 10px 14px; background: rgba(99,91,255,0.06); border: 1px solid rgba(99,91,255,0.15); border-radius: 6px;">
+        <p style="color: var(--text-gray); font-size: 0.7rem; line-height: 1.5; margin: 0;">
+          🔒 Your card details are securely stored by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>, a PCI Level 1 certified payment processor. GigsFill never sees or stores your full card number.
+        </p>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Billing History -->
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:0 0 20px 0;">
+      <h2 class="section-header" style="margin:0;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;text-align:left;">BILLING HISTORY  <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);font-size:0.9rem;">(Artist payouts are released at 5:00 PM the day after the gig.)</span></h2>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="position:relative;">
+          <button onclick="var dd=document.getElementById('venueBillExportDD');dd.style.display=dd.style.display==='block'?'none':'block';" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:var(--text-muted);padding:5px 14px;border-radius:6px;font-size:0.78rem;cursor:pointer;font-weight:500;">Export ▾</button>
+          <div id="venueBillExportDD" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#1a1f2e;border:1px solid rgba(255,255,255,0.15);border-radius:6px;overflow:hidden;z-index:100;min-width:130px;box-shadow:0 4px 16px rgba(0,0,0,0.4);">
+            <div onclick="exportVenueBilling('excel')" style="padding:8px 16px;font-size:0.8rem;color:var(--text);cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">📊 Excel (CSV)</div>
+            <div onclick="exportVenueBilling('pdf')" style="padding:8px 16px;font-size:0.8rem;color:var(--text);cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='none'">📄 PDF</div>
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:var(--text-gray);">
+          <span>Show:</span>
+          <select id="venueBillShowFilter" onchange="if(window.setVenueBillShow) window.setVenueBillShow(this.value)" style="padding:6px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;">
+            <option value="all">All</option>
+            <option value="pending">Upcoming</option>
+            <option value="completed">Completed (past)</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div id="venueBillingHistory" style="text-align: left;">
+      <p style="color: var(--text-muted); font-size: 0.875rem;">No billing history yet</p>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- TAB 5: ANALYTICS -->
+<div class="tab-content" id="analytics-tab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <h2 class="section-header" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Venue Analytics</h2>
+    
+    <!-- Stats Overview - Clickable Bubbles -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px;">
+      <div onclick="switchAnalyticsBubble('venue', 'visitors')" class="analytics-bubble active" id="venueBubble_visitors" style="background: rgba(139,92,246,0.2); border: 2px solid rgba(139,92,246,0.5); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="venueAnalyticsTotalClicks">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Total Gig Clicks</div>
+      </div>
+      <div onclick="switchAnalyticsBubble('venue', 'gigs')" class="analytics-bubble" id="venueBubble_gigs" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="venueAnalyticsUniqueVisitors">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Unique Visitors</div>
+      </div>
+      <div onclick="switchAnalyticsBubble('venue', 'recent7')" class="analytics-bubble" id="venueBubble_recent7" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="venueAnalytics7d">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Clicks (7 days)</div>
+      </div>
+      <div onclick="switchAnalyticsBubble('venue', 'recent30')" class="analytics-bubble" id="venueBubble_recent30" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">
+        <div style="font-size: 1.75rem; font-weight: 700; color: var(--cyan);" id="venueAnalytics30d">0</div>
+        <div style="font-size: 0.7rem; color: var(--text-gray);">Clicks (30 days)</div>
+      </div>
+    </div>
+    
+    <!-- Content sections (one visible at a time) -->
+    <div id="venueAnalyticsContent_visitors" class="analytics-content">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Where Your Visitors Are From</h3>
+      <div id="venueVisitorCities">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No visitor data yet. Data will appear when people view your gigs on the public calendar.</p>
+      </div>
+    </div>
+    
+    <div id="venueAnalyticsContent_gigs" class="analytics-content" style="display: none;">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Most Viewed Gigs</h3>
+      <div id="venuePopularGigs">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No gig views yet</p>
+      </div>
+    </div>
+    
+    <div id="venueAnalyticsContent_recent7" class="analytics-content" style="display: none;">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Recent Activity (Last 7 Days)</h3>
+      <div id="venueRecentActivity7" style="max-height: 300px; overflow-y: auto;">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No recent activity</p>
+      </div>
+    </div>
+    
+    <div id="venueAnalyticsContent_recent30" class="analytics-content" style="display: none;">
+      <h3 style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 12px;">Recent Activity (Last 30 Days)</h3>
+      <div id="venueRecentActivity30" style="max-height: 300px; overflow-y: auto;">
+        <p style="color: var(--text-muted); font-size: 0.85rem;">No recent activity</p>
+      </div>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- TAB: TAXES -->
+<div class="tab-content" id="taxes-tab">
+
+<!-- Sub-tab navigation -->
+<div style="display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); overflow-x:auto;">
+  <button class="legal-subtab active" onclick="switchLegalSubtab('contractSettings', this)">Contract Settings</button>
+  <button class="legal-subtab" onclick="switchLegalSubtab('executedContracts', this)">Executed Contracts</button>
+  <button class="legal-subtab" onclick="switchLegalSubtab('taxSettings', this)">Tax Settings</button>
+</div>
+
+<!-- Sub-tab: Contract Settings -->
+<div class="legal-subtab-content active" id="contractSettings-subtab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+    <h2 class="section-header" style="margin: 0 0 6px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Contracts</h2>
+    <p style="font-size:0.8rem; color:var(--text-gray); margin:0 0 16px 0;">(Contracts are Optional when using GigsFill. This section is meant to help you stay organized if you do use Contracts.)</p>
+
+    <!-- Require checkbox — always visible at top -->
+    <div id="contractRequireRow" style="margin-bottom:16px;">
+      <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
+        <input type="checkbox" id="contractRequireForBooking" style="width:18px; height:18px; min-width:18px; accent-color:#8b5cf6;">
+        <span style="font-size:0.85rem; color:var(--text-gray);">Require artist to sign contract before booking is confirmed</span>
+      </label>
+    </div>
+
+    <div style="margin-bottom: 16px;">
+      <label style="font-size:0.85rem; color:var(--text-gray); display:block; margin-bottom:8px;">Contract Type</label>
+      <select id="contractType" style="width:auto; min-width:200px;">
+        <option value="">None — No contract</option>
+        <option value="pdf_upload">Upload existing PDF</option>
+        <option value="custom_builder">Contract Builder (digital)</option>
+        <option value="auto_generated">Auto-Generated From Venue Profile</option>
+      </select>
+    </div>
+
+    <!-- PDF: Upload button + inline description -->
+    <div id="contractPdfUploadRow" style="display:none; margin-bottom:16px;">
+      <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
+        <span onclick="document.getElementById('contractPdfInput').click()" style="font-weight:700; text-transform:uppercase; letter-spacing:0.03em; font-size:0.85rem; color:var(--cyan); cursor:pointer;">📄 UPLOAD CONTRACT PDF</span>
+        <span style="font-size:0.8rem; color:var(--text-gray); font-style:italic;">(Upload your existing contract as a PDF. Artists will download it, fill it out, sign it, and re-upload the signed version.)</span>
+      </div>
+      <input type="file" id="contractPdfInput" accept=".pdf" style="display:none;">
+    </div>
+
+    <!-- Per-gig PDF option -->
+    <div id="contractPerGigPdf" style="display:none; margin-bottom:16px;">
+      <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
+        <input type="checkbox" id="contractPerGigPdfCheck" style="width:18px; height:18px; min-width:18px; accent-color:#8b5cf6;">
+        <span style="font-size:0.85rem; color:var(--text-gray);">Upload a unique contract for every gig.</span>
+      </label>
+      <div id="perGigPdfDesc" style="font-size:0.8rem; color:var(--text-gray); font-style:italic; margin-top:4px; margin-left:28px; display:none;">(when a gig is booked, you will have to upload a PDF contract for each individual gig)</div>
+    </div>
+
+    <!-- PDF: Uploaded file display -->
+    <div id="contractPdfFileRow" style="display:none; margin-bottom:16px;">
+      <div id="contractPdfStatus"></div>
+    </div>
+
+    <!-- CUSTOM BUILDER SECTION -->
+    <div id="contractBuilderSection" style="display:none; margin-top:16px; padding:16px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px;">
+      <p style="font-size:0.85rem; color:var(--text-gray); margin-bottom:12px;">Paste or write your contract text below. Use placeholder buttons to insert fillable fields that auto-populate with artist/gig details.</p>
+      <div style="margin-bottom:12px;">
+        <span style="font-size:0.75rem; color:var(--cyan); display:block; margin-bottom:6px;">Insert Auto-Fill Placeholders:</span>
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_name" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Artist Name</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_email" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Artist Email</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_phone" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Artist Phone</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="venue_name" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Venue Name</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="venue_address" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Venue Address</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_date" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Gig Date</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_start_time" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Start Time</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_end_time" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">End Time</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_pay" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Pay Amount</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_title" data-target="contractBuilderEditor" style="padding:3px 8px; font-size:0.7rem;">Gig Title</button>
+        </div>
+      </div>
+      <textarea id="contractBuilderEditor" placeholder="Paste or type your contract text here...&#10;&#10;Use {{artist_name}}, {{gig_date}}, etc. for auto-fill fields.&#10;&#10;Example:&#10;This agreement is between {{venue_name}} and {{artist_name}} for a performance on {{gig_date}}..." style="width:100%; min-height:300px; font-family:monospace; font-size:0.85rem; line-height:1.6; resize:vertical;"></textarea>
+      <div id="contractBuilderFieldsList" style="margin-top:8px;"></div>
+    </div>
+
+    <!-- AUTO-GENERATED SECTION (editable like builder) -->
+    <div id="contractAutoSection" style="display:none; margin-top:16px; padding:16px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px;">
+      <p style="font-size:0.85rem; color:var(--text-gray); margin-bottom:12px;">This contract was auto-generated from your venue profile. You can edit any part of it below. Use placeholder buttons to insert fillable fields that auto-populate with artist/gig details when a gig is booked.</p>
+      <div style="margin-bottom:12px;">
+        <button class="btn ghost" onclick="window.venueContracts.resetToDefault()" style="padding:5px 14px; font-size:0.8rem; color:var(--cyan); border-color:rgba(6,182,212,0.3);">↻ Restore Default Performance Agreement</button>
+      </div>
+      <div style="margin-bottom:12px;">
+        <span style="font-size:0.75rem; color:var(--cyan); display:block; margin-bottom:6px;">Insert Auto-Fill Placeholders:</span>
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_name" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Artist Name</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_email" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Artist Email</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_phone" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Artist Phone</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_contact_name" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Artist Contact</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_city" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Artist City</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="artist_state" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Artist State</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="venue_name" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Venue Name</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="venue_address" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Venue Address</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_date" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Gig Date</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_start_time" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Start Time</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_end_time" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">End Time</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_pay" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Pay Amount</button>
+          <button class="btn ghost contract-placeholder-btn" data-placeholder="gig_title" data-target="contractAutoEditor" style="padding:3px 8px; font-size:0.7rem;">Gig Title</button>
+        </div>
+      </div>
+      <textarea id="contractAutoEditor" style="width:100%; min-height:500px; font-family:monospace; font-size:0.85rem; line-height:1.6; resize:vertical;"></textarea>
+    </div>
+
+    <!-- SAVE / STATUS -->
+    <div style="display:flex; align-items:center; gap:16px; margin-top:16px;">
+      <button class="btn primary" id="contractSaveBtn" style="display:none;">Save Contract Settings</button>
+      <button class="btn ghost" id="contractViewBtn" style="display:none; font-size:0.85rem;" onclick="window.venueContracts.viewContract()">Preview Contract</button>
+      <span id="contractSaveStatus" style="font-size:0.8rem; opacity:0; transition:opacity 0.3s;"></span>
+    </div>
+    <span id="contractStatus" style="font-size:0.8rem; margin-top:12px; display:block;"></span>
+
+    <p style="font-size:0.7rem; color:var(--text-gray); font-style:italic; line-height:1.6; margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
+      Contract templates provided by GigsFill are for convenience only and do not constitute legal advice. GigsFill is not a law firm, makes no representations regarding enforceability, and assumes no liability for use of any contract. Both parties should consult a licensed attorney.
+    </p>
+  </div>
+</section>
+</div>
+
+<!-- Sub-tab: Executed Contracts -->
+<div class="legal-subtab-content" id="executedContracts-subtab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+      <div style="flex:1;">
+        <h2 class="section-header" style="margin: 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Executed Contracts</h2>
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; color:var(--text-gray);">
+        <span>Show:</span>
+        <select id="venueExecContractsFilter" onchange="window.venueContracts && window.venueContracts.setExecFilter(this.value)" style="padding:6px 10px; background:var(--card); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:0.85rem;">
+          <option value="all">All</option>
+          <option value="pending">Upcoming</option>
+          <option value="completed">Completed (past)</option>
+        </select>
+      </label>
+    </div>
+    <div id="venueExecutedContractsList">
+      <p style="color: var(--text-muted); font-size: 0.85rem;">Loading contracts...</p>
+    </div>
+    <div id="venueExecutedContractsPagination" style="margin-top:12px; align-items:center; gap:12px; justify-content:flex-end; display:none;"></div>
+  </div>
+</section>
+</div>
+
+<!-- Sub-tab: Tax Settings -->
+<div class="legal-subtab-content" id="taxSettings-subtab">
+<section class="panel">
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    
+    <!-- W9 Requirement Toggle -->
+    <h2 class="section-header" style="margin: 0 0 16px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Tax Settings</h2>
+    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+      <label style="display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 0.95rem; color: var(--text);">
+        <input type="checkbox" id="requireW9Toggle" onchange="saveVenueTaxSettings()" style="width: 20px; height: 20px; accent-color: #8b5cf6;">
+        <div>
+          <div style="font-weight: 600;">Require artists to have an updated W-9 on file to book gigs</div>
+          <div style="font-size: 0.8rem; color: var(--text-gray); font-style: italic; margin-top: 2px;">When enabled, artists cannot book gigs at your venue unless they have a current-year W-9 on file.</div>
+        </div>
+      </label>
+      <div id="taxSettingsSaveStatus" style="font-size: 0.8rem; margin-top: 8px; opacity: 0; transition: opacity 0.3s;"></div>
+    </div>
+    
+    <!-- 1099 Section -->
+    <h2 class="section-header" style="margin: 0 0 16px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">1099-NEC Forms</h2>
+    
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+      <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray);">Tax Year:</label>
+      <select id="taxYear1099" onchange="load1099s()" style="padding: 8px 12px; background: #151b28; border: 1px solid #333; border-radius: 8px; color: var(--text); font-size: 0.9rem; min-width: 100px;"></select>
+      <button class="btn primary" onclick="generate1099s()" id="generate1099Btn" style="padding: 6px 14px; font-size: 0.85rem;">Generate 1099s</button>
+      <button class="btn ghost" onclick="sendAll1099s()" id="sendAll1099Btn" style="padding: 6px 14px; font-size: 0.85rem; display: none;">Send All Unsent</button>
+    </div>
+    
+    <p style="font-size: 0.8rem; color: var(--text-gray); font-style: italic; margin-bottom: 16px; line-height: 1.5;">
+      1099-NEC forms are generated for artists who earned $600 or more from booked gigs at your venue during the selected tax year.
+    </p>
+    
+    <div id="tax1099Status" style="margin-bottom: 12px;"></div>
+    <div id="tax1099List">
+      <p style="color: var(--text-muted); font-size: 0.85rem;">Select a tax year and click Generate to create 1099 forms.</p>
+    </div>
+  </div>
+</section>
+</div>
+
+</div>
+
+<!-- Contract View Modal -->
+<div id="contractViewOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:10001; align-items:center; justify-content:center; overflow-y:auto;">
+  <div style="background:var(--card-bg); border:1px solid var(--border); border-radius:12px; padding:24px; max-width:700px; width:90%; margin:40px auto; max-height:80vh; overflow-y:auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+      <h3 style="margin:0; color:var(--text);">Contract Preview</h3>
+      <button class="btn ghost" onclick="window.venueContracts.closeView()" style="padding:4px 12px;">✕ Close</button>
+    </div>
+    <div id="contractViewBody" style="font-size:0.85rem; line-height:1.7; color:var(--text); white-space:pre-wrap; font-family:monospace;"></div>
+  </div>
+</div>
+
+<!-- Contract Rename Modal -->
+<div id="contractRenameOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10001; align-items:center; justify-content:center;">
+  <div style="background:var(--card-bg); border:1px solid var(--border); border-radius:12px; padding:24px; max-width:400px; width:90%;">
+    <h3 style="margin:0 0 16px; color:var(--text);">Rename Contract</h3>
+    <input type="text" id="contractRenameInput" placeholder="Contract name" style="width:100%; margin-bottom:16px;">
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn ghost" onclick="window.venueContracts.closeRename()">Cancel</button>
+      <button class="btn primary" onclick="window.venueContracts.saveRename()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Contract Restore Modal -->
+<div id="contractRestoreOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10001; align-items:center; justify-content:center;">
+  <div style="background:var(--card-bg); border:1px solid var(--border); border-radius:12px; padding:24px; max-width:400px; width:90%;">
+    <h3 style="margin:0 0 12px; color:var(--text);">Restore Default Contract</h3>
+    <p style="font-size:0.85rem; color:var(--text-gray); margin-bottom:16px; line-height:1.5;">This will regenerate the auto-generated contract from your current venue profile, replacing any edits you've made.</p>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn ghost" onclick="window.venueContracts.closeRestore()">Cancel</button>
+      <button class="btn primary" onclick="window.venueContracts.confirmRestore()">Restore Default</button>
+    </div>
+  </div>
+</div>
+
+<!-- Contract Remove Confirmation Modal -->
+<div id="contractRemoveOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10001; align-items:center; justify-content:center;">
+  <div style="background:var(--card-bg); border:1px solid var(--border); border-radius:12px; padding:24px; max-width:400px; width:90%;">
+    <h3 style="margin:0 0 12px; color:#ef4444;">Remove Contract</h3>
+    <p style="font-size:0.85rem; color:var(--text-gray); margin-bottom:16px; line-height:1.5;">Are you sure you want to remove this contract? Artists will no longer see a contract when booking.</p>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn ghost" onclick="document.getElementById('contractRemoveOverlay').style.display='none'">Cancel</button>
+      <button class="btn primary" style="background:#ef4444;" onclick="window.venueContracts.removePdf(); document.getElementById('contractRemoveOverlay').style.display='none'">Remove</button>
+    </div>
+  </div>
+</div>
+
+</div> <!-- Close book-gigs-container -->
+
+<!-- Invite User Modal -->
+<div class="modal-overlay hidden" id="inviteUserModal">
+<div class="modal" style="max-width: 450px;">
+  <h2 id="inviteModalTitle" style="font-size: 1.125rem; margin-bottom: 24px; color: var(--text);">Invite a User</h2>
+  <div class="field">
+    <label style="color: var(--cyan); font-weight: 600;">Email Address</label>
+    <input type="email" id="inviteEmail" placeholder="user@email.com" />
+    <div id="inviteEmailLookupStatus" style="font-size:0.78rem; margin-top:4px; min-height:16px; color:var(--text-muted);"></div>
+  </div>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
+    <div class="field" style="margin:0;">
+      <label style="font-weight:600; font-size:0.875rem;">First Name</label>
+      <input type="text" id="inviteFirstName" placeholder="First name" />
+    </div>
+    <div class="field" style="margin:0;">
+      <label style="font-weight:600; font-size:0.875rem;">Last Name</label>
+      <input type="text" id="inviteLastName" placeholder="Last name" />
+    </div>
+  </div>
+  <div class="field" style="margin-top:12px;">
+    <label style="font-weight:600; font-size:0.875rem;">Phone <span style="color:var(--text-muted); font-weight:400;">(optional)</span></label>
+    <input type="tel" id="invitePhone" placeholder="Phone number" />
+  </div>
+  <div id="inviteStatus" class="invite-status"></div>
+  <div class="modal-actions" style="margin-top: 24px;">
+    <button class="btn ghost" onclick="entityUsersManager?.closeInviteModal()">Cancel</button>
+    <button class="btn primary" id="sendInviteBtn" onclick="entityUsersManager?.sendInvitation()">Invite User</button>
+  </div>
+</div>
+</div>
+
+<!-- Payment Method Required Modal -->
+<div class="modal-overlay hidden" id="paymentRequiredModal" style="z-index: 10001;">
+<div class="modal" style="max-width: 450px;">
+  <h2 style="font-size: 1.125rem; margin-bottom: 16px; color: var(--text);">Payment Method Required</h2>
+  <p style="color: var(--text-gray); margin-bottom: 24px; line-height: 1.6;">
+    You need to choose a payment method before you can create gigs!
+  </p>
+  <div class="modal-actions" style="margin-top: 24px;">
+    <button class="btn ghost" onclick="document.getElementById('paymentRequiredModal').classList.add('hidden')">Close</button>
+    <button class="btn primary" onclick="goToPaymentSettings()">Choose Payment Method</button>
+  </div>
+</div>
+</div>
+
+<style>
+/* Invite Status Styles */
+.invite-status {
+  min-height: 24px;
+  margin-top: 12px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-align: center;
+}
+.invite-status.sending { color: var(--cyan); }
+.invite-status.success { color: #22c55e; }
+.invite-status.error { color: #ef4444; }
+
+/* Entity Item Styles */
+.entity-item {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: all 0.2s;
+}
+.entity-item:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(6,182,212,0.3);
+}
+</style>
+
+<div class="modal-overlay hidden" id="gigModal">
+  <div class="modal modal-clean">
+
+    <h2 id="modalTitle">Create Gig</h2>
+    <div class="modal-separator"></div>
+
+    <section class="modal-section">
+
+      <div class="modal-row">
+        <label>Date</label>
+        <div class="modal-control">
+          <span id="gigDate" style="color: var(--text); font-size: 0.9rem; font-weight: 500;"></span>
+        </div>
+      </div>
+
+      <div class="modal-row">
+        <label>Gig Title</label>
+        <div class="modal-control">
+          <input id="gigTitle" type="text">
+        </div>
+      </div>
+      
+
+      
+
+      <div class="modal-row" style="display:none;">
+        <label>Artist Accepted</label>
+        <div class="modal-control">
+          <select id="gigArtistType">
+            <option value="">Select Artist Type</option>
+            <option>Live Band</option>
+            <option>DJ</option>
+            <option>Comedian</option>
+            <option>Trivia Host</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- STYLES (hidden - now per-slot) -->
+      <div id="styleOptions" class="modal-row" style="display:none !important;">
+        <label>Styles Allowed:</label>
+        <div class="modal-control" style="display:flex; flex-wrap:wrap; gap:12px; width:100%;">
+          <label><input id="styleCountry" type="checkbox" name="gig_style" value="Country" checked> Country</label>
+          <label><input id="styleHipHop" type="checkbox" name="gig_style" value="Hip-Hop" checked> Hip-Hop</label>
+          <label><input id="styleIndie" type="checkbox" name="gig_style" value="Indie" checked> Indie</label>
+          <label><input id="styleJazz" type="checkbox" name="gig_style" value="Jazz" checked> Jazz</label>
+          <label><input id="styleLatin" type="checkbox" name="gig_style" value="Latin" checked> Latin</label>
+          <label><input id="stylePop" type="checkbox" name="gig_style" value="Pop" checked> Pop</label>
+          <label><input id="styleReggae" type="checkbox" name="gig_style" value="Reggae" checked> Reggae</label>
+          <label><input id="styleRock" type="checkbox" name="gig_style" value="Rock" checked> Rock</label>
+        </div>
+      </div>
+
+      <!-- LINEUP (hidden - now per-slot) -->
+      <div id="bandFormatOptions" class="modal-row" style="display:none !important;">
+        <label>Lineup Allowed:</label>
+      
+        <div
+          class="modal-control"
+          style="
+            display:flex;
+            flex-wrap:nowrap;
+            gap:18px;
+            white-space:nowrap;
+            width:100%;
+          "
+        >
+          <label><input id="formatSolo" type="checkbox" checked> Solo</label>
+          <label><input id="formatDuo" type="checkbox" checked> Duo</label>
+          <label><input id="formatTrio" type="checkbox" checked> Trio</label>
+          <label><input id="formatFullBand" type="checkbox" checked> Full Band</label>
+        </div>
+      </div>
+
+      <!-- SLOT BUILDER (always visible - per-slot artist type) -->
+      <div id="slotBuilder" style="display:block;">
+        <div style="padding: 12px; background: rgba(124, 107, 255, 0.10); border: 1px solid rgba(124, 107, 255, 0.25); border-radius: 8px; margin: 8px 0 12px 0;">
+
+          <div id="slotList" style="display: flex; flex-direction: column; gap: 8px;"></div>
+          <button type="button" id="addSlotBtn" style="
+            margin-top: 10px; padding: 6px 14px; font-size: 0.8rem; 
+            background: rgba(124, 107, 255, 0.15); border: 1px dashed rgba(124, 107, 255, 0.4);
+            color: #a78bfa; border-radius: 6px; cursor: pointer; transition: all 0.2s;
+          " onmouseover="this.style.background='rgba(124,107,255,0.25)'" onmouseout="this.style.background='rgba(124,107,255,0.15)'">
+            + Add Slot
+          </button>
+          <div id="slotError" style="display:none; color:#ef4444; font-size:0.75rem; margin-top:6px;"></div>
+        </div>
+      </div>
+      
+      
+      
+      
+      
+
+      <div class="modal-row">
+        <label>Notes for Artist</label>
+        <div class="modal-control" style="flex:1;">
+          <textarea id="gigNotes" rows="3"></textarea>
+        </div>
+      </div>
+
+      <div class="modal-row">
+        <label>Recurring Gig?</label>
+        <div class="modal-control">
+          <input type="checkbox" id="recurringGig">
+        </div>
+      </div>
+      
+
+      <!-- RECURRING OPTIONS (JS NEEDS THIS ID + display toggle) -->
+      <div id="recurringOptions" class="subgroup" style="display:none; padding-left: 20px; border-left: 2px solid rgba(124, 107, 255, 0.3); margin-left: 14px;">
+
+        <div class="modal-row" style="grid-template-columns: 78px 1fr;">
+          <label>Repeat Every</label>
+          <div class="modal-control" style="gap: 8px;">
+            <input id="recurWeeks" type="number" value="1" style="width:60px; text-align:center;">
+            <span>week(s)</span>
+          </div>
+        </div>
+        
+      
+        <div class="modal-row" style="grid-template-columns: 78px 1fr;">
+          <label>Days</label>
+          <div class="modal-control days-row">
+            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+              <input id="daySun" type="checkbox">
+              <span>Sun</span>
+            </label>
+            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+              <input id="dayMon" type="checkbox">
+              <span>Mon</span>
+            </label>
+            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+              <input id="dayTue" type="checkbox">
+              <span>Tue</span>
+            </label>
+            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+              <input id="dayWed" type="checkbox">
+              <span>Wed</span>
+            </label>
+            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+              <input id="dayThu" type="checkbox">
+              <span>Thu</span>
+            </label>
+            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+              <input id="dayFri" type="checkbox">
+              <span>Fri</span>
+            </label>
+            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+              <input id="daySat" type="checkbox">
+              <span>Sat</span>
+            </label>
+          </div>
+        </div>
+        
+        <div class="modal-separator" style="margin: 12px 0;"></div>
+      
+        <div class="modal-row" style="grid-template-columns: 78px 1fr; align-items: flex-start; margin-top:16px;">
+          <label>Ends</label>
+        
+          <div class="modal-control" style="flex-direction:column; align-items:flex-start; gap:8px;">
+            <label style="display: flex; align-items: center; gap: 8px;">
+              <input type="radio" name="endType" value="after" checked>
+              <span>End After</span>
+              <input id="endAfter" type="number" disabled style="width:60px; text-align:center;" placeholder="##">
+              <span>occurrences</span>
+            </label>
+            
+            <label style="display: flex; align-items: center; gap: 8px;">
+              <input type="radio" name="endType" value="by">
+              <span>End By</span>
+              <input id="endBy" type="date" disabled>
+            </label>
+            
+          </div>
+        </div>
+      
+      </div>
+      
+      
+
+    </section>
+
+    <div id="gigArtistInfo" style="display:none;"></div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" id="msgArtistGigBtn" style="display:none; color:#06b6d4; border-color:rgba(6,182,212,0.3);">💬 Message Artist</button>
+      <button class="btn ghost" id="flyerGigBtn" style="display:none; color:#c4b5fd; border-color:rgba(139,92,246,0.3);" onclick="window.flyerEditor && window.flyerEditor.open(window.venueId, window._currentGigIdForFlyer)">🎨 Flyer</button>
+      <button class="btn primary" id="saveGig">Save</button>
+      <button class="btn danger hidden" id="deleteGig">Delete</button>
+      <button class="btn ghost" id="cancelGig">Close</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- SERIES EDIT/DELETE MODAL -->
+<div class="modal-overlay hidden" id="seriesModal">
+  <div class="modal-content" style="max-width: 480px;">
+    <h2 id="seriesModalTitle">Edit Recurring Gig</h2>
+    <p style="margin: 16px 0; line-height: 1.6; color: var(--text-muted);">
+      This gig is part of a recurring series. Would you like to apply changes to:
+    </p>
+    <div class="modal-actions" style="flex-direction: column; gap: 12px;">
+      <button class="btn primary" id="seriesEditThis" style="width: 100%;">This Gig Only</button>
+      <button class="btn primary" id="seriesSelectGigs" style="width: 100%;">Select Gigs to Save/Delete</button>
+      <button class="btn primary" id="seriesEditAll" style="width: 100%;">All Gigs in Series</button>
+      <button class="btn ghost" id="seriesCancelBtn" style="width: 100%;">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- SELECT GIGS MODAL -->
+<div class="modal-overlay hidden" id="selectGigsModal">
+  <div class="modal-content" style="max-width: 600px;">
+    <h2 id="selectGigsModalTitle">Select Gigs to Save</h2>
+    <div class="modal-separator"></div>
+    
+    <div style="margin: 16px 0;">
+      <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+        <input type="checkbox" id="selectAllGigs" style="width: 16px; height: 16px;">
+        <span style="font-weight: 600; color: var(--text);">Select All</span>
+      </label>
+    </div>
+    
+    <div id="gigSelectionList" style="max-height: 400px; overflow-y: auto; margin: 16px 0; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid var(--border);">
+      <!-- Gig checkboxes will be populated here by JavaScript -->
+    </div>
+    
+    <div class="modal-actions" style="gap: 12px;">
+      <button class="btn primary" id="confirmSelectedGigs" style="flex: 1;">Save Gig(s)</button>
+      <button class="btn ghost" id="closeSelectGigs" style="flex: 1;">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ALERT MODAL -->
+<div class="modal-overlay hidden" id="alertModal">
+  <div class="modal-content" style="max-width: 420px;">
+    <h2 id="alertModalTitle">Alert</h2>
+    <p id="alertModalMessage" style="margin: 16px 0; line-height: 1.6; color: var(--text-muted);"></p>
+    <div class="modal-actions">
+      <button class="btn primary" id="alertModalOk" style="width: 100%;">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://js.stripe.com/v3/" async></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=5" defer></script>
+<script src="/app/static/js/venue-payment-guard.js" defer></script>
+<script src="/app/static/js/messages.js?v=3"></script>
+<script src="/app/static/js/review-modal.js?v=2"></script>
+<script src="/app/static/js/artist-reviews.js"></script>
+<script src="/app/static/js/gig-modal.js"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=93"></script>
+<script src="/app/static/js/venue.contracts.js?v=2" defer></script>
+<script src="/app/static/js/flyer-editor.js?v=3" defer></script>
+
+<script src="/app/static/js/activity-center.js"></script>
+
+<script src="/app/static/js/my-artists.js?v=2"></script>
+<script src="/app/static/js/entity-users.js"></script>
+<script src="/app/static/js/venue-email-center.js"></script>
+
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/venue-create-gigs-init.js?v=6"></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

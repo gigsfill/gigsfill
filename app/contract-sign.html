@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GigsFill — Sign Contract</title>
+  <link rel="stylesheet" href="/app/static/css/styles.css">
+  <style>
+    .sign-container {
+      max-width: 700px;
+      margin: 40px auto;
+      padding: 0 20px;
+    }
+    .contract-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .contract-body {
+      font-size: 0.85rem;
+      line-height: 1.7;
+      color: var(--text);
+      white-space: pre-wrap;
+      font-family: monospace;
+      max-height: 500px;
+      overflow-y: auto;
+      padding: 16px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .sign-section {
+      border-top: 1px solid var(--border);
+      padding-top: 20px;
+      margin-top: 20px;
+    }
+    .pdf-upload-section {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+    .pdf-upload-section.dragover {
+      border-color: var(--cyan);
+      background: rgba(6, 182, 212, 0.05);
+    }
+  </style>
+</head>
+<body>
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+<script src="/app/static/js/auth.guard.js"></script>
+
+<div class="sign-container">
+  <div style="text-align:center; margin-bottom:24px;">
+    <a id="backLink" href="javascript:history.back()" style="color:var(--text-gray); font-size:0.85rem;">← Back</a>
+  </div>
+
+  <div id="loading" style="text-align:center; padding:40px;">
+    <p style="color:var(--text-gray);">Loading contract...</p>
+  </div>
+
+  <div id="contractContent" style="display:none;">
+    <div class="contract-card">
+      <h2 id="contractTitle" style="margin:0 0 8px; color:var(--text); font-size:1.125rem;"></h2>
+      <p id="contractMeta" style="font-size:0.8rem; color:var(--text-gray); margin-bottom:16px;"></p>
+      
+      <!-- Digital contract body -->
+      <div id="digitalContractSection" style="display:none;">
+        <div id="contractBodyHtml" class="contract-body"></div>
+        
+        <div class="sign-section">
+          <h3 style="margin:0 0 12px; font-size:0.95rem; color:var(--text);">Digital Signature</h3>
+          <p style="font-size:0.8rem; color:var(--text-gray); margin-bottom:12px;">By typing your name below and clicking Sign, you agree to the terms of this contract.</p>
+          
+          <div style="margin-bottom:12px;">
+            <label style="font-size:0.85rem; color:var(--text-gray); display:block; margin-bottom:4px;">Full Legal Name</label>
+            <input type="text" id="signatureName" placeholder="Type your full name" style="width:100%; max-width:400px;">
+          </div>
+          
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:16px;">
+            <input type="checkbox" id="signatureAgree" style="width:18px; height:18px; accent-color:#8b5cf6;">
+            <span style="font-size:0.85rem; color:var(--text-gray);">I agree to the terms and conditions above</span>
+          </label>
+          
+          <button class="btn primary" id="signBtn" onclick="signContract()">Sign Contract</button>
+          <span id="signStatus" style="font-size:0.8rem; margin-left:12px;"></span>
+        </div>
+      </div>
+      
+      <!-- PDF contract section -->
+      <div id="pdfContractSection" style="display:none;">
+        <div style="margin-bottom:16px;">
+          <p style="font-size:0.85rem; color:var(--text-gray); line-height:1.6;">
+            Download the contract PDF below, fill it out, sign it, and upload the signed version.
+          </p>
+          <a id="pdfDownloadLink" href="#" target="_blank" class="btn ghost" style="margin-top:8px;">📄 Download Contract PDF</a>
+        </div>
+        
+        <div class="sign-section">
+          <h3 style="margin:0 0 12px; font-size:0.95rem; color:var(--text);">Upload Signed Contract</h3>
+          
+          <div class="pdf-upload-section" id="pdfDropZone">
+            <p style="color:var(--text-gray); margin-bottom:8px;">Drag & drop your signed PDF here, or:</p>
+            <button class="btn primary" onclick="document.getElementById('signedPdfInput').click()">Choose File</button>
+            <input type="file" id="signedPdfInput" accept=".pdf" style="display:none;" onchange="uploadSignedPdf()">
+            <p id="pdfUploadStatus" style="font-size:0.8rem; margin-top:8px;"></p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Already signed -->
+      <div id="alreadySignedSection" style="display:none;">
+        <div style="text-align:center; padding:20px;">
+          <div style="font-size:2rem; margin-bottom:8px;">✓</div>
+          <p style="color:#22c55e; font-weight:600;" id="alreadySignedMsg">Contract signed!</p>
+          <a id="downloadSignedLink" href="#" style="color:var(--cyan); font-size:0.85rem; display:none;">Download signed contract</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/app/static/js/contract-sign-init.js"></script>
+</body>
+</html>

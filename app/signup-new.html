@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<!-- CITY-VALIDATION-v2 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create Account - GigsFill</title>
+<meta name="description" content="Sign up for GigsFill as a musician or venue. Create your profile, list gigs, and connect with the live music community.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://gigsfill.com/app/signup-new.html">
+<link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+<meta name="theme-color" content="#0f1419">
+<link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+<style>
+/* FIX: Dropdown options need explicit hex colors (browsers ignore CSS variables) */
+select {
+  background: #151b28 !important;
+  border: 1px solid #333 !important;
+}
+select option {
+  background: #151b28;
+  color: #ffffff;
+  text-align: center;
+}
+
+/* Match input background to dropdown background */
+input, textarea {
+  background: #151b28 !important;
+}
+
+.signup-container { max-width: 600px; margin: 40px auto; padding: 20px; }
+
+/* Step indicators - hide on role selection, show 2 for artist, 3 for venue */
+.step-indicator { display: flex; justify-content: center; gap: 40px; margin-bottom: 40px; position: relative; }
+.step-indicator::before { content: ""; position: absolute; top: 16px; left: 20%; right: 20%; height: 2px; background: rgba(148,163,184,0.2); z-index: 0; }
+.step { width: 32px; height: 32px; border-radius: 50%; background: rgba(148,163,184,0.1); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.75rem; position: relative; z-index: 1; transition: all 0.2s; }
+.step.active { background: linear-gradient(135deg, #8b5cf6, #06b6d4); color: white; box-shadow: 0 0 20px rgba(139,92,246,0.4); }
+.step.completed { background: #10b981; color: white; }
+.step.hidden { display: none; }
+
+.step-content { display: none; }
+.step-content.active { display: block; animation: fadeIn 0.3s; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+.step-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 24px; background: linear-gradient(135deg, #8b5cf6, #06b6d4); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+/* Role selection - smaller, sleeker bubbles */
+.role-selection { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 500px; margin: 0 auto; }
+.role-card { 
+  background: #151b28; 
+  border: 2px solid rgba(148,163,184,0.15); 
+  border-radius: 12px; 
+  padding: 32px 24px; 
+  text-align: center; 
+  cursor: pointer; 
+  transition: all 0.2s; 
+}
+.role-card:hover { 
+  border-color: #8b5cf6; 
+  transform: translateY(-4px); 
+  box-shadow: 0 8px 24px rgba(139,92,246,0.2); 
+}
+.role-card.selected { 
+  border-color: #8b5cf6; 
+  background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(6,182,212,0.1)); 
+}
+.role-card .icon { font-size: 2.5rem; margin-bottom: 12px; display: block; }
+.role-card h3 { font-size: 1.125rem; font-weight: 600; margin-bottom: 8px; }
+.role-card p { font-size: 0.8125rem; color: var(--text-gray); line-height: 1.4; }
+
+.button-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 24px; }
+.error-message { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #ef4444; padding: 12px; border-radius: 8px; margin-bottom: 20px; display: none; font-size: 0.875rem; }
+
+input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; cursor: pointer; margin: 0; accent-color: #8b5cf6; }
+.checkbox-group { display: flex; flex-direction: column; gap: 12px; }
+.checkbox-group label { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9375rem; }
+
+/* Pay fields - dollars and cents */
+.pay-fields { display: flex; align-items: center; gap: 8px; }
+.pay-fields input { width: auto; }
+.pay-dollars { width: 120px; }
+.pay-cents { width: 60px; }
+
+/* Smaller text areas */
+textarea { min-height: 60px !important; max-height: 80px; }
+
+/* Section dividers */
+.section-divider { 
+  height: 1px; 
+  background: linear-gradient(90deg, transparent, #8b5cf6, #06b6d4, transparent); 
+  margin: 24px 0; 
+  opacity: 0.3; 
+}
+
+/* Load in/out time selects - wider */
+.time-select { min-width: 80px; }
+
+/* Helper text - darker, smaller, italic */
+.helper-text {
+  font-size: 0.75rem;
+  font-style: italic;
+  color: #64748b;
+  text-transform: none !important;
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+/* Inline text - same as label but NOT uppercase */
+.inline-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #e2e8f0;
+  text-transform: none !important;
+}
+
+/* Tight dropdowns for Yes/No */
+.tight-select {
+  width: auto !important;
+  min-width: 60px;
+  padding: 4px 8px !important;
+  text-align: center;
+}
+
+/* Arrival type dropdown */
+.arrival-select {
+  width: auto !important;
+  min-width: 150px;
+  padding: 4px 8px !important;
+  text-align: center;
+}
+
+/* Pay field sizes */
+.pay-dollars { width: 100px !important; text-align: right; }
+.pay-cents { width: 45px !important; text-align: center; }
+
+/* Capacity field */
+.capacity-field { width: 90px !important; text-align: center; }
+
+/* Frequency field */
+.frequency-field { width: 70px !important; text-align: center; }
+</style>
+
+<script src="/app/static/js/us-states.js"></script>
+<script src="/app/static/js/city-autocomplete.js"></script>
+
+<script src="/app/static/js/time-format.js"></script>
+
+</head>
+<script>
+  (function() {
+    var aff = new URLSearchParams(window.location.search).get('aff');
+    if (aff) {
+      var exp = new Date(Date.now() + 30*24*60*60*1000).toUTCString();
+      document.cookie = 'aff_code=' + encodeURIComponent(aff.trim().toUpperCase()) + '; expires=' + exp + '; path=/; SameSite=Lax; Secure';
+    }
+  })();
+</script>
+<body class="dark-ui">
+  
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+      <div class="header-actions">
+        <a class="btn ghost" href="/app/index.html">Home</a>
+      </div>
+    </div>
+  </header>
+<div class="signup-container">
+<!-- Step Indicator -->
+<div class="step-indicator">
+<div class="step active" id="step1-indicator">1</div>
+<div class="step" id="step2-indicator">2</div>
+<div class="step" id="step3-indicator">3</div>
+<div class="step" id="step4-indicator">4</div>
+</div>
+<div class="error-message" id="errorMessage"></div>
+<!-- Step 1: Account Type -->
+<div class="step-content active" id="step1">
+<h2 class="step-title" style="text-align: center;">Choose Account Type</h2>
+<div class="role-selection">
+<div class="role-card" data-role="artist" onclick="window._selectRole && window._selectRole('artist')">
+<span class="icon">🎸</span>
+<h3>Artist / Band</h3>
+<p>Showcase your talent and book gigs</p>
+</div>
+<div class="role-card" data-role="venue" onclick="window._selectRole && window._selectRole('venue')">
+<span class="icon">🎭</span>
+<h3>Venue Owner</h3>
+<p>Discover artists and manage bookings</p>
+</div>
+</div>
+<div style="text-align: center; margin-top: 16px;">
+<a href="#" onclick="event.preventDefault(); window._selectRole && window._selectRole('skip');" style="font-size: 0.85rem; color: #9ca3af; text-decoration: none; border-bottom: 1px dashed rgba(156,163,175,0.5); cursor: pointer; transition: color 0.2s;" onmouseover="this.style.color='#c4b5fd'" onmouseout="this.style.color='#9ca3af'">Skip this step — I'm joining to help manage an existing account</a>
+</div>
+<script>
+// Inline role selection handler - auto-advances to Step 2
+(function() {
+  window._selectRole = function(role) {
+    window.selectedRole = role;
+    if (typeof selectedRole !== 'undefined') try { selectedRole = role; } catch(e) {}
+    document.querySelectorAll('.role-card').forEach(function(c) { 
+      c.classList.remove('selected'); 
+      c.style.transform = '';
+      c.style.boxShadow = '';
+    });
+    if (role !== 'skip') {
+      var card = document.querySelector('.role-card[data-role="' + role + '"]');
+      if (card) {
+        card.classList.add('selected');
+        card.style.transform = 'translateY(-4px) scale(1.02)';
+        card.style.boxShadow = '0 8px 32px rgba(139,92,246,0.4)';
+      }
+    }
+    // Auto-advance to Step 2 after brief visual feedback
+    setTimeout(function() {
+      if (typeof nextStep === 'function') nextStep();
+    }, 400);
+  };
+  // Event delegation for clicks
+  document.addEventListener('click', function(e) {
+    var card = e.target.closest('.role-card');
+    if (card) {
+      var role = card.getAttribute('data-role') || 'artist';
+      window._selectRole(role);
+    }
+  });
+})();
+</script>
+</div>
+<!-- Step 2: Personal Info -->
+<div class="step-content" id="step2">
+<h2 class="step-title">Personal Information</h2>
+<div class="field">
+<label class="required">First Name</label>
+<input id="firstName" placeholder="John" type="text"/>
+</div>
+<div class="field">
+<label class="required">Last Name</label>
+<input id="lastName" placeholder="Doe" type="text"/>
+</div>
+<div class="field">
+<label class="required">Email</label>
+<input id="email" placeholder="you@email.com" type="email"/>
+</div>
+<div class="field">
+<label class="required">Phone Number</label>
+<input id="phone" oninput="formatPhoneNumber(this)" placeholder="(555) 123-4567" type="tel"/>
+</div>
+<div class="field">
+<label class="required">Password (min 6 characters)</label>
+<input id="password" placeholder="••••••••" type="password"/>
+</div>
+<div class="button-group">
+<button class="btn ghost" onclick="prevStep()">← Back</button>
+<button class="btn primary" onclick="nextStep()" style="flex: 1;">Next →</button>
+</div>
+</div>
+<!-- Step 3: Artist Details -->
+<div class="step-content" id="step3-artist">
+<h2 class="step-title">Artist Details</h2>
+<div class="field">
+<label class="required">Artist/Band Name</label>
+<input id="artistName" placeholder="The Blue Notes" type="text"/>
+</div>
+<div class="field">
+<label class="required">Artist Type</label>
+<select id="artistType" onchange="toggleBandFormats()">
+<option value="">Select Type</option>
+<option value="Live Band">Live Band</option>
+<option value="DJ">DJ</option>
+<option value="Comedian">Comedian</option>
+<option value="Trivia Host">Trivia Host</option>
+</select>
+</div>
+<div class="field" id="bandFormatsField" style="display: none;">
+<label class="required">Styles (select at least one)</label>
+<div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Country"/>
+<span>Country</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Hip-Hop"/>
+<span>Hip-Hop</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Indie"/>
+<span>Indie</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Jazz"/>
+<span>Jazz</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Latin"/>
+<span>Latin</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Pop"/>
+<span>Pop</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Reggae"/>
+<span>Reggae</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="artist_style" type="checkbox" value="Rock"/>
+<span>Rock</span>
+</label>
+</div>
+</div>
+<div class="field" id="lineupField" style="display: none;">
+<label class="required">Lineup (select at least one)</label>
+<div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="band_format" type="checkbox" value="Solo"/>
+<span>Solo</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="band_format" type="checkbox" value="Duo"/>
+<span>Duo</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="band_format" type="checkbox" value="Trio"/>
+<span>Trio</span>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+<input name="band_format" type="checkbox" value="Full Band"/>
+<span>Full Band</span>
+</label>
+</div>
+</div>
+<div class="field">
+<label class="required">City</label>
+<div style="position:relative;">
+<input id="artistCity" placeholder="Los Angeles" type="text" autocomplete="off"/>
+</div>
+</div>
+<div class="field">
+<label class="required">State</label>
+<select id="artistState">
+<option value="">Select State</option>
+</select>
+
+</div>
+<div class="field">
+<label>Bio (optional)</label>
+<textarea id="artistBio" placeholder="Tell us about yourself..." rows="3"></textarea>
+</div>
+<div class="field">
+<label>Booking Contact</label>
+<select id="artistBookingContact">
+<option value="">Loading...</option>
+</select>
+</div>
+
+<div class="button-group">
+<button class="btn ghost" onclick="prevStep()">← Back</button>
+<button class="btn primary" onclick="completeSignup()" style="flex: 1;">Create Account 🎉</button>
+</div>
+</div>
+<!-- Step 3: Venue Details -->
+<div class="step-content" id="step3-venue">
+<h2 class="step-title">Venue Details</h2>
+<div class="field">
+<label class="required">Venue Name</label>
+<input id="venueName" placeholder="The Blue Note" type="text"/>
+</div>
+<div class="field">
+<label class="required">Address</label>
+<input id="venueAddress" placeholder="123 Main St" type="text"/>
+</div>
+<div class="field">
+<label class="required">City</label>
+<div style="position:relative;">
+<input id="venueCity" placeholder="Los Angeles" type="text" autocomplete="off"/>
+</div>
+</div>
+<div class="field">
+<label class="required">State</label>
+<select class="dark-dropdown" id="venueState" required="">
+<option value="">Select State</option>
+</select>
+
+</div>
+<div class="field">
+<label class="required">Zip Code</label>
+<input id="venueZip" placeholder="90001" type="text" maxlength="5" oninput="formatZipCode(this)" pattern="[0-9]{5}"/>
+</div>
+<div class="field">
+<label>Description (optional)</label>
+<textarea id="venueDescription" placeholder="Tell us about your venue..." rows="3"></textarea>
+</div>
+<div class="button-group">
+<button class="btn ghost" onclick="prevStep()">← Back</button>
+<button class="btn primary" onclick="nextStep()" style="flex: 1;">Next →</button>
+</div>
+</div>
+<!-- Step 4: Venue Requirements -->
+<div class="step-content" id="step4-venue">
+<div class="field">
+<label class="required">Default Artist Pay <span class="helper-text">Standard payment for artists at your venue</span></label>
+<div class="pay-fields">
+<span class="inline-text">$</span>
+<input id="venueDefaultPayDollars" type="text" class="pay-dollars" placeholder="500" oninput="formatPayDollars(this)" maxlength="6" />
+<span class="inline-text">.</span>
+<input id="venueDefaultPayCents" type="text" class="pay-cents" value="00" maxlength="2" oninput="formatPayCents(this)" />
+</div>
+</div>
+<div class="section-divider"></div>
+<div class="field">
+<label class="required">Performance Frequency <span class="helper-text">How often can the same artist perform? (0 = unlimited)</span></label>
+<div style="display: flex; align-items: center; gap: 8px;">
+<span class="inline-text">1 Time Every</span>
+<input id="venueFrequency" min="0" max="365" placeholder="30" step="1" class="frequency-field" type="number" oninput="formatFrequency(this)"/>
+<span class="inline-text">Days</span>
+</div>
+</div>
+<div class="section-divider"></div>
+<div class="field">
+<label class="required">Venue Capacity</label>
+<input id="venueCapacity" type="text" class="capacity-field" placeholder="100" oninput="formatCapacity(this)" maxlength="6" />
+</div>
+<!-- v73: STAGE - Matching venue edit exactly -->
+<div class="section-divider"></div>
+<div class="field">
+<label>Venue Has a Stage?</label>
+<select id="venueHasStage" onchange="toggleStageDetails()" class="tight-select">
+<option selected="" value="0">No</option>
+<option value="1">Yes</option>
+</select>
+</div>
+<div id="stageDetails" style="display: none; margin-left: 20px;">
+<div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+<label style="display: flex; align-items: center; gap: 6px;">
+<input id="venueStageWidth" max="999" min="0" placeholder="20" step="1" style="width: 80px;" type="number">
+<span class="inline-text">ft wide</span>
+</input></label>
+<label style="display: flex; align-items: center; gap: 6px;">
+<input id="venueStageDepth" max="999" min="0" placeholder="15" step="1" style="width: 80px;" type="number">
+<span class="inline-text">ft deep</span>
+</input></label>
+</div>
+<textarea id="venueSetupLocation" placeholder="Stage / setup description" style="min-height: 50px; max-height: 70px;"></textarea>
+</div>
+<!-- v73: SOUND - Matching venue edit exactly -->
+<div class="section-divider"></div>
+<div class="field">
+<label>Sound Equipment Provided?</label>
+<select id="venueHasSoundEquipment" onchange="toggleSoundDetails()" class="tight-select">
+<option selected="" value="0">No</option>
+<option value="1">Yes</option>
+</select>
+</div>
+<div id="soundDetails" style="display: none; margin-left: 20px;">
+<textarea id="venueSoundEquipmentDesc" placeholder="Sound equipment details" style="min-height: 50px; max-height: 70px;"></textarea>
+<div class="field" style="margin-top: 12px;">
+<label>Sound Engineer?</label>
+<select id="venueHasSoundEngineer" onchange="toggleEngineerDetails()" class="tight-select">
+<option selected="" value="0">No</option>
+<option value="1">Yes</option>
+</select>
+</div>
+<div id="engineerDetails" style="display: none; margin-top: 12px;">
+<textarea id="venueSoundEngineerDetails" placeholder="Sound engineer details" style="min-height: 50px; max-height: 70px;"></textarea>
+</div>
+</div>
+<div class="section-divider"></div>
+<div class="field">
+<label>Lighting Provided?</label>
+<select id="venueHasLighting" onchange="toggleLightingDetails()" class="tight-select">
+<option selected="" value="0">No</option>
+<option value="1">Yes</option>
+</select>
+</div>
+<div id="lightingDetails" style="display: none; margin-left: 20px;">
+<textarea id="venueLightingDesc" placeholder="Lighting details" style="min-height: 50px; max-height: 70px;"></textarea>
+</div>
+<!-- BAR TAB -->
+<div class="section-divider"></div>
+<div class="field">
+<label>Bar Tab <span class="helper-text">Bar tab details for artists, if any</span></label>
+<textarea id="venueBarTabDetails" placeholder="Enter bar tab details for artists, if any..." style="min-height: 50px; max-height: 70px;"></textarea>
+</div>
+<!-- FOOD TAB -->
+<div class="section-divider"></div>
+<div class="field">
+<label>Food Tab <span class="helper-text">Food tab details for artists, if any</span></label>
+<textarea id="venueFoodTabDetails" placeholder="Enter food tab details for artists, if any..." style="min-height: 50px; max-height: 70px;"></textarea>
+</div>
+<!-- ARRIVAL TIME - Matching venue edit exactly -->
+<div class="section-divider"></div>
+<div class="field" style="margin-top: 20px;">
+<label>Load In / Out:</label>
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+<select id="venueArrivalType" onchange="toggleArrivalDetails()" class="arrival-select">
+<option selected="" value="flexible">Flexible</option>
+<option value="no_earlier_than">No Earlier Than…</option>
+</select>
+<div id="arrivalDetails" style="display: none;">
+<div style="display: flex; gap: 4px; align-items: center;">
+<select id="venueArrivalHour" class="tight-select">
+<option value="">--</option>
+<option>1</option><option>2</option><option>3</option>
+<option>4</option><option>5</option><option>6</option>
+<option>7</option><option>8</option><option>9</option>
+<option>10</option><option>11</option><option selected>12</option>
+</select>
+<select id="venueArrivalPeriod" class="tight-select">
+<option selected="" value="PM">PM</option>
+<option value="AM">AM</option>
+</select>
+</div>
+</div>
+</div>
+</div>
+<textarea id="venueLoadInOut" placeholder="Load in / load out details" style="margin-left: 20px; min-height: 50px; max-height: 70px;"></textarea>
+
+<div style="margin: 20px 0 16px 0; padding: 16px; background: rgba(139,92,246,0.06); border: 1px solid rgba(139,92,246,0.15); border-radius: 8px;">
+  <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
+    <input type="checkbox" id="venueProCertified" style="width: 20px; height: 20px; min-width: 20px; margin-top: 3px; accent-color: #8b5cf6;" required>
+    <span style="font-size: 0.78rem; color: var(--text-gray); line-height: 1.6;">I represent and warrant that this venue maintains active public performance licenses from all applicable Performing Rights Organizations ("PROs"), including but not limited to ASCAP, BMI, SESAC, GMR, and any other organization required for the lawful public performance of musical works at this venue. I understand that maintaining such licenses is solely the responsibility of the venue. <span style="color: #ef4444;">*</span></span>
+  </label>
+</div>
+
+<div class="button-group">
+<button class="btn ghost" onclick="prevStep()">← Back</button>
+<button class="btn primary" onclick="completeSignup()" style="flex: 1;">Create Account 🎉</button>
+</div>
+</div>
+
+</div>
+
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/signup-new-init.js?v=3"></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>
+

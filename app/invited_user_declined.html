@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+<title>Invitation Declined - GigsFill</title>
+<link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+<style>
+.decline-container { 
+  max-width: 600px; 
+  margin: 80px auto; 
+  padding: 20px; 
+  text-align: center;
+}
+
+.decline-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 48px 32px;
+}
+
+.decline-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 16px;
+}
+
+.decline-message {
+  color: var(--text-gray);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin-bottom: 32px;
+}
+
+.inviter-name {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+.entity-name {
+  color: var(--purple);
+  font-weight: 600;
+}
+
+.loading-state {
+  text-align: center;
+  padding: 60px 20px;
+}
+
+.loading-state .spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(139,92,246,0.2);
+  border-top-color: #8b5cf6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 20px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.invalid-token {
+  text-align: center;
+  padding: 60px 20px;
+}
+
+.invalid-token h2 {
+  color: #ef4444;
+  margin-bottom: 16px;
+}
+
+.invalid-token p {
+  color: var(--text-gray);
+  margin-bottom: 24px;
+}
+</style>
+</head>
+
+<body class="dark-ui">
+  
+<header class="app-header">
+  <div class="header-inner">
+    <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+    <div class="header-actions">
+      <a class="btn ghost" href="/app/index.html">Home</a>
+    </div>
+  </div>
+</header>
+
+<div class="decline-container">
+  
+  <!-- Loading State -->
+  <div id="loadingState" class="loading-state">
+    <div class="spinner"></div>
+    <p style="color: var(--text-gray);">Processing...</p>
+  </div>
+  
+  <!-- Invalid Token State -->
+  <div id="invalidState" class="invalid-token" style="display: none;">
+    <h2>⚠️ Invalid or Expired Invitation</h2>
+    <p>This invitation link is no longer valid.</p>
+    <a class="btn primary" href="/app/index.html">Go to Home</a>
+  </div>
+  
+  <!-- Decline Confirmation -->
+  <div id="declineCard" class="decline-card" style="display: none;">
+    <h2 class="decline-title">Invitation Declined</h2>
+    <p class="decline-message">
+      You declined your invitation from<br>
+      <span class="inviter-name" id="inviterName">Loading...</span><br><br>
+      <a id="entityLink" href="#" style="color: var(--cyan); text-decoration: none; font-weight: 600;"><span class="entity-name" id="entityName">Loading...</span></a>
+    </p>
+    <p class="decline-message">
+      If you change your mind, let <span class="inviter-name" id="inviterName2">them</span> know<br>
+      so they can send you another invite.
+    </p>
+  </div>
+  
+</div>
+
+<footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+<script src="/app/static/js/invited_user_declined-init.js"></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+</body>
+</html>

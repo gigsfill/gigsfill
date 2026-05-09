@@ -1,0 +1,1918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="manifest" href="/app/static/manifest.json">
+  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+  <meta name="theme-color" content="#0f1419">
+  <title>Admin - GigsFill</title>
+  <!-- Audit fix (May 2026): admin-only page-load guard. auth.guard.js handles
+       authentication + email verification for ALL pages, but it doesn't gate
+       admin status. Without this guard, any logged-in user could load admin.html
+       and see the UI (most API calls 403, but the unauthenticated analytics
+       endpoint at /api/analytics/stats/admin-dashboard was leaking until today).
+       Pre-paint redirect so non-admins never see the page. -->
+  <script>
+    (function adminPagePreGuard() {
+      try { document.documentElement.style.visibility = 'hidden'; } catch (_) {}
+      fetch('/api/me', { credentials: 'include' })
+        .then(function(r) { return r.ok ? r.json() : Promise.reject(); })
+        .then(function(me) {
+          var isAdmin = me && (
+            me.is_admin === true || me.is_admin === 'true' ||
+            me.is_admin === 1    || me.is_admin === '1'
+          );
+          if (!isAdmin) {
+            window.location.href = '/app/user-profile.html';
+          }
+          // Note: leave visibility hidden — auth.guard.js will set it visible
+          // once it finishes its own checks (email verification, etc.).
+        })
+        .catch(function() {
+          // not authenticated — let auth.guard.js handle the redirect
+        });
+    })();
+  </script>
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    .admin-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    
+    .admin-title {
+      font-size: 2rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 32px;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      background: transparent;
+      border: none;
+      color: var(--text-gray);
+      cursor: pointer;
+      font: 600 0.875rem 'Inter', sans-serif;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+      margin-bottom: -1px;
+      flex-shrink: 0;
+    }
+    
+    .tab:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.03);
+    }
+    
+    .tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      background: rgba(6,182,212,0.1);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .content-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    
+    .stat-card {
+      background: rgba(139,92,246,0.1);
+      border: 1px solid rgba(139,92,246,0.2);
+      border-radius: 8px;
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .stat-card:hover {
+      background: rgba(139,92,246,0.15);
+      border-color: rgba(139,92,246,0.4);
+    }
+    
+    .stat-card.active {
+      background: rgba(139,92,246,0.2);
+      border-color: var(--cyan);
+      box-shadow: 0 4px 12px rgba(139,92,246,0.3);
+    }
+    
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: var(--cyan);
+      margin-bottom: 2px;
+    }
+    
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-gray);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    
+    .data-table th {
+      text-align: left;
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-gray);
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .data-table td {
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    .data-table tr:hover {
+      background: rgba(255,255,255,0.02);
+    }
+    
+    .section-header {
+      font-size: 0.95rem;
+      margin-bottom: 12px;
+      color: var(--text);
+    }
+    
+    .search-pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    
+    .search-box {
+      flex: 1;
+      min-width: 200px;
+      max-width: 300px;
+    }
+    
+    .pagination {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    
+    .pagination button {
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      transition: all 0.2s;
+    }
+    
+    .pagination button:hover:not(:disabled) {
+      background: rgba(255,255,255,0.1);
+      border-color: var(--cyan);
+    }
+    
+    .pagination button:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+    
+    .pagination .page-info {
+      color: var(--text-gray);
+      font-size: 0.875rem;
+    }
+    
+    .email-templates-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    
+    .template-section h4 {
+      color: var(--cyan);
+      font-size: 0.9rem;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    
+    .template-item {
+      margin-bottom: 16px;
+      padding: 14px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    
+    .template-label {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    
+    .template-guide {
+      font-size: 0.75rem;
+      color: var(--text-gray);
+      margin-bottom: 12px;
+      font-style: italic;
+    }
+    
+    .form-grid-2col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    
+    @media (max-width: 768px) {
+      .email-templates-grid,
+      .form-grid-2col {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    /* Email Preview Modal */
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    
+    .modal.hidden {
+      display: none;
+    }
+    
+    .modal .modal-content {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    
+    .modal .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.3);
+    }
+    
+    .modal .modal-header h3 {
+      margin: 0;
+      color: var(--text);
+      font-size: 1.125rem;
+    }
+    
+    .modal .close-btn {
+      background: none;
+      border: none;
+      color: var(--text-gray);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      line-height: 1;
+    }
+    
+    .modal .close-btn:hover {
+      color: var(--text);
+    }
+    
+    /* Dropdown styling to match signup-new */
+    select {
+      background: #151b28 !important;
+      border: 1px solid #333 !important;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px !important;
+    }
+    select option {
+      background: #151b28;
+      color: #ffffff;
+    }
+    select optgroup {
+      background: #151b28;
+      color: var(--cyan);
+      font-weight: 600;
+    }
+
+    /* Toggle Switch */
+    .pay-toggle {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .pay-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .pay-toggle .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #374151;
+      border-radius: 20px;
+      transition: 0.25s;
+    }
+    .pay-toggle .slider:before {
+      content: "";
+      position: absolute;
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.25s;
+    }
+    .pay-toggle input:checked + .slider {
+      background: var(--cyan);
+    }
+    .pay-toggle input:checked + .slider:before {
+      transform: translateX(16px);
+    }
+
+    .venue-row {
+      display: flex;
+      align-items: center;
+      padding: 8px 10px;
+      border-bottom: 1px solid #1e2636;
+      gap: 10px;
+      font-size: 0.75rem;
+    }
+    .venue-row:last-child { border-bottom: none; }
+    .venue-row:hover { background: rgba(255,255,255,0.02); }
+    .venue-row .v-name { color: var(--text-white); font-weight: 600; white-space: nowrap; min-width: 140px; }
+    .venue-row .v-loc  { color: var(--text-gray); white-space: nowrap; min-width: 120px; }
+    .venue-row .v-email { color: var(--text-gray); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .venue-row .v-status {
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      min-width: 65px;
+      text-align: center;
+    }
+
+    .letter-btn {
+      padding: 3px 0;
+      width: 26px;
+      text-align: center;
+      background: transparent;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: var(--text-gray);
+      cursor: pointer;
+      font-size: 0.65rem;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .letter-btn:hover { background: #253050; color: var(--text-white); border-color: #555; }
+    .letter-btn.active { background: var(--cyan); color: #000; border-color: var(--cyan); }
+    .letter-btn.has-suspended { border-bottom: 2px solid #f59e0b; }
+
+    /* ================================================================
+       LOGS TAB
+       ================================================================ */
+    .logs-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .logs-toolbar select,
+    .logs-toolbar input[type="text"] {
+      padding: 7px 10px;
+      background: #0d1220;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.82rem;
+    }
+    .logs-toolbar input[type="text"] { flex: 1; min-width: 180px; max-width: 320px; }
+    .logs-toolbar .log-action-btn {
+      padding: 7px 14px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-family: inherit;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .logs-toolbar .log-action-btn:hover { background: rgba(255,255,255,0.1); }
+
+    #logsOutput {
+      font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      background: #080c14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 640px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log-line { padding: 1px 4px; border-radius: 2px; }
+    .log-critical { color: #f87171; background: rgba(239,68,68,0.12); font-weight: 700; }
+    .log-error    { color: #fb923c; }
+    .log-warn     { color: #fbbf24; }
+    .log-info     { color: #94a3b8; }
+    .log-debug    { color: #475569; }
+    .logs-pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+      font-size: 0.8rem;
+      color: var(--text-gray);
+    }
+    .logs-pagination button {
+      padding: 5px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: inherit;
+    }
+    .logs-pagination button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* ================================================================
+       DATABASE TAB
+       ================================================================ */
+    .db-layout {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 16px;
+      min-height: 600px;
+    }
+    @media (max-width: 768px) {
+      .db-layout { grid-template-columns: 1fr; }
+    }
+    .db-sidebar {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-y: auto;
+      max-height: 700px;
+    }
+    .db-sidebar-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-gray);
+      background: rgba(0,0,0,0.2);
+    }
+    .db-table-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 14px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      transition: background 0.15s;
+    }
+    .db-table-item:hover  { background: rgba(255,255,255,0.04); }
+    .db-table-item.active { background: rgba(6,182,212,0.12); border-left: 3px solid var(--cyan); }
+    .dbt-name  { font-size: 0.82rem; color: var(--text); font-weight: 500; }
+    .dbt-count { font-size: 0.7rem; color: var(--text-gray); background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 10px; }
+
+    .db-main {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      overflow: hidden;
+    }
+    .db-main-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .db-search-input {
+      flex: 1;
+      min-width: 160px;
+      max-width: 280px;
+      padding: 7px 10px;
+      background: #0d1220;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.82rem;
+      font-family: inherit;
+    }
+    .db-action-btn {
+      padding: 7px 13px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: inherit;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .db-action-btn:hover { background: rgba(255,255,255,0.1); }
+    .db-action-btn.cyan { border-color: rgba(6,182,212,0.4); color: var(--cyan); }
+    .db-action-btn.cyan:hover { background: rgba(6,182,212,0.12); }
+
+    .db-data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+    }
+    .db-data-table th {
+      text-align: left;
+      padding: 7px 8px;
+      border-bottom: 2px solid var(--border);
+      color: var(--text-gray);
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      background: rgba(0,0,0,0.15);
+    }
+    .db-th-sortable { cursor: pointer; user-select: none; }
+    .db-th-sortable:hover { color: var(--cyan); }
+    .db-data-table td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      color: var(--text);
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .db-data-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .db-row-editing td { background: rgba(6,182,212,0.06) !important; }
+
+    .db-cell-input {
+      width: 100%;
+      padding: 4px 6px;
+      background: #0d1220;
+      border: 1px solid rgba(6,182,212,0.4);
+      border-radius: 4px;
+      color: var(--text);
+      font-size: 0.78rem;
+      font-family: inherit;
+      min-width: 80px;
+    }
+
+    .db-btn-edit, .db-btn-delete, .db-btn-save, .db-btn-cancel, .db-btn-add {
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.72rem;
+      font-family: inherit;
+      border: 1px solid;
+      transition: all 0.15s;
+      margin-right: 2px;
+    }
+    .db-btn-edit   { background: rgba(139,92,246,0.1); border-color: rgba(139,92,246,0.3); color: #a78bfa; }
+    .db-btn-delete { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); color: #f87171; }
+    .db-btn-save   { background: rgba(6,182,212,0.15); border-color: rgba(6,182,212,0.4); color: var(--cyan); font-weight:600; }
+    .db-btn-cancel { background: rgba(255,255,255,0.05); border-color: var(--border); color: var(--text-gray); }
+    .db-btn-add    { background: rgba(6,182,212,0.1); border-color: rgba(6,182,212,0.3); color: var(--cyan); padding: 6px 14px; font-size:0.8rem; }
+    .db-btn-edit:hover   { background: rgba(139,92,246,0.2); }
+    .db-btn-delete:hover { background: rgba(239,68,68,0.2); }
+    .db-btn-save:hover   { background: rgba(6,182,212,0.25); }
+
+    .db-pagination {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 12px;
+      gap: 8px;
+    }
+    .db-pagination button {
+      padding: 5px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: inherit;
+    }
+    .db-pagination button:disabled { opacity: 0.3; cursor: not-allowed; }
+    .db-pagination select {
+      padding: 4px 8px;
+      background: #0d1220;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 0.8rem;
+      font-family: inherit;
+    }
+    .db-protected-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 4px;
+      color: #f87171;
+      font-size: 0.68rem;
+      font-weight: 600;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    /* ================================================================
+       PLATFORM SETTINGS SUB-TABS
+       ================================================================ */
+    .ps-stats-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .ps-stat {
+      flex: 1;
+      min-width: 80px;
+      background: rgba(139,92,246,0.08);
+      border: 1px solid rgba(139,92,246,0.18);
+      border-radius: 6px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .ps-stat:hover { background: rgba(139,92,246,0.14); border-color: rgba(139,92,246,0.35); }
+    .ps-stat.active { background: rgba(139,92,246,0.2); border-color: var(--cyan); }
+    .ps-stat-val {
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: var(--cyan);
+      line-height: 1;
+    }
+    .ps-stat-lbl {
+      font-size: 0.65rem;
+      color: var(--text-gray);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .ps-subtabs {
+      display: flex;
+      gap: 2px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+    .ps-subtab {
+      padding: 8px 16px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-gray);
+      cursor: pointer;
+      font: 600 0.78rem 'Inter', sans-serif;
+      margin-bottom: -1px;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .ps-subtab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+    .ps-subtab.active { color: var(--cyan); border-bottom-color: var(--cyan); background: rgba(6,182,212,0.08); }
+
+    .ps-subtab-content { display: none; }
+    .ps-subtab-content.active { display: block; }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <a href="/app/venue-create-gigs.html" style="text-decoration: none;"><div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div></a>
+      <div class="header-actions">
+      </div>
+    </div>
+  </header>
+<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/event-delegate.js"></script>
+  <script src="/app/static/js/timezone-utils.js"></script>
+  
+  <script src="/app/static/js/auth.guard.js"></script>
+  <script src="/app/static/js/api-globals.js"></script>
+  <script src="/app/static/js/user-dropdown.js"></script>
+
+  <div class="admin-container">
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('platform')">Platform Settings</button>
+      <button class="tab" onclick="switchTab('support')">Support</button>
+      <button class="tab" onclick="switchTab('templates')">Email Templates</button>
+      <button class="tab" onclick="switchTab('flyertemplates')">Flyer Templates</button>
+      <button class="tab" onclick="switchTab('affiliates')">Affiliates</button>
+      <button class="tab" onclick="switchTab('analytics')">Analytics</button>
+      <button class="tab" onclick="switchTab('logs')">Logs</button>
+      <button class="tab" onclick="switchTab('database')">Database</button>
+    </div>
+
+    <!-- PLATFORM SETTINGS TAB -->
+    <div class="tab-content active" id="platform-tab">
+
+      <!-- ── SERVER HEALTH (always visible at top) ───────────────────────────── -->
+      <div id="serverHealthPanel" style="margin-bottom:12px;">
+        <!-- Alerts (red) -->
+        <div id="serverAlerts" style="display:none;margin-bottom:6px;"></div>
+        <!-- Warnings (yellow) -->
+        <div id="serverWarnings" style="display:none;margin-bottom:6px;"></div>
+        <!-- Metrics bar -->
+        <div id="serverMetrics" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:0.68rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;white-space:nowrap;">🖥 Server</span>
+          <span id="shMemBar" style="font-size:0.78rem;"></span>
+          <span id="shCpuBar" style="font-size:0.78rem;"></span>
+          <span id="shDiskBar" style="font-size:0.78rem;"></span>
+          <span id="shDbBar" style="font-size:0.78rem;"></span>
+          <span id="shRedisBar" style="font-size:0.78rem;"></span>
+          <span id="shDbType" style="font-size:0.78rem;"></span>
+          <span id="shWorkers" style="font-size:0.78rem;"></span>
+          <button onclick="loadServerHealth()" style="margin-left:auto;background:transparent;border:1px solid rgba(255,255,255,0.12);color:var(--text-muted);border-radius:4px;padding:2px 10px;font-size:0.68rem;cursor:pointer;white-space:nowrap;">↻ Refresh</button>
+        </div>
+      </div>
+
+      <!-- ── PLATFORM STATUS STRIP ─────────────────────────────────────────── -->
+      <!-- Quick-action strip: live toggles for the most critical site-wide switches -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:8px;align-items:center;">
+        <span style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px;">Site Status</span>
+
+        <!-- Payments live/off -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <span style="font-size:0.7rem;color:var(--text-gray);">💳 Payments</span>
+          <span id="paymentsStatusLabel" style="font-size:0.7rem;font-weight:700;color:#ef4444;">OFF</span>
+          <div style="position:relative;width:36px;height:20px;">
+            <input type="checkbox" id="paymentsEnabled" onchange="togglePaymentsEnabled()" style="opacity:0;width:0;height:0;position:absolute;">
+            <div id="paymentsToggleTrack" onclick="document.getElementById('paymentsEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
+            <div id="paymentsToggleThumb" onclick="document.getElementById('paymentsEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+          </div>
+        </div>
+
+        <!-- Affiliate program on/off (quick toggle mirrors affiliate settings) -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <span style="font-size:0.7rem;color:var(--text-gray);">🤝 Affiliates</span>
+          <span id="affQuickLabel" style="font-size:0.7rem;font-weight:700;color:#ef4444;">OFF</span>
+          <div style="position:relative;width:36px;height:20px;">
+            <input type="checkbox" id="affQuickEnabled" onchange="toggleAffQuick()" style="opacity:0;width:0;height:0;position:absolute;">
+            <div id="affQuickTrack" onclick="document.getElementById('affQuickEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
+            <div id="affQuickThumb" onclick="document.getElementById('affQuickEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+          </div>
+        </div>
+
+        <!-- New signups (future kill switch) -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <span style="font-size:0.7rem;color:var(--text-gray);">🔐 Signups</span>
+          <span id="signupsQuickLabel" style="font-size:0.7rem;font-weight:700;color:#10b981;">OPEN</span>
+          <div style="position:relative;width:36px;height:20px;">
+            <input type="checkbox" id="signupsEnabled" onchange="toggleSignupsEnabled()" style="opacity:0;width:0;height:0;position:absolute;" checked>
+            <div id="signupsToggleTrack" onclick="document.getElementById('signupsEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#10b981;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
+            <div id="signupsToggleThumb" onclick="document.getElementById('signupsEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+          </div>
+        </div>
+
+        <!-- Maintenance mode -->
+        <div style="display:flex;flex-direction:column;gap:6px;padding:8px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:0.7rem;color:var(--text-gray);">🚧 Maintenance</span>
+            <span id="maintQuickLabel" style="font-size:0.7rem;font-weight:700;color:#6b7280;">OFF</span>
+            <div style="position:relative;width:36px;height:20px;">
+              <input type="checkbox" id="maintEnabled" onchange="toggleMaintenance()" style="opacity:0;width:0;height:0;position:absolute;">
+              <div id="maintToggleTrack" onclick="document.getElementById('maintEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
+              <div id="maintToggleThumb" onclick="document.getElementById('maintEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <label for="maintMessage" style="font-size:0.68rem;color:#6b7280;">Message shown to users:</label>
+            <input id="maintMessage" type="text"
+              placeholder="We'll be back shortly!"
+              onchange="saveMaintMessage()"
+              style="width:100%;background:#111827;border:1px solid #374151;border-radius:5px;
+                     color:#e2e8f0;padding:5px 8px;font-size:0.75rem;box-sizing:border-box;">
+          </div>
+        </div>
+
+        <div id="siteStatusSaved" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity .3s;margin-left:4px;">✓ Saved</div>
+      </div>
+
+      <!-- ── DATA BUBBLES ────────────────────────────────────────────────────── -->
+      <div class="ps-stats-row" id="dashboardStatsGrid">
+        <div class="ps-stat" data-type="users" onclick="toggleDataSection('users')" title="Click to browse all users">
+          <span class="ps-stat-val" id="totalUsers">0</span>
+          <span class="ps-stat-lbl">Users</span>
+        </div>
+        <div class="ps-stat" data-type="artists" onclick="toggleDataSection('artists')" title="Click to browse all artists">
+          <span class="ps-stat-val" id="totalArtists">0</span>
+          <span class="ps-stat-lbl">Artists</span>
+        </div>
+        <div class="ps-stat" data-type="venues" onclick="toggleDataSection('venues')" title="Click to browse all venues">
+          <span class="ps-stat-val" id="totalVenues">0</span>
+          <span class="ps-stat-lbl">Venues</span>
+        </div>
+        <div class="ps-stat" data-type="gigs" onclick="toggleDataSection('gigs')" title="Click to browse upcoming gigs">
+          <span class="ps-stat-val" id="totalGigs">0</span>
+          <span class="ps-stat-lbl">Total Gigs</span>
+        </div>
+        <div class="ps-stat" data-type="booked_gigs" onclick="toggleDataSection('booked_gigs')" title="Click to browse booked gigs">
+          <span class="ps-stat-val" id="bookedGigs">0</span>
+          <span class="ps-stat-lbl">Booked</span>
+        </div>
+      </div>
+
+      <!-- ── DATA DRILLDOWN ────────────────────────────────────────────────── -->
+      <div class="content-card" id="dataSection" style="display:none;padding:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+          <h2 class="section-header" id="dataTitle" style="font-size:0.85rem;font-weight:700;margin:0;color:var(--cyan);">Users</h2>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="searchInput" placeholder="Search…" style="padding:5px 10px;font-size:0.78rem;background:#0d1220;border:1px solid var(--border);border-radius:6px;color:var(--text);width:180px;" oninput="filterDsSearch(this.value)">
+            <button onclick="changePage(-1)" id="prevBtn" style="padding:4px 10px;font-size:0.75rem;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text);cursor:pointer;">← Prev</button>
+            <span class="page-info" id="pageInfo" style="font-size:0.75rem;color:var(--text-gray);white-space:nowrap;">Page 1 of 1</span>
+            <button onclick="changePage(1)" id="nextBtn" style="padding:4px 10px;font-size:0.75rem;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text);cursor:pointer;">Next →</button>
+            <button onclick="document.getElementById('dataSection').style.display='none'" style="padding:4px 8px;font-size:0.75rem;background:transparent;border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:var(--text-gray);cursor:pointer;">✕</button>
+          </div>
+        </div>
+        <div id="dataTableContainer"></div>
+      </div>
+
+      <!-- Sub-tabs -->
+      <div class="ps-subtabs">
+        <button class="ps-subtab active" onclick="switchPsTab('email')">Email Settings</button>
+        <button class="ps-subtab" onclick="switchPsTab('payment')">Payment Settings</button>
+        <button class="ps-subtab" onclick="switchPsTab('accounting')">Payment Accounting</button>
+      </div>
+
+      <!-- ── Sub-tab: Email Settings ── -->
+      <div class="ps-subtab-content active" id="ps-email">
+        <div class="content-card" style="padding:14px;">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Platform Communications Email</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div class="field">
+              <label style="font-size:0.7rem;">Email From Name</label>
+              <input type="text" id="platformEmailFromName" placeholder="GigsFill Booking" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;">Email Address</label>
+              <input type="email" id="platformEmail" placeholder="noreply@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;">Email Password</label>
+              <input type="password" id="platformEmailPassword" placeholder="Email password" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;max-width:66%;">
+            <div class="field">
+              <label style="font-size:0.7rem;">SMTP Server</label>
+              <input type="text" id="platformSmtpServer" placeholder="smtp.gmail.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;">SMTP Port</label>
+              <input type="number" id="platformSmtpPort" placeholder="587" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+
+          <div style="margin-bottom:14px;">
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px;">Send a test email to verify SMTP is working:</div>
+            <div style="display:flex;gap:8px;align-items:center;max-width:66%;">
+              <input type="email" id="smtpTestEmail" placeholder="you@example.com"
+                style="flex:1;padding:7px 10px;font-size:0.8rem;box-sizing:border-box;">
+              <button onclick="testSmtp()" id="smtpTestBtn"
+                style="padding:7px 18px;background:#06b6d4;color:#fff;border:none;border-radius:6px;font-size:0.8rem;font-weight:600;cursor:pointer;white-space:nowrap;">
+                Send Test
+              </button>
+            </div>
+            <div id="smtpTestResult" style="font-size:0.78rem;margin-top:6px;min-height:16px;"></div>
+          </div>
+
+          <div style="height:1px;background:var(--border);margin:12px 0;"></div>
+
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Support Email</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div class="field">
+              <label style="font-size:0.7rem;">Email From Name</label>
+              <input type="text" id="supportEmailFromName" placeholder="GigsFill Support" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;">Email Address</label>
+              <input type="email" id="supportEmail" placeholder="support@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;">Email Password</label>
+              <input type="password" id="supportEmailPassword" placeholder="Email password" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;max-width:66%;">
+            <div class="field">
+              <label style="font-size:0.7rem;">SMTP Server</label>
+              <input type="text" id="supportSmtpServer" placeholder="smtp.gmail.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;">SMTP Port</label>
+              <input type="number" id="supportSmtpPort" placeholder="587" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="text-align:center;margin-top:8px;color:var(--cyan);font-weight:600;font-size:0.78rem;opacity:0;transition:opacity .3s;" id="autoSaveIndicator">✓ Saved</div>
+
+          <div style="height:1px;background:var(--border);margin:12px 0;"></div>
+
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Admin Alert Email</div>
+          <div style="color:var(--text-gray);font-size:0.7rem;margin-bottom:10px;">All system alerts (chargebacks, payment failures, account issues) are sent here. Use your personal GigsFill email, not the platform sending address.</div>
+          <div class="field" style="max-width:360px;">
+            <label style="font-size:0.7rem;">Admin Email Address</label>
+            <input type="email" id="adminAlertEmail" placeholder="you@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;">
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Sub-tab: Payment Settings ── -->
+      <div class="ps-subtab-content" id="ps-payment">
+        <!-- Live Payments toggle banner -->
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:6px;margin-bottom:8px;font-size:0.72rem;color:var(--text-gray);">
+          <span style="font-size:1rem;">⚡</span>
+          <span>The <strong style="color:var(--text);">Live Payments</strong> on/off switch has moved to the <strong style="color:var(--cyan);">Site Status</strong> strip at the top of this page.</span>
+          <span id="paymentStatusMirror" style="margin-left:auto;font-weight:700;font-size:0.75rem;"></span>
+        </div>
+
+        <!-- Stripe Connect -->
+        <div class="content-card" style="padding:12px;margin-top:8px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <span style="background:#635bff;color:white;padding:2px 7px;border-radius:4px;font-size:0.65rem;font-weight:700;">Stripe</span>
+            <span style="font-size:0.8rem;font-weight:700;color:var(--text);">Stripe Connect Settings</span>
+          </div>
+          <p style="color:var(--text-gray);font-size:0.68rem;margin-bottom:8px;">Get keys from <a href="https://dashboard.stripe.com/apikeys" target="_blank" style="color:var(--cyan);">Stripe Dashboard → API Keys</a>.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div class="field">
+              <label style="font-size:0.68rem;">Publishable Key</label>
+              <input type="text" id="stripePublishableKey" placeholder="pk_live_..." onblur="autoSavePaymentSettings()" onkeypress="if(event.key==='Enter'){ autoSavePaymentSettings(); this.blur(); }" style="padding:7px;font-size:0.78rem;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.68rem;">Secret Key</label>
+              <input type="text" id="stripeSecretKey" placeholder="sk_live_..." onblur="autoSavePaymentSettings()" onkeypress="if(event.key==='Enter'){ autoSavePaymentSettings(); this.blur(); }" style="padding:7px;font-size:0.78rem;">
+            </div>
+            <div class="field" style="grid-column:span 2;">
+              <label style="font-size:0.68rem;">Webhook Secret</label>
+              <input type="text" id="stripeWebhookSecret" placeholder="whsec_..." onblur="autoSavePaymentSettings()" onkeypress="if(event.key==='Enter'){ autoSavePaymentSettings(); this.blur(); }" style="padding:7px;font-size:0.78rem;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Fee & Payout -->
+        <div class="content-card" style="padding:12px;margin-top:8px;">
+          <div style="font-size:0.8rem;font-weight:700;color:var(--text);margin-bottom:8px;">💰 Platform Fee & Payout Schedule</div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:8px;">
+            <div class="field">
+              <label style="font-size:0.68rem;">Platform Fee (%)</label>
+              <input type="number" id="platformFeePercent" min="0" max="50" step="0.5" placeholder="10" onblur="autoSavePaymentSettings()" onkeypress="if(event.key==='Enter'){ autoSavePaymentSettings(); this.blur(); }" style="padding:7px;">
+              <small style="color:var(--text-gray);font-size:0.62rem;">Per booking</small>
+            </div>
+            <div class="field">
+              <label style="font-size:0.68rem;">Fee Split</label>
+              <select id="platformFeeSplit" onchange="autoSavePaymentSettings()" style="padding:7px;">
+                <option value="split">50/50</option>
+                <option value="venue_only">100% Venue</option>
+                <option value="artist_only">100% Artist</option>
+              </select>
+              <small style="color:var(--text-gray);font-size:0.62rem;">Who pays</small>
+            </div>
+            <div class="field">
+              <label style="font-size:0.68rem;">Min Fee ($)</label>
+              <input type="number" id="platformMinFee" min="0" max="500" step="1" placeholder="20" onblur="autoSavePaymentSettings()" onkeypress="if(event.key==='Enter'){ autoSavePaymentSettings(); this.blur(); }" style="padding:7px;">
+              <small style="color:var(--text-gray);font-size:0.62rem;">Floor per gig</small>
+            </div>
+            <div class="field">
+              <label style="font-size:0.68rem;">Payout Delay</label>
+              <input type="number" id="paymentDelayDays" min="0" max="7" step="1" placeholder="1" onblur="autoSavePaymentSettings()" onkeypress="if(event.key==='Enter'){ autoSavePaymentSettings(); this.blur(); }" style="padding:7px;">
+              <small style="color:var(--text-gray);font-size:0.62rem;">Days after gig</small>
+            </div>
+            <div class="field">
+              <label style="font-size:0.68rem;">Payout Time</label>
+              <select id="paymentProcessingHour" onchange="autoSavePaymentSettings()" style="padding:7px;">
+                <option value="9">9:00 AM</option>
+                <option value="12">12:00 PM</option>
+                <option value="15">3:00 PM</option>
+                <option value="17" selected>5:00 PM</option>
+                <option value="18">6:00 PM</option>
+                <option value="21">9:00 PM</option>
+              </select>
+              <small style="color:var(--text-gray);font-size:0.62rem;">Daily auto-payout</small>
+            </div>
+          </div>
+          <div style="background:rgba(99,91,255,0.08);border:1px solid rgba(99,91,255,0.2);border-radius:6px;padding:8px 10px;">
+            <p style="color:var(--text-gray);font-size:0.68rem;line-height:1.5;margin:0;"><strong style="color:#635bff;">Payment Flow:</strong> Venue card is charged when a gig is booked. Artist is paid the day after the gig via Stripe. GigsFill absorbs Stripe processing costs.</p>
+          </div>
+        </div>
+
+        <!-- Venue Free Trials -->
+        <div class="content-card" style="padding:12px;margin-top:8px;">
+          <div style="font-size:0.8rem;font-weight:700;color:var(--text);margin-bottom:3px;">🎟️ Venue Free Trials</div>
+          <p style="color:var(--text-gray);font-size:0.65rem;margin-bottom:10px;">Suspend automated payments for venues on a free trial.</p>
+          <div style="margin-bottom:8px;">
+            <input type="text" id="venueOverrideSearch" placeholder="Search venue by name..."
+              oninput="searchVenueOverrides(this.value, '')"
+              style="width:100%;padding:7px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;box-sizing:border-box;">
+          </div>
+          <div id="letterBar" style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:8px;"></div>
+          <div id="venueResultsInfo" style="display:none;font-size:0.65rem;color:var(--text-gray);margin-bottom:5px;padding:0 2px;"></div>
+          <div id="venueOverrideList" style="max-height:360px;overflow-y:auto;"></div>
+          <div id="showMoreRow" style="display:none;text-align:center;padding:6px 0;">
+            <button onclick="loadMoreVenues()" id="showMoreBtn" style="padding:5px 18px;background:#1e3a5f;color:var(--cyan);border:1px solid var(--cyan);border-radius:6px;cursor:pointer;font-size:0.7rem;">Show More</button>
+          </div>
+          <div id="venueOverrideEmpty" style="color:var(--text-gray);font-size:0.72rem;text-align:center;padding:14px;">Search for a venue or browse by letter.</div>
+        </div>
+
+        <div style="text-align:center;margin-top:6px;color:var(--cyan);font-weight:600;font-size:0.78rem;opacity:0;transition:opacity .3s;" id="paymentSaveIndicator">✓ Payment Settings Saved</div>
+      </div>
+
+      <!-- ── Sub-tab: Payment Accounting ── -->
+      <div class="ps-subtab-content" id="ps-accounting">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span style="font-size:0.78rem;font-weight:700;color:var(--text);">💰 Payment Accounting</span>
+          <button onclick="showAccountingExportModal()" style="padding:5px 12px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.4);border-radius:6px;color:#c4b5fd;cursor:pointer;font-size:0.72rem;font-weight:600;">📥 Export</button>
+        </div>
+        <div id="accountingSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:6px;">All transactions processed through GigsFill</div>
+        <div id="accountingTable" style="overflow-x:auto;"></div>
+        <div id="accountingPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;"></div>
+      </div>
+
+    </div>
+
+    <div class="tab-content" id="support-tab">
+      <div class="content-card" style="padding:14px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;flex:1;min-width:120px;">Help &amp; Support Tickets</div>
+          <input type="text" id="supportSearchInput" placeholder="Search tickets…" oninput="filterSupportTickets(this.value)"
+            style="padding:6px 10px;font-size:0.75rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);width:200px;">
+          <select id="supportStatusFilter" onchange="filterSupportTicketsByStatus(this.value)"
+            style="padding:6px 10px;font-size:0.75rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);">
+            <option value="all">All Statuses</option>
+            <option value="open">Open</option>
+            <option value="closed">Closed</option>
+          </select>
+          <button onclick="loadSupportTickets()" style="padding:5px 12px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.3);border-radius:5px;color:var(--cyan);font-size:0.7rem;cursor:pointer;">↺ Refresh</button>
+        </div>
+        <div id="supportTableContainer" style="min-height:200px;">
+          <p style="color:var(--text-gray);text-align:center;font-size:0.85rem;padding:40px 0;">Loading tickets…</p>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px;">
+          <button id="supportPrevBtn" onclick="supportPage(-1)" style="padding:4px 12px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text-white);font-size:0.7rem;cursor:pointer;" disabled>‹ Prev</button>
+          <span id="supportPageInfo" style="font-size:0.72rem;color:var(--text-gray);">1 / 1 (0 tickets)</span>
+          <button id="supportNextBtn" onclick="supportPage(1)" style="padding:4px 12px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text-white);font-size:0.7rem;cursor:pointer;" disabled>Next ›</button>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- EMAIL TEMPLATES TAB -->
+    <div class="tab-content" id="templates-tab">
+      <div class="content-card">
+
+        <!-- ℹ️ Template workflow info banner -->
+        <div style="background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.3); border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; display: flex; gap: 12px; align-items: flex-start;">
+          <span style="font-size: 1.25rem; flex-shrink:0;">💡</span>
+          <div>
+            <div style="font-weight: 700; color: var(--cyan); font-size: 0.875rem; margin-bottom: 4px;">How template edits are saved permanently</div>
+            <div style="color: var(--text-gray); font-size: 0.8rem; line-height: 1.6;">
+              Edit any template below and click <strong style="color:var(--text);">Save Template</strong> — changes go to the database immediately.
+              Then click <strong style="color:var(--text);">Export All</strong> to write all templates back to <code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;">backend/email_templates.py</code> on disk.
+              This ensures your edits survive server restarts (which reload from that file).
+              <strong style="color:#f59e0b;"> Always Export after editing.</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Template Editor (always visible) -->
+        <div id="templateEditor">
+          <!-- Row 1: Select Template -->
+          <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px;">
+            <label style="color: var(--text-gray); font-size: 14px; white-space: nowrap; min-width: 120px;">Select Template</label>
+            <select id="templateSelector" onchange="loadSelectedTemplate()" style="flex: 1; max-width: 400px; padding: 10px 14px; background: #151b28; border: 1px solid #333; border-radius: 6px; color: var(--text-white); font-size: 14px; cursor: pointer;">
+              <option value="">-- Choose a template --</option>
+              <optgroup label="Artist Emails">
+                <option value="artist_gig_booked">Gig Booked (to Artist)</option>
+                <option value="artist_gig_cancelled">Gig Cancelled (to Artist)</option>
+                <option value="artist_gig_edited">Gig Edited (to Artist)</option>
+                <option value="artist_booking_pending_approval">Booking Pending Approval (to Artist)</option>
+                <option value="artist_booking_approved">Booking Approved (to Artist)</option>
+                <option value="artist_booking_denied">Booking Denied (to Artist)</option>
+                <option value="artist_preferred_request">Preferred Request Sent</option>
+                <option value="artist_preferred_approved">Preferred Status Approved</option>
+                <option value="artist_preferred_denied">Preferred Status Denied</option>
+                <option value="artist_preferred_revoked">Preferred Status Revoked</option>
+                <option value="artist_payment_sent">Payment Sent (to Artist)</option>
+                <option value="artist_venue_payment_issue">Venue Payment Issue (to Artist)</option>
+                <option value="transfer_failed_artist">Transfer Failed (to Artist)</option>
+              </optgroup>
+              <optgroup label="Venue Emails">
+                <option value="venue_gig_booked">Gig Booked (to Venue)</option>
+                <option value="venue_gig_cancelled">Gig Cancelled (to Venue)</option>
+                <option value="venue_booking_approval_request">Booking Approval Request (to Venue)</option>
+                <option value="venue_contract_sign_needed">Contract Countersign Needed (to Venue)</option>
+                <option value="venue_preferred_request">Preferred Request Received</option>
+                <option value="venue_preferred_approved">Preferred Artist Approved</option>
+                <option value="venue_preferred_denied">Preferred Artist Denied</option>
+                <option value="venue_preferred_revoked">Preferred Artist Revoked</option>
+                <option value="venue_payment_charged">Payment Charged (to Venue)</option>
+                <option value="transfer_failed_venue">Transfer Failed (to Venue)</option>
+              </optgroup>
+              <optgroup label="Waitlist Emails">
+                <option value="waitlist_offer">Waitlist Offer (Gig Just Opened)</option>
+                <option value="waitlist_gig_available">Waitlist Gig Available</option>
+              </optgroup>
+              <optgroup label="Automated Gig Emails">
+                <option value="venue_gig_confirmation_reminder">Gig Confirmation Reminder</option>
+                <option value="venue_open_gig_36h">Open Gig Notice (36hr)</option>
+                <option value="venue_open_gig_4w">Open Gig Notice (4 Weeks)</option>
+                <option value="venue_open_gig_2w">Open Gig Notice (2 Weeks)</option>
+                <option value="venue_open_gig_1w">Open Gig Notice (1 Week)</option>
+                <option value="cancelled_gig_preferred_blast">Cancelled Gig — Preferred Artist Blast</option>
+                <option value="cancelled_gig_radius_blast">Cancelled Gig — 36hr Radius Blast</option>
+                <option value="new_gigs_batch_blast">New Gigs Batch Blast</option>
+              </optgroup>
+              <optgroup label="Support Emails">
+                <option value="support_ticket_received">Support Ticket Confirmation (to Artist)</option>
+                <option value="support_ticket_admin_notification">Support Ticket Alert (to Admin)</option>
+                <option value="support_ticket_reply">Support Reply (to Artist)</option>
+                <option value="support_ticket">Support Ticket Legacy (to Admin)</option>
+              </optgroup>
+              <optgroup label="Review Emails">
+                <option value="venue_review_request">Review Request (Venue → rates Artist)</option>
+                <option value="artist_review_request">Review Request (Artist → rates Venue)</option>
+              </optgroup>
+              <optgroup label="Other Emails">
+                <option value="email_verification">Email Verification</option>
+                <option value="venue_message_to_artists">Venue Message to Artists (Email Center)</option>
+                <option value="welcome">Welcome Email</option>
+                <option value="entity_invitation">Entity Invitation</option>
+                <option value="recommend_gigsfill">Recommend GigsFill</option>
+              </optgroup>
+            </select>
+          </div>
+          
+          <!-- Row 2: Variables Guide (hidden until selection) -->
+          <div id="variablesGuide" style="display: none; margin-bottom: 20px; margin-left: 136px; padding: 10px 14px; background: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: 6px;">
+            <span style="color: var(--cyan); font-weight: 600; font-size: 12px;">Variables: </span>
+            <span id="variablesList" style="color: var(--text-gray); font-size: 12px;"></span>
+          </div>
+          
+          <!-- Row 3: Subject Line + Save Button -->
+          <div id="subjectRow" style="display: none; align-items: center; gap: 16px; margin-bottom: 24px;">
+            <label style="color: var(--text-gray); font-size: 14px; white-space: nowrap; min-width: 120px;">Subject Line</label>
+            <input type="text" id="templateSubject" style="flex: 1; max-width: 400px; padding: 10px 14px; background: #151b28; border: 1px solid #333; border-radius: 6px; color: var(--text-white); font-size: 14px;">
+            <button class="btn primary" onclick="saveCurrentTemplate()" style="padding: 10px 24px; white-space: nowrap;">Save Template</button>
+            <span id="saveIndicator" style="color: var(--cyan); font-weight: 600; opacity: 0; transition: opacity 0.3s; white-space: nowrap;">✓ Saved!</span>
+            <button class="btn" onclick="exportAllTemplates()" style="padding: 10px 16px; white-space: nowrap; border: 1px solid var(--border); color: var(--text-gray); margin-left: auto;" title="Download templates as Python file for deployment">Export All</button>
+          </div>
+          
+          <!-- Rich Text Editor -->
+          <div id="editorContainer" style="display: none;">
+            <textarea id="templateBodyEditor"></textarea>
+          </div>
+        </div>
+        
+        <!-- Empty State -->
+        <div id="templateEmptyState" style="text-align: center; padding: 60px 20px; color: var(--text-gray);">
+          <div style="font-size: 48px; margin-bottom: 16px;">📧</div>
+          <p>Select a template from the dropdown above to preview and edit</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- FLYER TEMPLATES TAB -->
+    <div class="tab-content" id="flyertemplates-tab">
+      <div class="content-card">
+        <div style="margin-bottom:20px;">
+          <h2 style="margin:0 0 4px;font-size:1.1rem;color:#e2e8f0;">🎨 Flyer Templates</h2>
+          <p style="margin:0;font-size:0.8rem;color:#94a3b8;">Design the site-wide default flyer template that all venues use when no custom template is set.</p>
+        </div>
+        <div style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.3);border-radius:10px;padding:16px 20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+            <span style="font-size:1.3rem;">⭐</span>
+            <span style="font-weight:600;color:#c4b5fd;font-size:0.9rem;">Site-Wide Default Template</span>
+          </div>
+          <p style="margin:0;font-size:0.78rem;color:#94a3b8;line-height:1.5;">This template is shown to all venues that haven't set their own custom template. When you save changes in the editor using <strong style="color:#c4b5fd;">Save as Site-Wide Default Template</strong>, every venue will immediately see the updated design.</p>
+          <div id="adminFlyerThumbWrap" style="margin-top:16px;display:none;">
+            <p style="font-size:0.72rem;color:#64748b;margin:0 0 8px;">Current saved template preview:</p>
+            <img id="adminFlyerThumb" style="max-width:180px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);box-shadow:0 4px 20px rgba(0,0,0,0.4);" />
+          </div>
+          <button onclick="openAdminFlyerEditor()" style="margin-top:14px;padding:8px 18px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.5);border-radius:6px;color:#c4b5fd;cursor:pointer;font-size:0.8rem;font-weight:600;">Edit Default Template →</button>
+        </div>
+
+        <div style="margin-top:24px;">
+          <h3 style="font-size:0.85rem;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Saved Admin Templates</h3>
+          <div id="adminTemplatesList" style="display:flex;flex-direction:column;gap:8px;">
+            <div style="color:#64748b;font-size:0.8rem;text-align:center;padding:20px;">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AFFILIATES TAB -->
+    <div class="tab-content" id="affiliates-tab">
+      <div class="content-card" style="padding:0;">
+
+        <!-- Subtabs -->
+        <div class="ps-subtabs" style="padding:14px 16px 0;">
+          <button class="ps-subtab active" onclick="switchAffTab('accounting')">Affiliate Accounting</button>
+          <button class="ps-subtab" onclick="switchAffTab('settings')">Affiliate Settings</button>
+        </div>
+
+        <!-- ACCOUNTING SUBTAB -->
+        <div class="ps-subtab-content active" id="aff-accounting" style="padding:16px;">
+
+          <!-- Summary bubbles -->
+          <div class="ps-stats-row" id="affAdminStats" style="margin-bottom:16px;"></div>
+
+          <!-- Admin Actions (above table) -->
+          <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+            <div style="font-size:0.72rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Admin Actions</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+              <button onclick="adminRunAffPayouts()" style="padding:7px 14px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);border-radius:6px;color:#f59e0b;font-size:0.75rem;cursor:pointer;font-weight:600;">▶ Run Quarterly Payouts Now</button>
+              <button onclick="adminGenAffiliate1099s()" style="padding:7px 14px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.4);border-radius:6px;color:#c4b5fd;font-size:0.75rem;cursor:pointer;font-weight:600;">📋 Generate 1099s</button>
+              <span id="affActionResult" style="font-size:0.75rem;color:var(--text-gray);opacity:0;transition:opacity .3s;"></span>
+            </div>
+            <div style="margin-top:8px;font-size:0.7rem;color:var(--text-gray);line-height:1.5;"><strong style="color:var(--text);">ℹ️ Quarterly Payouts:</strong> System emails you on Apr 1, Jul 1, Oct 1, Dec 31. Click "Run Quarterly Payouts Now" after reviewing to send Stripe transfers.</div>
+            <div id="aff1099Result" style="margin-top:8px;font-size:0.75rem;display:none;"></div>
+          </div>
+
+          <!-- Manual Link Tool -->
+          <div style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.25);border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+            <div style="font-size:0.78rem;font-weight:700;color:#c4b5fd;margin-bottom:10px;">🔗 Manually Link Venue to Affiliate</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+              <div style="flex:2;min-width:180px;">
+                <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:4px;">Venue (search by name or email)</label>
+                <input type="text" id="affVenueSearch" placeholder="Search venue…" oninput="searchAffVenues(this.value)"
+                  style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+                <div id="affVenueResults" style="margin-top:4px;"></div>
+              </div>
+              <div style="flex:1;min-width:140px;">
+                <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:4px;">Affiliate Code</label>
+                <input type="text" id="affCodeInput" placeholder="AFF-XXXXXXXX"
+                  style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;text-transform:uppercase;">
+              </div>
+              <button onclick="adminManualLinkAffiliate()"
+                style="padding:7px 16px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.5);border-radius:6px;color:#c4b5fd;font-size:0.78rem;font-weight:600;cursor:pointer;white-space:nowrap;">
+                Link →
+              </button>
+              <span id="affLinkResult" style="font-size:0.75rem;color:#10b981;opacity:0;transition:opacity .3s;"></span>
+            </div>
+          </div>
+
+          <!-- Affiliates table -->
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:0.75rem;font-weight:700;color:var(--text);">Active Affiliates</span>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <div style="position:relative;">
+                <button onclick="toggleAffExportMenu()" style="padding:4px 12px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.4);border-radius:5px;color:#c4b5fd;font-size:0.7rem;cursor:pointer;font-weight:600;">📥 Export ▾</button>
+                <div id="affExportMenu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:#1a2235;border:1px solid var(--border);border-radius:6px;min-width:140px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                  <div onclick="affExport('csv')" style="padding:8px 14px;font-size:0.75rem;cursor:pointer;color:var(--text);" onmouseover="this.style.background='rgba(255,255,255,0.06)'" onmouseout="this.style.background=''">📊 Export CSV</div>
+                  <div onclick="affExport('pdf')" style="padding:8px 14px;font-size:0.75rem;cursor:pointer;color:var(--text);" onmouseover="this.style.background='rgba(255,255,255,0.06)'" onmouseout="this.style.background=''">📄 Export PDF</div>
+                </div>
+              </div>
+              <button onclick="loadAffAccounting()" style="padding:4px 12px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.3);border-radius:5px;color:var(--cyan);font-size:0.7rem;cursor:pointer;">↺ Refresh</button>
+            </div>
+          </div>
+          <div id="affAccountingTable" style="overflow-x:auto;min-height:80px;"></div>
+          <div id="affAccountingPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;"></div>
+
+
+          <!-- Detail drilldown panel -->
+          <div id="affDetailPanel" style="display:none;margin-top:16px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;padding:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+              <span id="affDetailTitle" style="font-size:0.8rem;font-weight:700;color:var(--cyan);"></span>
+              <button onclick="document.getElementById('affDetailPanel').style.display='none'"
+                style="background:none;border:none;color:var(--text-gray);cursor:pointer;font-size:1rem;">✕</button>
+            </div>
+            <div id="affDetailContent"></div>
+          </div>
+        </div>
+
+        <!-- SETTINGS SUBTAB -->
+        <div class="ps-subtab-content" id="aff-settings" style="padding:16px;">
+          <div style="max-width:520px;">
+
+            <div style="margin-bottom:20px;">
+              <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Program Toggle</div>
+              <div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+                <span style="font-size:0.78rem;color:var(--text-gray);flex:1;">Enable Affiliate Program</span>
+                <span id="affEnabledLabel" style="font-size:0.72rem;font-weight:600;color:#ef4444;">OFF</span>
+                <div style="position:relative;width:40px;height:24px;">
+                  <input type="checkbox" id="affEnabled" onchange="toggleAffEnabled()" style="opacity:0;width:0;height:0;position:absolute;">
+                  <div id="affEnabledTrack" onclick="document.getElementById('affEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:12px;cursor:pointer;transition:background .3s;"></div>
+                  <div id="affEnabledThumb" onclick="document.getElementById('affEnabled').click()" style="position:absolute;top:3px;left:3px;width:18px;height:18px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-bottom:20px;">
+              <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Payout Rates</div>
+              <div style="display:flex;flex-direction:column;gap:10px;">
+                <div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+                  <span style="font-size:0.78rem;color:var(--text-gray);flex:1;">Initial Rate (%)</span>
+                  <input type="number" id="affRatePercent" step="0.1" min="0" max="10" placeholder="1.0" onblur="saveAffSettings()"
+                    style="width:80px;padding:5px 8px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text-white);text-align:right;">
+                </div>
+                <div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+                  <span style="font-size:0.78rem;color:var(--text-gray);flex:1;">Reduced Rate After Cutoff (%)</span>
+                  <input type="number" id="affReducedRate" step="0.1" min="0" max="10" placeholder="0.5" onblur="saveAffSettings()"
+                    style="width:80px;padding:5px 8px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text-white);text-align:right;">
+                </div>
+                <div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+                  <span style="font-size:0.78rem;color:var(--text-gray);flex:1;">Days Until Rate Reduces</span>
+                  <input type="number" id="affReducedDays" step="1" min="1" placeholder="365" onblur="saveAffSettings()"
+                    style="width:80px;padding:5px 8px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text-white);text-align:right;">
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-bottom:20px;">
+              <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">Payout Thresholds</div>
+              <div style="display:flex;flex-direction:column;gap:10px;">
+                <div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+                  <span style="font-size:0.78rem;color:var(--text-gray);flex:1;">Minimum Quarterly Payout ($)</span>
+                  <input type="number" id="affMinPayout" step="1" min="0" placeholder="50" onblur="saveAffSettings()"
+                    style="width:80px;padding:5px 8px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text-white);text-align:right;">
+                </div>
+                <div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+                  <span style="font-size:0.78rem;color:var(--text-gray);flex:1;">1099 Annual Threshold ($)</span>
+                  <input type="number" id="aff1099Threshold" step="1" min="0" placeholder="600" onblur="saveAffSettings()"
+                    style="width:80px;padding:5px 8px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text-white);text-align:right;">
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;">
+              <span id="affSettingsSaved" style="font-size:0.75rem;color:#10b981;opacity:0;transition:opacity .3s;">✓ Saved</span>
+            </div>
+
+            <div style="margin-top:20px;padding:12px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+              <div style="font-size:0.72rem;color:var(--text-gray);line-height:1.6;">
+                <strong style="color:var(--text);">Payout Schedule:</strong> Apr 1 · Jul 1 · Oct 1 · Dec 31 (9:00 AM server time)<br>
+                <strong style="color:var(--text);">Rate applies to:</strong> Venue's gross gig fee only (not the GigsFill platform fee)<br>
+                <strong style="color:var(--text);">1099 threshold:</strong> Affiliates earning over the threshold in a calendar year receive a 1099
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ANALYTICS TAB -->
+    <div class="tab-content" id="analytics-tab">
+
+      <!-- Header row -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div>
+          <span style="font-size:1rem;font-weight:700;color:var(--text);">📊 Site Analytics</span>
+          <span style="font-size:0.7rem;color:var(--text-gray);margin-left:10px;" id="analyticsLastUpdated"></span>
+        </div>
+        <button onclick="loadAnalytics()" style="padding:5px 14px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.3);border-radius:6px;color:var(--cyan);font-size:0.72rem;cursor:pointer;">↺ Refresh</button>
+      </div>
+
+      <!-- ── Section: Platform Overview ── -->
+      <div style="font-size:0.65rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Platform Overview</div>
+      <div class="ps-stats-row" style="margin-bottom:16px;">
+        <div class="ps-stat" onclick="showAnalyticsDetail('users')"><span class="ps-stat-val" id="an-total-users">—</span><span class="ps-stat-lbl">Total Users</span></div>
+        <div class="ps-stat" onclick="showAnalyticsDetail('artists')"><span class="ps-stat-val" id="an-total-artists">—</span><span class="ps-stat-lbl">Artists</span></div>
+        <div class="ps-stat" onclick="showAnalyticsDetail('venues')"><span class="ps-stat-val" id="an-total-venues">—</span><span class="ps-stat-lbl">Venues</span></div>
+        <div class="ps-stat" onclick="showAnalyticsDetail('gigs')"><span class="ps-stat-val" id="an-total-gigs">—</span><span class="ps-stat-lbl">Total Gigs</span></div>
+        <div class="ps-stat" onclick="showAnalyticsDetail('booked')"><span class="ps-stat-val" id="an-booked-gigs">—</span><span class="ps-stat-lbl">Booked</span></div>
+        <div class="ps-stat" onclick="showAnalyticsDetail('open')"><span class="ps-stat-val" id="an-open-gigs">—</span><span class="ps-stat-lbl">Open</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-upcoming-gigs">—</span><span class="ps-stat-lbl">Upcoming</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-past-gigs">—</span><span class="ps-stat-lbl">Played</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-cancelled-gigs">—</span><span class="ps-stat-lbl">Cancelled</span></div>
+      </div>
+
+      <!-- ── Section: Growth (7d) ── -->
+      <div style="font-size:0.65rem;font-weight:700;color:#10b981;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Growth — Last 7 Days</div>
+      <div class="ps-stats-row" style="margin-bottom:16px;">
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);" onclick="showAnalyticsDetail('new_users')"><span class="ps-stat-val" style="color:#10b981;" id="an-new-users-7d">—</span><span class="ps-stat-lbl">New Users</span></div>
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);" onclick="showAnalyticsDetail('new_artists')"><span class="ps-stat-val" style="color:#10b981;" id="an-new-artists-7d">—</span><span class="ps-stat-lbl">New Artists</span></div>
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);" onclick="showAnalyticsDetail('new_venues')"><span class="ps-stat-val" style="color:#10b981;" id="an-new-venues-7d">—</span><span class="ps-stat-lbl">New Venues</span></div>
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);"><span class="ps-stat-val" style="color:#10b981;" id="an-new-gigs-7d">—</span><span class="ps-stat-lbl">New Gigs</span></div>
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);"><span class="ps-stat-val" style="color:#10b981;" id="an-bookings-7d">—</span><span class="ps-stat-lbl">Bookings</span></div>
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);"><span class="ps-stat-val" style="color:#10b981;" id="an-new-users-30d">—</span><span class="ps-stat-lbl">Users (30d)</span></div>
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);"><span class="ps-stat-val" style="color:#10b981;" id="an-new-gigs-30d">—</span><span class="ps-stat-lbl">Gigs (30d)</span></div>
+        <div class="ps-stat" style="border-color:rgba(16,185,129,0.25);background:rgba(16,185,129,0.06);"><span class="ps-stat-val" style="color:#10b981;" id="an-bookings-30d">—</span><span class="ps-stat-lbl">Bookings (30d)</span></div>
+      </div>
+
+      <!-- ── Section: Revenue ── -->
+      <div style="font-size:0.65rem;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Revenue &amp; Payments</div>
+      <div class="ps-stats-row" style="margin-bottom:16px;">
+        <div class="ps-stat" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.06);"><span class="ps-stat-val" style="color:#f59e0b;" id="an-total-revenue">—</span><span class="ps-stat-lbl">Total Charged</span></div>
+        <div class="ps-stat" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.06);"><span class="ps-stat-val" style="color:#f59e0b;" id="an-total-commission">—</span><span class="ps-stat-lbl">Commission</span></div>
+        <div class="ps-stat" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.06);"><span class="ps-stat-val" style="color:#f59e0b;" id="an-total-payouts">—</span><span class="ps-stat-lbl">Artist Payouts</span></div>
+        <div class="ps-stat" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.06);"><span class="ps-stat-val" style="color:#f59e0b;" id="an-revenue-30d">—</span><span class="ps-stat-lbl">Revenue (30d)</span></div>
+        <div class="ps-stat" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.06);"><span class="ps-stat-val" style="color:#f59e0b;" id="an-revenue-7d">—</span><span class="ps-stat-lbl">Revenue (7d)</span></div>
+        <div class="ps-stat" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.06);"><span class="ps-stat-val" style="color:#f59e0b;" id="an-total-transactions">—</span><span class="ps-stat-lbl">Completed Txns</span></div>
+        <div class="ps-stat" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.06);"><span class="ps-stat-val" style="color:#f59e0b;" id="an-pending-payments">—</span><span class="ps-stat-lbl">Pending $</span></div>
+        <div class="ps-stat" style="border-color:rgba(239,68,68,0.25);background:rgba(239,68,68,0.05);"><span class="ps-stat-val" style="color:#f87171;" id="an-failed-payments">—</span><span class="ps-stat-lbl">Failed Pymnts</span></div>
+      </div>
+
+      <!-- ── Section: Engagement ── -->
+      <div style="font-size:0.65rem;font-weight:700;color:#8b5cf6;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Engagement</div>
+      <div class="ps-stats-row" style="margin-bottom:16px;">
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-total-contracts">—</span><span class="ps-stat-lbl">Contracts</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-signed-contracts">—</span><span class="ps-stat-lbl">Signed</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-pending-contracts">—</span><span class="ps-stat-lbl">Pending Sign</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-preferred-pairs">—</span><span class="ps-stat-lbl">Preferred Pairs</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-active-waitlist">—</span><span class="ps-stat-lbl">On Waitlist</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);" onclick="switchTab('support')"><span class="ps-stat-val" style="color:#a78bfa;" id="an-open-tickets">—</span><span class="ps-stat-lbl">Open Tickets</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-tickets-7d">—</span><span class="ps-stat-lbl">Tickets (7d)</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-pending-preferred">—</span><span class="ps-stat-lbl">Pref Pending</span></div>
+      </div>
+
+      <!-- ── Section: Public Traffic ── -->
+      <div style="font-size:0.65rem;font-weight:700;color:#06b6d4;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Public Traffic</div>
+      <div class="ps-stats-row" style="margin-bottom:16px;">
+        <div class="ps-stat"><span class="ps-stat-val" id="an-unique-visitors">—</span><span class="ps-stat-lbl">Unique Visitors</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-activity-24h">—</span><span class="ps-stat-lbl">Events (24h)</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-activity-7d">—</span><span class="ps-stat-lbl">Events (7d)</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-activity-30d">—</span><span class="ps-stat-lbl">Events (30d)</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-gig-clicks">—</span><span class="ps-stat-lbl">Gig Clicks</span></div>
+        <div class="ps-stat"><span class="ps-stat-val" id="an-gig-clicks-7d">—</span><span class="ps-stat-lbl">Clicks (7d)</span></div>
+      </div>
+
+      <!-- ── Bottom grid: lists ── -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">
+
+        <!-- Recent Bookings -->
+        <div class="content-card" style="padding:14px;margin-bottom:0;">
+          <div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:10px;">🎤 Recent Bookings</div>
+          <div id="an-recent-bookings" style="font-size:0.72rem;"></div>
+        </div>
+
+        <!-- Top Artists -->
+        <div class="content-card" style="padding:14px;margin-bottom:0;">
+          <div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:10px;">⭐ Most Booked Artists</div>
+          <div id="an-top-artists" style="font-size:0.72rem;"></div>
+        </div>
+
+        <!-- Top Venues -->
+        <div class="content-card" style="padding:14px;margin-bottom:0;">
+          <div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:10px;">🏛️ Most Active Venues</div>
+          <div id="an-top-venues" style="font-size:0.72rem;"></div>
+        </div>
+
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">
+
+        <!-- Recent Signups -->
+        <div class="content-card" style="padding:14px;margin-bottom:0;">
+          <div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:10px;">👤 Recent Sign-Ups</div>
+          <div id="an-recent-signups" style="font-size:0.72rem;"></div>
+        </div>
+
+        <!-- Top Cities -->
+        <div class="content-card" style="padding:14px;margin-bottom:0;">
+          <div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:10px;">📍 Top Cities (30d)</div>
+          <div id="an-top-cities" style="font-size:0.72rem;"></div>
+        </div>
+
+        <!-- Traffic Event Types -->
+        <div class="content-card" style="padding:14px;margin-bottom:0;">
+          <div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:10px;">🌐 Traffic Events</div>
+          <div id="an-events-by-type" style="font-size:0.72rem;"></div>
+        </div>
+
+      </div>
+
+      <!-- Revenue by Month -->
+      <div class="content-card" style="padding:14px;">
+        <div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:10px;">💰 Revenue by Month — <span id="an-revenue-year" style="color:var(--cyan);"></span></div>
+        <div id="an-revenue-chart" style="display:flex;gap:2px;"></div>
+        <div id="an-revenue-labels" style="display:none;"></div>
+      </div>
+
+    </div>
+
+    <!-- ACCOUNTING TAB -->
+
+
+    <!-- LOGS TAB -->
+    <div class="tab-content" id="logs-tab">
+      <div class="content-card">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="font-size:1rem;color:var(--text);margin:0;">🪵 Application Logs</h2>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Live view of server-side log output — most recent first</span>
+        </div>
+
+        <div class="logs-toolbar">
+          <!-- Level filter -->
+          <select id="logsLevelFilter" onchange="fetchLogs(true)">
+            <option value="ALL">All Levels</option>
+            <option value="CRITICAL">🔴 CRITICAL</option>
+            <option value="ERROR">🟠 ERROR</option>
+            <option value="WARNING">🟡 WARNING</option>
+            <option value="INFO">⚪ INFO</option>
+            <option value="DEBUG">🔵 DEBUG</option>
+          </select>
+
+          <!-- Search -->
+          <input type="text" id="logsSearch" placeholder="Search logs…" onkeydown="if(event.key==='Enter')fetchLogs(true)">
+
+          <!-- Buttons -->
+          <button class="log-action-btn" id="logsRefreshBtn" onclick="fetchLogs(true)">⟳ Refresh</button>
+          <button class="log-action-btn" id="logsAutoRefreshBtn" onclick="toggleLogsAutoRefresh()">▶ Auto-Refresh</button>
+          <button class="log-action-btn" id="logsCopyBtn" onclick="copyLogs()">📋 Copy</button>
+          <button class="log-action-btn" onclick="clearLogBuffer()" style="color:#f87171;border-color:rgba(239,68,68,0.3);">🗑 Clear Buffer</button>
+        </div>
+
+        <!-- Level legend -->
+        <div style="display:flex;gap:16px;margin-bottom:10px;font-size:0.72rem;">
+          <span class="log-critical" style="padding:1px 6px;border-radius:3px;">CRITICAL</span>
+          <span class="log-error" style="padding:1px 6px;">ERROR</span>
+          <span class="log-warn" style="padding:1px 6px;">WARNING</span>
+          <span class="log-info" style="padding:1px 6px;">INFO</span>
+          <span class="log-debug" style="padding:1px 6px;">DEBUG</span>
+        </div>
+
+        <!-- Log output -->
+        <div id="logsOutput">
+          <div style="color:var(--text-gray);text-align:center;padding:40px;font-size:0.85rem;">Click Refresh or switch to this tab to load logs.</div>
+        </div>
+
+        <!-- Pagination -->
+        <div class="logs-pagination">
+          <div style="display:flex;gap:8px;">
+            <button id="logsPrevBtn" onclick="logsChangePage(-1)" disabled>← Prev</button>
+            <button id="logsNextBtn" onclick="logsChangePage(1)" disabled>Next →</button>
+          </div>
+          <span id="logsPageInfo" style="color:var(--text-gray);">—</span>
+        </div>
+      </div>
+
+      <!-- Tips card -->
+      <div class="content-card" style="margin-top:12px;padding:14px 18px;background:rgba(139,92,246,0.06);border-color:rgba(139,92,246,0.2);">
+        <div style="font-size:0.8rem;color:#c4b5fd;font-weight:600;margin-bottom:6px;">💡 Log Tips</div>
+        <ul style="font-size:0.75rem;color:var(--text-gray);line-height:1.7;padding-left:18px;margin:0;">
+          <li>Logs are stored in an <strong style="color:var(--text);">in-memory ring buffer</strong> (last 2,000 lines). They reset on server restart.</li>
+          <li>Use <strong style="color:var(--text);">Auto-Refresh</strong> to watch logs live as users interact with the platform.</li>
+          <li>Filter by <strong style="color:#f87171;">ERROR</strong> or <strong style="color:#f87171;">CRITICAL</strong> first when diagnosing problems.</li>
+          <li>Search by email, venue name, artist name, or endpoint path to trace a specific user's actions.</li>
+          <li>For persistent log storage, set <code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;">GIGSFILL_LOG_FILE=/var/log/gigsfill.log</code> on your server.</li>
+        </ul>
+      </div>
+    </div>
+
+
+    <!-- DATABASE TAB -->
+    <div class="tab-content" id="database-tab">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <div>
+          <h2 style="font-size:1rem;color:var(--text);margin:0 0 2px;">🗄️ Database Browser</h2>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Browse, search, edit, and export every table in the SQLite database</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="font-size:0.7rem;color:#f87171;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:4px;padding:3px 8px;">⚠ Edits are immediate — no undo</span>
+          <button class="db-action-btn cyan" onclick="dbExportCsv()">📥 Export CSV</button>
+          <button class="db-action-btn" onclick="dbRefresh()">⟳ Refresh</button>
+        </div>
+      </div>
+
+      <div class="db-layout">
+        <!-- Sidebar: table list -->
+        <div class="db-sidebar">
+          <div class="db-sidebar-header">Tables</div>
+          <div id="dbTableList">
+            <div style="padding:20px;text-align:center;color:var(--text-gray);font-size:0.8rem;">Loading…</div>
+          </div>
+        </div>
+
+        <!-- Main area -->
+        <div class="db-main">
+          <!-- Table header -->
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+            <span id="dbActiveTableTitle" style="font-size:1rem;font-weight:700;color:var(--cyan);">—</span>
+            <span id="dbActiveTableSub" style="font-size:0.75rem;color:var(--text-gray);"></span>
+          </div>
+
+          <!-- Toolbar: search + controls -->
+          <div class="db-main-toolbar">
+            <input type="text" class="db-search-input" id="dbSearch"
+                   placeholder="Search text columns…"
+                   onkeydown="dbSearchKeydown(event)">
+            <button class="db-action-btn" onclick="dbDoSearch()">🔍 Search</button>
+            <button class="db-action-btn" onclick="document.getElementById('dbSearch').value='';dbDoSearch()">✕ Clear</button>
+          </div>
+
+          <!-- Table output -->
+          <div style="overflow-x:auto;">
+            <div id="dbTableContainer">
+              <div style="color:var(--text-gray);text-align:center;padding:40px;font-size:0.85rem;">Select a table from the left to begin browsing.</div>
+            </div>
+          </div>
+
+          <!-- Pagination -->
+          <div class="db-pagination">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button id="dbPrevBtn" onclick="dbChangePage(-1)" disabled>← Prev</button>
+              <button id="dbNextBtn" onclick="dbChangePage(1)" disabled>Next →</button>
+              <label style="font-size:0.78rem;color:var(--text-gray);">
+                Rows:
+                <select onchange="dbChangePageSize(this)" id="dbPageSize">
+                  <option value="25">25</option>
+                  <option value="50" selected>50</option>
+                  <option value="100">100</option>
+                  <option value="250">250</option>
+                </select>
+              </label>
+            </div>
+            <span id="dbPageInfo" style="font-size:0.78rem;color:var(--text-gray);">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Protected tables notice -->
+      <div class="content-card" style="margin-top:12px;padding:12px 18px;background:rgba(239,68,68,0.05);border-color:rgba(239,68,68,0.2);">
+        <div style="font-size:0.78rem;color:#f87171;font-weight:600;margin-bottom:4px;">🔒 Protected Tables</div>
+        <p style="font-size:0.75rem;color:var(--text-gray);margin:0;">
+          <strong style="color:var(--text);">users</strong> and <strong style="color:var(--text);">platform_settings</strong> are read-only in this browser.
+          Direct row deletion and insertion are blocked to prevent accidental account loss.
+          Use the dedicated admin UI panels for those operations.
+        </p>
+      </div>
+    </div>
+
+
+    <!-- Accounting Export Modal -->
+    <div id="accountingExportModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:400px;width:90%;">
+        <h3 style="color:var(--cyan);margin-bottom:16px;">Export Accounting Data</h3>
+        <div style="margin-bottom:12px;">
+          <label style="font-size:0.8rem;color:var(--text-gray);">Date Range</label>
+          <select id="acctExportRange" onchange="toggleAcctCustomRange()" style="width:100%;padding:6px 8px;margin-top:4px;">
+            <option value="all">All Time</option>
+            <option value="ytd">Year to Date</option>
+            <option value="last_month">Last Month</option>
+            <option value="last_quarter">Last Quarter</option>
+            <option value="custom">Custom Range</option>
+          </select>
+        </div>
+        <div id="acctCustomRangeDiv" style="display:none;margin-bottom:12px;">
+          <div style="display:flex;gap:8px;">
+            <div style="flex:1;"><label style="font-size:0.7rem;color:var(--text-gray);">From</label><input type="date" id="acctExportFrom" style="width:100%;padding:5px;margin-top:2px;"></div>
+            <div style="flex:1;"><label style="font-size:0.7rem;color:var(--text-gray);">To</label><input type="date" id="acctExportTo" style="width:100%;padding:5px;margin-top:2px;"></div>
+          </div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="font-size:0.8rem;color:var(--text-gray);">Format</label>
+          <div style="display:flex;gap:16px;margin-top:6px;">
+            <label style="font-size:0.8rem;color:var(--text-white);cursor:pointer;"><input type="radio" name="acctExportFmt" value="excel" checked> CSV / Excel</label>
+            <label style="font-size:0.8rem;color:var(--text-white);cursor:pointer;"><input type="radio" name="acctExportFmt" value="print"> Print View</label>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="closeAccountingExportModal()" style="padding:6px 16px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:var(--text-gray);cursor:pointer;font-size:0.8rem;">Cancel</button>
+          <button onclick="executeAccountingExport();closeAccountingExportModal()" style="padding:6px 16px;background:rgba(139,92,246,0.8);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:0.8rem;font-weight:600;">Export</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<footer>
+  © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+</footer>
+
+  <!-- TinyMCE Rich Text Editor -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tinymce/6.8.2/tinymce.min.js" referrerpolicy="no-referrer"></script>
+  
+  <script src="/app/static/js/modals.js"></script>
+  <script src="/app/static/js/flyer-editor.js?v=3" defer></script>
+
+<script>
+function openAdminFlyerEditor() {
+  if (window.flyerEditor) {
+    window.flyerEditor.open(0, 0);
+  }
+}
+
+async function loadAdminFlyerTemplates() {
+  const list = document.getElementById('adminTemplatesList');
+  const thumbWrap = document.getElementById('adminFlyerThumbWrap');
+  const thumb = document.getElementById('adminFlyerThumb');
+  if (!list) return;
+  try {
+    const r = await fetch('/api/admin/flyers/templates', {credentials:'include'});
+    if (!r.ok) { list.innerHTML = '<div style="color:#ef4444;font-size:0.8rem;">Error loading templates</div>'; return; }
+    const templates = await r.json();
+    if (!templates.length) { list.innerHTML = '<div style="color:#64748b;font-size:0.8rem;text-align:center;padding:20px;">No templates saved yet. Open the editor to create one.</div>'; return; }
+    // Show thumbnail for Default Template
+    const def = templates.find(t => t.name.toLowerCase() === 'default template');
+    if (def && def.thumbnail_data) {
+      thumbWrap.style.display = '';
+      thumb.src = def.thumbnail_data;
+    }
+    list.innerHTML = templates.map(t => `
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;">
+        ${t.thumbnail_data ? `<img src="${t.thumbnail_data}" style="width:48px;height:60px;object-fit:cover;border-radius:4px;flex-shrink:0;border:1px solid rgba(255,255,255,0.1);">` : '<div style="width:48px;height:60px;background:rgba(255,255,255,0.05);border-radius:4px;flex-shrink:0;"></div>'}
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;font-size:0.82rem;color:#e2e8f0;${t.name.toLowerCase()==='default template'?'color:#c4b5fd;':''}">${t.name.toLowerCase()==='default template'?'⭐ ':''} ${t.name}</div>
+          <div style="font-size:0.7rem;color:#64748b;margin-top:2px;">${t.size_preset||'instagram_post'} · Updated ${new Date(t.updated_at).toLocaleDateString()}</div>
+        </div>
+        <button onclick="loadAdminTemplateInEditor(${t.id})" style="padding:5px 12px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.4);border-radius:6px;color:#c4b5fd;cursor:pointer;font-size:0.75rem;">Edit</button>
+        ${t.name.toLowerCase()!=='default template' ? `<button onclick="confirmDeleteAdminTemplate(${t.id},'${t.name.replace(/'/g,"\\'")}')" style="padding:5px 10px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:#f87171;cursor:pointer;font-size:0.75rem;">Delete</button>` : ''}
+      </div>
+    `).join('');
+  } catch(e) { list.innerHTML = '<div style="color:#ef4444;font-size:0.8rem;">Error: '+e.message+'</div>'; }
+}
+
+async function loadAdminTemplateInEditor(id) {
+  if (!window.flyerEditor) return;
+  // Open editor in admin mode, then load specific template
+  window.flyerEditor.open(0, 0);
+  // Wait for editor to init, then load template
+  setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/admin/flyers/templates/${id}`, {credentials:'include'});
+      if (r.ok) {
+        const tpl = await r.json();
+        // Use the editor's onTemplateSelect to load it
+        window.flyerEditor.onTemplateSelect(String(id));
+      }
+    } catch(e) {}
+  }, 800);
+}
+
+async function confirmDeleteAdminTemplate(id, name) {
+  window._adminConfirm({
+    title: '🗑 Delete Template',
+    titleColor: '#ef4444',
+    body: 'Delete template <strong style="color:var(--text-white);">' + name + '</strong>?<br><br>This cannot be undone.',
+    cancelLabel: 'Cancel',
+    confirmLabel: 'Delete Template',
+    confirmColor: 'rgba(239,68,68,0.25)',
+    onConfirm: async function() {
+      try {
+        const r = await fetch('/api/admin/flyers/templates/' + id, {method:'DELETE', credentials:'include'});
+        if (r.ok) loadAdminFlyerTemplates();
+        else window._adminToast('Delete failed: ' + await r.text(), 'rgba(239,68,68,0.8)');
+      } catch(e) { window._adminToast('Error: ' + e.message, 'rgba(239,68,68,0.8)'); }
+    }
+  });
+}
+
+function switchPsTab(tab) {
+  document.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.ps-subtab-content').forEach(c => c.classList.remove('active'));
+  const btn = document.querySelector('.ps-subtab[onclick*="' + tab + '"]');
+  if (btn) btn.classList.add('active');
+  const panel = document.getElementById('ps-' + tab);
+  if (panel) panel.classList.add('active');
+  if (tab === 'accounting') { typeof loadAccounting === 'function' && loadAccounting(); }
+  if (tab === 'payment') {
+    typeof loadPaymentSettings === 'function' && loadPaymentSettings();
+    typeof loadVenuePaymentOverrides === 'function' && loadVenuePaymentOverrides();
+  }
+  if (tab === 'email') { typeof loadEmailSettings === 'function' && loadEmailSettings(); }
+}
+</script>
+<script src="/app/static/js/admin-logs.js"></script>
+<script src="/app/static/js/admin-db.js"></script>
+<script src="/app/static/js/admin-platform.js"></script>
+<script src="/app/static/js/admin-templates.js"></script>
+<script src="/app/static/js/admin-affiliate.js"></script>
+<script src="/app/static/js/admin-init.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
+
+<script>
+// ── Single consolidated switchTab override (runs after all scripts loaded) ──
+document.addEventListener('DOMContentLoaded', function() {
+  window.switchTab = function(tab) {
+    // Update tab buttons
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    const btn = document.querySelector('[onclick*="' + tab + '"].tab') ||
+                document.querySelector('.tab[onclick*="' + tab + '"]');
+    if (btn) btn.classList.add('active');
+
+    // Update tab panels
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    const panel = document.getElementById(tab + '-tab');
+    if (panel) panel.classList.add('active');
+
+    // Stop logs auto-refresh when leaving
+    if (typeof stopLogsAutoRefresh === 'function') stopLogsAutoRefresh();
+
+    // Tab-specific loaders
+    if (tab === 'support')       { typeof loadSupportTickets === 'function'    && loadSupportTickets(); }
+    if (tab === 'templates')     { typeof loadEmailTemplates === 'function'     && loadEmailTemplates(); }
+    if (tab === 'flyertemplates'){ typeof loadAdminFlyerTemplates === 'function' && loadAdminFlyerTemplates(); }
+    if (tab === 'analytics')     { typeof loadAnalytics === 'function'          && loadAnalytics(); }
+    if (tab === 'logs')          { typeof fetchLogs === 'function'              && fetchLogs(true); }
+    if (tab === 'database')      { typeof initDbTab === 'function'              && initDbTab(); }
+    if (tab === 'affiliates')    { typeof loadAffiliatesTab === 'function'      && loadAffiliatesTab(); }
+    if (tab === 'platform')      { typeof loadEmailSettings === 'function'      && loadEmailSettings(); }
+  };
+});
+</script>
+
+<!-- Affiliate 1099 Confirm Modal -->
+<div id="aff1099Modal" class="modal hidden" style="">
+  <div class="modal-content" style="max-width:460px;">
+    <div class="modal-header">
+      <h3>Generate Affiliate 1099s</h3>
+      <button class="modal-close" onclick="document.getElementById('aff1099Modal').classList.add('hidden')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:0.85rem;color:var(--text-gray);line-height:1.6;margin:0 0 12px;">
+        This will identify all affiliates who earned over the
+        <strong style="color:var(--text);">1099 threshold</strong> in calendar year
+        <strong id="aff1099ModalYear" style="color:var(--text);"></strong>.
+      </p>
+      <p style="font-size:0.82rem;color:var(--text-gray);line-height:1.6;margin:0;">
+        No emails are sent automatically — you'll see a list of qualifying affiliates
+        so you can file 1099-NECs with the IRS directly.
+      </p>
+    </div>
+    <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:10px;padding:16px 24px;border-top:1px solid var(--border);">
+      <button onclick="document.getElementById('aff1099Modal').classList.add('hidden')"
+        style="padding:8px 18px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-gray);font-size:0.8rem;cursor:pointer;">
+        Cancel
+      </button>
+      <button onclick="confirmGenAffiliate1099s()"
+        style="padding:8px 20px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.5);border-radius:6px;color:#c4b5fd;font-size:0.8rem;font-weight:600;cursor:pointer;">
+        Generate 1099s
+      </button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
