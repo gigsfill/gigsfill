@@ -1170,9 +1170,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       const _isMulti = _slots.length > 1;
       const _bookedSlots = _slots.filter(s => s.artist_id && (s.status === 'booked' || s.status === 'pending_contract'));
       const _openCount = _slots.filter(s => s.status === 'open').length;
+      // Escape aName before innerHTML injection — protects against malicious
+      // registered names. esc() comes from security.js loaded on this page.
       const _renderArtistLink = (aId, aName) => aId
-        ? `<a href="/app/artist-profile.html?artist_id=${aId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor || '#fff'};text-decoration:underline;font-weight:600;">${aName}</a>`
-        : `<span style="font-weight:600;">${aName}</span>`;
+        ? `<a href="/app/artist-profile.html?artist_id=${aId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor || '#fff'};text-decoration:underline;font-weight:600;">${esc(aName)}</a>`
+        : `<span style="font-weight:600;">${esc(aName)}</span>`;
 
       if (_isMulti && _bookedSlots.length > 0) {
         const _names = _bookedSlots.map(s => _renderArtistLink(s.artist_id, s.artist_name || 'Booked')).join(', ');
@@ -1218,16 +1220,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         >
           <div>${({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'}[g.artist_type] || '🎵') + ' '}${formatTime12Hour(displayStartTime)}${displayEndTime ? ' \u2013 ' + formatTime12Hour(displayEndTime) : ''}</div>
 
-          <div style="overflow:hidden;text-overflow:ellipsis;">${g.venue_name}</div>
+          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.venue_name)}</div>
 
-          <div style="overflow:hidden;text-overflow:ellipsis;">${g.city || ''}${g.state ? ', ' + g.state : ''}</div>
+          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.city || '')}${g.state ? ', ' + esc(g.state) : ''}</div>
 
           <div style="overflow:hidden;text-overflow:ellipsis;">${artistDisplay}</div>
 
           <div>${payDisplay}</div>
 
           <div style="overflow:hidden;text-overflow:ellipsis;">
-            ${g.artist_type || 'Any'}${g.artist_type === 'Live Band' && g.band_formats ? ' • ' + g.band_formats.split(',').map(f => f.trim()).join(', ') : ''}${g.artist_type === 'Live Band' && g.styles ? ' • ' + g.styles.split(',').map(s => s.trim()).join(', ') : ''}
+            ${esc(g.artist_type || 'Any')}${g.artist_type === 'Live Band' && g.band_formats ? ' • ' + esc(g.band_formats.split(',').map(f => f.trim()).join(', ')) : ''}${g.artist_type === 'Live Band' && g.styles ? ' • ' + esc(g.styles.split(',').map(s => s.trim()).join(', ')) : ''}
           </div>
         </div>
       `;

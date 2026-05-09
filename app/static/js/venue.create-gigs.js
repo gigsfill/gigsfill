@@ -1147,9 +1147,12 @@ async function renderCalendar() {
         s.status === 'booked' || s.status === 'pending_contract' || s.status === 'pending_venue_approval'
       ));
       const _openCount = _slots.filter(s => s.status === 'open').length;
+      // Escape aName: registered-user data going into innerHTML. Without
+      // escaping, a malicious artist name like `<img src=x onerror=...>`
+      // executes in the venue's browser when the day-list renders.
       const _renderArtistLink = (aId, aName) => aId
-        ? `<a href="/app/artist-profile.html?artist_id=${aId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">${aName}</a>`
-        : `<span style="font-weight:600;">${aName}</span>`;
+        ? `<a href="/app/artist-profile.html?artist_id=${aId}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">${esc(aName)}</a>`
+        : `<span style="font-weight:600;">${esc(aName)}</span>`;
 
       let artistDisplay = '';
       if (_isMulti && _bookedSlots.length > 0) {
@@ -1168,7 +1171,7 @@ async function renderCalendar() {
         if (aName && aId) {
           artistDisplay = _renderArtistLink(aId, aName);
         } else if (aName) {
-          artistDisplay = `<span style="font-weight:600;">${aName}</span>`;
+          artistDisplay = `<span style="font-weight:600;">${esc(aName)}</span>`;
         } else {
           artistDisplay = `<span style="opacity:0.75;">Booked</span>`;
         }
@@ -1183,11 +1186,11 @@ async function renderCalendar() {
         artistTypeDisplay += ' \u2022 ' + g.band_formats.split(',').map(f => f.trim()).join(', ');
 
       return `<div onclick="window._venueOpenGigFromDay(${g.id})" style="display:grid;grid-template-columns:130px minmax(130px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(150px,1.5fr);column-gap:12px;align-items:center;padding:6px 10px;margin:0;border:1px solid ${gigBorder};border-radius:6px;background:${gigBg};color:${gigTextColor};font-weight:700;white-space:nowrap;cursor:pointer;line-height:1.3;">
-        <div>${icon} ${time}</div>
-        <div style="overflow:hidden;text-overflow:ellipsis;">${g.venue_name || ''}</div>
-        <div style="overflow:hidden;text-overflow:ellipsis;">${g.city || ''}${g.state ? ', ' + g.state : ''}</div>
+        <div>${icon} ${esc(time)}</div>
+        <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.venue_name || '')}</div>
+        <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.city || '')}${g.state ? ', ' + esc(g.state) : ''}</div>
         <div style="overflow:hidden;text-overflow:ellipsis;">${artistDisplay}</div>
-        <div style="overflow:hidden;text-overflow:ellipsis;">${artistTypeDisplay}</div>
+        <div style="overflow:hidden;text-overflow:ellipsis;">${esc(artistTypeDisplay)}</div>
       </div>`;
     }).join('');
 
