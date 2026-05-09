@@ -1244,6 +1244,9 @@ def get_my_venue_earnings(
         "SELECT COUNT(*) FROM affiliate_earnings WHERE affiliate_user_id = :uid AND venue_id = :vid"
     ), {"uid": user.id, "vid": venue_id}).scalar() or 0
 
+    # Resolve artist name preferring t.artist_id (set on artist_payout child
+    # rows for both single- and multi-slot) over g.artist_id (NULL on multi-slot).
+    # Without this, affiliate earnings on multi-slot gigs showed no artist name.
     rows = db.execute(text("""
         SELECT ae.id, ae.gig_fee_cents, ae.rate_percent, ae.earned_cents,
                ae.quarter, ae.accrued_at, ae.payout_id,
@@ -1253,7 +1256,7 @@ def get_my_venue_earnings(
         FROM affiliate_earnings ae
         JOIN transactions t ON t.id = ae.transaction_id
         JOIN gigs g ON g.id = t.gig_id
-        LEFT JOIN artists a ON a.id = g.artist_id
+        LEFT JOIN artists a ON a.id = COALESCE(t.artist_id, g.artist_id)
         LEFT JOIN affiliate_payouts ap ON ap.id = ae.payout_id
         WHERE ae.affiliate_user_id = :uid AND ae.venue_id = :vid
         ORDER BY g.date DESC, g.start_time DESC
