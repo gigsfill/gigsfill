@@ -2369,7 +2369,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   window.applyFilters = applyFilters;
   // Expose functions needed by contract signing modals (defined outside DOMContentLoaded)
   window.showSuccessModal = showSuccessModal;
-  window.showStyledModal = showStyledModal;
+  // NOTE (Phase 2 May 2026): no longer publishing showStyledModal to window.
+  // The canonical version is gf-modals.js's window.showStyledModal; this
+  // module's local showStyledModal is now a thin adapter that delegates
+  // there with legacy-button-shape mapping + auto-tone for error titles.
+  // Reassigning window.showStyledModal here would point window at the
+  // adapter, causing infinite recursion when the adapter calls window's
+  // version. External callers (gig-modal.js etc.) get the canonical helper
+  // directly from window — they don't need the adapter's auto-tone logic.
   window.loadGigs = loadGigs;
   window.loadMyGigs = loadMyGigs;
   window.renderCalendar = renderCalendar;
@@ -2388,36 +2395,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   }, 60000);
 });
 
-// v73: Styled modal function
-function showStyledModal(title, content, buttons) {
-  const modal = document.createElement('div');
-  modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 10001; display: flex; align-items: center; justify-content: center;';
-  
-  const modalContent = document.createElement('div');
-  modalContent.style.cssText = 'background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid rgba(124,107,255,0.4); border-radius: 12px; padding: 2rem; max-width: 400px; width: 90%; box-shadow: 0 8px 32px rgba(124,107,255,0.3);';
-  
-  modalContent.innerHTML = `
-    <h2 style="margin: 0 0 1rem 0; font-size: 1.25rem; color: #ffffff; text-align: center;">${title}</h2>
-    <div style="font-size: 0.95rem; color: #e5e5e5; margin-bottom: 1.5rem;">${content}</div>
-    <div style="display: flex; gap: 10px; justify-content: center;">
-      ${buttons.map((btn, i) => `
-        <button id="styledModalBtn${i}" class="btn ${btn.style === 'ghost' ? 'ghost' : 'primary'}" style="min-width: 120px; font-size: 0.9rem;">${btn.text}</button>
-      `).join('')}
-    </div>
-  `;
-  
-  modal.appendChild(modalContent);
-  document.body.appendChild(modal);
-  
-  const closeModal = () => { document.body.removeChild(modal); };
-  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-  
-  buttons.forEach((btn, i) => {
-    document.getElementById(`styledModalBtn${i}`).onclick = () => {
-      if (btn.action) btn.action();
-      closeModal();
-    };
-  });
+// Phase 2 migration (May 2026): the old dom-builder version of this helper
+// shipped its own inline cssText (purple-bordered gradient card with hard-
+// coded fonts/colors) — see git blame for the v73 original. Now delegates
+// to the canonical window.showStyledModal in gf-modals.js so this page's
+// popups inherit the unified look. Two adaptations:
+//   1. Legacy button shape was {text, style, action}; new is
+//      {text, style, onClick}. Map action→onClick and default style.
+//   2. Older callers don't pass opts. Auto-tone modals whose title contains
+//      a negative-action keyword (Error / Failed / Cancellation / Could Not
+//      / Unavailable / etc.) so errors visually telegraph as red. Caller-
+//      supplied opts.tone always wins.
+function showStyledModal(title, content, buttons, opts) {
+  const adapted = (buttons || []).map(b => ({
+    text:    b.text,
+    style:   b.style || 'primary',
+    onClick: b.action || b.onClick,
+  }));
+  let mergedOpts = opts || {};
+  if (!mergedOpts.tone && /(error|fail|cancel|unavailable|invalid|denied|could ?not|cannot)/i.test(String(title || ''))) {
+    mergedOpts = Object.assign({}, mergedOpts, { tone: 'error' });
+  }
+  return window.showStyledModal(title, content, adapted, mergedOpts);
 }
 
 // ============================================
