@@ -62,78 +62,63 @@
 
     const reasonText = data.suspension_reason || 'No payment card on file';
 
-    const modal = document.createElement('div');
-    modal.id = 'venueSuspensionModal';
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100000;display:flex;align-items:center;justify-content:center;';
-    modal.innerHTML = `
-      <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:2px solid rgba(239,68,68,0.5);border-radius:16px;padding:32px;max-width:520px;width:95%;box-shadow:0 20px 60px rgba(0,0,0,0.5);text-align:center;">
-        <div style="width:64px;height:64px;margin:0 auto 20px;background:rgba(239,68,68,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;">
-          <span style="font-size:32px;">🚫</span>
-        </div>
-        <h2 style="color:#ef4444;font-size:1.3rem;font-weight:700;margin:0 0 8px;">Venue Suspended</h2>
-        <p style="color:#9ca3af;font-size:0.9rem;margin:0 0 16px;line-height:1.6;">
-          Your venue is suspended because: <strong style="color:#f87171;">${reasonText}</strong>
-        </p>
-        <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:16px;margin:0 0 16px;text-align:left;">
-          <p style="color:#d1d5db;font-size:0.85rem;margin:0 0 8px;line-height:1.6;">While suspended:</p>
-          <ul style="color:#9ca3af;font-size:0.85rem;margin:0;padding-left:20px;line-height:2;">
-            <li>Your venue profile is <strong style="color:#f87171;">hidden</strong> from artists</li>
-            <li>Your gigs are <strong style="color:#f87171;">not visible</strong> in search results</li>
-            <li>You <strong style="color:#f87171;">cannot create</strong> new gigs</li>
-          </ul>
-        </div>
-        ${bookedMsg}
-        <p style="color:#9ca3af;font-size:0.85rem;margin:0 0 20px;line-height:1.6;">
-          Add a valid payment card to reactivate your venue immediately.
-        </p>
-        <button id="suspensionGoToPayments" style="
-          padding:14px 32px;
-          background:linear-gradient(135deg,#635bff 0%,#7c6bff 100%);
-          color:white;border:none;border-radius:8px;font-size:0.95rem;font-weight:600;
-          cursor:pointer;width:100%;
-          box-shadow:0 4px 12px rgba(99,91,255,0.4);
-        ">
-          💳 Go to Payments Tab
-        </button>
-      </div>
-    `;
-    document.body.appendChild(modal);
+    // Phase 2 migration: was a 35-line inline-styled venue-suspended
+    // modal. Now uses showStyledModal — auto-toned error via the
+    // "Suspended" title keyword. Non-dismissible so the user must take
+    // action (go to Payments tab) rather than just dismiss the warning.
+    // When they click the action button: close the modal, switch to the
+    // Payments tab, then start polling for a fresh card so we can show
+    // the reactivation toast when one's added.
+    const bodyHtml =
+      `<p>Your venue is suspended because: <strong style="color:#f87171;">${reasonText}</strong></p>` +
+      `<div class="gf-bubble" style="margin-top:14px;text-align:left;">` +
+        `<p style="margin:0 0 6px;color:var(--text);"><strong>While suspended:</strong></p>` +
+        `<ul style="margin:0;padding-left:18px;line-height:1.9;">` +
+          `<li>Your venue profile is <strong style="color:#f87171;">hidden</strong> from artists</li>` +
+          `<li>Your gigs are <strong style="color:#f87171;">not visible</strong> in search results</li>` +
+          `<li>You <strong style="color:#f87171;">cannot create</strong> new gigs</li>` +
+        `</ul>` +
+      `</div>` +
+      bookedMsg +
+      `<p style="margin-top:14px;">Add a valid payment card to reactivate your venue immediately.</p>`;
 
-    document.getElementById('suspensionGoToPayments').addEventListener('click', () => {
-      // Click the Payments tab button
-      const paymentsBtn = document.querySelector('[data-tab="payments"]') ||
-                          document.querySelector('button[onclick*="payments"]');
-      if (paymentsBtn) {
-        paymentsBtn.click();
-      }
-      // Hide modal temporarily so they can interact with Payments tab
-      modal.style.display = 'none';
+    window.showStyledModal(
+      '🚫 Venue Suspended',
+      bodyHtml,
+      [
+        { text: '💳 Go to Payments Tab', style: 'danger',
+          onClick: () => {
+            // Switch to the Payments tab on the underlying page
+            const paymentsBtn = document.querySelector('[data-tab="payments"]') ||
+                                document.querySelector('button[onclick*="payments"]');
+            if (paymentsBtn) paymentsBtn.click();
 
-      // Re-check status after they might add a card (poll every 3 seconds)
-      const recheckInterval = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/stripe/venue/${venueId}/payment-status`, { credentials: 'include' });
-          if (!res.ok) return;
-          const newData = await res.json();
-          if (newData.payment_status === 'active' && newData.has_card) {
-            clearInterval(recheckInterval);
-            dismissSuspensionModal();
-            suspensionActive = false;
-            window._venuePaymentStatus = newData;
-            // Show success
-            showReactivationSuccess();
+            // Poll for a fresh card every 3s; show reactivation toast when
+            // one appears. Auto-stops after 5 min so we don't leak intervals.
+            const recheckInterval = setInterval(async () => {
+              try {
+                const res = await fetch(`/api/stripe/venue/${venueId}/payment-status`, { credentials: 'include' });
+                if (!res.ok) return;
+                const newData = await res.json();
+                if (newData.payment_status === 'active' && newData.has_card) {
+                  clearInterval(recheckInterval);
+                  suspensionActive = false;
+                  window._venuePaymentStatus = newData;
+                  showReactivationSuccess();
+                }
+              } catch (e) {}
+            }, 3000);
+            setTimeout(() => clearInterval(recheckInterval), 300000);
+            // modal will close automatically (no `return false`)
           }
-        } catch (e) {}
-      }, 3000);
-
-      // Stop polling after 5 minutes
-      setTimeout(() => clearInterval(recheckInterval), 300000);
-    });
+        },
+      ],
+      { dismissible: false }
+    );
   }
 
   function dismissSuspensionModal() {
-    const modal = document.getElementById('venueSuspensionModal');
-    if (modal) modal.remove();
+    if (typeof window.closeAllModals === 'function') window.closeAllModals();
   }
 
   function showReactivationSuccess() {
@@ -158,38 +143,27 @@
         }
         warningMsg += "<br><br>Are you sure you want to remove your card?";
 
-        // Show styled confirm
-        const existingModal = document.getElementById('paymentModal');
-        if (existingModal) existingModal.remove();
-
-        const modal = document.createElement('div');
-        modal.id = 'paymentModal';
-        modal.innerHTML = `
-          <div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;">
-            <div style="background:#1a1f2e;border:1px solid rgba(239,68,68,0.4);border-radius:12px;padding:28px;max-width:480px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
-              <h3 style="color:#ef4444;font-size:1rem;font-weight:700;margin:0 0 12px 0;">🚫 Remove Card & Suspend Venue?</h3>
-              <p style="color:#9ca3af;font-size:0.85rem;line-height:1.6;margin:0 0 20px 0;">${warningMsg}</p>
-              <div style="display:flex;gap:10px;justify-content:center;">
-                <button onclick="this.closest('#paymentModal').remove()" style="padding:10px 24px;background:transparent;color:#9ca3af;border:1px solid #333;border-radius:6px;font-size:0.85rem;cursor:pointer;">Keep Card</button>
-                <button id="confirmRemoveCardBtn" style="padding:10px 24px;background:#ef4444;color:white;border:none;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer;">Remove Card</button>
-              </div>
-            </div>
-          </div>`;
-        document.body.appendChild(modal);
-
-        document.getElementById('confirmRemoveCardBtn').onclick = async function() {
-          modal.remove();
-          // Proceed with original removal
-          const res = await fetch(`/api/stripe/venue/${venueId}/payment-method`, {
-            method: 'DELETE', credentials: 'include'
-          });
-          if (res.ok) {
-            // Reload card display
-            if (typeof loadVenueCard === 'function') loadVenueCard();
-            // Check status again (will show suspension modal)
-            setTimeout(checkVenuePaymentStatus, 500);
-          }
-        };
+        // Phase 2 migration: was inline-styled confirm with raw onclick
+        // attributes. Now uses showStyledModal — auto-toned error via the
+        // "Remove" and "Suspend" keywords in the title.
+        window.showStyledModal(
+          '🚫 Remove Card & Suspend Venue?',
+          warningMsg,
+          [
+            { text: 'Keep Card', style: 'ghost' },
+            { text: 'Remove Card', style: 'danger',
+              onClick: async () => {
+                const res = await fetch(`/api/stripe/venue/${venueId}/payment-method`, {
+                  method: 'DELETE', credentials: 'include'
+                });
+                if (res.ok) {
+                  if (typeof loadVenueCard === 'function') loadVenueCard();
+                  setTimeout(checkVenuePaymentStatus, 500);
+                }
+              }
+            },
+          ]
+        );
       })
       .catch(() => {
         // Fallback to original

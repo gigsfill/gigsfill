@@ -109,40 +109,29 @@ class EntityUsersManager {
   }
   
   /**
-   * Show confirmation modal before removing user
+   * Show confirmation modal before removing user.
+   *
+   * Phase 2 migration: was inline-styled HTML. Now uses showStyledModal —
+   * auto-toned 'error' (red) because the title contains "Remove".
    */
   confirmRemoveUser(userId, userName) {
-    // Create modal HTML - branded to match site
-    const modalHtml = `
-      <div class="modal-overlay" id="removeUserModal" style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000;">
-        <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid #7c6bff; border-radius: 12px; padding: 2rem; max-width: 400px; text-align: center; box-shadow: 0 8px 32px rgba(124,107,255,0.4);">
-          <div style="font-size: 2.5rem; margin-bottom: 1rem; color: #ef4444;">⚠️</div>
-          <h2 style="color: #ffffff; margin: 0 0 0.75rem 0; font-size: 1.25rem;">Remove User Access</h2>
-          <p style="color: #a1a1aa; margin: 0 0 1.5rem 0; font-size: 0.95rem; line-height: 1.5;">
-            Are you sure you want to remove <strong style="color: var(--cyan);">${userName}</strong>'s access?
-          </p>
-          <div style="display: flex; gap: 12px; justify-content: center;">
-            <button class="btn ghost" onclick="entityUsersManager.closeRemoveModal()">Cancel</button>
-            <button class="btn" style="background: #ef4444; border-color: #ef4444;" onclick="entityUsersManager.removeUser(${userId})">Remove</button>
-          </div>
-        </div>
-      </div>
-    `;
-    
-    // Remove any existing modal
-    const existingModal = document.getElementById('removeUserModal');
-    if (existingModal) existingModal.remove();
-    
-    // Add modal to page
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const safeName = String(userName || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      '⚠️ Remove User Access',
+      `<p>Are you sure you want to remove <strong style="color:var(--cyan);">${safeName}</strong>'s access?</p>`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        { text: 'Remove', style: 'danger', onClick: () => this.removeUser(userId) },
+      ]
+    );
   }
-  
+
   /**
-   * Close remove user modal
+   * Legacy close helpers — kept for backwards compatibility with any
+   * inline onclick attributes elsewhere. Now just closes any open modal.
    */
   closeRemoveModal() {
-    const modal = document.getElementById('removeUserModal');
-    if (modal) modal.remove();
+    if (typeof window.closeAllModals === 'function') window.closeAllModals();
   }
   
   /**
@@ -183,87 +172,61 @@ class EntityUsersManager {
   }
   
   /**
-   * Show branded result modal
+   * Show branded result modal.
+   *
+   * Phase 2 migration: delegates to gf-modals helpers for the right tone:
+   * success → green stripe, error → red, other → neutral. onClose fires
+   * after the modal is dismissed (any path: OK button, X, esc, backdrop).
    */
   showResultModal(type, message, onClose = null) {
-    // Remove any existing result modal
-    const existing = document.getElementById('entityResultModal');
-    if (existing) existing.remove();
-    
-    const isSuccess = type === 'success';
-    const isError = type === 'error';
-    const icon = isSuccess ? '✓' : isError ? '✕' : 'ℹ';
-    const iconColor = isSuccess ? '#22c55e' : isError ? '#ef4444' : '#5b8cff';
-    const title = isSuccess ? 'Success!' : isError ? 'Error' : 'Notice';
-    
-    const modalHtml = `
-      <div id="entityResultModal" style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000;">
-        <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid #7c6bff; border-radius: 12px; padding: 2rem; max-width: 400px; text-align: center; box-shadow: 0 8px 32px rgba(124,107,255,0.4);">
-          <div style="font-size: 3rem; margin-bottom: 1rem; color: ${iconColor};">${icon}</div>
-          <h2 style="color: #ffffff; margin: 0 0 0.75rem 0; font-size: 1.25rem;">${title}</h2>
-          <p style="color: #a1a1aa; margin: 0 0 1.5rem 0; font-size: 0.95rem; line-height: 1.5;">${message}</p>
-          <button class="btn primary" style="min-width: 120px;" onclick="entityUsersManager.closeResultModal(${onClose ? 'true' : 'false'})">OK</button>
-        </div>
-      </div>
-    `;
-    
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    
-    // Store callback for later
-    this._resultModalCallback = onClose;
-  }
-  
-  /**
-   * Close result modal
-   */
-  closeResultModal(hasCallback) {
-    const modal = document.getElementById('entityResultModal');
-    if (modal) modal.remove();
-    
-    if (hasCallback && this._resultModalCallback) {
-      this._resultModalCallback();
+    if (type === 'success') {
+      window.showSuccessModal('Success!', message, onClose);
+    } else if (type === 'error') {
+      window.showErrorModal('Error', message, onClose);
+    } else {
+      window.showAlert(message, 'Notice', { onClose });
     }
-    this._resultModalCallback = null;
+  }
+
+  /** Legacy close helper — kept for backwards compatibility. */
+  closeResultModal(hasCallback) {
+    if (typeof window.closeAllModals === 'function') window.closeAllModals();
   }
   
   /**
-   * Show re-invite confirmation modal
+   * Show re-invite confirmation modal.
+   *
+   * Phase 2 migration: was inline-styled HTML. Now uses showStyledModal.
+   * The #reinviteStatus div is preserved inside the body so sendReinvite()
+   * can still update it in place during the async request.
    */
   showReinviteModal(invitationId, email) {
-    const existing = document.getElementById('reinviteModal');
-    if (existing) existing.remove();
-    
-    const modalHtml = `
-      <div id="reinviteModal" style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000;">
-        <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid #7c6bff; border-radius: 12px; padding: 2rem; max-width: 420px; text-align: center; box-shadow: 0 8px 32px rgba(124,107,255,0.4);">
-          <div style="font-size: 2.5rem; margin-bottom: 1rem;">📧</div>
-          <h2 style="color: #ffffff; margin: 0 0 0.75rem 0; font-size: 1.25rem;">Re-send Invitation?</h2>
-          <p style="color: #a1a1aa; margin: 0 0 1.5rem 0; font-size: 0.95rem; line-height: 1.5;">
-            Send another invitation to <strong style="color: var(--cyan);">${email}</strong>?
-          </p>
-          <div id="reinviteStatus" style="margin-bottom: 1rem; font-size: 0.85rem;"></div>
-          <div style="display: flex; gap: 12px; justify-content: center;">
-            <button class="btn ghost" onclick="entityUsersManager.closeReinviteModal()">Cancel</button>
-            <button id="reinviteSendBtn" class="btn primary" onclick="entityUsersManager.sendReinvite(${invitationId})">Send Invite</button>
-          </div>
-        </div>
-      </div>
-    `;
-    
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    
-    // Click outside to close
-    document.getElementById('reinviteModal').addEventListener('click', function(e) {
-      if (e.target === this) entityUsersManager.closeReinviteModal();
-    });
+    const safeEmail = String(email || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      '📧 Re-send Invitation?',
+      `<p>Send another invitation to <strong style="color:var(--cyan);">${safeEmail}</strong>?</p>` +
+      `<div id="reinviteStatus" style="margin-top:1rem;font-size:0.85rem;text-align:center;min-height:20px;"></div>`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        { text: 'Send Invite', style: 'primary',
+          onClick: () => { this.sendReinvite(invitationId); return false; /* let sendReinvite update status + close */ } },
+      ]
+    );
+    // The legacy sendReinvite implementation expects #reinviteSendBtn — give
+    // the gfm-modal footer's last button that id so the existing handler can
+    // disable it without rewrites.
+    setTimeout(() => {
+      const overlay = document.querySelector('.gfm-modal-overlay');
+      if (overlay) {
+        const btns = overlay.querySelectorAll('.gfm-modal-footer .btn');
+        if (btns.length) btns[btns.length - 1].id = 'reinviteSendBtn';
+      }
+    }, 0);
   }
-  
-  /**
-   * Close re-invite modal
-   */
+
+  /** Legacy close helper — kept for backwards compatibility. */
   closeReinviteModal() {
-    const modal = document.getElementById('reinviteModal');
-    if (modal) modal.remove();
+    if (typeof window.closeAllModals === 'function') window.closeAllModals();
   }
   
   /**
