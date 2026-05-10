@@ -448,18 +448,18 @@ async function completeSignup() {
       dashboardUrl = '/app/user-profile.html';
     }
 
-    // Show success modal then redirect to dashboard
-    const modal = document.createElement('div');
-    modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-    modal.innerHTML = `
-      <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid #7c6bff; border-radius: 12px; padding: 2rem; max-width: 400px; text-align: center; box-shadow: 0 8px 32px rgba(124,107,255,0.4);">
-        <div style="font-size: 3rem; margin-bottom: 1rem; color: #22c55e;">✓</div>
-        <h2 style="color: #ffffff; margin-bottom: 0.5rem;">Account Created!</h2>
-        <p style="color: #a1a1aa; margin-bottom: 0;">Taking you to your dashboard...</p>
-      </div>
-    `;
-    document.body.appendChild(modal);
-    
+    // Phase 2 migration: was an inline-styled non-dismissible "redirecting"
+    // toast. Now uses showStyledModal — auto-toned green via the body's
+    // success keywords, non-dismissible so the user can't accidentally
+    // close before the redirect fires.
+    window.showStyledModal(
+      'Account Created!',
+      '<div style="text-align:center;font-size:3rem;color:#22c55e;margin-bottom:8px;">✓</div>' +
+      '<p style="text-align:center;">Taking you to your dashboard...</p>',
+      [], // no buttons — auto-redirects
+      { size: 'sm', dismissible: false, tone: 'success' }
+    );
+
     setTimeout(() => {
       window.location.href = dashboardUrl;
     }, 2000);
@@ -505,72 +505,75 @@ document.addEventListener('DOMContentLoaded', function(){
   }
 });
 
-// Duplicate entity modal
+// Phase 2 migration: duplicate entity modal — was an inline-styled
+// confirm/promise dialog. Now delegates to showStyledModal. Resolves the
+// returned Promise based on which button was clicked. After a successful
+// request-access POST, the dialog body is updated in place to show a
+// success message and the primary button switches to "OK".
 function showDuplicateModal(dupData) {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000;';
     const typeLabel = dupData.type === 'artist' ? 'Artist' : 'Venue';
-    overlay.innerHTML = `
-      <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:1px solid rgba(6,182,212,0.4);border-radius:12px;padding:28px 32px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
-        <h2 style="margin:0 0 16px;color:#06b6d4;font-size:1.1rem;text-transform:uppercase;letter-spacing:0.05em;">${typeLabel} Already Exists</h2>
-        <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;margin-bottom:20px;">
-          <div style="font-size:1.05rem;font-weight:600;color:#e5e5e5;">${dupData.name}</div>
-          <div style="font-size:0.85rem;color:#9ca3af;margin-top:4px;">${dupData.city}, ${dupData.state}</div>
-        </div>
-        <p style="color:#9ca3af;font-size:0.85rem;line-height:1.5;margin:0 0 20px;">This ${typeLabel.toLowerCase()} already exists in our system. Would you like to request permission to access their profile?</p>
-        <div style="display:flex;gap:12px;justify-content:flex-end;">
-          <button id="dupNoBtn" style="padding:8px 20px;border-radius:6px;font:600 0.85rem 'Inter',sans-serif;cursor:pointer;background:transparent;color:#9ca3af;border:1px solid rgba(255,255,255,0.15);">No, Go Back</button>
-          <button id="dupYesBtn" style="padding:8px 20px;border-radius:6px;font:600 0.85rem 'Inter',sans-serif;cursor:pointer;background:#06b6d4;color:#fff;border:none;">Yes, Request Access</button>
-        </div>
-        <div id="dupStatus" style="text-align:center;font-size:0.8rem;margin-top:12px;min-height:20px;"></div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    
-    overlay.querySelector('#dupNoBtn').addEventListener('click', () => {
-      overlay.remove();
-      resolve(false);
-    });
-    
-    overlay.querySelector('#dupYesBtn').addEventListener('click', async () => {
-      const yesBtn = overlay.querySelector('#dupYesBtn');
-      const status = overlay.querySelector('#dupStatus');
-      yesBtn.disabled = true;
-      yesBtn.textContent = 'Sending...';
-      
-      try {
-        const res = await fetch('/api/request-access', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: dupData.type,
-            entity_id: dupData.entity_id,
-            requester_name: document.getElementById('firstName').value + ' ' + document.getElementById('lastName').value,
-            requester_email: document.getElementById('email').value
-          })
-        });
-        
-        if (res.ok) {
-          status.style.color = '#22c55e';
-          status.textContent = '✓ Request sent to the profile owner! They will invite you via email.';
-          yesBtn.textContent = 'OK';
-          yesBtn.disabled = false;
-          yesBtn.onclick = () => { overlay.remove(); resolve(true); };
-        } else {
-          throw new Error('Failed');
-        }
-      } catch (e) {
-        status.style.color = '#ef4444';
-        status.textContent = 'Failed to send request. Please try again.';
-        yesBtn.disabled = false;
-        yesBtn.textContent = 'Yes, Request Access';
-      }
-    });
-    
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) { overlay.remove(); resolve(false); }
-    });
+    const safeName  = String(dupData.name || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    const safeCity  = String(dupData.city || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    const safeState = String(dupData.state || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+
+    const bodyHtml =
+      `<div class="gf-notice gf-notice--error" style="margin-bottom:14px;">` +
+        `<div style="font-size:1.05rem;font-weight:700;color:var(--text);">${safeName}</div>` +
+        `<div style="font-size:0.85rem;color:var(--text-gray);margin-top:4px;">${safeCity}, ${safeState}</div>` +
+      `</div>` +
+      `<p>This ${typeLabel.toLowerCase()} already exists in our system. Would you like to request permission to access their profile?</p>` +
+      `<div id="_dupStatus" style="text-align:center;font-size:0.8rem;margin-top:14px;min-height:20px;"></div>`;
+
+    window.showStyledModal(
+      `${typeLabel} Already Exists`,
+      bodyHtml,
+      [
+        { text: 'No, Go Back', style: 'ghost', onClick: () => resolve(false) },
+        {
+          text: 'Yes, Request Access', style: 'primary',
+          onClick: async () => {
+            const overlay = document.querySelector('.gfm-modal-overlay');
+            if (!overlay) return;
+            const status = overlay.querySelector('#_dupStatus');
+            const footerBtns = overlay.querySelectorAll('.gfm-modal-footer .btn');
+            const yesBtn = footerBtns[footerBtns.length - 1];
+            yesBtn.disabled = true;
+            yesBtn.textContent = 'Sending...';
+
+            try {
+              const res = await fetch('/api/request-access', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  type: dupData.type,
+                  entity_id: dupData.entity_id,
+                  requester_name: document.getElementById('firstName').value + ' ' + document.getElementById('lastName').value,
+                  requester_email: document.getElementById('email').value
+                })
+              });
+              if (!res.ok) throw new Error('Failed');
+              if (status) {
+                status.style.color = '#22c55e';
+                status.textContent = '✓ Request sent! The profile owner will invite you via email.';
+              }
+              yesBtn.textContent = 'OK';
+              yesBtn.disabled = false;
+              yesBtn.onclick = () => { window.closeAllModals(); resolve(true); };
+            } catch (e) {
+              if (status) {
+                status.style.color = '#ef4444';
+                status.textContent = 'Failed to send request. Please try again.';
+              }
+              yesBtn.disabled = false;
+              yesBtn.textContent = 'Yes, Request Access';
+            }
+            return false; // keep modal open during async work / for status display
+          }
+        },
+      ],
+      { onClose: () => resolve(false) }
+    );
   });
 }
 
