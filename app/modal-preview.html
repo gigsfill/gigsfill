@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GigsFill — Modal Preview</title>
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/modals.preview.css" rel="stylesheet">
+  <style>
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 40px 20px;
+      max-width: 880px;
+      margin: 0 auto;
+    }
+    h1 {
+      background: linear-gradient(135deg, #a855f7, #06b6d4);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 6px;
+    }
+    p.lead { color: var(--text-gray); margin-top: 0; margin-bottom: 32px; }
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      margin-bottom: 40px;
+    }
+    .preview-grid button {
+      padding: 14px 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.15s;
+      text-align: left;
+    }
+    .preview-grid button:hover {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: rgba(139, 92, 246, 0.3);
+      transform: translateY(-1px);
+    }
+    h2 {
+      color: var(--cyan);
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-top: 28px;
+      margin-bottom: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    code {
+      background: var(--card);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.85em;
+      color: #c4b5fd;
+    }
+    .btn { padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; border: 1px solid; font-size: 0.9rem; }
+    .btn.primary { background: #a855f7; color: white; border-color: #a855f7; }
+    .btn.primary:hover { background: #9333ea; }
+    .btn.ghost { background: transparent; color: var(--text-gray); border-color: rgba(255,255,255,0.15); }
+    .btn.ghost:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+    .btn.danger { background: #ef4444; color: white; border-color: #ef4444; }
+    .btn.danger:hover { background: #dc2626; }
+    .note {
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 0.85rem;
+      color: #fbbf24;
+    }
+  </style>
+</head>
+<body>
+  <h1>Modal Preview</h1>
+  <p class="lead">
+    Visual reference for the unified modal system, aligned to the Payments tab look.
+    Files: <code>modals.preview.css</code> + <code>modals.preview.js</code> — not loaded anywhere else yet.
+  </p>
+
+  <div class="note">
+    Solid <code>var(--card)</code> surfaces, subtle <code>var(--border)</code> outlines, purple→cyan gradient on the title + 3px top stripe. Dropdowns now use the same color as the working dropdowns on artist-book-gigs.html.
+  </div>
+
+  <h2>Convenience helpers</h2>
+  <div class="preview-grid">
+    <button id="ex-alert">showAlert</button>
+    <button id="ex-confirm">showConfirm</button>
+    <button id="ex-success">showSuccessModal</button>
+    <button id="ex-error">showErrorModal</button>
+  </div>
+
+  <h2>Generic dialog (showStyledModal)</h2>
+  <div class="preview-grid">
+    <button id="ex-styled-sm">size: sm</button>
+    <button id="ex-styled-md">size: md (default)</button>
+    <button id="ex-styled-lg">size: lg</button>
+    <button id="ex-styled-xl">size: xl</button>
+  </div>
+
+  <h2>Real-app examples (rebuilt with the new system)</h2>
+  <div class="preview-grid">
+    <button id="ex-cancel-gig">Cancel slot (3-button choice)</button>
+    <button id="ex-booking-conflict">Booking unavailable</button>
+    <button id="ex-payment-cancel">Cancel payment (with dropdown)</button>
+    <button id="ex-gig-details">Gig Details (multi-slot)</button>
+    <button id="ex-contract-sign">Contract preview (xl, body-flush)</button>
+    <button id="ex-payout-summary">Payout summary (KPI bubbles)</button>
+  </div>
+
+  <h2>Edge cases</h2>
+  <div class="preview-grid">
+    <button id="ex-async">Async confirm (button stays open)</button>
+    <button id="ex-non-dismissible">Non-dismissible</button>
+    <button id="ex-stacked">Open modal-on-modal</button>
+    <button id="ex-long-content">Long body (scrolls)</button>
+  </div>
+
+  <script src="/app/static/js/modals.preview.js"></script>
+  <script>
+    // Convenience helpers — tone applied per the action's mood
+    document.getElementById('ex-alert').onclick = () => showAlert(
+      'Slot 1 has been released back to the pool.',
+      'Slot Cancelled',
+      { tone: 'error' }    // cancellations look reddish
+    );
+    document.getElementById('ex-confirm').onclick = () => showConfirm(
+      'Cancel this gig?',
+      'The artist will be notified by email and the slot will become available again.',
+      () => showAlert('Slot 1 has been released back to the pool.', 'Slot Cancelled', { tone: 'error' }),
+      null,
+      { tone: 'warning', confirmLabel: 'Cancel Gig', confirmStyle: 'danger' }
+    );
+    document.getElementById('ex-success').onclick = () => showSuccessModal('Booking Confirmed!', 'Slot 2 is yours. Check your email for confirmation.');
+    document.getElementById('ex-error').onclick = () => showErrorModal('Booking Unavailable', 'Another artist booked this slot moments ago. Please refresh and try a different slot.');
+
+    // Generic
+    document.getElementById('ex-styled-sm').onclick = () => showStyledModal(
+      'Quick Question',
+      '<p>Does this look right to you?</p>',
+      [{ text: 'Yes', style: 'primary' }, { text: 'No', style: 'ghost' }],
+      { size: 'sm' }
+    );
+    document.getElementById('ex-styled-md').onclick = () => showStyledModal(
+      'Standard Dialog',
+      '<p>This is the default modal width — used for most informational popups.</p>' +
+      '<p>The body supports any HTML, including tables and forms.</p>',
+      [{ text: 'Got it', style: 'primary' }]
+    );
+    document.getElementById('ex-styled-lg').onclick = () => showStyledModal(
+      'Booking Approval',
+      '<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:0.9rem;">' +
+      '<div style="font-weight:700;color:var(--text);">Date:</div><div>Saturday, May 17, 2026</div>' +
+      '<div style="font-weight:700;color:var(--text);">Slot 1:</div><div>7:00 PM – 9:00 PM · <span style="color:#22c55e;font-weight:700;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);">$10.00</span></div>' +
+      '<div style="font-weight:700;color:var(--text);">Slot 2:</div><div>9:00 PM – 11:00 PM · <span style="color:#22c55e;font-weight:700;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);">$25.00</span></div>' +
+      '</div>',
+      [{ text: 'Approve', style: 'primary' }, { text: 'Deny', style: 'danger' }, { text: 'Cancel', style: 'ghost' }],
+      { size: 'lg' }
+    );
+    document.getElementById('ex-styled-xl').onclick = () => showStyledModal(
+      'Long Form',
+      '<p>Use the xl size for forms with many fields or long contracts. ' +
+      'Inputs and textareas inside <code>.gfm-modal-body</code> get the dark theme automatically — no inline styles needed.</p>' +
+      '<input type="text" placeholder="Field 1" style="margin-bottom:8px;">' +
+      '<input type="text" placeholder="Field 2" style="margin-bottom:8px;">' +
+      '<input type="text" placeholder="Field 3" style="margin-bottom:8px;">' +
+      '<textarea rows="6" placeholder="Notes..."></textarea>',
+      [{ text: 'Save', style: 'primary' }, { text: 'Cancel', style: 'ghost' }],
+      { size: 'xl' }
+    );
+
+    // Real-app examples
+    document.getElementById('ex-cancel-gig').onclick = () => showStyledModal(
+      'Cancel Slot 2?',
+      '<p>What happens to the rest of the gig?</p>' +
+      '<textarea id="cancel-reason" placeholder="Reason for cancellation (optional)" rows="3" style="margin-top:12px;"></textarea>',
+      [
+        { text: 'Keep slot open', style: 'primary' },
+        { text: 'Remove slot',    style: 'danger' },
+        { text: 'Cancel',         style: 'ghost' },
+      ],
+      { tone: 'error' }
+    );
+    document.getElementById('ex-booking-conflict').onclick = () => showErrorModal(
+      'Booking Unavailable',
+      'Another artist booked this slot moments ago. Please refresh and try a different slot.'
+    );
+    document.getElementById('ex-payment-cancel').onclick = () => showStyledModal(
+      'Cancel Payment?',
+      '<div class="gf-notice gf-notice--warning"><strong>Heads up:</strong> Cancelling will charge the venue a <strong>$5.00 platform fee</strong> and refund the artist payout. This cannot be undone.</div>' +
+      '<select style="margin-top:14px;">' +
+      '<option>Reason: Artist no-show</option>' +
+      '<option>Reason: Performance issue</option>' +
+      '<option>Reason: Scheduling conflict</option>' +
+      '<option>Reason: Other</option>' +
+      '</select>',
+      [{ text: 'Cancel Payment', style: 'danger' }, { text: 'Keep Payment', style: 'ghost' }],
+      { tone: 'warning' }
+    );
+    document.getElementById('ex-gig-details').onclick = () => showStyledModal(
+      'Gig Details',
+      '<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:0.9rem;margin-bottom:16px;">' +
+      '<div style="font-weight:700;color:var(--text);">Date:</div><div style="color:var(--text-gray);">Saturday, May 17, 2026</div>' +
+      '<div style="font-weight:700;color:var(--text);">Event:</div><div style="color:var(--text-gray);">Live Band Night</div>' +
+      '</div>' +
+      '<div style="padding:9px 14px 9px 12px;margin-bottom:6px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.33);border-left:3px solid #a855f7;border-radius:6px;font-size:0.85rem;">' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<span style="font-weight:700;color:#a855f7;letter-spacing:0.3px;">Slot 1</span>' +
+      '<span style="color:#cbd5e1;">7:00 PM – 9:00 PM</span>' +
+      '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);">$10.00</span>' +
+      '</div>' +
+      '<div style="margin-top:5px;color:var(--text-gray);font-size:0.78rem;font-style:italic;">🎸 Live Band · Solo, Duo, Trio · Country, Pop, Rock</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;"><span style="color:var(--text-gray);font-size:0.78rem;">Artist:</span><strong style="color:#ef4444;">Fridays Past</strong></div>' +
+      '</div>' +
+      '<div style="padding:9px 14px 9px 12px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.33);border-left:3px solid #a855f7;border-radius:6px;font-size:0.85rem;">' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<span style="font-weight:700;color:#a855f7;letter-spacing:0.3px;">Slot 2</span>' +
+      '<span style="color:#cbd5e1;">9:00 PM – 11:00 PM</span>' +
+      '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);">$25.00</span>' +
+      '<span style="flex:1;"></span>' +
+      '<span style="color:#22c55e;font-weight:700;font-size:0.78rem;background:rgba(34,197,94,0.12);padding:2px 10px;border-radius:10px;border:1px solid rgba(34,197,94,0.3);">Open</span>' +
+      '</div>' +
+      '<div style="margin-top:5px;color:var(--text-gray);font-size:0.78rem;font-style:italic;">🎸 Live Band</div>' +
+      '</div>',
+      [{ text: 'Edit Gig', style: 'primary' }, { text: 'Cancel Gig', style: 'danger' }, { text: 'Close', style: 'ghost' }],
+      { size: 'lg' }
+    );
+    document.getElementById('ex-contract-sign').onclick = () => showStyledModal(
+      'Contract — Review & Sign',
+      '<div style="background:var(--bg);padding:18px 24px;font-size:0.85rem;line-height:1.7;color:var(--text-gray);border-bottom:1px solid var(--border);">' +
+      '<p style="color:var(--text);"><strong>Performance Agreement</strong></p>' +
+      '<p>This agreement is between <em>Live Music Hall</em> ("Venue") and <em>Fridays Past</em> ("Artist") for a performance on <em>May 17, 2026</em>.</p>' +
+      '<p>Artist agrees to perform from <strong style="color:var(--text);">7:00 PM</strong> to <strong style="color:var(--text);">9:00 PM</strong> for compensation of <strong style="color:#10b981;">$10.00</strong>, payable via GigsFill on the day following the performance.</p>' +
+      '<p>Either party may cancel with 24-hour notice. Late cancellation may incur a platform fee.</p>' +
+      '</div>' +
+      '<div style="padding:16px 24px;">' +
+      '<input type="text" placeholder="Type your full legal name to sign">' +
+      '</div>',
+      [{ text: 'Sign & Confirm Booking', style: 'primary' }, { text: 'Close', style: 'ghost' }],
+      { size: 'xl', bodyFlush: true }
+    );
+    document.getElementById('ex-payout-summary').onclick = () => showStyledModal(
+      'Payout Summary',
+      '<h3 class="gf-section">Earnings</h3>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:20px;">' +
+      '<div class="gf-bubble" style="text-align:center;"><div style="font-size:1.4rem;font-weight:700;color:#10b981;">$120</div><div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;">This Month</div></div>' +
+      '<div class="gf-bubble" style="text-align:center;"><div style="font-size:1.4rem;font-weight:700;color:#10b981;">$1,840</div><div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;">This Year</div></div>' +
+      '<div class="gf-bubble" style="text-align:center;"><div style="font-size:1.4rem;font-weight:700;color:var(--cyan);">$5,290</div><div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;">All Time</div></div>' +
+      '</div>' +
+      '<h3 class="gf-section gf-section--purple">Recent Activity</h3>' +
+      '<div class="gf-panel">No new activity in the last 7 days.</div>',
+      [{ text: 'View History', style: 'primary' }, { text: 'Close', style: 'ghost' }],
+      { size: 'lg' }
+    );
+
+    // Edge cases
+    document.getElementById('ex-async').onclick = () => showStyledModal(
+      'Async Action',
+      '<p>The "Save" button stays open while a fake 1.5s request runs.</p>',
+      [
+        {
+          text: 'Save',
+          style: 'primary',
+          onClick: () => {
+            setTimeout(() => showSuccessModal('Saved!', 'Took 1.5 seconds.'), 1500);
+            return false;
+          }
+        },
+        { text: 'Cancel', style: 'ghost' },
+      ]
+    );
+    document.getElementById('ex-non-dismissible').onclick = () => showStyledModal(
+      'Action Required',
+      '<p>You must complete this step. No X, no esc, no backdrop click — only the buttons close it.</p>',
+      [{ text: 'I understand', style: 'primary' }],
+      { size: 'sm', dismissible: false }
+    );
+    document.getElementById('ex-stacked').onclick = () => showConfirm(
+      'Open another modal?',
+      'Click confirm to open a second modal on top of this one.',
+      () => showSuccessModal('Stacked!', 'Esc closes the topmost; closeAllModals() drains the whole stack.')
+    );
+    document.getElementById('ex-long-content').onclick = () => showStyledModal(
+      'Long Body',
+      Array(20).fill('<p>This paragraph repeats to test scrolling within the modal body. The header and footer stay pinned; only the body scrolls.</p>').join(''),
+      [{ text: 'OK', style: 'primary' }],
+      { size: 'lg' }
+    );
+  </script>
+</body>
+</html>

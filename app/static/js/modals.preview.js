@@ -56,40 +56,15 @@
   // ── Track modal stack for closeAllModals + Esc handling ────────────────
   const _stack = [];
 
-  // ── Auto-tone heuristic ────────────────────────────────────────────────
-  // If a caller doesn't explicitly pass opts.tone, infer it from the title.
-  // Negative-action keywords → 'error' (red), positive → 'success' (green),
-  // "are you sure" verbiage → 'warning' (amber). Caller-supplied tone always
-  // wins. Set opts.tone = '' (empty string) explicitly to force neutral
-  // purple if you want to override the inference. This runs centrally so
-  // every page in the app gets consistent tone semantics without each
-  // call site having to pass {tone:'error'} manually.
-  const _ERROR_RX   = /(error|fail|cancel(led|lation)?|unavailable|invalid|denied|could ?not|cannot|expired|rejected|declined|not found|not authorized|forbidden|no access|missing|conflict|incorrect|wrong|exhausted)/i;
-  const _SUCCESS_RX = /(success|saved|booked|confirmed|sent|completed|published|reset successfully|signed|transferred|paid|approved|welcome|done|ok!|✓|🎉)/i;
-  const _WARNING_RX = /^(are you sure|warning|caution|heads up)/i;
-  function _inferTone(title) {
-    const t = String(title || '');
-    if (_WARNING_RX.test(t)) return 'warning';
-    if (_ERROR_RX.test(t))   return 'error';
-    if (_SUCCESS_RX.test(t)) return 'success';
-    return null;
-  }
-
   // ── Core builder ───────────────────────────────────────────────────────
   function _buildModal(opts) {
-    // Auto-tone: only fires when caller didn't specify tone at all
-    // (undefined). To force neutral, caller can pass {tone: ''} or
-    // {tone: 'info'}.
-    let tone = opts.tone;
-    if (tone === undefined) tone = _inferTone(opts.title);
-
     const overlay = document.createElement('div');
     overlay.className = 'gfm-modal-overlay';
 
     const modal = document.createElement('div');
     let cls = 'gfm-modal';
     if (opts.size) cls += ' gfm-modal--' + opts.size;
-    if (tone) cls += ' gfm-modal--' + tone;
+    if (opts.tone) cls += ' gfm-modal--' + opts.tone;
     modal.className = cls;
 
     // Header (rendered if title given, OR if dismissible to show the X)
@@ -255,11 +230,11 @@
     [..._stack].forEach((o) => _closeOne(o));
   };
 
-  // NOTE: this file deliberately does NOT alias window.showModal /
-  // window.closeModal / window.showSuccess / window.showError to the new
-  // helpers. Those globals are owned by the legacy modals.js (still loaded
-  // on reset_password.html / support-ticket.html / review.html). Aliasing
-  // would silently switch those pages to the new look, which we want to do
-  // only deliberately during Phase 2 migration.
+  // ── Backwards-compat aliases ───────────────────────────────────────────
+  // Legacy modals.js API
+  window.showModal    = window.showStyledModal;
+  window.closeModal   = function () { if (_stack.length) _closeOne(_stack[_stack.length - 1]); };
+  window.showSuccess  = function (m) { window.showSuccessModal('Success', m); };
+  window.showError    = function (m) { window.showErrorModal('Error', m); };
 
 })();
