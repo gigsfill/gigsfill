@@ -64,9 +64,9 @@
   // purple if you want to override the inference. This runs centrally so
   // every page in the app gets consistent tone semantics without each
   // call site having to pass {tone:'error'} manually.
-  const _ERROR_RX   = /(error|fail|cancel(led|lation)?|unavailable|invalid|denied|could ?not|cannot|expired|rejected|declined|not found|not authorized|forbidden|no access|missing|conflict|incorrect|wrong|exhausted)/i;
-  const _SUCCESS_RX = /(success|saved|booked|confirmed|sent|completed|published|reset successfully|signed|transferred|paid|approved|welcome|done|ok!|✓|🎉)/i;
-  const _WARNING_RX = /^(are you sure|warning|caution|heads up)/i;
+  const _ERROR_RX   = /(error|fail|cancel(led|lation)?|unavailable|invalid|denied|could ?not|cannot|expired|rejected|declined|not found|not authorized|forbidden|no access|missing|conflict|incorrect|wrong|exhausted|remove|delete|ban\b|block(ed)?|abort|leave|kick|stop|🚫|✕|❌|⛔|⚠️)/i;
+  const _SUCCESS_RX = /(success|saved|booked|confirmed|sent|completed|published|reset successfully|signed|transferred|paid|approved|welcome|done|ok!|✓|🎉|🎊)/i;
+  const _WARNING_RX = /^(are you sure|warning|caution|heads up|review|verify|double-check|please confirm)/i;
   function _inferTone(title) {
     const t = String(title || '');
     if (_WARNING_RX.test(t)) return 'warning';

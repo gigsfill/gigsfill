@@ -604,22 +604,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
 
-  // ===================================
-  // STYLED ALERT FUNCTION
-  // ===================================
+  // Phase 2 migration (May 2026): the original showAlert toggled visibility
+  // on a static #alertModal element in the HTML and was the catch-all alert
+  // for ~30 callers in this file (validation errors, booking-action results,
+  // delete confirmations, etc.). Replaced with a thin delegation to
+  // window.showAlert (gf-modals) so every alert across the page picks up the
+  // unified look + auto-toned title coloring (Error/Failed/Denied → red,
+  // Booked/Approved → green, plain "Alert" → neutral purple).
+  // The static #alertModal markup in venue-create-gigs.html is now unused
+  // and can be deleted in Phase 4 cleanup.
   function showAlert(message, title = "Alert") {
-    const alertModal = document.getElementById("alertModal");
-    const alertModalTitle = document.getElementById("alertModalTitle");
-    const alertModalMessage = document.getElementById("alertModalMessage");
-    const alertModalOk = document.getElementById("alertModalOk");
-    
-    alertModalTitle.textContent = title;
-    alertModalMessage.textContent = message;
-    alertModal.classList.remove("hidden");
-    
-    alertModalOk.onclick = () => {
-      alertModal.classList.add("hidden");
-    };
+    window.showAlert(message, title);
   }
 
   async function api(url, options = {}) {
