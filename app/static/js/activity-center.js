@@ -688,43 +688,18 @@ class ActivityCenter {
   }
   
   showResultModal(type, message, onClose = null) {
-    // Remove any existing result modal
-    const existing = document.getElementById('resultModal');
-    if (existing) existing.remove();
-    
-    const isSuccess = type === 'success';
-    const isError = type === 'error';
-    const icon = isSuccess ? '✓' : isError ? '✕' : 'ℹ';
-    const iconColor = isSuccess ? '#22c55e' : isError ? '#ef4444' : '#5b8cff';
-    const title = isSuccess ? 'Success!' : isError ? 'Error' : 'Notice';
-    
-    const overlay = document.createElement('div');
-    overlay.id = 'resultModal';
-    overlay.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-    
-    overlay.innerHTML = `
-      <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid #7c6bff; border-radius: 12px; padding: 2rem; max-width: 400px; text-align: center; box-shadow: 0 8px 32px rgba(124,107,255,0.4);">
-        <div style="font-size: 3rem; margin-bottom: 1rem; color: ${iconColor};">${icon}</div>
-        <h2 style="color: #ffffff; margin: 0 0 0.75rem 0; font-size: 1.25rem;">${title}</h2>
-        <p style="color: #a1a1aa; margin: 0 0 1.5rem 0; font-size: 0.95rem; line-height: 1.5;">${message}</p>
-        <button class="btn primary" style="min-width: 120px;">OK</button>
-      </div>
-    `;
-    
-    document.body.appendChild(overlay);
-    
-    const closeModal = () => {
-      overlay.remove();
-      if (onClose) onClose();
-    };
-    
-    // Close button handler
-    overlay.querySelector('button').onclick = closeModal;
-    
-    // Click outside to close
-    overlay.onclick = (e) => {
-      if (e.target === overlay) closeModal();
-    };
+    // Phase 2 migration (May 2026): replaced an inline-styled DOM-builder
+    // with a delegation to the unified gf-modals helpers in gf-modals.js,
+    // so activity-center result popups inherit the site-wide modal look
+    // (stripe + tone variants + button styling). Keeps the same external
+    // signature: (type, message, onClose) where type ∈ success/error/other.
+    if (type === 'success') {
+      window.showSuccessModal('Success!', message, onClose);
+    } else if (type === 'error') {
+      window.showErrorModal('Error', message, onClose);
+    } else {
+      window.showAlert(message, 'Notice', { onClose });
+    }
   }
   
   async openNotificationModal(notificationId) {
