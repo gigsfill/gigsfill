@@ -64,14 +64,25 @@
   // purple if you want to override the inference. This runs centrally so
   // every page in the app gets consistent tone semantics without each
   // call site having to pass {tone:'error'} manually.
-  const _ERROR_RX   = /(error|fail|cancel(led|lation)?|unavailable|invalid|denied|could ?not|cannot|expired|rejected|declined|not found|not authorized|forbidden|no access|missing|conflict|incorrect|wrong|exhausted|remove|delete|ban\b|block(ed)?|abort|leave|kick|stop|🚫|✕|❌|⛔|⚠️)/i;
+  const _ERROR_RX   = /(error|fail|cancel(led|lation)?|unavailable|invalid|denied|could ?not|cannot|expired|rejected|declined|not found|not authorized|forbidden|no access|missing|conflict|incorrect|wrong|exhausted|remove|delete|ban\b|block(ed)?|abort|leave|kick|stop|please (select|enter|provide|fill|choose)|is required|must (be|have|enter|select)|needs to|🚫|✕|❌|⛔|⚠️)/i;
   const _SUCCESS_RX = /(success|saved|booked|confirmed|sent|completed|published|reset successfully|signed|transferred|paid|approved|welcome|done|ok!|✓|🎉|🎊)/i;
   const _WARNING_RX = /^(are you sure|warning|caution|heads up|review|verify|double-check|please confirm)/i;
-  function _inferTone(title) {
+  // Inspect both title and message body — many alerts have a generic
+  // "Alert" title but a clearly negative message ("Please select..." /
+  // "X is required"). Title takes precedence; if it's neutral or generic,
+  // fall back to scanning the message for keywords.
+  function _inferTone(title, message) {
     const t = String(title || '');
     if (_WARNING_RX.test(t)) return 'warning';
     if (_ERROR_RX.test(t))   return 'error';
     if (_SUCCESS_RX.test(t)) return 'success';
+    // Fallback: scan message body for tone keywords.
+    if (message) {
+      const m = String(message);
+      if (_WARNING_RX.test(m)) return 'warning';
+      if (_ERROR_RX.test(m))   return 'error';
+      if (_SUCCESS_RX.test(m)) return 'success';
+    }
     return null;
   }
 
@@ -79,9 +90,14 @@
   function _buildModal(opts) {
     // Auto-tone: only fires when caller didn't specify tone at all
     // (undefined). To force neutral, caller can pass {tone: ''} or
-    // {tone: 'info'}.
+    // {tone: 'info'}. Inference scans title first, then message body —
+    // catches validation alerts like "Please select an Artist Type" that
+    // have a generic title ("Alert") but a clearly negative body.
     let tone = opts.tone;
-    if (tone === undefined) tone = _inferTone(opts.title);
+    if (tone === undefined) {
+      const messageText = (typeof opts.content === 'string') ? opts.content : '';
+      tone = _inferTone(opts.title, messageText);
+    }
 
     const overlay = document.createElement('div');
     overlay.className = 'gfm-modal-overlay';
