@@ -232,148 +232,117 @@ class MyArtists {
     }
   }
   
-  // v73: Revoke preferred status with confirmation
+  // Phase 2 migration (May 2026): three confirm-then-act modals (revoke
+  // preferred / ban / unban) used to be inline-styled DOM builders. Replaced
+  // with showStyledModal calls so they pick up the unified modal look. Each
+  // wires its primary button via an async onClick that returns false to
+  // keep the modal open while the network request is in flight, then
+  // closes via closeAllModals on success.
+  // Note: the bare alert() fallback on network errors was kept in spirit
+  // by routing failures through showErrorModal — visible feedback rather
+  // than the legacy native alert.
   async revokePreferred(artistId, preferredId, artistName) {
-    // Show confirmation modal
-    const modal = document.createElement('div');
-    modal.id = 'revokeModal';
-    modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-    
-    modal.innerHTML = `
-      <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid rgba(239, 68, 68, 0.5); border-radius: 12px; padding: 2rem; max-width: 500px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
-        <h2 style="color: #ffffff; margin-bottom: 1rem; font-size: 1.5rem;">Revoke Preferred Status</h2>
-        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
-          <p style="color: #ef4444; margin: 0; font-weight: 500;">Are you sure you want to revoke the preferred status for ${artistName}?</p>
-        </div>
-        <p style="color: #a1a1aa; margin-bottom: 1.5rem; font-size: 0.95rem;">
-          This artist will no longer be able to book future gigs at your venue. Existing booked gigs will remain unchanged.
-        </p>
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button id="cancelRevoke" class="btn ghost" style="padding: 8px 16px;">Cancel</button>
-          <button id="confirmRevoke" class="btn" style="padding: 8px 16px; background: #ef4444; border: 1px solid #ef4444;">Confirm Revoke Preferred Status</button>
-        </div>
-      </div>
-    `;
-    
-    document.body.appendChild(modal);
-    
-    // Handle cancel
-    document.getElementById('cancelRevoke').onclick = () => {
-      document.body.removeChild(modal);
-    };
-    
-    // Handle confirm
-    document.getElementById('confirmRevoke').onclick = async () => {
-      try {
-        const response = await fetch(`/api/preferred-artists/${preferredId}/revoke`, {
-          method: 'PUT',
-          credentials: 'include'
-        });
-        
-        if (response.ok) {
-          document.body.removeChild(modal);
-          await this.loadArtists();
-          this.render();
-          
-          // v73: Reload Activity Center on venue page
-          if (window.activityCenterVenue) {
-            await window.activityCenterVenue.loadNotifications();
+    const safeName = (artistName || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      'Revoke Preferred Status',
+      `<div class="gf-notice gf-notice--error" style="margin-bottom:14px;"><strong>Are you sure?</strong> Revoke the preferred status for <strong>${safeName}</strong>?</div>` +
+      `<p>This artist will no longer be able to book future gigs at your venue. Existing booked gigs will remain unchanged.</p>`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        {
+          text: 'Confirm Revoke', style: 'danger',
+          onClick: async () => {
+            try {
+              const response = await fetch(`/api/preferred-artists/${preferredId}/revoke`, { method: 'PUT', credentials: 'include' });
+              if (response.ok) {
+                window.closeAllModals();
+                await this.loadArtists();
+                this.render();
+                if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
+              } else {
+                window.showErrorModal('Revoke Failed', 'Could not revoke preferred status. Please try again.');
+              }
+            } catch (error) {
+              console.error('Error revoking preferred status:', error);
+              window.showErrorModal('Revoke Failed', 'Network error — please try again.');
+            }
+            return false; // keep modal open until handler decides
           }
-        } else {
-          alert('Failed to revoke preferred status');
-        }
-      } catch (error) {
-        console.error('Error revoking preferred status:', error);
-        alert('Failed to revoke preferred status');
-      }
-    };
-    
-    // Close on background click
-    modal.onclick = (e) => {
-      if (e.target === modal) {
-        document.body.removeChild(modal);
-      }
-    };
+        },
+      ],
+      { tone: 'error' }
+    );
   }
 
   async banArtist(artistId, artistName) {
-    const modal = document.createElement('div');
-    modal.id = 'banArtistModal';
-    modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-    modal.innerHTML = `
-      <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid rgba(239, 68, 68, 0.5); border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
-        <h2 style="color: #ffffff; margin-bottom: 1rem; font-size: 1.5rem;">🚫 Ban Artist</h2>
-        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
-          <p style="color: #ef4444; margin: 0; font-weight: 500;">Ban <strong>${artistName}</strong> from your venue?</p>
-        </div>
-        <p style="color: #a1a1aa; margin-bottom: 1rem; font-size: 0.95rem;">
-          They will be permanently blocked from booking any gig at your venue — even during blast windows. This cannot be undone without manually removing the ban.
-        </p>
-        <div style="margin-bottom: 1.5rem;">
-          <label style="font-size: 0.85rem; color: #a1a1aa; display: block; margin-bottom: 6px;">Reason <span style="color: #6b7280;">(optional)</span></label>
-          <input id="banReasonInput" type="text" placeholder="e.g. No-show, misconduct..."
-            style="width: 100%; padding: 8px 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #ffffff; font-size: 0.9rem; box-sizing: border-box; outline: none;">
-        </div>
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button id="cancelBan" class="btn ghost" style="padding: 8px 16px;">Cancel</button>
-          <button id="confirmBan" class="btn" style="padding: 8px 16px; background: #ef4444; border: 1px solid #ef4444;">Confirm Ban</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    document.getElementById('cancelBan').onclick = () => modal.remove();
-    modal.onclick = e => { if (e.target === modal) modal.remove(); };
-    document.getElementById('confirmBan').onclick = async () => {
-      const reason = document.getElementById('banReasonInput').value.trim();
-      try {
-        const r = await fetch(`/api/venues/${this.venueId}/ban-artist/${artistId}`, {
-          method: 'POST', credentials: 'include',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({reason})
-        });
-        if (r.ok) {
-          modal.remove();
-          await this.loadArtists();
-          this.render();
-          if (typeof window.refreshSearchArtistsBanned === 'function') window.refreshSearchArtistsBanned();
-        } else { alert('Failed to ban artist'); }
-      } catch(e) { alert('Error banning artist'); }
-    };
+    const safeName = (artistName || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      '🚫 Ban Artist',
+      `<div class="gf-notice gf-notice--error" style="margin-bottom:14px;">Ban <strong>${safeName}</strong> from your venue?</div>` +
+      `<p>They will be permanently blocked from booking any gig at your venue — even during blast windows. This cannot be undone without manually removing the ban.</p>` +
+      `<label style="font-size:0.85rem;color:var(--text-gray);display:block;margin:14px 0 6px;">Reason <span style="color:#6b7280;">(optional)</span></label>` +
+      `<input id="_banReasonInput" type="text" placeholder="e.g. No-show, misconduct...">`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        {
+          text: 'Confirm Ban', style: 'danger',
+          onClick: async () => {
+            const reason = (document.getElementById('_banReasonInput')?.value || '').trim();
+            try {
+              const r = await fetch(`/api/venues/${this.venueId}/ban-artist/${artistId}`, {
+                method: 'POST', credentials: 'include',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({reason})
+              });
+              if (r.ok) {
+                window.closeAllModals();
+                await this.loadArtists();
+                this.render();
+                if (typeof window.refreshSearchArtistsBanned === 'function') window.refreshSearchArtistsBanned();
+              } else {
+                window.showErrorModal('Ban Failed', 'Could not ban artist. Please try again.');
+              }
+            } catch (e) {
+              window.showErrorModal('Ban Failed', 'Network error — please try again.');
+            }
+            return false;
+          }
+        },
+      ],
+      { tone: 'error' }
+    );
   }
 
   async unbanArtist(artistId, artistName) {
-    const modal = document.createElement('div');
-    modal.id = 'unbanArtistModal';
-    modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-    modal.innerHTML = `
-      <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid rgba(239, 68, 68, 0.5); border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
-        <h2 style="color: #ffffff; margin-bottom: 1rem; font-size: 1.5rem;">Remove Ban</h2>
-        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
-          <p style="color: #ef4444; margin: 0; font-weight: 500;">Remove ban for <strong>${artistName}</strong>?</p>
-        </div>
-        <p style="color: #a1a1aa; margin-bottom: 1.5rem; font-size: 0.95rem;">
-          They will be able to request preferred artist status again and may appear in future blast emails.
-        </p>
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button id="cancelUnban" class="btn ghost" style="padding: 8px 16px;">Cancel</button>
-          <button id="confirmUnban" class="btn" style="padding: 8px 16px; background: #22c55e; border: 1px solid #22c55e;">Remove Ban</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    document.getElementById('cancelUnban').onclick = () => modal.remove();
-    modal.onclick = e => { if (e.target === modal) modal.remove(); };
-    document.getElementById('confirmUnban').onclick = async () => {
-      try {
-        const r = await fetch(`/api/venues/${this.venueId}/ban-artist/${artistId}`, {
-          method: 'DELETE', credentials: 'include'
-        });
-        if (r.ok) {
-          modal.remove();
-          await this.loadArtists();
-          this.render();
-          if (typeof window.refreshSearchArtistsBanned === 'function') window.refreshSearchArtistsBanned();
-        } else { alert('Failed to remove ban'); }
-      } catch(e) { alert('Error removing ban'); }
-    };
+    const safeName = (artistName || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      'Remove Ban',
+      `<div class="gf-notice gf-notice--success" style="margin-bottom:14px;">Remove ban for <strong>${safeName}</strong>?</div>` +
+      `<p>They will be able to request preferred artist status again and may appear in future blast emails.</p>`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        {
+          text: 'Remove Ban', style: 'primary',
+          onClick: async () => {
+            try {
+              const r = await fetch(`/api/venues/${this.venueId}/ban-artist/${artistId}`, { method: 'DELETE', credentials: 'include' });
+              if (r.ok) {
+                window.closeAllModals();
+                await this.loadArtists();
+                this.render();
+                if (typeof window.refreshSearchArtistsBanned === 'function') window.refreshSearchArtistsBanned();
+              } else {
+                window.showErrorModal('Unban Failed', 'Could not remove ban. Please try again.');
+              }
+            } catch (e) {
+              window.showErrorModal('Unban Failed', 'Network error — please try again.');
+            }
+            return false;
+          }
+        },
+      ],
+      { tone: 'success' }
+    );
   }
 
   async togglePastGigs() {
