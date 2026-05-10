@@ -249,6 +249,37 @@
 }
 .gfm-modal-footer .btn { min-width: 110px; font-size: 0.85rem; }
 
+/* Site-wide .btn.ghost is intentionally borderless plain-text (gigsfill.css:84).
+ * Inside a modal footer it reads as broken — buttons should look like buttons.
+ * Re-style ghost + add danger to the modal context only. .btn.primary keeps
+ * the global gradient look. */
+.gfm-modal-footer .btn.ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-gray);
+  padding: 8px 16px;
+  border-radius: 6px;
+}
+.gfm-modal-footer .btn.ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--text);
+}
+.gfm-modal-footer .btn.danger {
+  background: #ef4444;
+  color: #fff;
+  border: 1px solid #ef4444;
+  padding: 8px 16px;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.gfm-modal-footer .btn.danger:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.35);
+  transform: translateY(-1px);
+}
+
 /* ── Form controls ─────────────────────────────────────────────────────── */
 /* All inputs/selects/textareas inside .gfm-modal-body share the same surface:
  * solid var(--card). This is the same color the Payments tab dropdown uses
