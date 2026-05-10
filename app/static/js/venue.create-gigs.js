@@ -166,38 +166,29 @@ document.addEventListener("DOMContentLoaded", async () => {
           // Re-check immediately while we ask
           recurringCheckbox.checked = true;
 
-          // Show site-style confirm modal
-          const overlay = document.createElement('div');
-          overlay.id = '_detachConfirmOverlay';
-          overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:10002;';
-          overlay.innerHTML = `
-            <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:2px solid rgba(239,68,68,0.5);border-radius:12px;padding:2rem;max-width:420px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(239,68,68,0.2);">
-              <div style="font-size:2.5rem;margin-bottom:1rem;">🔁</div>
-              <p style="color:#f0f0f0;margin:0 0 0.5rem;font-size:1.05rem;font-weight:700;">Remove from Recurring Series?</p>
-              <p style="color:#a0a0b0;margin:0 0 1.75rem;font-size:0.88rem;line-height:1.5;">This gig will be removed from the recurring series and become a standalone gig. The other gigs in the series won't be affected.</p>
-              <div style="display:flex;gap:12px;justify-content:center;">
-                <button id="_detachCancel" class="btn primary" style="min-width:110px;">Keep in Series</button>
-                <button id="_detachConfirm" class="btn" style="min-width:110px;background:rgba(239,68,68,0.2);border-color:rgba(239,68,68,0.5);color:#ef4444;">Remove</button>
-              </div>
-            </div>
-          `;
-          document.body.appendChild(overlay);
-
-          document.getElementById('_detachCancel').onclick = () => {
-            overlay.remove();
-            // Leave checkbox checked, options visible — no change
-          };
-
-          document.getElementById('_detachConfirm').onclick = () => {
-            overlay.remove();
-            // Uncheck and hide options, flag for detach on save
-            recurringCheckbox.checked = false;
-            recurringOptions.style.display = 'none';
-            if (selectedGig) selectedGig._pendingDetach = true;
-            // Remove the series banner from the modal immediately
-            const info = document.getElementById('gigArtistInfo');
-            if (info) { info.innerHTML = ''; info.style.display = 'none'; }
-          };
+          // Phase 2 migration: was an inline DOM-builder confirm modal.
+          // Now uses the unified showStyledModal — auto-toned 'error' (red)
+          // since the title contains "Remove".
+          window.showStyledModal(
+            '🔁 Remove from Recurring Series?',
+            '<p>This gig will be removed from the recurring series and become a standalone gig. The other gigs in the series won\'t be affected.</p>',
+            [
+              { text: 'Keep in Series', style: 'primary' },
+              {
+                text: 'Remove', style: 'danger',
+                onClick: () => {
+                  // Uncheck and hide options, flag for detach on save
+                  recurringCheckbox.checked = false;
+                  recurringOptions.style.display = 'none';
+                  if (selectedGig) selectedGig._pendingDetach = true;
+                  // Remove the series banner from the modal immediately
+                  const info = document.getElementById('gigArtistInfo');
+                  if (info) { info.innerHTML = ''; info.style.display = 'none'; }
+                },
+              },
+            ],
+            { size: 'sm' }
+          );
         } else {
           // New gig or non-recurring — just hide options
           recurringOptions.style.display = 'none';
@@ -365,23 +356,20 @@ document.addEventListener("DOMContentLoaded", async () => {
         hint = 'Looks like an overnight gig — end time is before start.';
       }
 
-      const msg = document.createElement('div');
-      msg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;z-index:10005;';
-      msg.innerHTML = `
-        <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:2px solid rgba(99,91,255,0.5);border-radius:12px;padding:1.5rem 2rem;max-width:360px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(99,91,255,0.25);">
-          <div style="font-size:2rem;margin-bottom:0.75rem;">🕐</div>
-          <p style="color:#f0f0f0;margin:0 0 0.4rem;font-size:1rem;font-weight:700;">Did you mean:</p>
-          <p style="color:#a78bfa;margin:0 0 1.25rem;font-size:1.1rem;font-weight:600;">${_fmt12(s)} to ${_fmt12(suggested)}?</p>
-          <p style="color:#888;font-size:0.8rem;margin:0 0 1.25rem;">${hint}</p>
-          <div style="display:flex;gap:10px;justify-content:center;">
-            <button id="_timeNo"  class="btn ghost" style="min-width:80px;">No, keep it</button>
-            <button id="_timeYes" class="btn primary" style="min-width:80px;">Yes, fix it</button>
-          </div>
-        </div>
-      `;
-      document.body.appendChild(msg);
-      msg.querySelector('#_timeYes').onclick = () => { endInput.value = suggested; msg.remove(); };
-      msg.querySelector('#_timeNo').onclick  = () => { msg.remove(); };
+      // Phase 2 migration: was an inline DOM-builder time-correction
+      // prompt. Now uses showStyledModal — neutral default tone (purple
+      // since this isn't an error, just a clarifying ask).
+      window.showStyledModal(
+        '🕐 Did you mean...',
+        `<p style="text-align:center;color:#a78bfa;font-size:1.05rem;font-weight:600;">${_fmt12(s)} to ${_fmt12(suggested)}?</p>` +
+        `<p style="text-align:center;color:var(--text-gray);font-size:0.85rem;margin-top:8px;">${hint}</p>`,
+        [
+          { text: 'No, keep it', style: 'ghost' },
+          { text: 'Yes, fix it', style: 'primary',
+            onClick: () => { endInput.value = suggested; } },
+        ],
+        { size: 'sm', tone: 'info' }
+      );
     }
 
     row.querySelector('.slot-end').addEventListener('blur', _checkSlotTimes);
@@ -2908,22 +2896,11 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
   };
 
   function showGigSuccess(message) {
+    // Phase 2 migration: was a 13-line inline DOM builder. Now delegates to
+    // the unified showSuccessModal — same green-stripe + checkmark mood,
+    // consistent with other success popups across the app.
     modal.classList.add("hidden");
-    
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:10001;';
-    overlay.innerHTML = `
-      <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:2px solid #22c55e;border-radius:12px;padding:2rem;max-width:400px;text-align:center;box-shadow:0 8px 32px rgba(34,197,94,0.3);">
-        <div style="font-size:3rem;margin-bottom:1rem;color:#22c55e;">✓</div>
-        <p style="color:#e5e5e5;margin:0 0 1.5rem;font-size:1rem;line-height:1.5;">${message}</p>
-        <button class="btn primary" style="min-width:120px;">OK</button>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    
-    const closeIt = () => { overlay.remove(); };
-    overlay.querySelector('button').onclick = closeIt;
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeIt(); });
+    window.showSuccessModal('Gig Saved', message);
   }
 
   // Validate per-slot artist types, styles, lineup
@@ -3367,47 +3344,39 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       ).join('');
 
       await new Promise(resolve => {
-        const ov = document.createElement('div');
-        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:10004;padding:16px;box-sizing:border-box;';
-        ov.innerHTML = `
-          <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:2px solid rgba(245,158,11,0.4);border-radius:12px;padding:1.75rem;max-width:520px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);">
-            <h3 style="color:#f0f0f0;margin:0 0 8px;font-size:1rem;font-weight:700;">⚠️ Time Conflicts Found</h3>
-            <p style="color:#a0a0b0;font-size:0.83rem;margin:0 0 14px;line-height:1.5;">The following dates already have a gig at overlapping times:</p>
-            <div style="background:rgba(0,0,0,0.3);border-radius:8px;overflow:hidden;margin-bottom:16px;max-height:200px;overflow-y:auto;">
-              <table style="width:100%;border-collapse:collapse;">
-                <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
-                  <th style="padding:6px 10px;text-align:left;font-size:0.72rem;color:#888;text-transform:uppercase;">Date</th>
-                  <th style="padding:6px 10px;text-align:left;font-size:0.72rem;color:#888;text-transform:uppercase;">Existing Gig</th>
-                </tr></thead>
-                <tbody>${conflictList}</tbody>
-              </table>
-            </div>
-            <p style="color:#a0a0b0;font-size:0.83rem;margin:0 0 18px;line-height:1.5;">What would you like to do?</p>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;">
-              <button id="_ovSkip" class="btn ghost" style="flex:1;min-width:120px;">Skip those dates</button>
-              <button id="_ovAllow" class="btn" style="flex:1;min-width:120px;background:rgba(245,158,11,0.15);border-color:rgba(245,158,11,0.4);color:#f59e0b;">Allow Overlap</button>
-              <button id="_ovCancel" class="btn" style="flex:1;min-width:80px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4);color:#ef4444;">Cancel</button>
-            </div>
-          </div>
-        `;
-        document.body.appendChild(ov);
+        // Phase 2 migration: was an inline DOM-builder. Now uses
+        // showStyledModal — warning tone (amber stripe + amber title)
+        // since this is a "destructive action confirmation". The conflict
+        // table renders inside the modal body via raw HTML.
+        const conflictTableHtml =
+          '<p>The following dates already have a gig at overlapping times:</p>' +
+          '<div class="gf-panel" style="padding:0;margin-top:10px;max-height:200px;overflow-y:auto;">' +
+            '<table style="width:100%;border-collapse:collapse;font-size:0.83rem;">' +
+              '<thead><tr style="border-bottom:1px solid var(--border);">' +
+                '<th style="padding:8px 12px;text-align:left;font-size:0.72rem;color:var(--text-gray);text-transform:uppercase;">Date</th>' +
+                '<th style="padding:8px 12px;text-align:left;font-size:0.72rem;color:var(--text-gray);text-transform:uppercase;">Existing Gig</th>' +
+              '</tr></thead>' +
+              '<tbody>' + conflictList + '</tbody>' +
+            '</table>' +
+          '</div>' +
+          '<p style="margin-top:14px;">What would you like to do?</p>';
 
-        ov.querySelector('#_ovSkip').onclick = () => {
-          ov.remove();
-          // Re-run with skip_dates set — conflicting dates will be skipped
-          updateSeriesGigs._extraParams = { skip_dates: _seriesResult.conflicts.map(c => c.date) };
-          resolve('skip');
-        };
-        ov.querySelector('#_ovAllow').onclick = () => {
-          ov.remove();
-          // Re-run with force_overlap — insert even if conflicts exist
-          updateSeriesGigs._extraParams = { force_overlap: true };
-          resolve('allow');
-        };
-        ov.querySelector('#_ovCancel').onclick = () => {
-          ov.remove();
-          resolve('cancel');
-        };
+        window.showStyledModal(
+          '⚠️ Time Conflicts Found',
+          conflictTableHtml,
+          [
+            { text: 'Cancel',           style: 'ghost',   onClick: () => resolve('cancel') },
+            { text: 'Allow Overlap',    style: 'primary', onClick: () => {
+                updateSeriesGigs._extraParams = { force_overlap: true };
+                resolve('allow');
+              } },
+            { text: 'Skip those dates', style: 'danger',  onClick: () => {
+                updateSeriesGigs._extraParams = { skip_dates: _seriesResult.conflicts.map(c => c.date) };
+                resolve('skip');
+              } },
+          ],
+          { size: 'lg', tone: 'warning', onClose: () => resolve('cancel') }
+        );
       }).then(async choice => {
         if (choice === 'cancel') return;
         // Re-call with the extra params set above
@@ -3758,45 +3727,32 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     seriesModal.classList.add("hidden");
     
     if (seriesAction === 'edit') {
-      // Show confirmation that this gig will be detached from the series
-      const detachOverlay = document.createElement('div');
-      detachOverlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:10003;padding:16px;box-sizing:border-box;';
-      detachOverlay.innerHTML = `
-        <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:2px solid rgba(245,158,11,0.4);border-radius:12px;padding:2rem;max-width:420px;width:100%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.6);">
-          <div style="font-size:2.5rem;margin-bottom:1rem;">📋</div>
-          <p style="color:#f0f0f0;margin:0 0 0.5rem;font-size:1.05rem;font-weight:700;">Save as Standalone Gig?</p>
-          <p style="color:#a0a0b0;margin:0 0 1.75rem;font-size:0.88rem;line-height:1.6;">
-            This gig will be <strong style="color:#f59e0b;">removed from the recurring series</strong> and saved as a standalone gig with your changes. The other gigs in the series won't be affected.
-          </p>
-          <div style="display:flex;gap:12px;justify-content:center;">
-            <button id="_detachSeriesCancel" class="btn ghost" style="min-width:100px;">Cancel</button>
-            <button id="_detachSeriesOk" class="btn primary" style="min-width:140px;">OK, Save Changes</button>
-          </div>
-        </div>
-      `;
-      document.body.appendChild(detachOverlay);
-
-      detachOverlay.querySelector('#_detachSeriesCancel').onclick = () => {
-        detachOverlay.remove();
-        // Re-show series modal so user can choose again
-        seriesModal.classList.remove("hidden");
-      };
-
-      detachOverlay.querySelector('#_detachSeriesOk').onclick = async () => {
-        detachOverlay.remove();
-        // Detach from series then save
-        try {
-          await api(`/api/gigs/${selectedGig.id}/detach-series`, { method: 'POST' });
-          selectedGig = Object.assign({}, selectedGig, { recurring_group_id: null, is_recurring: 0 });
-          if (venueGigsCache) {
-            const idx = venueGigsCache.findIndex(g => g.id === selectedGig.id);
-            if (idx !== -1) venueGigsCache[idx] = Object.assign({}, venueGigsCache[idx], { recurring_group_id: null, is_recurring: 0 });
-          }
-          await updateSingleGig(selectedGig.id);
-        } catch (e) {
-          showAlert("Failed to save: " + e.message);
-        }
-      };
+      // Phase 2 migration: was an inline DOM-builder confirm. Now uses
+      // showStyledModal — warning tone since it's a "you sure?" prompt
+      // for a permanent action.
+      window.showStyledModal(
+        '📋 Save as Standalone Gig?',
+        '<p>This gig will be <strong style="color:#f59e0b;">removed from the recurring series</strong> and saved as a standalone gig with your changes. The other gigs in the series won\'t be affected.</p>',
+        [
+          { text: 'Cancel', style: 'ghost', onClick: () => { seriesModal.classList.remove("hidden"); } },
+          { text: 'OK, Save Changes', style: 'primary',
+            onClick: async () => {
+              try {
+                await api(`/api/gigs/${selectedGig.id}/detach-series`, { method: 'POST' });
+                selectedGig = Object.assign({}, selectedGig, { recurring_group_id: null, is_recurring: 0 });
+                if (venueGigsCache) {
+                  const idx = venueGigsCache.findIndex(g => g.id === selectedGig.id);
+                  if (idx !== -1) venueGigsCache[idx] = Object.assign({}, venueGigsCache[idx], { recurring_group_id: null, is_recurring: 0 });
+                }
+                await updateSingleGig(selectedGig.id);
+              } catch (e) {
+                window.showErrorModal('Save Failed', e.message || 'Could not save the gig.');
+              }
+            }
+          },
+        ],
+        { size: 'sm', tone: 'warning' }
+      );
 
     } else if (seriesAction === 'delete') {
       // Delete only this gig
@@ -4636,81 +4592,77 @@ function initializeArtistSearch(venueId, venueData) {
     displayArtists
   };
 
+  // Phase 2 migration: ban/unban modals duplicated the my-artists.js
+  // versions for the search context. Same structure, same behavior, now
+  // delegated to showStyledModal with auto-toned error/success.
   window.banArtistFromSearch = async function(artistId, artistName, venueId) {
-    const modal = document.createElement('div');
-    modal.id = 'banSearchModal';
-    modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-    modal.innerHTML = `
-      <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid rgba(239, 68, 68, 0.5); border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
-        <h2 style="color: #ffffff; margin-bottom: 1rem; font-size: 1.5rem;">🚫 Ban Artist</h2>
-        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
-          <p style="color: #ef4444; margin: 0; font-weight: 500;">Ban <strong>${artistName}</strong> from your venue?</p>
-        </div>
-        <p style="color: #a1a1aa; margin-bottom: 1rem; font-size: 0.95rem;">
-          They will be permanently blocked from booking any gig at your venue — even during blast windows. This cannot be undone without manually removing the ban.
-        </p>
-        <div style="margin-bottom: 1.5rem;">
-          <label style="font-size: 0.85rem; color: #a1a1aa; display: block; margin-bottom: 6px;">Reason <span style="color: #6b7280;">(optional)</span></label>
-          <input id="banSearchReasonInput" type="text" placeholder="e.g. No-show, misconduct..."
-            style="width: 100%; padding: 8px 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #ffffff; font-size: 0.9rem; box-sizing: border-box; outline: none;">
-        </div>
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button id="cancelBanSearch" class="btn ghost" style="padding: 8px 16px;">Cancel</button>
-          <button id="confirmBanSearch" class="btn" style="padding: 8px 16px; background: #ef4444; border: 1px solid #ef4444;">Confirm Ban</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    document.getElementById('cancelBanSearch').onclick = () => modal.remove();
-    modal.onclick = e => { if (e.target === modal) modal.remove(); };
-    document.getElementById('confirmBanSearch').onclick = async () => {
-      const reason = document.getElementById('banSearchReasonInput').value.trim();
-      modal.remove();
-      try {
-        const r = await fetch(`/api/venues/${venueId}/ban-artist/${artistId}`, {
-          method: 'POST', credentials: 'include',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({reason})
-        });
-        if (r.ok) {
-          bannedArtistIds.add(artistId);
-          preferredArtistIds.delete(artistId);
-          displayArtists();
-        } else { alert('Failed to ban artist'); }
-      } catch(e) { alert('Error banning artist'); }
-    };
+    const safeName = (artistName || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      '🚫 Ban Artist',
+      `<div class="gf-notice gf-notice--error" style="margin-bottom:14px;">Ban <strong>${safeName}</strong> from your venue?</div>` +
+      `<p>They will be permanently blocked from booking any gig at your venue — even during blast windows. This cannot be undone without manually removing the ban.</p>` +
+      `<label style="font-size:0.85rem;color:var(--text-gray);display:block;margin:14px 0 6px;">Reason <span style="color:#6b7280;">(optional)</span></label>` +
+      `<input id="_banSearchReasonInput" type="text" placeholder="e.g. No-show, misconduct...">`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        {
+          text: 'Confirm Ban', style: 'danger',
+          onClick: async () => {
+            const reason = (document.getElementById('_banSearchReasonInput')?.value || '').trim();
+            try {
+              const r = await fetch(`/api/venues/${venueId}/ban-artist/${artistId}`, {
+                method: 'POST', credentials: 'include',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({reason})
+              });
+              if (r.ok) {
+                window.closeAllModals();
+                bannedArtistIds.add(artistId);
+                preferredArtistIds.delete(artistId);
+                displayArtists();
+              } else {
+                window.showErrorModal('Ban Failed', 'Could not ban artist. Please try again.');
+              }
+            } catch (e) {
+              window.showErrorModal('Ban Failed', 'Network error — please try again.');
+            }
+            return false;
+          }
+        },
+      ],
+      { tone: 'error' }
+    );
   };
 
   window.unbanArtistFromSearch = async function(artistId, artistName, venueId) {
-    const modal = document.createElement('div');
-    modal.id = 'unbanSearchModal';
-    modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-    modal.innerHTML = `
-      <div style="background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%); border: 2px solid rgba(239, 68, 68, 0.5); border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
-        <h2 style="color: #ffffff; margin-bottom: 1rem; font-size: 1.5rem;">Remove Ban</h2>
-        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
-          <p style="color: #ef4444; margin: 0; font-weight: 500;">Remove ban for <strong>${artistName}</strong>?</p>
-        </div>
-        <p style="color: #a1a1aa; margin-bottom: 1.5rem; font-size: 0.95rem;">
-          They will be able to request preferred artist status again and may appear in future blast emails.
-        </p>
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button id="cancelUnbanSearch" class="btn ghost" style="padding: 8px 16px;">Cancel</button>
-          <button id="confirmUnbanSearch" class="btn" style="padding: 8px 16px; background: #22c55e; border: 1px solid #22c55e;">Remove Ban</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    document.getElementById('cancelUnbanSearch').onclick = () => modal.remove();
-    modal.onclick = e => { if (e.target === modal) modal.remove(); };
-    document.getElementById('confirmUnbanSearch').onclick = async () => {
-      modal.remove();
-      try {
-        const r = await fetch(`/api/venues/${venueId}/ban-artist/${artistId}`, {
-          method: 'DELETE', credentials: 'include'
-        });
-        if (r.ok) { bannedArtistIds.delete(artistId); displayArtists(); }
-        else { alert('Failed to remove ban'); }
-      } catch(e) { alert('Error removing ban'); }
-    };
+    const safeName = (artistName || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      'Remove Ban',
+      `<div class="gf-notice gf-notice--success" style="margin-bottom:14px;">Remove ban for <strong>${safeName}</strong>?</div>` +
+      `<p>They will be able to request preferred artist status again and may appear in future blast emails.</p>`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        {
+          text: 'Remove Ban', style: 'primary',
+          onClick: async () => {
+            try {
+              const r = await fetch(`/api/venues/${venueId}/ban-artist/${artistId}`, { method: 'DELETE', credentials: 'include' });
+              if (r.ok) {
+                window.closeAllModals();
+                bannedArtistIds.delete(artistId);
+                displayArtists();
+              } else {
+                window.showErrorModal('Unban Failed', 'Could not remove ban. Please try again.');
+              }
+            } catch (e) {
+              window.showErrorModal('Unban Failed', 'Network error — please try again.');
+            }
+            return false;
+          }
+        },
+      ],
+      { tone: 'success' }
+    );
   };
   
   // v90: Initialize
@@ -5148,8 +5100,12 @@ window._showNewGigBlastPrompt = async function(gigEntries, blastSettings, _venue
       .toLocaleDateString('en-US', {month:'numeric', day:'numeric', year:'2-digit'});
   };
 
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:10002;padding:16px;box-sizing:border-box;';
+  // Phase 2 migration: was a 90-line inline DOM-builder modal (table with
+  // per-gig blast checkboxes + status message + dynamic button states).
+  // Now uses showStyledModal — same table markup inside, but the modal
+  // chrome (overlay + card + footer buttons) comes from the unified system.
+  // Default purple→cyan tone since this is a neutral "choose what to do"
+  // dialog, not an error or confirmation.
 
   let tableRows = rows.map(g => {
     const win = windowForGig(g.daysUntil);
@@ -5158,111 +5114,85 @@ window._showNewGigBlastPrompt = async function(gigEntries, blastSettings, _venue
     const radDefaultChecked  = radiusEnabled && win === '36h'; // radius default checked only at 36h
 
     return `<tr data-gig-id="${g.id}" data-show-radius="${showRadius}">
-      <td style="padding:10px 12px;font-size:0.88rem;color:#f0f0f0;white-space:nowrap;font-weight:600;">${fmt(g.date)}</td>
+      <td style="padding:10px 12px;font-size:0.88rem;color:var(--text);white-space:nowrap;font-weight:600;">${fmt(g.date)}</td>
       <td style="padding:10px 12px;">
-        <label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#d1d5db;cursor:pointer;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text-gray);cursor:pointer;">
           <input type="checkbox" class="pref-cb" data-gig="${g.id}" ${prefDefaultChecked ? 'checked' : ''} style="width:15px;height:15px;accent-color:#635bff;">
           All Preferred Artists
         </label>
       </td>
       <td style="padding:10px 12px;">
-        ${showRadius ? `<label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#d1d5db;cursor:pointer;">
+        ${showRadius ? `<label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text-gray);cursor:pointer;">
           <input type="checkbox" class="radius-cb" data-gig="${g.id}" ${radDefaultChecked ? 'checked' : ''} style="width:15px;height:15px;accent-color:#f59e0b;">
           All Artists within ${radiusMiles} mi
-        </label>` : `<span style="font-size:0.78rem;color:#555;">—</span>`}
+        </label>` : `<span style="font-size:0.78rem;color:var(--text-gray);">—</span>`}
       </td>
     </tr>`;
   }).join('');
 
-  overlay.innerHTML = `
-    <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:1px solid rgba(99,91,255,0.4);border-radius:14px;padding:1.75rem;max-width:600px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);">
-      <h2 style="color:#f0f0f0;font-size:1.1rem;font-weight:700;margin:0 0 6px 0;">⚡ Send Blast Emails?</h2>
-      <p style="color:#888;font-size:0.82rem;margin:0 0 16px 0;">These gigs fall within your Email Center blast windows. Choose which to blast:</p>
-      <div style="overflow-x:auto;">
-        <table style="width:100%;border-collapse:collapse;min-width:400px;">
-          <thead>
-            <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
-              <th style="padding:8px 12px;text-align:left;font-size:0.75rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Date</th>
-              <th style="padding:8px 12px;text-align:left;font-size:0.75rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Preferred Artists</th>
-              <th style="padding:8px 12px;text-align:left;font-size:0.75rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Radius Blast</th>
-            </tr>
-          </thead>
-          <tbody id="_blastTbody">
-            ${tableRows}
-          </tbody>
-        </table>
-      </div>
-      <div style="margin-top:20px;display:flex;gap:12px;justify-content:flex-end;">
-        <button id="_blastSkip" class="btn ghost">Skip</button>
-        <button id="_blastSend" class="btn primary">Send Selected Blasts</button>
-      </div>
-      <p id="_blastStatus" style="margin:10px 0 0;font-size:0.82rem;color:#a78bfa;text-align:right;display:none;"></p>
-    </div>
-  `;
-  document.body.appendChild(overlay);
+  const bodyHtml =
+    '<p>These gigs fall within your Email Center blast windows. Choose which to blast:</p>' +
+    '<div class="gf-panel" style="padding:0;margin-top:12px;overflow-x:auto;">' +
+      '<table style="width:100%;border-collapse:collapse;min-width:400px;">' +
+        '<thead><tr style="border-bottom:1px solid var(--border);">' +
+          '<th style="padding:10px 12px;text-align:left;font-size:0.72rem;color:var(--text-gray);font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">Date</th>' +
+          '<th style="padding:10px 12px;text-align:left;font-size:0.72rem;color:var(--text-gray);font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">Preferred Artists</th>' +
+          '<th style="padding:10px 12px;text-align:left;font-size:0.72rem;color:var(--text-gray);font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">Radius Blast</th>' +
+        '</tr></thead>' +
+        '<tbody id="_blastTbody">' + tableRows + '</tbody>' +
+      '</table>' +
+    '</div>';
 
-  overlay.querySelector('#_blastSkip').onclick = () => {
-    overlay.remove();
-    showGigSuccess('Gig created successfully!');
-  };
+  window.showStyledModal(
+    '⚡ Send Blast Emails?',
+    bodyHtml,
+    [
+      {
+        text: 'Skip', style: 'ghost',
+        onClick: () => { showGigSuccess('Gig created successfully!'); }
+      },
+      {
+        text: 'Send Selected Blasts', style: 'primary',
+        onClick: async () => {
+          // Read checkbox state from the current modal (which is still open).
+          const overlay = document.querySelector('.gfm-modal-overlay');
+          if (!overlay) return; // safety
+          const gigSelections = [];
+          for (const g of rows) {
+            const prefCb   = overlay.querySelector(`.pref-cb[data-gig="${g.id}"]`);
+            const radiusCb = overlay.querySelector(`.radius-cb[data-gig="${g.id}"]`);
+            const doPreferred = prefCb && prefCb.checked;
+            const doRadius    = radiusCb && radiusCb.checked;
+            if (!doPreferred && !doRadius) continue;
+            gigSelections.push({ id: g.id, blast_preferred: doPreferred, blast_all: doRadius, blast_radius: radiusMiles });
+          }
 
-  overlay.querySelector('#_blastSend').onclick = async () => {
-    const btn = overlay.querySelector('#_blastSend');
-    const status = overlay.querySelector('#_blastStatus');
-    btn.disabled = true;
-    btn.textContent = 'Sending...';
-    status.style.display = 'block';
+          if (gigSelections.length > 0) {
+            try {
+              await fetch(`/api/venues/${_venueId}/batch-blast`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ gigs: gigSelections })
+              });
+            } catch (e) { /* swallow — show success regardless */ }
+          }
 
-    // Collect all gig selections and send ONE batch request (one email per artist)
-    const gigSelections = [];
-    for (const g of rows) {
-      const prefCb   = overlay.querySelector(`.pref-cb[data-gig="${g.id}"]`);
-      const radiusCb = overlay.querySelector(`.radius-cb[data-gig="${g.id}"]`);
-      const doPreferred = prefCb && prefCb.checked;
-      const doRadius    = radiusCb && radiusCb.checked;
-      if (!doPreferred && !doRadius) continue;
-      gigSelections.push({ id: g.id, blast_preferred: doPreferred, blast_all: doRadius, blast_radius: radiusMiles });
-    }
+          window.closeAllModals();
+          if (typeof window.invalidateGigs === 'function') window.invalidateGigs();
+          if (typeof window.renderCalendar === 'function') window.renderCalendar();
 
-
-    let totalSent = 0;
-    if (gigSelections.length > 0) {
-      status.textContent = 'Sending batch blast…';
-      try {
-        const res = await fetch(`/api/venues/${_venueId}/batch-blast`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ gigs: gigSelections })
-        });
-        const data = await res.json();
-        totalSent = data.sent || 0;
-      } catch (e) {
-      }
-    } else {
-    }
-
-    overlay.remove();
-    if (typeof window.invalidateGigs === 'function') window.invalidateGigs();
-    if (typeof window.renderCalendar === 'function') window.renderCalendar();
-
-    // Show result — doubles as the gig creation confirmation
-    const done = document.createElement('div');
-    done.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:10003;';
-    done.innerHTML = `
-      <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:2px solid #22c55e;border-radius:12px;padding:2rem;max-width:380px;text-align:center;">
-        <div style="font-size:2.5rem;margin-bottom:1rem;">✓</div>
-        <p style="color:#f0f0f0;margin:0 0 1.5rem;font-size:0.95rem;line-height:1.5;">
-          ${gigSelections.length > 0
-            ? 'Gig created! Emails sent — artists will be alerted to your new gig!'
-            : 'Gig created successfully!'}
-        </p>
-        <button class="btn primary" style="min-width:100px;">Done</button>
-      </div>
-    `;
-    document.body.appendChild(done);
-    done.querySelector('button').onclick = () => done.remove();
-    done.addEventListener('click', e => { if (e.target === done) done.remove(); });
-  };
+          window.showSuccessModal(
+            'Gig Created',
+            gigSelections.length > 0
+              ? 'Emails sent — artists will be alerted to your new gig!'
+              : 'Gig created successfully!'
+          );
+          return false; // we already closed manually
+        }
+      },
+    ],
+    { size: 'lg' }
+  );
 };
 
