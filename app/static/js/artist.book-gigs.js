@@ -187,23 +187,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     return days;
   }
 
+  // Phase 2 migration: was a page-local helper that toggled visibility on
+  // the static #modalOverlay element. Now delegates to the canonical
+  // window.showSuccessModal in gf-modals.js so artist-side success toasts
+  // (booking confirmations, slot release, etc.) render with the unified
+  // green-stripe look. The static #modalOverlay HTML markup in
+  // artist-book-gigs.html is now unused for this path and can be deleted
+  // in Phase 4 cleanup.
   function showSuccessModal(title, message) {
-    const overlay = document.getElementById("modalOverlay");
-    const modalTitle = document.getElementById("modalTitle");
-    const modalBody = document.getElementById("modalBody");
-    const modalActions = document.getElementById("modalActions");
-
-    modalTitle.textContent = title;
-    modalBody.innerHTML = `
-      <div style="text-align: center; padding: 20px;">
-        <div style="font-size: 3rem; margin-bottom: 16px;">✓</div>
-        <p style="font-size: 1.1rem; color: #10b981; font-weight: 600; margin-bottom: 24px;">${message}</p>
-        <button class="btn primary" onclick="document.getElementById('modalOverlay').classList.add('hidden')" style="min-width: 120px;">OK</button>
-      </div>
-    `;
-    if (modalActions) modalActions.style.display = 'none';
-
-    overlay.classList.remove("hidden");
+    return window.showSuccessModal(title, message);
   }
 
   function daysBetween(date1Str, date2Str) {
@@ -2367,16 +2359,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   window.openGigModal = openGigModal;
   // Expose applyFilters globally for preferred venue search
   window.applyFilters = applyFilters;
-  // Expose functions needed by contract signing modals (defined outside DOMContentLoaded)
-  window.showSuccessModal = showSuccessModal;
-  // NOTE (Phase 2 May 2026): no longer publishing showStyledModal to window.
-  // The canonical version is gf-modals.js's window.showStyledModal; this
-  // module's local showStyledModal is now a thin adapter that delegates
-  // there with legacy-button-shape mapping + auto-tone for error titles.
-  // Reassigning window.showStyledModal here would point window at the
-  // adapter, causing infinite recursion when the adapter calls window's
-  // version. External callers (gig-modal.js etc.) get the canonical helper
-  // directly from window — they don't need the adapter's auto-tone logic.
+  // NOTE (Phase 2 May 2026): no longer publishing showSuccessModal /
+  // showStyledModal to window. The canonical versions are gf-modals.js's
+  // window.showSuccessModal / window.showStyledModal; this module's local
+  // versions are now thin adapters that delegate there. Reassigning to
+  // window would point window at the adapter, causing infinite recursion
+  // when the adapter calls window's version. External callers
+  // (gig-modal.js etc.) get the canonical helpers directly from window —
+  // they don't need the adapter's mapping logic.
   window.loadGigs = loadGigs;
   window.loadMyGigs = loadMyGigs;
   window.renderCalendar = renderCalendar;
@@ -2420,82 +2410,82 @@ function showStyledModal(title, content, buttons, opts) {
  */
 function showContractSigningModal(gig, preview, artistId) {
   const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:10002; display:flex; align-items:flex-start; justify-content:center; padding-top:30px; overflow-y:auto;';
+  // Phase 2 migration: was an inline-styled modal with custom layout for
+  // the contract body + signature input + status message. Replaced with
+  // showStyledModal — body uses gf-panel for the contract scroll area,
+  // input is bare (modal CSS styles it), status message is a div in the
+  // body that the button's onClick updates in place during async work.
+  const bodyHtml =
+    '<p>Read the contract below carefully. Type your full legal name to sign and confirm your booking.</p>' +
+    '<div class="gf-panel" style="background:var(--bg);font-size:0.85rem;line-height:1.7;color:#e5e5e5;max-height:50vh;overflow-y:auto;margin-top:12px;">' +
+      (preview.rendered_body || '') +
+    '</div>' +
+    '<label style="font-size:0.85rem;color:var(--cyan);display:block;margin:18px 0 8px;">Sign by typing your full legal name:</label>' +
+    '<input type="text" id="contractSignatureName" placeholder="Your Full Legal Name" style="font-style:italic;font-size:1rem;">' +
+    '<div id="contractSignStatus" style="font-size:0.82rem;margin-top:10px;text-align:right;min-height:20px;"></div>';
 
-  // Render HTML contract body safely
-  const bodyHtml = preview.rendered_body || '';
+  window.showStyledModal(
+    '📋 Contract — Review & Sign to Book',
+    bodyHtml,
+    [
+      { text: 'Cancel', style: 'ghost' },
+      {
+        text: 'Sign & Book This Gig', style: 'primary',
+        onClick: async () => {
+          const overlay = document.querySelector('.gfm-modal-overlay');
+          if (!overlay) return;
+          const sigInput = overlay.querySelector('#contractSignatureName');
+          const statusEl = overlay.querySelector('#contractSignStatus');
+          const btns = overlay.querySelectorAll('.gfm-modal-footer .btn');
+          const signBtn = btns[btns.length - 1];
+          const sigName = (sigInput?.value || '').trim();
+          const setStatus = (msg, color) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color; } };
 
-  modal.innerHTML = `
-    <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%); border:2px solid rgba(124,107,255,0.4); border-radius:12px; padding:24px; max-width:750px; width:95%; max-height:90vh; display:flex; flex-direction:column; box-shadow:0 8px 32px rgba(124,107,255,0.3);">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
-        <h2 style="margin:0; font-size:1.1rem; color:#fff;">📋 Contract — Review & Sign to Book</h2>
-        <button class="btn ghost" onclick="this.closest('[style*=position]').remove()" style="padding:4px 12px; font-size:0.8rem;">✕ Close</button>
-      </div>
-      <p style="font-size:0.8rem; color:var(--text-gray); margin:0 0 12px;">Read the contract below carefully. Type your full legal name to sign and confirm your booking.</p>
-      <div style="flex:1; overflow-y:auto; background:#0a0e14; border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:16px; font-size:0.85rem; line-height:1.7; color:#e5e5e5; min-height:200px; max-height:50vh;">${bodyHtml}</div>
-      <div style="border-top:1px solid var(--border); padding-top:16px;">
-        <label style="font-size:0.85rem; color:var(--cyan); display:block; margin-bottom:8px;">Sign by typing your full legal name:</label>
-        <input type="text" id="contractSignatureName" placeholder="Your Full Legal Name" style="width:100%; padding:10px 14px; font-size:1rem; font-style:italic; margin-bottom:12px; background:#0a0e14; border:1px solid var(--border); border-radius:8px; color:#fff;">
-        <div style="display:flex; gap:12px; justify-content:flex-end;">
-          <button class="btn ghost" onclick="this.closest('[style*=position]').remove()">Cancel</button>
-          <button class="btn primary" id="contractSignAndBookBtn">Sign & Book This Gig</button>
-        </div>
-        <div id="contractSignStatus" style="font-size:0.8rem; margin-top:8px; text-align:right;"></div>
-      </div>
-    </div>`;
+          if (!sigName) { setStatus('Please type your full legal name to sign.', '#ef4444'); return false; }
+          if (sigName.length < 2) { setStatus('Please enter your full name.', '#ef4444'); return false; }
 
-  document.body.appendChild(modal);
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+          signBtn.disabled = true;
+          signBtn.textContent = 'Signing & Booking...';
+          setStatus('', '');
 
-  const signBtn = modal.querySelector('#contractSignAndBookBtn');
-  signBtn.onclick = async () => {
-    const sigName = modal.querySelector('#contractSignatureName').value.trim();
-    const statusEl = modal.querySelector('#contractSignStatus');
-    if (!sigName) { statusEl.textContent = 'Please type your full legal name to sign.'; statusEl.style.color = '#ef4444'; return; }
-    if (sigName.length < 2) { statusEl.textContent = 'Please enter your full name.'; statusEl.style.color = '#ef4444'; return; }
-
-    signBtn.disabled = true;
-    signBtn.textContent = 'Signing & Booking...';
-    statusEl.textContent = '';
-
-    try {
-      const bookingPayload = { artist_id: artistId, signature_name: sigName };
-      // If this was triggered from a slot booking, include slot_id
-      if (window._pendingSlotBooking) {
-        bookingPayload.slot_id = window._pendingSlotBooking.slotId;
-      }
-      const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bookingPayload)
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Booking failed');
-      }
-      modal.remove();
-      window._pendingContractInfo = null;
-      const wasSlotBooking = !!window._pendingSlotBooking;
-      window._pendingSlotBooking = null;
-      if (typeof window.showSuccessModal === 'function') {
-        window.showSuccessModal("Gig Booked & Contract Signed!", wasSlotBooking ? "Your slot booking is confirmed." : "Your booking is confirmed. The venue will be notified.");
-        // Refresh calendar behind modal
-        if (typeof window.loadGigs === 'function') await window.loadGigs();
-        if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-        if (typeof window.renderCalendar === 'function') window.renderCalendar();
-      }
-      if (typeof window.loadGigs === 'function') await window.loadGigs();
-      if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-      if (window.activityCenter) await window.activityCenter.loadNotifications();
-      if (typeof window.renderCalendar === 'function') window.renderCalendar();
-      if (typeof window.loadArtistEarningsHistory === 'function') window.loadArtistEarningsHistory();
-    } catch (e) {
-      signBtn.disabled = false;
-      signBtn.textContent = 'Sign & Book This Gig';
-      statusEl.textContent = e.message;
-      statusEl.style.color = '#ef4444';
-    }
-  };
+          try {
+            const bookingPayload = { artist_id: artistId, signature_name: sigName };
+            if (window._pendingSlotBooking) {
+              bookingPayload.slot_id = window._pendingSlotBooking.slotId;
+            }
+            const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(bookingPayload)
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.detail || 'Booking failed');
+            }
+            window.closeAllModals();
+            window._pendingContractInfo = null;
+            const wasSlotBooking = !!window._pendingSlotBooking;
+            window._pendingSlotBooking = null;
+            window.showSuccessModal(
+              'Gig Booked & Contract Signed!',
+              wasSlotBooking ? 'Your slot booking is confirmed.' : 'Your booking is confirmed. The venue will be notified.'
+            );
+            if (typeof window.loadGigs === 'function') await window.loadGigs();
+            if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
+            if (window.activityCenter) await window.activityCenter.loadNotifications();
+            if (typeof window.renderCalendar === 'function') window.renderCalendar();
+            if (typeof window.loadArtistEarningsHistory === 'function') window.loadArtistEarningsHistory();
+          } catch (e) {
+            signBtn.disabled = false;
+            signBtn.textContent = 'Sign & Book This Gig';
+            setStatus(e.message, '#ef4444');
+          }
+          return false; // we close manually on success
+        }
+      },
+    ],
+    { size: 'xl' }
+  );
 }
 
 /**
