@@ -2396,27 +2396,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 // Phase 2 migration (May 2026): the old dom-builder version of this helper
-// shipped its own inline cssText (purple-bordered gradient card with hard-
-// coded fonts/colors) — see git blame for the v73 original. Now delegates
-// to the canonical window.showStyledModal in gf-modals.js so this page's
-// popups inherit the unified look. Two adaptations:
-//   1. Legacy button shape was {text, style, action}; new is
-//      {text, style, onClick}. Map action→onClick and default style.
-//   2. Older callers don't pass opts. Auto-tone modals whose title contains
-//      a negative-action keyword (Error / Failed / Cancellation / Could Not
-//      / Unavailable / etc.) so errors visually telegraph as red. Caller-
-//      supplied opts.tone always wins.
+// shipped its own inline cssText. Now a thin adapter that delegates to the
+// canonical window.showStyledModal in gf-modals.js. Only adapts the legacy
+// button shape ({text, style, action} → {text, style, onClick}). Auto-tone
+// based on title text is handled centrally inside gf-modals._buildModal,
+// so every call site across the app gets consistent tones without each
+// caller needing to pass {tone:'error'} explicitly.
 function showStyledModal(title, content, buttons, opts) {
   const adapted = (buttons || []).map(b => ({
     text:    b.text,
     style:   b.style || 'primary',
     onClick: b.action || b.onClick,
   }));
-  let mergedOpts = opts || {};
-  if (!mergedOpts.tone && /(error|fail|cancel|unavailable|invalid|denied|could ?not|cannot)/i.test(String(title || ''))) {
-    mergedOpts = Object.assign({}, mergedOpts, { tone: 'error' });
-  }
-  return window.showStyledModal(title, content, adapted, mergedOpts);
+  return window.showStyledModal(title, content, adapted, opts);
 }
 
 // ============================================
