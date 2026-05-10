@@ -1,0 +1,323 @@
+/*
+ * ============================================================================
+ * GigsFill Modal System — single source of truth (PREVIEW v2)
+ * ============================================================================
+ * Aligned to the visual language used on artist-book-gigs.html → Payments tab:
+ *   - Solid dark surfaces (var(--card) = #151b28) instead of gradients
+ *   - Subtle gray borders (var(--border))
+ *   - Purple→cyan gradient ONLY on the title text + a 3px top stripe
+ *     (matches the existing #modalTitle and .modal-separator look)
+ *   - Section sub-headers in cyan or light-purple, uppercase, letter-spaced
+ *   - KPI / info bubbles with rgba purple/green/amber tints
+ *   - Form controls all use var(--card) — same color the working dropdowns
+ *     on the Payments tab use, so Firefox inherits it cleanly to options
+ *
+ * Tokens reused from gigsfill.css :root:
+ *   --bg #0a0e17    page bg (darkest)
+ *   --card #151b28  card surface (mid)
+ *   --purple #8b5cf6
+ *   --cyan #06b6d4
+ *   --text #f8fafc
+ *   --text-gray #94a3b8
+ *   --border rgba(148, 163, 184, 0.1)
+ * ============================================================================
+ */
+
+/* ── Backdrop overlay ──────────────────────────────────────────────────── */
+.gf-modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10000;
+  padding: 16px;
+  animation: gf-modal-fade 0.18s ease-out;
+}
+.gf-modal-overlay.gf-modal-closing {
+  animation: gf-modal-fade 0.15s ease-in reverse forwards;
+}
+
+@keyframes gf-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Modal card ────────────────────────────────────────────────────────── */
+.gf-modal {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  width: 100%;
+  max-width: 540px;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  animation: gf-modal-scale 0.18s ease-out;
+}
+
+@keyframes gf-modal-scale {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Top accent stripe — purple → cyan, matches the existing .modal-separator.
+ * Tone variants below override this with green/red/amber to telegraph the
+ * modal's mood (success / error / warning) at a glance, before the user
+ * even reads the title. */
+.gf-modal::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #a855f7, #06b6d4, #a855f7);
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.35);
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+/* ── Tone variants ─────────────────────────────────────────────────────── */
+/* Success — green stripe + green→cyan title. Use for booking confirmations,
+ * payment success, save-completed dialogs. */
+.gf-modal--success::before {
+  background: linear-gradient(90deg, #10b981, #06b6d4, #10b981);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+}
+.gf-modal--success .gf-modal-title {
+  background: linear-gradient(135deg, #10b981, #06b6d4);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+
+/* Error — red stripe + red→amber title. Use for booking denied, payment
+ * failed, slot unavailable, validation errors. */
+.gf-modal--error::before {
+  background: linear-gradient(90deg, #ef4444, #f59e0b, #ef4444);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+}
+.gf-modal--error .gf-modal-title {
+  background: linear-gradient(135deg, #ef4444, #f59e0b);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+
+/* Warning — amber stripe + amber→yellow title. Use for cancel-payment
+ * confirmations, "are you sure" destructive actions, free-trial nags. */
+.gf-modal--warning::before {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24, #f59e0b);
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
+}
+.gf-modal--warning .gf-modal-title {
+  background: linear-gradient(135deg, #f59e0b, #fbbf24);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+
+/* Info (alias for the default purple→cyan) — explicit class so call sites
+ * can be self-documenting, e.g. tone:'info' for purely informational modals. */
+.gf-modal--info::before {
+  background: linear-gradient(90deg, #a855f7, #06b6d4, #a855f7);
+}
+
+/* ── Width variants ────────────────────────────────────────────────────── */
+.gf-modal--sm   { max-width: 400px; }
+.gf-modal--md   { max-width: 540px; }
+.gf-modal--lg   { max-width: 720px; }
+.gf-modal--xl   { max-width: 920px; }
+.gf-modal--full { max-width: calc(100vw - 32px); }
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+.gf-modal-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* Title — purple→cyan gradient text, matches existing #modalTitle style */
+.gf-modal-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  background: linear-gradient(135deg, #a855f7, #06b6d4);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  word-break: break-word;
+}
+
+.gf-modal-close {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 32px; height: 32px;
+  color: var(--text-gray);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.gf-modal-close:hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+}
+
+/* ── Body ──────────────────────────────────────────────────────────────── */
+.gf-modal-body {
+  padding: 20px 24px;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  overflow-y: auto;
+  flex: 1;
+}
+.gf-modal-body p:first-child { margin-top: 0; }
+.gf-modal-body p:last-child  { margin-bottom: 0; }
+.gf-modal-body p             { color: var(--text-gray); }
+.gf-modal-body strong        { color: var(--text); font-weight: 700; }
+.gf-modal-body--flush        { padding: 0; }
+
+/* Section sub-headers used inside modals — uppercase, letter-spaced.
+ * Use .gf-section--cyan or .gf-section--purple for the accent color. */
+.gf-modal-body .gf-section,
+.gf-modal-body h3.gf-section {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--cyan);
+}
+.gf-modal-body .gf-section--purple { color: #a78bfa; }
+
+/* Info bubble — purple-tinted KPI/info card style from Payments tab. */
+.gf-modal-body .gf-bubble {
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--text-gray);
+}
+.gf-modal-body .gf-bubble strong { color: #c4b5fd; }
+
+/* Status notices (success / warning / error) — same look as the Payments
+ * tab status banners. */
+.gf-modal-body .gf-notice {
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  border: 1px solid;
+}
+.gf-modal-body .gf-notice--success { background: rgba(16, 185, 129, 0.1);  border-color: rgba(16, 185, 129, 0.3);  color: #6ee7b7; }
+.gf-modal-body .gf-notice--warning { background: rgba(245, 158, 11, 0.1);  border-color: rgba(245, 158, 11, 0.3);  color: #fbbf24; }
+.gf-modal-body .gf-notice--error   { background: rgba(239, 68, 68, 0.1);   border-color: rgba(239, 68, 68, 0.3);   color: #fca5a5; }
+.gf-modal-body .gf-notice strong   { color: var(--text); }
+
+/* Inner panel — slightly darker surface for nested content (matches the
+ * "Earnings by Month" / "By Venue" cards on the Payments tab). */
+.gf-modal-body .gf-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+.gf-modal-footer {
+  padding: 14px 24px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.gf-modal-footer .btn { min-width: 110px; font-size: 0.85rem; }
+
+/* ── Form controls ─────────────────────────────────────────────────────── */
+/* All inputs/selects/textareas inside .gf-modal-body share the same surface:
+ * solid var(--card). This is the same color the Payments tab dropdown uses
+ * (which renders correctly on Firefox/Chrome), so Firefox inherits it
+ * cleanly to <option> elements without needing forced overrides. */
+.gf-modal-body select,
+.gf-modal-body input[type="text"],
+.gf-modal-body input[type="email"],
+.gf-modal-body input[type="tel"],
+.gf-modal-body input[type="password"],
+.gf-modal-body input[type="number"],
+.gf-modal-body input[type="search"],
+.gf-modal-body input[type="url"],
+.gf-modal-body input[type="date"],
+.gf-modal-body input[type="time"],
+.gf-modal-body textarea {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 12px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.gf-modal-body select:focus,
+.gf-modal-body input:focus,
+.gf-modal-body textarea:focus {
+  outline: none;
+  border-color: rgba(168, 85, 247, 0.5);
+}
+
+/* Custom chevron on selects so the arrow color matches our text-gray rather
+ * than whatever OS tint the default arrow uses. */
+.gf-modal-body select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='%2394a3b8' d='M6 8L0 0h12z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+}
+
+/* Option list — Firefox honors these reliably. We use the same surface as
+ * the select itself for visual continuity. Chrome/Edge also paint these.
+ * Mobile Safari uses iOS native picker regardless (platform limit). */
+.gf-modal-body select option,
+.gf-modal-body select optgroup {
+  background-color: var(--card);
+  color: var(--text);
+  padding: 6px 10px;
+}
+.gf-modal-body select option:checked {
+  background-color: rgba(139, 92, 246, 0.25);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── Mobile ────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .gf-modal-overlay { padding: 8px; }
+  .gf-modal { max-height: calc(100vh - 16px); }
+  .gf-modal-header { padding: 16px 18px 12px; }
+  .gf-modal-body { padding: 16px 18px; }
+  .gf-modal-footer { padding: 12px 18px 14px; }
+  .gf-modal-title { font-size: 1.1rem; }
+  .gf-modal-footer .btn { flex: 1; min-width: 0; }
+}
