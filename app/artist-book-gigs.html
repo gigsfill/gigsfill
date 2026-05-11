@@ -1467,7 +1467,7 @@
 <script src="/app/static/js/gf-modals.js?v=6"></script>
 <script src="/app/static/js/activity-center.js?v=100"></script>
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/artist-stripe-payment.js?v=6" defer></script>
+<script src="/app/static/js/artist-stripe-payment.js?v=7" defer></script>
 <script src="/app/static/js/flyer-overlay.js"></script>
 <!-- Block all artist-specific API calls until artist.book-gigs.js confirms access -->
 <script>
@@ -1801,7 +1801,7 @@
 <section class="panel">
   <!-- Payout Info Notice -->
   <div style="margin-bottom: 16px; padding: 14px 18px; border-radius: 8px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.8rem; line-height: 1.6; color: var(--text-gray); text-align: left;">
-    <strong style="color: #10b981;">💰 How Payouts Work:</strong> Your Gig Fee (minus the GigsFill service fee of <span id="artistFeePercent">…</span>%) is released to your bank the day after the gig is completed.
+    <strong style="color: #10b981;">💰 How Payouts Work:</strong> Your Gig Fee (minus the GigsFill service fee of <span id="artistFeePercent">…</span>%) is transferred to your Stripe account the day after the gig. Stripe holds the funds while the venue's card payment settles, then releases to your bank — typically <strong>5&ndash;7 business days</strong> after the gig.
   </div>
 
   <!-- Stripe Connect Onboarding -->
@@ -1909,7 +1909,7 @@
   <!-- Earnings History -->
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:0 0 20px 0;">
-      <h2 class="section-header" style="margin:0;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;text-align:left;">EARNINGS HISTORY  <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);font-size:0.9rem;">(payouts are released at 5:00 PM the day after the gig)</span></h2>
+      <h2 class="section-header" style="margin:0;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;text-align:left;">EARNINGS HISTORY  <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);font-size:0.9rem;">(payouts initiate at 5:00 PM the day after the gig; bank deposit typically 5&ndash;7 business days after the gig)</span></h2>
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="position:relative;">
           <button onclick="var dd=document.getElementById('artistEarnExportDD');dd.style.display=dd.style.display==='block'?'none':'block';" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:var(--text-muted);padding:5px 14px;border-radius:6px;font-size:0.78rem;cursor:pointer;font-weight:500;">Export ▾</button>

@@ -398,9 +398,30 @@ def process_payouts_now():
                 continue  # Still not onboarded
 
             try:
-                # Use source_transaction if we have the original PaymentIntent to bypass pending balance issue
+                # PROD FIX (May 11 2026): set source_transaction on retry
+                # transfers too. Without it, Stripe doesn't chain the
+                # artist's funds to the venue charge — funds become
+                # "available" in the artist's Connect immediately and
+                # could be paid out to bank before the venue's card has
+                # actually settled to our account (~3 business days). If
+                # the charge were disputed in that window, we'd have to
+                # eat the loss.
+                # The retry path's txn is the artist_payout CHILD which
+                # has no stripe_payment_intent_id directly — PIs live on
+                # the parent venue_charge. Walk up via parent_transaction_id
+                # to find the PI, then expand to the latest charge.
                 retry_charge_id = None
-                pi_id = txn["stripe_payment_intent_id"] if txn["stripe_payment_intent_id"] else None
+                pi_id = txn["stripe_payment_intent_id"] if "stripe_payment_intent_id" in txn.keys() and txn["stripe_payment_intent_id"] else None
+                if not pi_id:
+                    try:
+                        parent_row = conn.execute(
+                            "SELECT stripe_payment_intent_id FROM transactions WHERE id = (SELECT parent_transaction_id FROM transactions WHERE id = ?)",
+                            (txn_id,)
+                        ).fetchone()
+                        if parent_row and parent_row[0]:
+                            pi_id = parent_row[0]
+                    except Exception:
+                        pass
                 if pi_id:
                     try:
                         pi_obj = stripe.PaymentIntent.retrieve(pi_id, expand=["latest_charge"])

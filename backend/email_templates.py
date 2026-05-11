@@ -1472,7 +1472,7 @@ TEMPLATES = {
 </tr>
 </tbody>
 </table>
-<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">The artist has been notified and will receive their payment within 1-2 business days.</p>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">The artist has been notified. Funds typically reach their bank within 5&ndash;7 business days of the gig.</p>
 <a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Calendar</a>
 </td>
 </tr>
@@ -1503,7 +1503,7 @@ TEMPLATES = {
 <tr>
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">&#128184; Payment Sent!</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Great news, {{artist_name}}! Your payment for the gig at {{venue_name}} has been transferred to your Stripe account and should arrive in your bank within 1&#8211;2 business days.</p>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Great news, {{artist_name}}! Your payment for the gig at {{venue_name}} has been transferred to your Stripe account. Stripe holds the funds while the venue's card payment settles, then releases to your bank &mdash; typically <strong>5&ndash;7 business days</strong> after the gig.</p>
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
 <tbody>
 <tr>
@@ -1543,7 +1543,7 @@ TEMPLATES = {
 </tr>
 </tbody>
 </table>
-<p style="margin: 0; font-size: 14px; color: #6b7280;">Funds should appear in your connected bank account within 1-2 business days.</p>
+<p style="margin: 0; font-size: 14px; color: #6b7280;">Funds typically appear in your connected bank account 5&ndash;7 business days after the gig.</p>
 </td>
 </tr>
 <tr>
