@@ -561,11 +561,21 @@ def charge_booking(data: dict, user=Depends(get_current_user), db=Depends(get_db
         {"gid": gig_id}
     ).mappings().first()
     
-    # Schedule payout for day after gig at configured time
+    # Schedule payout for day after gig at configured time, in venue's local tz,
+    # stored as naive UTC (same convention as _create_booking_transaction in
+    # routes/gigs.py). Server runs UTC so naive datetime.combine() here would
+    # otherwise mean 17:00 UTC = 10am Pacific — payout fires 7h early for CA venues.
     if gig and gig["date"]:
         from datetime import date as date_type
+        from backend.utils import get_venue_timezone_str
+        from zoneinfo import ZoneInfo
         gig_date = gig["date"] if isinstance(gig["date"], date_type) else datetime.strptime(str(gig["date"]), "%Y-%m-%d").date()
-        payout_date = datetime.combine(gig_date + timedelta(days=1), datetime.min.time().replace(hour=17))
+        venue_tz_str = get_venue_timezone_str(db, venue_id)
+        local_dt = datetime.combine(
+            gig_date + timedelta(days=1),
+            datetime.min.time().replace(hour=17),
+        ).replace(tzinfo=ZoneInfo(venue_tz_str))
+        payout_date = local_dt.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     else:
         payout_date = utcnow_naive() + timedelta(days=2)
     

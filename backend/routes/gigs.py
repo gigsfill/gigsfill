@@ -716,11 +716,20 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                         "SELECT date FROM gigs WHERE id=?", (_gig_id_cu,)
                     ).fetchone()
                     if not gig_row: conn.close(); return
+                    # TZ FIX: use the VENUE's timezone (gig.date is venue-local).
+                    # Falls back to platform tz, then to a UTC date as last resort.
                     try:
-                        import pytz as _cup_pytz
-                        _cup_tz_str = conn.execute("SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'").fetchone()
-                        _cup_tz = _cup_pytz.timezone((_cup_tz_str[0] if _cup_tz_str else None) or "America/Los_Angeles")
-                        _cup_today = __import__('datetime').datetime.now(_cup_tz).date()
+                        from zoneinfo import ZoneInfo as _cup_zi
+                        _vrow = conn.execute("SELECT timezone, state FROM venues WHERE id=?", (_venue_id_cu,)).fetchone()
+                        _vtz_str = (_vrow[0] if _vrow and _vrow[0] else None)
+                        if not _vtz_str:
+                            from backend.utils import US_STATE_TIMEZONES as _ust
+                            _st = (_vrow[1] if _vrow and _vrow[1] else '').strip().upper()
+                            _vtz_str = _ust.get(_st)
+                        if not _vtz_str:
+                            _pf = conn.execute("SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'").fetchone()
+                            _vtz_str = (_pf[0] if _pf else None) or "America/Los_Angeles"
+                        _cup_today = __import__('datetime').datetime.now(_cup_zi(_vtz_str)).date()
                     except Exception:
                         _cup_today = _date.today()
                     days_until = (_dt.strptime(gig_row["date"], "%Y-%m-%d").date() - _cup_today).days
@@ -1515,7 +1524,12 @@ def book_gig(
         {"vid": gig["venue_id"]}
     ).first()
     if venue_tax and venue_tax[0]:
-        current_year = date.today().year
+        # TZ FIX: use venue-local "today" so year boundary follows the venue's
+        # clock, not server UTC. Otherwise a Pacific venue at 11pm Dec 31 would
+        # see UTC = Jan 1 and fail a Dec 31 booking on W-9 grounds.
+        from backend.utils import get_venue_timezone
+        _w9_tz = get_venue_timezone(db, gig["venue_id"])
+        current_year = datetime.now(_w9_tz).year
         w9 = db.execute(
             text("SELECT tax_year FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :aid ORDER BY tax_year DESC LIMIT 1"),
             {"aid": artist_id}
@@ -1530,7 +1544,11 @@ def book_gig(
     if not gig["frequency_exempt"] and not token_valid:
         try:
             from datetime import date as _date_cls
-            _today = _date_cls.today()
+            # TZ FIX: use venue-local "today" so days_until matches the venue's
+            # calendar day, not server UTC. Off-by-1 near UTC midnight would
+            # mis-classify blast windows for west-coast venues.
+            from backend.utils import get_venue_timezone as _gvt
+            _today = datetime.now(_gvt(db, gig["venue_id"])).date()
             _gig_date = _date_cls.fromisoformat(str(gig["date"])[:10])
             _days_until = (_gig_date - _today).days
             if _days_until >= 0:
@@ -2353,13 +2371,22 @@ def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depen
     # 2026-05-08), but a direct API call or a stale browser tab can still
     # corrupt an in-progress gig — overwrite pay/times, delete open slots,
     # renumber. Refuse the edit if the gig has already started.
+    #
+    # TZ FIX (May 11 2026): the prod server runs UTC but gig.start_time is
+    # stored as venue-local (e.g. "19:00" = 7pm Pacific). Naive datetime.now()
+    # returns UTC, so a gig 6 hours before its actual start was being flagged
+    # in-progress and the venue's Save click was 409'd silently. Compare in
+    # the venue's timezone instead.
     if gig.get("date") and gig.get("start_time"):
         try:
-            _start = datetime.strptime(
+            from backend.utils import get_venue_timezone
+            _venue_tz = get_venue_timezone(db, gig["venue_id"])
+            _start_naive = datetime.strptime(
                 f"{str(gig['date'])[:10]} {gig['start_time']}",
                 "%Y-%m-%d %H:%M"
             )
-            if datetime.now() >= _start:
+            _start = _start_naive.replace(tzinfo=_venue_tz)
+            if datetime.now(_venue_tz) >= _start:
                 raise HTTPException(409, "GIG_IN_PROGRESS: Cannot edit a gig that has already started.")
         except ValueError:
             # Malformed time string — fall through; the rest of the endpoint
@@ -3341,7 +3368,9 @@ def book_slot(
         {"vid": gig["venue_id"]}
     ).first()
     if venue_tax and venue_tax[0]:
-        current_year = date.today().year
+        # TZ FIX: venue-local year (see W-9 fix in book_slot above).
+        from backend.utils import get_venue_timezone
+        current_year = datetime.now(get_venue_timezone(db, gig["venue_id"])).year
         w9 = db.execute(
             text("SELECT tax_year FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :aid ORDER BY tax_year DESC LIMIT 1"),
             {"aid": artist_id}

@@ -2847,11 +2847,25 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     if (typeof window.checkVenuePaymentMethod === 'function' && !window.checkVenuePaymentMethod()) {
       return; // Payment method required modal will be shown
     }
-    
+
+    // Front-line in-progress guard: the modal may have been opened before
+    // the gig's start time but Save is clicked after — backend correctly
+    // refuses with 409 GIG_IN_PROGRESS but the user just sees "nothing
+    // happened". Catch it here before making any backend calls (especially
+    // the detach-series call, which runs first and would otherwise leave
+    // the DB half-mutated).
+    if (selectedGig && selectedGig.id && isGigStartedToday(selectedGig) && !isGigEndPassed(selectedGig)) {
+      showAlert(
+        "This gig has already started and can no longer be edited. Close this window and refresh to see current state.",
+        "Gig In Progress"
+      );
+      return;
+    }
+
     const origText = saveBtn.textContent;
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
-    
+
     try {
       if (selectedGig.id) {
         // If venue confirmed detach from recurring series, do that first then save standalone
@@ -2899,6 +2913,18 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       }
     } catch (e) {
       console.error('Save gig error:', e);
+      // Surface the backend error to the user. api() throws Error(responseBody),
+      // which for FastAPI is typically `{"detail":"..."}` — extract the detail
+      // for a clean message. Falls back to the raw text if parsing fails.
+      let msg = (e && e.message) || 'Could not save changes.';
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed && parsed.detail) msg = parsed.detail;
+      } catch (_) { /* not JSON — keep raw text */ }
+      // Strip the leading machine code (e.g. "GIG_IN_PROGRESS: ") so the user
+      // sees only the human-readable part.
+      msg = msg.replace(/^[A-Z_]+:\s*/, '');
+      showAlert(msg, 'Could Not Save');
     } finally {
       saveBtn.disabled = false;
       saveBtn.textContent = origText;

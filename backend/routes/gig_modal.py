@@ -440,12 +440,15 @@ def get_gig_modal_data(
             gig_state = "open"
 
     # ── Timing ────────────────────────────────────────────────────────────
+    # TZ FIX (May 11 2026): use the VENUE's timezone, not platform tz. Gig
+    # date/start_time/end_time are stored as venue-local strings; comparing
+    # against platform-tz "now" is wrong whenever venue tz != platform tz
+    # (e.g. a NY venue when platform tz is America/Los_Angeles would appear
+    # in-progress 3h early). Use venue tz so gigs in any state correctly
+    # transition past/in-progress in their own local time.
     try:
-        import pytz as _gz_pytz
-        _tz_str = db.execute(text(
-            "SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'"
-        )).scalar() or "America/Los_Angeles"
-        _tz = _gz_pytz.timezone(_tz_str)
+        from backend.utils import get_venue_timezone
+        _tz = get_venue_timezone(db, gig["venue_id"])
         _now = datetime.now(_tz)
     except Exception:
         _now = datetime.now()
@@ -464,6 +467,9 @@ def get_gig_modal_data(
             if s.get("start_time") and s.get("end_time"):
                 st = datetime.strptime(f"{gig['date']}T{str(s['start_time'])[:5]}", "%Y-%m-%dT%H:%M")
                 et = datetime.strptime(f"{gig['date']}T{str(s['end_time'])[:5]}", "%Y-%m-%dT%H:%M")
+                # Overnight slots: if end < start, end is next day
+                if et < st:
+                    et = et + timedelta(days=1)
                 if st <= _now_naive <= et:
                     is_in_progress = True
                     break

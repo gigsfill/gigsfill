@@ -415,14 +415,13 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
         artist_dict["venue_default_freq_days"] = default_freq_days or 0
         
         # Calculate next_gig_date — use platform timezone so gigs tonight aren't excluded
+        # TZ FIX: use the VENUE's timezone (the gigs belong to this venue),
+        # not platform tz. Otherwise next-gig-date is off by 1 day near UTC
+        # midnight for venues outside the platform tz.
         try:
-            import pytz as _pa_pytz
-            from sqlalchemy import text as _pa_tx
-            _pa_tz_str = db.execute(_pa_tx(
-                "SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'"
-            )).scalar() or "America/Los_Angeles"
-            _pa_tz = _pa_pytz.timezone(_pa_tz_str)
-            today = __import__('datetime').datetime.now(_pa_tz).strftime("%Y-%m-%d")
+            from backend.utils import get_venue_timezone as _gvt
+            from datetime import datetime as _pa_dt
+            today = _pa_dt.now(_gvt(db, venue_id)).strftime("%Y-%m-%d")
         except Exception:
             from datetime import date
             today = date.today().isoformat()
