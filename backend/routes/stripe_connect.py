@@ -1806,25 +1806,23 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
     try:
 
         # ----------------------------------------------------------------
-        # transfer.created — Stripe initiated transfer to artist's Connect account
+        # transfer.created — Stripe acknowledged the transfer was created
         # ----------------------------------------------------------------
+        # PROD BUG FIX (May 11 2026): the previous handler marked
+        # `status='paid'` here, but `transfer.created` fires the moment we
+        # call stripe.Transfer.create — confirming creation, NOT bank
+        # settlement. Marking 'paid' here was premature; the artist's
+        # money was still in their Connect balance (status=available), not
+        # in their bank yet. The correct signal is the connected account's
+        # `payout.paid` event, which requires a separate connect-webhook
+        # subscription. Until that's wired up, the hourly poll in
+        # payout_scheduler._poll_transferred_for_bank_settlement is the
+        # authoritative source for the paid transition. Here we just log.
         if event_type == "transfer.created":
             try:
                 obj = _webhook_get_event_obj(event)
                 transfer_id = _webhook_get(obj, "id")
-                if transfer_id:
-                    result = conn.execute("""
-                        UPDATE transactions
-                        SET status = 'paid',
-                            notes = COALESCE(notes || ' | ', '') || 'Settled via Stripe webhook'
-                        WHERE stripe_transfer_id = ?
-                          AND status = 'transferred'
-                    """, (transfer_id,))
-                    conn.commit()
-                    if result.rowcount:
-                        logger.info(f"Webhook transfer.created: {result.rowcount} txn(s) marked paid (transfer {transfer_id})")
-                    else:
-                        logger.info(f"Webhook transfer.created: no matching transferred txn for {transfer_id}")
+                logger.info(f"Webhook transfer.created: {transfer_id} (no DB change — bank settlement tracked by hourly poll)")
             except Exception as e:
                 logger.error(f"Webhook transfer.created error: {e}")
 

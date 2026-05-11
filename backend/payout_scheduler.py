@@ -484,38 +484,52 @@ def process_payouts_now():
                     if not tr or getattr(tr, "reversed", False):
                         continue
 
-                    # Step 2: check the connected account for a paid payout.
-                    # A payout status of 'paid' means the money arrived in the artist's bank.
-                    # We look for any paid payout created after the transfer was sent.
+                    # Step 2: check whether THIS transfer's funds have been
+                    # paid out to the artist's bank.
+                    # PROD BUG FIX (May 11 2026): the original logic marked
+                    # bank_settled=True if the connected account had ANY past
+                    # paid payout — completely unrelated to this transfer.
+                    # Result: brand-new transfers got prematurely marked
+                    # 'paid' because the artist had a payout from days/weeks
+                    # ago. Fix: ask Stripe directly about THIS transfer's
+                    # destination balance_transaction status. The status
+                    # goes pending → available → paid (= consumed by a real
+                    # Stripe payout to bank).
                     bank_settled = False
-                    if connect_acct:
+                    if connect_acct and getattr(tr, "destination_payment", None):
                         try:
-                            payouts = stripe.Payout.list(
-                                limit=10,
-                                status="paid",
-                                stripe_account=connect_acct
+                            dest_charge = stripe.Charge.retrieve(
+                                tr.destination_payment, stripe_account=connect_acct
                             )
-                            if payouts and payouts.data:
-                                # Any paid payout on the account means funds have reached the bank
-                                bank_settled = True
+                            bt_id = getattr(dest_charge, "balance_transaction", None)
+                            if bt_id:
+                                bt_id_str = bt_id if isinstance(bt_id, str) else bt_id.id
+                                bt = stripe.BalanceTransaction.retrieve(
+                                    bt_id_str, stripe_account=connect_acct
+                                )
+                                if getattr(bt, "status", "") == "paid":
+                                    bank_settled = True
                         except stripe.error.PermissionError:
-                            # Connected account hasn't granted payout read permission —
-                            # fall back to checking the platform-side balance_transaction
+                            # Connected account hasn't granted balance read
+                            # permission — fall back to a strict platform-side
+                            # check: only mark paid if our PLATFORM balance_tx
+                            # is available AND ≥2 days old (long enough for
+                            # any reasonable payout schedule to have fired).
+                            # Still conservative; better to say "Processing"
+                            # for an extra day than wrongly say "Paid".
                             bt_id = getattr(tr, "balance_transaction", None)
                             if bt_id:
                                 try:
                                     bt_id_str = bt_id if isinstance(bt_id, str) else bt_id.id
                                     bt = stripe.BalanceTransaction.retrieve(bt_id_str)
-                                    # 'available' means settled on platform; add 2-day buffer
                                     if getattr(bt, "status", "") == "available":
-                                        created = getattr(bt, "created", 0)
                                         import time as _time
-                                        if _time.time() - created >= 2 * 86400:
+                                        if _time.time() - getattr(bt, "created", 0) >= 3 * 86400:
                                             bank_settled = True
                                 except Exception:
                                     pass
                         except Exception as pe:
-                            logger.warning(f"Txn {txn['id']}: Payout list failed — {pe}")
+                            logger.warning(f"Txn {txn['id']}: bal_tx check failed — {pe}")
 
                     if bank_settled:
                         conn.execute(
