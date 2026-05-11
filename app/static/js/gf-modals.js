@@ -153,9 +153,16 @@
         btn.textContent = b.text || 'OK';
         btn.onclick = () => {
           let stayOpen = false;
+          // Accept both `onClick` (new convention) and `action` (legacy convention
+          // used by gig-modal.js and the artist.book-gigs.js local adapter). A
+          // multi-slot waitlist confirm modal silently dropped its handler because
+          // it passed `action:` and gf-modals only checked `onClick:`.
+          const _handler = (typeof b.onClick === 'function') ? b.onClick
+                         : (typeof b.action  === 'function') ? b.action
+                         : null;
           try {
-            if (typeof b.onClick === 'function') {
-              const r = b.onClick();
+            if (_handler) {
+              const r = _handler();
               if (r === false) stayOpen = true;
             }
           } catch (e) { console.error('[gfm-modal] button onClick error:', e); }

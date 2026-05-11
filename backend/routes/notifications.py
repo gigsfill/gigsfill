@@ -43,7 +43,7 @@ def get_notifications(user=Depends(get_current_user), db=Depends(get_db)):
     """Get all notifications for current user"""
     rows = db.execute(
         text("""
-            SELECT 
+            SELECT
                 n.id,
                 n.user_id,
                 n.notification_type,
@@ -73,8 +73,31 @@ def get_notifications(user=Depends(get_current_user), db=Depends(get_db)):
         """),
         {"user_id": user.id}
     ).mappings().all()
-    
-    return [dict(row) for row in rows]
+
+    # Enrich slot-specific notifications with the slot's actual start_time.
+    # Without this, Activity Center shows the parent gig start_time (e.g. 7pm
+    # = slot 1) for a notification that's about slot 2 at 9pm. We parse the
+    # "Slot N" suffix from the message and look up that slot's start_time.
+    import re as _re
+    out = []
+    for row in rows:
+        d = dict(row)
+        msg = d.get("message") or ""
+        m = _re.search(r"\bSlot\s+(\d+)\b", msg)
+        if m and d.get("gig_id"):
+            try:
+                slot_num = int(m.group(1))
+                slot_row = db.execute(
+                    text("SELECT start_time FROM gig_slots WHERE gig_id = :gid AND slot_number = :sn LIMIT 1"),
+                    {"gid": d["gig_id"], "sn": slot_num}
+                ).first()
+                if slot_row and slot_row[0]:
+                    d["slot_start_time"] = slot_row[0]
+                    d["slot_number"] = slot_num
+            except Exception:
+                pass
+        out.append(d)
+    return out
 
 # =====================================================
 # GET UNREAD COUNT

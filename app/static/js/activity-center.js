@@ -315,8 +315,13 @@ class ActivityCenter {
         gigDate = dateObj.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       }
     }
-    if (n.gig_start_time) {
-      gigTime = this.formatTimeTo12Hour(n.gig_start_time);
+    // Prefer slot-specific start_time when this notification is about a
+    // particular slot (multi-slot gigs). Backend sets slot_start_time when
+    // the message contains "Slot N" and that slot exists; otherwise fall
+    // back to the parent gig's start_time.
+    const effectiveStartTime = n.slot_start_time || n.gig_start_time;
+    if (effectiveStartTime) {
+      gigTime = this.formatTimeTo12Hour(effectiveStartTime);
     }
 
     // Helper: apply name links to a raw message string
@@ -358,17 +363,10 @@ class ActivityCenter {
       }
       
       case 'gig_booked': {
-        // Slot booking — split into two lines
-        if (n.message && n.message.includes('Slot')) {
-          let msg = linkify(n.message);
-          // Split at ". Slot" or ". Booked Slot"
-          const slotMatch = msg.match(/^(.*?\.\s*)((?:Booked\s+)?Slot\s+.*)$/i);
-          if (slotMatch) {
-            return { main: slotMatch[1].trim(), detail: slotMatch[2].trim() };
-          }
-          return { main: msg, detail: '' };
-        }
-        // Non-slot booking
+        // Build the rich main message from structured fields so multi-slot
+        // gigs match the single-slot phrasing ("X booked a gig at Y on Date at Time")
+        // and use friendly date formatting instead of the raw ISO string from the DB.
+        // The "Slot N" suffix (if present in the message) becomes the detail line.
         let mainMsg = '';
         if (gigDate && gigTime) {
           mainMsg = `${artistLink} booked a gig at ${venueLink} on ${gigDate} at ${gigTime}.`;
@@ -377,7 +375,13 @@ class ActivityCenter {
         } else {
           mainMsg = `${artistLink} booked a gig at ${venueLink}.`;
         }
-        return { main: mainMsg, detail: '' };
+        // Detect "Slot N" suffix in the raw message and surface it as detail.
+        let detail = '';
+        if (n.message) {
+          const slotMatch = String(n.message).match(/((?:Booked\s+)?Slot\s+[^.]+)\.?\s*$/i);
+          if (slotMatch) detail = slotMatch[1].trim();
+        }
+        return { main: mainMsg, detail };
       }
       
       case 'gig_edited': {
