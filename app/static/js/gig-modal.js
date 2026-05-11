@@ -341,10 +341,21 @@ function _slotsSection(data, vType, { isPast, isInProgress, close, callbacks }) 
   const slots = (data.slots || []);
   if (!slots.length) return '';
 
+  // PROD BUG FIX (May 10 2026): the gig's chronological baseline for
+  // overnight-slot detection must come from the slots themselves, not
+  // gigs.start_time which can be unreliable (some saved gigs have
+  // parent start_time set to a later slot's start, breaking the
+  // "slot < gig => next day" heuristic). Use the slot with the lowest
+  // slot_number as the baseline.
+  const _orderedSlots = [...slots].sort((a, b) =>
+    (a.slot_number || 0) - (b.slot_number || 0));
+  const _gigBaseline = (_orderedSlots[0] && _orderedSlots[0].start_time)
+    || data.start_time;
+
   let html = `<div style="border-top:1px solid rgba(255,255,255,0.1);padding-top:12px;margin-top:4px;">`;
 
   for (const slot of slots) {
-    html += _slotRow(slot, data, vType, isPast, isInProgress, callbacks);
+    html += _slotRow(slot, data, vType, isPast, isInProgress, callbacks, _gigBaseline);
   }
 
   html += `</div>`;
@@ -352,7 +363,7 @@ function _slotsSection(data, vType, { isPast, isInProgress, close, callbacks }) 
 }
 
 /* ── Single slot row ──────────────────────────────────────────────────────── */
-function _slotRow(slot, data, vType, isPast, isInProgress, callbacks) {
+function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaseline) {
   const { onBook, onJoinWaitlist, onLeaveWaitlist, onCountersign,
           onMessage, onUploadContract, onUploadVenueContractPdf } = callbacks || {};
 
@@ -395,7 +406,10 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks) {
     const [h, min] = String(time).split(':').map(Number);
     return new Date(y, m - 1, d + (dayOffset || 0), h, min, 0);
   }
-  const _offsets = _slotDateOffsets(data.start_time, slot.start_time, slot.end_time);
+  // Use the gig baseline computed by _slotsSection (first slot's start)
+  // — not data.start_time, which can be set to a later slot's value
+  // on some saved gigs.
+  const _offsets = _slotDateOffsets(gigBaseline || data.start_time, slot.start_time, slot.end_time);
   const _slotStartDt = _slotDate(data.date, slot.start_time, _offsets.startOffset);
   const _slotEndDt   = _slotDate(data.date, slot.end_time,   _offsets.endOffset);
   const _now = new Date();
