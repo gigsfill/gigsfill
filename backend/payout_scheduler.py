@@ -409,8 +409,11 @@ def process_payouts_now():
                     except Exception as ce:
                         logger.warning(f"Txn {txn_id}: Retry — could not retrieve charge_id: {ce}")
 
-                if (txn.get("artist_payout_cents") or 0) <= 0:
-                    logger.error(f"Retry txn {txn_id}: artist_payout_cents={txn.get('artist_payout_cents')} — SKIPPING zero/negative transfer")
+                # sqlite3.Row doesn't have .get() — use bracket indexing.
+                # All callers fetched txn from a SELECT that includes
+                # artist_payout_cents, so this column always exists.
+                if (txn["artist_payout_cents"] or 0) <= 0:
+                    logger.error(f"Retry txn {txn_id}: artist_payout_cents={txn['artist_payout_cents']} — SKIPPING zero/negative transfer")
                     continue
 
                 retry_kwargs = dict(
@@ -662,8 +665,9 @@ def _transfer_to_artists(conn, stripe, payout_rows, charge_id, venue_id, parent_
             continue
 
         try:
-            if (payout.get("artist_payout_cents") or 0) <= 0:
-                logger.error(f"Payout {payout_id}: artist_payout_cents={payout.get('artist_payout_cents')} — SKIPPING zero/negative transfer")
+            # sqlite3.Row doesn't have .get() — bracket indexing only.
+            if (payout["artist_payout_cents"] or 0) <= 0:
+                logger.error(f"Payout {payout_id}: artist_payout_cents={payout['artist_payout_cents']} — SKIPPING zero/negative transfer")
                 conn.execute(
                     "UPDATE transactions SET status = 'transfer_failed', notes = ? WHERE id = ?",
                     ("Blocked: artist_payout_cents is zero or negative", payout_id)
@@ -992,9 +996,13 @@ def _get_gig_summary(conn, txn):
         if a:
             artist_name = a["name"]
 
-    # Get slot time if available
+    # Get slot time if available — sqlite3.Row supports `in keys()` /
+    # bracket indexing but not .get(). The txn passed in may or may not
+    # have artist_id (depending on the SELECT that produced it), so guard
+    # against missing column AND null value.
     time_part = ""
-    if txn.get("artist_id"):
+    _has_artist_id = ("artist_id" in txn.keys()) and txn["artist_id"]
+    if _has_artist_id:
         slot = conn.execute("""
             SELECT start_time, end_time FROM gig_slots
             WHERE gig_id = ? AND artist_id = ?
@@ -1049,7 +1057,9 @@ def _send_payout_email(conn, txn):
             'pay': f"{amount/100:.2f}",
             'artist_fee': f"{fee/100:.2f}",
             'payout_amount': f"{payout/100:.2f}",
-            'slot_times': _compute_slot_times_sqlite(conn, txn["gig_id"], artist_id=gig_info.get("artist_id")),
+            # gig_info is a sqlite3.Row, not a dict — bracket-index with
+            # explicit fallback. Check keys() to tolerate either schema.
+            'slot_times': _compute_slot_times_sqlite(conn, txn["gig_id"], artist_id=(gig_info["artist_id"] if "artist_id" in gig_info.keys() else None)),
         }
         subject = tmpl["subject"]
         body = tmpl["body"]
@@ -1101,7 +1111,10 @@ def _send_venue_charged_email(conn, txn, venue_id):
 
         # Build artist list for multi-slot gigs
         artist_name = gig_info["artist_name"] or "Artist"
-        if txn.get("transaction_type") == "venue_charge":
+        # sqlite3.Row uses bracket indexing, not .get(). Check key
+        # existence first since some SELECTs may not project transaction_type.
+        _txn_type = txn["transaction_type"] if "transaction_type" in txn.keys() else None
+        if _txn_type == "venue_charge":
             # Get all artists paid in this charge
             payout_rows = conn.execute("""
                 SELECT a.name FROM transactions t

@@ -1435,8 +1435,14 @@ def get_artist_transactions(artist_id: int, user=Depends(get_current_user), db=D
             LEFT JOIN venues v ON v.id = g.venue_id
             WHERE t.artist_id = :aid
               AND t.transaction_type IN ('artist_payout', 'single')
+              -- Include the failure states (transfer_failed, payment_failed)
+              -- so artists can see their stalled payouts and know to contact
+              -- support. The frontend's status map renders these as red
+              -- "Issue" rows. Hiding them caused gigs to silently vanish
+              -- from the artist's earnings history when a transfer crashed.
               AND t.status IN ('paid','transferred','payment_cancelled','suspended',
-                               'scheduled','test','pending_transfer','charged','charge_retry')
+                               'scheduled','test','pending_transfer','charged','charge_retry',
+                               'transfer_failed','payment_failed')
             ORDER BY g.date DESC
             LIMIT 50
         """),
