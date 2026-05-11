@@ -2746,6 +2746,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           document.getElementById('gigModal').classList.add('hidden');
           invalidateGigs(); await renderCalendar();
           if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
+          // Refresh Payments tab — pre-gig cancellations delete the transaction
+          // from the DB so without this the cancelled gig keeps showing as
+          // "Upcoming" until the user manually reloads the page.
+          if (typeof loadVenueBillingHistory === 'function') await loadVenueBillingHistory();
           showAlert(result.keepOpen ? 'Booking cancelled — gig is open again.' : 'Gig cancelled and removed from calendar.', 'Gig Cancelled');
         } catch(e) {
           showAlert('Failed to cancel gig: ' + e.message, 'Error');
@@ -2800,6 +2804,8 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         document.getElementById('gigModal').classList.add('hidden');
         invalidateGigs(); await renderCalendar();
         if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
+        // Refresh Payments tab — slot cancel deletes the slot's transaction row.
+        if (typeof loadVenueBillingHistory === 'function') await loadVenueBillingHistory();
         showAlert(
           result.removeSlot
             ? `Slot ${slotNum} removed — ${artistName} has been notified.`
@@ -3594,10 +3600,12 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             body: JSON.stringify({ cancellation_reason: cancelReason, keep_open: keepOpen })
           });
           if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
-          
+
           if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
           if (window.myArtists) { await myArtists.loadArtists(); myArtists.render(); }
-          
+          // Refresh Payments tab — cancellation deletes the gig's transactions.
+          if (typeof loadVenueBillingHistory === 'function') await loadVenueBillingHistory();
+
           invalidateGigs(); await renderCalendar();
           showGigSuccess("Event cancelled");
         } catch (e) {

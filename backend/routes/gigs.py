@@ -1802,6 +1802,9 @@ def book_gig(
                    {"gid": gig_id, "aid": artist_id})
         db.execute(text("DELETE FROM waitlist_offered WHERE gig_id = :gid AND artist_id = :aid"),
                    {"gid": gig_id, "aid": artist_id})
+        # Clear the in-app "Waitlist Spot Available" Activity Center notification.
+        from backend.routes.waitlist import _clear_waitlist_offer_notification as _cwon
+        _cwon(db, gig_id, artist_id)
     except Exception as _wlr:
         logger.warning(f"[BOOK_GIG] waitlist remove on book error: {_wlr}")
 
@@ -3546,6 +3549,10 @@ def book_slot(
                    {"gid": gig_id, "aid": artist_id})
         db.execute(text("DELETE FROM waitlist_offered WHERE gig_id = :gid AND artist_id = :aid"),
                    {"gid": gig_id, "aid": artist_id})
+        # Clear the in-app "Waitlist Spot Available" Activity Center notification
+        # so the artist's feed doesn't keep showing a stale invitation after they book.
+        from backend.routes.waitlist import _clear_waitlist_offer_notification as _cwon
+        _cwon(db, gig_id, artist_id)
     except Exception as _wlr:
         logger.warning(f"[BOOK_SLOT] waitlist remove on book error: {_wlr}")
 

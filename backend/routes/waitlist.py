@@ -104,6 +104,23 @@ def _get_position(db, gig_id: int, row_id: int) -> int:
     return pos or 1
 
 
+def _clear_waitlist_offer_notification(db, gig_id: int, artist_id: int):
+    """Delete the artist's "Waitlist Spot Available" Activity Center notification
+    for this gig. Called when the offer is consumed (booked, declined, or
+    timed-out) so the artist's feed doesn't keep showing a stale invitation.
+    Targets all users of the artist (multi-user accounts) via artist_id."""
+    try:
+        db.execute(
+            text("""DELETE FROM notifications
+                    WHERE notification_type = 'waitlist_offer'
+                      AND gig_id = :gid AND artist_id = :aid"""),
+            {"gid": gig_id, "aid": artist_id}
+        )
+        db.commit()
+    except Exception as _ne:
+        logger.warning(f"_clear_waitlist_offer_notification gig={gig_id} artist={artist_id}: {_ne}")
+
+
 def _has_active_waitlist(db, gig_id: int) -> bool:
     """Return True if there are any artists on the waitlist OR with an active offer for this gig."""
     count = db.execute(
@@ -227,6 +244,8 @@ def leave_waitlist(gig_id: int, artist_id: int, user=Depends(get_current_user), 
             {"gid": gig_id, "aid": artist_id}
         )
     db.commit()
+    # Either way (decline or plain leave), clear the in-app offer notification
+    _clear_waitlist_offer_notification(db, gig_id, artist_id)
 
     # Always advance — whether they had an active offer or were just waiting.
     # If no more artists remain, this exhausts the waitlist and triggers the blast + venue email.
@@ -473,13 +492,40 @@ def respond_to_offer(request: Request, token: str, action: str, db=Depends(get_d
         return _splash("🎸", "Gig No Longer Available", "Sorry, this gig has already been filled. Keep an eye out for future openings!", base_url)
 
     if action == "decline":
+        # BUG FIX (May 11 2026): previously this path DELETEd the row. Compare
+        # to the in-app DELETE /api/gigs/{id}/waitlist which sets offer_declined=1
+        # and explicitly comments "so fire_cancelled_gig_blast skips them."
+        # When the row was deleted here, the subsequent advance_waitlist_offer
+        # → blast saw no declined-row and emailed the artist back. We must
+        # preserve a row with offer_declined=1 in gig_waitlist so the blast
+        # exclusion subquery finds them.
         if _from_offered_table:
-            # Remove from waitlist_offered — artist is done, no longer waiting
+            # Active offer lived in waitlist_offered; tear it down, then
+            # insert/upsert a declined marker into gig_waitlist.
             db.execute(text("DELETE FROM waitlist_offered WHERE offer_token = :tok"), {"tok": token})
+            _existing = db.execute(
+                text("SELECT id FROM gig_waitlist WHERE gig_id = :gid AND artist_id = :aid"),
+                {"gid": row["gig_id"], "aid": row["artist_id"]}
+            ).first()
+            if _existing:
+                db.execute(
+                    text("UPDATE gig_waitlist SET offer_declined = 1 WHERE id = :wid"),
+                    {"wid": _existing[0]}
+                )
+            else:
+                db.execute(
+                    text("INSERT INTO gig_waitlist (gig_id, artist_id, offer_declined, created_at) VALUES (:gid, :aid, 1, CURRENT_TIMESTAMP)"),
+                    {"gid": row["gig_id"], "aid": row["artist_id"]}
+                )
         elif row["id"]:
-            # Delete the gig_waitlist row entirely — artist said Not Available
-            db.execute(text("DELETE FROM gig_waitlist WHERE id = :wid"), {"wid": row["id"]})
+            # Row still in gig_waitlist — flag declined instead of deleting.
+            db.execute(
+                text("UPDATE gig_waitlist SET offer_declined = 1, offer_sent = 0, offer_expires_at = NULL WHERE id = :wid"),
+                {"wid": row["id"]}
+            )
         db.commit()
+        # Clear the in-app "Waitlist Spot Available" notification for this artist
+        _clear_waitlist_offer_notification(db, row["gig_id"], row["artist_id"])
         advance_waitlist_offer(db, row["gig_id"])
         return _splash(
             "👋", "No Problem!",
@@ -494,6 +540,10 @@ def respond_to_offer(request: Request, token: str, action: str, db=Depends(get_d
         # 3. The artist can still be shown the correct modal on the calendar
         # Cleanup happens in the booking endpoint when artist actually completes the booking.
         artist_id = row["artist_id"]
+        # Clear the "Waitlist Spot Available" Activity Center notification —
+        # they've consumed the offer (by accepting). Whether or not they
+        # complete the booking flow, the notification has served its purpose.
+        _clear_waitlist_offer_notification(db, row["gig_id"], artist_id)
         url = f"{base_url}/app/artist-book-gigs.html?artist_id={artist_id}&open_gig={row['gig_id']}&waitlist_token={token}"
         return RedirectResponse(url=url, status_code=302)
 
