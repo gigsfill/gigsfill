@@ -555,12 +555,26 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
     check_venue_access(db, venue_id, user.id)
     try:
         slots = data.get("slots", [])
-        
-        # Derive gig start/end from slots
+
+        # Derive gig start/end from slots.
+        # PROD BUG (May 10 2026): the original sorted slots by string
+        # start_time. For overnight gigs (slot 1: 23:00-01:00, slot 2:
+        # 01:00-03:00) the lexical sort puts "01:00" before "23:00", so
+        # slot 2 became "first" and parent gigs.start_time was set to the
+        # later slot's start — breaking every overnight-slot heuristic
+        # in the frontend.
+        # Fix: respect the venue-defined slot_number ordering (chronological
+        # by construction). slot 1 is always the earliest; the last
+        # slot_number's end is always the gig's chronological end.
         if slots:
-            sorted_slots = sorted(slots, key=lambda s: s.get("start_time", ""))
-            start_time = sorted_slots[0].get("start_time")
-            end_time = sorted_slots[-1].get("end_time")
+            ordered = sorted(slots, key=lambda s: int(s.get("slot_number") or 0) or 0)
+            # slot_number is 1-indexed; if missing, fall back to incoming
+            # array order (which the venue-create-gigs UI guarantees is
+            # chronological as the user added rows).
+            if not any((s.get("slot_number") or 0) for s in slots):
+                ordered = slots
+            start_time = ordered[0].get("start_time")
+            end_time = ordered[-1].get("end_time")
         else:
             start_time = data.get("start_time")
             end_time = data.get("end_time")
@@ -2460,10 +2474,16 @@ def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depen
         # FIX (May 2026): pay was previously NOT synced — only start/end. Result:
         # editing a slot's pay would update emails (which read slot.pay) but the
         # venue's gig details modal still showed the stale parent gig.pay value.
+        # PROD BUG (May 10 2026): MIN(start_time)/MAX(end_time) string-sorts
+        # times, which breaks overnight gigs ("01:00" < "23:00" lexically).
+        # Use slot_number ordering — slot 1's start = chronological start,
+        # last slot's end = chronological end.
         times = db.execute(
             text("""
-                SELECT MIN(start_time) as min_st, MAX(end_time) as max_et, MAX(pay) as max_pay
-                FROM gig_slots WHERE gig_id = :gid
+                SELECT
+                  (SELECT start_time FROM gig_slots WHERE gig_id = :gid ORDER BY slot_number ASC  LIMIT 1) as st,
+                  (SELECT end_time   FROM gig_slots WHERE gig_id = :gid ORDER BY slot_number DESC LIMIT 1) as et,
+                  (SELECT MAX(pay)   FROM gig_slots WHERE gig_id = :gid)                                  as max_pay
             """),
             {"gid": gig_id}
         ).fetchone()
@@ -2472,7 +2492,7 @@ def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depen
                 text("UPDATE gigs SET start_time = :st, end_time = :et, pay = :pay WHERE id = :gid"),
                 {"gid": gig_id, "st": times[0], "et": times[1], "pay": (times[2] if times[2] is not None else 0)}
             )
-    
+
     db.commit()
     return {"ok": True}
 
@@ -2587,10 +2607,14 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
     # FIX (May 2026): pay was previously NOT synced — only start/end. Result:
     # editing a slot's pay would update emails (which read slot.pay) but the
     # venue's gig details modal still showed the stale parent gig.pay value.
+    # PROD BUG (May 10 2026): see comment on the sibling site — overnight
+    # gigs break string-time MIN/MAX. Use slot_number ordering.
     times = db.execute(
         text("""
-            SELECT MIN(start_time) as min_st, MAX(end_time) as max_et, MAX(pay) as max_pay
-            FROM gig_slots WHERE gig_id = :gid
+            SELECT
+              (SELECT start_time FROM gig_slots WHERE gig_id = :gid ORDER BY slot_number ASC  LIMIT 1) as st,
+              (SELECT end_time   FROM gig_slots WHERE gig_id = :gid ORDER BY slot_number DESC LIMIT 1) as et,
+              (SELECT MAX(pay)   FROM gig_slots WHERE gig_id = :gid)                                  as max_pay
         """),
         {"gid": gig_id}
     ).fetchone()
