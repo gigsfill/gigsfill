@@ -661,16 +661,31 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function isSlotStartedToday(gig, slot) {
+    // PROD BUG (May 10 2026): for overnight gigs (e.g. 11pm-1am +
+    // 1am-3am), slot 2's start_time "01:00" was treated as same-day,
+    // so at 10pm on the gig date the function returned "started=true"
+    // for slot 2 — even though slot 2 is actually on the FOLLOWING
+    // calendar day at 1am. Fix: if the slot's start_time is earlier
+    // than the gig's overall start_time, the slot is one day later
+    // (overnight wrap).
     if (!gig.date || !slot.start_time) return false;
     const now = new Date();
     const [y, mo, d] = gig.date.split('-').map(Number);
-    const gigDay = new Date(y, mo - 1, d);
-    gigDay.setHours(0, 0, 0, 0);
-    const todayMid = new Date();
-    todayMid.setHours(0, 0, 0, 0);
-    if (gigDay.getTime() !== todayMid.getTime()) return false;
     const [h, min] = slot.start_time.split(':').map(Number);
-    const startTime = new Date(y, mo - 1, d, h, min, 0);
+
+    // Determine whether this slot crosses midnight relative to gig start
+    let dayOffset = 0;
+    if (gig.start_time) {
+      const [gh, gm] = gig.start_time.split(':').map(Number);
+      const slotMin = h * 60 + min;
+      const gigMin  = gh * 60 + gm;
+      if (slotMin < gigMin) dayOffset = 1;
+    }
+
+    const startTime = new Date(y, mo - 1, d + dayOffset, h, min, 0);
+    // "today" means today OR tomorrow if the slot rolled past midnight.
+    // We test "has now reached or passed the slot's start" — date-of-week
+    // doesn't matter beyond that.
     return now >= startTime;
   }
 

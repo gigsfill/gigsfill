@@ -365,19 +365,42 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks) {
   const slotTime   = slot.start_time_fmt && slot.end_time_fmt
     ? `${slot.start_time_fmt} – ${slot.end_time_fmt}` : '';
 
-  // Slot started/ended?
-  const slotStarted = (() => {
-    if (!data.date || !slot.start_time) return false;
-    const [y,m,d] = data.date.split('-').map(Number);
-    const [h,min] = slot.start_time.split(':').map(Number);
-    return new Date() >= new Date(y,m-1,d,h,min,0);
-  })();
-  const slotEnded = (() => {
-    if (!data.date || !slot.end_time) return false;
-    const [y,m,d] = data.date.split('-').map(Number);
-    const [h,min] = slot.end_time.split(':').map(Number);
-    return new Date() >= new Date(y,m-1,d,h,min,0);
-  })();
+  // Slot started/ended? Resolve overnight slots correctly.
+  //
+  // PROD BUG (May 10 2026): a gig with slots 11pm-1am + 1am-3am was
+  // shown as "Ended" because the 01:00 end time, treated as same-day,
+  // is already past at 10pm of the gig date. Fix: compare the slot's
+  // start time to the GIG's overall start_time. If the slot starts
+  // chronologically before the gig (e.g. 01:00 < 23:00), it's the
+  // morning AFTER the gig date. Similarly, if a slot's end is before
+  // its own start, end is one day later than start.
+  function _slotDateOffsets(gigStartTime, slotStartTime, slotEndTime) {
+    const toMin = (t) => {
+      if (!t) return null;
+      const [h, m] = String(t).split(':').map(Number);
+      return h * 60 + m;
+    };
+    const gs = toMin(gigStartTime);
+    const ss = toMin(slotStartTime);
+    const se = toMin(slotEndTime);
+    let startOffset = 0;
+    if (gs != null && ss != null && ss < gs) startOffset = 1;
+    let endOffset = startOffset;
+    if (ss != null && se != null && se < ss) endOffset = startOffset + 1;
+    return { startOffset, endOffset };
+  }
+  function _slotDate(dateStr, time, dayOffset) {
+    if (!dateStr || !time) return null;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const [h, min] = String(time).split(':').map(Number);
+    return new Date(y, m - 1, d + (dayOffset || 0), h, min, 0);
+  }
+  const _offsets = _slotDateOffsets(data.start_time, slot.start_time, slot.end_time);
+  const _slotStartDt = _slotDate(data.date, slot.start_time, _offsets.startOffset);
+  const _slotEndDt   = _slotDate(data.date, slot.end_time,   _offsets.endOffset);
+  const _now = new Date();
+  const slotStarted = _slotStartDt ? _now >= _slotStartDt : false;
+  const slotEnded   = _slotEndDt   ? _now >= _slotEndDt   : false;
 
   // Color coding
   let borderColor = 'rgba(255,255,255,0.1)';
