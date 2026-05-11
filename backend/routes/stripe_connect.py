@@ -1323,30 +1323,24 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
                       LIMIT 1),
                      t.artist_id, g.artist_id
                    ) as resolved_artist_id,
-                   -- FIX (May 2026): for venue_charge parent rows, the parent's
-                   -- own status stays 'charged' even after children are paid.
-                   -- The "effective" parent status reflects whether the artist
-                   -- payout has actually completed:
-                   --   - If ALL non-cancelled children are 'paid' → parent shows 'paid'
-                   --   - Otherwise keep the parent's own status
-                   -- Frontend uses effective_status to display "Paid ✓" only when
-                   -- the artist actually got paid out, not just when venue was charged.
+                   -- Effective status from the VENUE's perspective: the
+                   -- moment their card is charged, the venue has paid in
+                   -- full. The artists' onward Connect→bank settlement is
+                   -- a separate downstream concern that doesn't affect the
+                   -- venue's transactional state.
+                   --
+                   -- PROD FIX (May 11 2026): the previous logic delayed
+                   -- "paid" until every child artist_payout was fully bank-
+                   -- settled, so the venue saw "Processing" for days after
+                   -- their card cleared. That's misleading — from the
+                   -- venue's perspective they're done. Map venue_charge
+                   -- 'charged' → 'paid' directly. Artist-side Payments tab
+                   -- still uses transactions.status raw, so they still see
+                   -- "Processing" until the actual bank deposit clears.
                    CASE
                      WHEN COALESCE(t.transaction_type, 'single') = 'venue_charge'
                           AND t.status = 'charged'
-                          AND NOT EXISTS (
-                            SELECT 1 FROM transactions c
-                            WHERE c.parent_transaction_id = t.id
-                              AND c.transaction_type = 'artist_payout'
-                              AND c.status NOT IN ('paid','payment_cancelled','account_deleted')
-                          )
-                          AND EXISTS (
-                            SELECT 1 FROM transactions c
-                            WHERE c.parent_transaction_id = t.id
-                              AND c.transaction_type = 'artist_payout'
-                              AND c.status = 'paid'
-                          )
-                     THEN 'paid'
+                       THEN 'paid'
                      ELSE t.status
                    END as effective_status
             FROM transactions t
