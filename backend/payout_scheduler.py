@@ -1019,12 +1019,30 @@ def _get_gig_summary(conn, txn):
 
 def _send_payout_email(conn, txn):
     try:
-        gig_info = conn.execute("""
-            SELECT g.date, g.pay, v.venue_name, a.name as artist_name, a.id as artist_id
-            FROM gigs g JOIN venues v ON g.venue_id = v.id
-            LEFT JOIN artists a ON a.user_id = ?
-            WHERE g.id = ?
-        """, (txn["to_user_id"], txn["gig_id"])).fetchone()
+        # PROD INCIDENT FIX (May 10 2026): the old query joined artists on
+        # `a.user_id = txn.to_user_id`. When one user owns multiple artists
+        # (e.g. both "Fridays Past" and "Fifty Proof" belong to the same
+        # user), the LEFT JOIN matched BOTH artist rows and returned just
+        # the first one — so the payout email to Fifty Proof was
+        # addressed "Hi Fridays Past" with slot 1's time.
+        # Fix: resolve the artist by the txn's own artist_id, which is
+        # always the correct payee. Fall back to user_id only if the txn
+        # is a legacy row without artist_id set.
+        _txn_artist_id = txn["artist_id"] if "artist_id" in txn.keys() else None
+        if _txn_artist_id:
+            gig_info = conn.execute("""
+                SELECT g.date, g.pay, v.venue_name, a.name as artist_name, a.id as artist_id
+                FROM gigs g JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.id = ?
+                WHERE g.id = ?
+            """, (_txn_artist_id, txn["gig_id"])).fetchone()
+        else:
+            gig_info = conn.execute("""
+                SELECT g.date, g.pay, v.venue_name, a.name as artist_name, a.id as artist_id
+                FROM gigs g JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.user_id = ?
+                WHERE g.id = ?
+            """, (txn["to_user_id"], txn["gig_id"])).fetchone()
         if not gig_info:
             return
 
@@ -1169,12 +1187,25 @@ def _send_venue_charged_email(conn, txn, venue_id):
 def _send_charge_failed_email(conn, txn, reason):
     """Notify artist that venue payment failed permanently"""
     try:
-        gig_info = conn.execute("""
-            SELECT g.date, v.venue_name, a.name as artist_name, a.id as artist_id
-            FROM gigs g JOIN venues v ON g.venue_id = v.id
-            LEFT JOIN artists a ON a.user_id = ?
-            WHERE g.id = ?
-        """, (txn["to_user_id"], txn["gig_id"])).fetchone()
+        # Resolve artist by txn.artist_id (the correct payee); fall back to
+        # user_id only for legacy rows. See _send_payout_email for the
+        # full incident write-up: joining on a.user_id matched the wrong
+        # artist when one user owns multiple artists.
+        _txn_artist_id = txn["artist_id"] if "artist_id" in txn.keys() else None
+        if _txn_artist_id:
+            gig_info = conn.execute("""
+                SELECT g.date, v.venue_name, a.name as artist_name, a.id as artist_id
+                FROM gigs g JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.id = ?
+                WHERE g.id = ?
+            """, (_txn_artist_id, txn["gig_id"])).fetchone()
+        else:
+            gig_info = conn.execute("""
+                SELECT g.date, v.venue_name, a.name as artist_name, a.id as artist_id
+                FROM gigs g JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.user_id = ?
+                WHERE g.id = ?
+            """, (txn["to_user_id"], txn["gig_id"])).fetchone()
         if not gig_info:
             return
         settings = _get_smtp_settings(conn)
@@ -1251,14 +1282,28 @@ def _send_venue_suspended_email(conn, venue_id, reason):
 def _send_transfer_failed_emails(conn, txn, venue_id):
     """Notify artist and venue when transfer fails (admin-editable templates)"""
     try:
-        gig_info = conn.execute("""
-            SELECT g.date, g.start_time, g.end_time, g.pay, v.venue_name,
-                   a.name as artist_name, a.id as artist_id
-            FROM gigs g
-            JOIN venues v ON g.venue_id = v.id
-            LEFT JOIN artists a ON a.user_id = ?
-            WHERE g.id = ?
-        """, (txn["to_user_id"], txn["gig_id"])).fetchone()
+        # Resolve artist by txn.artist_id (the correct payee); fall back to
+        # user_id only for legacy rows. See _send_payout_email for the
+        # full incident write-up.
+        _txn_artist_id = txn["artist_id"] if "artist_id" in txn.keys() else None
+        if _txn_artist_id:
+            gig_info = conn.execute("""
+                SELECT g.date, g.start_time, g.end_time, g.pay, v.venue_name,
+                       a.name as artist_name, a.id as artist_id
+                FROM gigs g
+                JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.id = ?
+                WHERE g.id = ?
+            """, (_txn_artist_id, txn["gig_id"])).fetchone()
+        else:
+            gig_info = conn.execute("""
+                SELECT g.date, g.start_time, g.end_time, g.pay, v.venue_name,
+                       a.name as artist_name, a.id as artist_id
+                FROM gigs g
+                JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.user_id = ?
+                WHERE g.id = ?
+            """, (txn["to_user_id"], txn["gig_id"])).fetchone()
         if not gig_info:
             return
 
