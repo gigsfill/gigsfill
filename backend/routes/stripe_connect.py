@@ -1358,12 +1358,12 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
             LEFT JOIN artists a ON a.id = t.artist_id
             LEFT JOIN artists a2 ON a2.id = g.artist_id
             WHERE g.venue_id = :vid
-              AND COALESCE(t.transaction_type, 'single') IN ('venue_charge', 'single', 'payment_cancelled')
+              AND COALESCE(t.transaction_type, 'single') IN ('venue_charge', 'single', 'payment_cancelled', 'free_trial')
               AND (
                 -- Only show transactions for gigs that are actually booked/in-progress
                 g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval','started','completed','paid')
-                -- OR historical paid/cancelled transactions regardless of gig status
-                OR t.status IN ('paid','transferred','payment_cancelled','suspended')
+                -- OR historical paid/cancelled / free-trial audit transactions regardless of gig status
+                OR t.status IN ('paid','transferred','payment_cancelled','suspended','free_trial')
               )
             ORDER BY g.date DESC, t.id DESC
             LIMIT 50
@@ -1438,15 +1438,19 @@ def get_artist_transactions(artist_id: int, user=Depends(get_current_user), db=D
             JOIN gigs g ON t.gig_id = g.id
             LEFT JOIN venues v ON v.id = g.venue_id
             WHERE t.artist_id = :aid
-              AND t.transaction_type IN ('artist_payout', 'single')
+              AND t.transaction_type IN ('artist_payout', 'single', 'free_trial')
               -- Include the failure states (transfer_failed, payment_failed)
               -- so artists can see their stalled payouts and know to contact
               -- support. The frontend's status map renders these as red
               -- "Issue" rows. Hiding them caused gigs to silently vanish
               -- from the artist's earnings history when a transfer crashed.
+              -- 'free_trial' rows are audit records for gigs at venues GigsFill
+              -- is comping — the venue pays the artist directly; this row is
+              -- displayed as 🎟 Free Trial so the artist sees the booking on
+              -- their Earnings History even though no platform money moved.
               AND t.status IN ('paid','transferred','payment_cancelled','suspended',
                                'scheduled','test','pending_transfer','charged','charge_retry',
-                               'transfer_failed','payment_failed')
+                               'transfer_failed','payment_failed','free_trial')
             ORDER BY g.date DESC
             LIMIT 50
         """),

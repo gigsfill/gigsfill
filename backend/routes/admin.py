@@ -1164,6 +1164,14 @@ async def toggle_venue_payment_override(request: Request, admin=Depends(check_ad
         """), {"rs": restore_status, "vid": venue_id})
         db.commit()
 
+        # MAY 11 2026: convert upcoming free-trial audit rows into real
+        # venue_charge transactions so the venue gets billed for future gigs
+        # that were booked while on free trial. The override has just been
+        # deleted above, so _create_booking_transaction will follow the
+        # normal billing path. Past free-trial gigs are LEFT AS-IS — we
+        # don't retroactively bill for gigs that already happened.
+        _convert_upcoming_free_trial_bookings(db, venue_id)
+
     # Recalculate all pending transactions for this venue's gigs
     _recalculate_venue_pending_transactions(db, venue_id, suspend)
 
@@ -1185,6 +1193,105 @@ async def toggle_venue_payment_override(request: Request, admin=Depends(check_ad
         pass
 
     return {"ok": True, "payments_suspended": suspend, "venue_name": venue[1]}
+
+
+def _convert_upcoming_free_trial_bookings(db, venue_id):
+    """Toggle-off helper: convert free-trial audit rows on UPCOMING gigs into
+    real venue_charge / artist_payout transactions, so the venue starts getting
+    billed for bookings that were created while on free trial.
+
+    Strategy:
+      1. Find every (gig_id, artist_id) pair with a 'free_trial' transaction
+         row where the gig date is today-or-later in the venue's local tz.
+      2. Resolve the artist's slot (for multi-slot) and the effective pay.
+      3. Delete the audit row.
+      4. Call _create_booking_transaction(...) — the override row was already
+         deleted by the caller, so this takes the normal billing path and
+         creates a proper venue_charge + artist_payout with the right
+         scheduled_process_at (5pm venue-local on day-after-gig).
+
+    Past free-trial rows are left intact — they're audit history and the venue
+    has presumably already paid the artist directly outside the platform.
+    """
+    from datetime import datetime
+    from backend.utils import get_venue_timezone
+    from backend.routes.gigs import _create_booking_transaction
+    log = logging.getLogger("gigsfill.admin")
+    try:
+        venue_tz = get_venue_timezone(db, venue_id)
+        today_local = datetime.now(venue_tz).date().isoformat()
+    except Exception as _tze:
+        log.warning(f"free-trial convert: tz lookup failed for venue {venue_id}: {_tze}")
+        # Fall back to UTC date — slight risk of missing/extra row near
+        # midnight, but better than failing the whole conversion.
+        from datetime import date as _date
+        today_local = _date.today().isoformat()
+
+    rows = db.execute(text("""
+        SELECT t.id as txn_id, t.gig_id, t.artist_id, t.amount_cents,
+               g.date as gig_date
+        FROM transactions t
+        JOIN gigs g ON g.id = t.gig_id
+        WHERE g.venue_id = :vid
+          AND t.transaction_type = 'free_trial'
+          AND t.status = 'free_trial'
+          AND date(g.date) >= date(:today)
+    """), {"vid": venue_id, "today": today_local}).mappings().all()
+
+    converted = 0
+    for r in rows:
+        gig_id = r["gig_id"]
+        artist_id = r["artist_id"]
+        if not artist_id:
+            continue
+        # Resolve slot_id (NULL for single-slot gigs)
+        slot_row = db.execute(text("""
+            SELECT id, pay FROM gig_slots
+            WHERE gig_id = :gid AND artist_id = :aid
+              AND status IN ('booked','pending_contract','pending_venue_approval')
+            ORDER BY slot_number LIMIT 1
+        """), {"gid": gig_id, "aid": artist_id}).mappings().first()
+        slot_id = slot_row["id"] if slot_row else None
+        # Effective pay: prefer the slot's pay; fall back to the audit row's
+        # amount_cents (which captured pay-at-booking-time, surviving any
+        # later edits we didn't track).
+        if slot_row and slot_row["pay"] is not None:
+            pay_amount = float(slot_row["pay"])
+        else:
+            pay_amount = float(r["amount_cents"] or 0) / 100.0
+
+        # Drop the audit row before recreating — otherwise the gig would have
+        # both a free_trial row AND a venue_charge row for the same booking.
+        db.execute(text("DELETE FROM transactions WHERE id = :tid"), {"tid": r["txn_id"]})
+
+        try:
+            _create_booking_transaction(
+                db, gig_id, venue_id, artist_id,
+                pay_amount, r["gig_date"], slot_id=slot_id
+            )
+            converted += 1
+        except Exception as _cbte:
+            log.error(
+                f"free-trial convert FAILED gig {gig_id} artist {artist_id}: {_cbte}"
+            )
+            # Re-insert a marker so we don't silently lose the row. Best-effort.
+            try:
+                db.execute(text("""
+                    INSERT INTO transactions
+                        (gig_id, artist_id, amount_cents, status, transaction_type,
+                         payment_method_type, created_at, notes)
+                    VALUES (:gid, :aid, :amt, 'free_trial', 'free_trial',
+                            'free_trial', :now, 'Restore failed — see logs')
+                """), {"gid": gig_id, "aid": artist_id, "amt": r["amount_cents"],
+                       "now": utcnow_naive()})
+            except Exception:
+                pass
+
+    db.commit()
+    log.info(
+        f"Free trial OFF for venue {venue_id}: converted {converted} upcoming "
+        f"booking(s) (out of {len(rows)} free-trial audit rows on/after {today_local})"
+    )
 
 
 def _recalculate_venue_pending_transactions(db, venue_id, is_free_trial):

@@ -1080,7 +1080,19 @@
         <!-- Venue Free Trials -->
         <div class="content-card" style="padding:12px;margin-top:8px;">
           <div style="font-size:0.8rem;font-weight:700;color:var(--text);margin-bottom:3px;">🎟️ Venue Free Trials</div>
-          <p style="color:var(--text-gray);font-size:0.65rem;margin-bottom:10px;">Suspend automated payments for venues on a free trial.</p>
+          <p style="color:var(--text-gray);font-size:0.65rem;margin-bottom:10px;line-height:1.45;">
+            Toggle a venue into Free Trial mode and GigsFill stops processing payments for them entirely:
+            no card charges, no artist payouts, no platform or Stripe fees. The venue pays the artist
+            directly outside the platform. Bookings still create transaction records — but tagged
+            <span style="color:#f59e0b;font-weight:600;">🎟 Free Trial</span> on both Venue and Artist
+            Payments tabs instead of <em>Paid</em>.
+            <br><br>
+            <strong>Toggling OFF</strong> turns on normal billing immediately. Any
+            <em>upcoming</em> bookings that were created during the trial are converted to real
+            venue charges (card will be charged 5pm the day after each gig) and the artist payout
+            is queued. Past Free Trial gigs stay as audit history — we don't retroactively bill for
+            gigs that already happened.
+          </p>
           <div style="margin-bottom:8px;">
             <input type="text" id="venueOverrideSearch" placeholder="Search venue by name..."
               oninput="searchVenueOverrides(this.value, '')"

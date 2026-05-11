@@ -150,9 +150,9 @@ async function loadArtistEarningsHistory() {
     // status='payment_cancelled' are post-gig payment cancellations — venue
     // refused to pay after the gig. Artist should see these as "Cancelled red".
     window._artistEarnData = txns.map(function(t) {
-      var statusMap = { paid:'Paid', transferred:'Processing', test:'Test', scheduled:'Upcoming', pending:'Upcoming', charged:'Processing', pending_transfer:'Processing', charge_retry:'Processing', payment_failed:'Issue', transfer_failed:'Issue', payment_cancelled:'Cancelled' };
-      var colorMap = { paid:'#10b981', transferred:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charged:'#f59e0b', pending_transfer:'#f59e0b', charge_retry:'#f97316', payment_failed:'#ef4444', transfer_failed:'#ef4444', payment_cancelled:'#f97316' };
-      var statusTip = { transferred:'Transfer sent to your Stripe account — funds held while the venue payment settles, then released to your bank (typically 5–7 business days after the gig)', paid:'Deposited in your bank account', scheduled:'Scheduled for processing after the gig', pending:'Pending processing', charged:'Venue charged — transfer in progress (bank deposit typically 5–7 business days after the gig)', pending_transfer:'Payment processing — payout typically arrives within 5–7 business days of the gig', charge_retry:'Retrying charge', payment_failed:'Payment issue — contact support', transfer_failed:'Transfer issue — contact support', upcoming:'Gig is upcoming — payout will process after the gig completes' };
+      var statusMap = { paid:'Paid', transferred:'Processing', test:'Test', scheduled:'Upcoming', pending:'Upcoming', charged:'Processing', pending_transfer:'Processing', charge_retry:'Processing', payment_failed:'Issue', transfer_failed:'Issue', payment_cancelled:'Cancelled', free_trial:'🎟 Free Trial' };
+      var colorMap = { paid:'#10b981', transferred:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charged:'#f59e0b', pending_transfer:'#f59e0b', charge_retry:'#f97316', payment_failed:'#ef4444', transfer_failed:'#ef4444', payment_cancelled:'#f97316', free_trial:'#f59e0b' };
+      var statusTip = { transferred:'Transfer sent to your Stripe account — funds held while the venue payment settles, then released to your bank (typically 5–7 business days after the gig)', paid:'Deposited in your bank account', scheduled:'Scheduled for processing after the gig', pending:'Pending processing', charged:'Venue charged — transfer in progress (bank deposit typically 5–7 business days after the gig)', pending_transfer:'Payment processing — payout typically arrives within 5–7 business days of the gig', charge_retry:'Retrying charge', payment_failed:'Payment issue — contact support', transfer_failed:'Transfer issue — contact support', upcoming:'Gig is upcoming — payout will process after the gig completes', free_trial:'Free Trial venue — GigsFill is comping platform fees. The venue pays you directly for this gig.' };
       window._artistEarnStatusTip = statusTip;
       // Format time from "HH:MM" 24h or similar to 12h display
       var rawTime = t.gig_time || t.start_time || '';
@@ -176,7 +176,10 @@ async function loadArtistEarningsHistory() {
       //   Future (dateTimeSort > nowMs): "Upcoming" purple
       //   Past + non-terminal status: "Processing" orange (gig started, payout pending)
       //   Terminal: use status map (Paid green, Cancelled red)
-      var TERMINAL = { paid:1, payment_cancelled:1, payment_failed:1, transfer_failed:1 };
+      // free_trial is terminal — no money will ever move through GigsFill for
+      // this row. The Upcoming/Processing override doesn't apply; always
+      // display 🎟 Free Trial.
+      var TERMINAL = { paid:1, payment_cancelled:1, payment_failed:1, transfer_failed:1, free_trial:1 };
       var displayStatus = statusMap[t.status] || 'Pending';
       var displayColor  = colorMap[t.status] || '#f59e0b';
       if (!TERMINAL[t.status]) {

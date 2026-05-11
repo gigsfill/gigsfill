@@ -221,8 +221,8 @@ async function loadVenueBillingHistory() {
       //   - Upcoming  : booking confirmed, gig hasn't started yet
       //   - Processing: gig started, artist payout pending (venue's been charged)
       //   - Paid ✓    : artist payout completed
-      var statusMap = { paid:'Paid ✓', charged:'Processing', test:'Test', scheduled:'Scheduled', pending:'Upcoming', charge_retry:'Retrying', payment_failed:'Failed', pending_transfer:'Processing', transfer_failed:'Processing', payment_cancelled:'Cancelled' };
-      var colorMap = { paid:'#10b981', charged:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charge_retry:'#f97316', payment_failed:'#ef4444', pending_transfer:'#f59e0b', transfer_failed:'#f59e0b', payment_cancelled:'#f97316' };
+      var statusMap = { paid:'Paid ✓', charged:'Processing', test:'Test', scheduled:'Scheduled', pending:'Upcoming', charge_retry:'Retrying', payment_failed:'Failed', pending_transfer:'Processing', transfer_failed:'Processing', payment_cancelled:'Cancelled', free_trial:'🎟 Free Trial' };
+      var colorMap = { paid:'#10b981', charged:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charge_retry:'#f97316', payment_failed:'#ef4444', pending_transfer:'#f59e0b', transfer_failed:'#f59e0b', payment_cancelled:'#f97316', free_trial:'#f59e0b' };
       // Format time from "HH:MM" 24h or similar to 12h display
       var rawTime = t.gig_time || t.start_time || '';
       var displayTime = rawTime;
@@ -235,6 +235,7 @@ async function loadVenueBillingHistory() {
         displayTime = h + ':' + m + ' ' + ampm;
       }
       var isCx = t.status === 'payment_cancelled';
+      var isFreeTrial = t.status === 'free_trial';
       var gigFeeCents = t.amount_cents || 0;
       // For cancelled: platform fee = commission_cents (set at booking time).
       // If commission_cents is 0 (legacy row), fall back to venue_charge_cents - amount_cents,
@@ -243,11 +244,14 @@ async function loadVenueBillingHistory() {
       var _rawVcFee = (t.venue_charge_cents || 0) - (t.amount_cents || 0);
       var platformFeeCents = isCx
         ? (_rawCommission || _rawVcFee || Math.round((gigFeeCents || 0) * 0.50))
-        : _rawVcFee;
+        : (isFreeTrial ? 0 : _rawVcFee);
       // For cancelled: total = platform fee owed. Venue doesn't pay gig fee to artist.
+      // For free trial: venue_charge_cents=0 (no GigsFill charge), but the row
+      // should show the gig pay amount so the Payments tab "looks normal" with
+      // a 🎟 Free Trial badge in the status column instead of 'Paid'.
       var totalPaidCents = isCx
         ? platformFeeCents
-        : (t.venue_charge_cents || 0);
+        : (isFreeTrial ? gigFeeCents : (t.venue_charge_cents || 0));
       // FIX (May 2026): override status label for non-terminal txns whose gig
       // hasn't started yet. Without this, an "8pm tonight" gig that was charged
       // earlier in the day shows "Paid ✓" — misleading because the gig hasn't
@@ -256,7 +260,9 @@ async function loadVenueBillingHistory() {
       //   Future (dtSort > nowMs): "Upcoming" purple, regardless of status
       //   Past + non-terminal status: "Processing" orange (gig started, awaiting payout)
       //   Terminal: use status map (Paid ✓ green, Cancelled orange, etc.)
-      var TERMINAL = { paid:1, payment_cancelled:1, payment_failed:1, transfer_failed:1 };
+      // free_trial is terminal — no money will ever move for this row, so the
+      // "Upcoming/Processing" override doesn't apply. Always show 🎟 Free Trial.
+      var TERMINAL = { paid:1, payment_cancelled:1, payment_failed:1, transfer_failed:1, free_trial:1 };
       var dtSort = t.gig_date ? new Date(t.gig_date + 'T' + (t.gig_time || t.start_time || '00:00') + ':00').getTime() : 0;
       var displayStatus = statusMap[rawStatus] || 'Pending';
       var displayColor  = colorMap[rawStatus] || '#f59e0b';
