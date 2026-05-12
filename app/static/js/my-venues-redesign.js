@@ -563,130 +563,144 @@ function _buildRateVenueBtn(venue, venueId, venueName) {
 
 
 // Rate Venue modal for My Venues tab
+// Phase 3 migration: was an inline self-built modal. Now uses showStyledModal.
+// Mirror of review-modal.js but for the artist→venue direction; API path is
+// /api/artists/{aid}/venues/{vid}/review.
 window.openVenueRateModal = function(venueId, venueName, artistId, existingRating, existingText, triggerBtn) {
-  var existing = document.getElementById('_myVenuesRateModal');
-  if (existing) existing.remove();
-
-  var selected = existingRating || 0;
-  var isEdit = selected > 0;
-  var starLabels = ['','Poor','Fair','Good','Very Good','Excellent'];
+  let selected = existingRating || 0;
+  const isEdit = selected > 0;
+  const starLabels = ['','Poor','Fair','Good','Very Good','Excellent'];
 
   function starHtml(n) {
-    var html = '';
-    for (var i = 1; i <= 5; i++) {
+    let html = '';
+    for (let i = 1; i <= 5; i++) {
       html += '<span class="_mvStar" data-val="' + i + '" style="font-size:2rem;cursor:pointer;transition:transform 0.1s,color 0.1s;user-select:none;color:' + (i<=n?'#f59e0b':'#444') + ';transform:' + (i<=n?'scale(1.1)':'scale(1)') + '">' + (i<=n?'★':'☆') + '</span>';
     }
     return html;
   }
 
-  var ov = document.createElement('div');
-  ov.id = '_myVenuesRateModal';
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:20000;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
-  ov.innerHTML =
-    '<div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%);border:1px solid rgba(6,182,212,0.3);border-radius:12px;padding:26px 30px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">' +
-      '<h3 style="color:#06b6d4;margin:0 0 4px;font-size:0.95rem;text-transform:uppercase;letter-spacing:0.05em;">' + (isEdit ? 'Edit Your Review' : 'Rate This Venue') + '</h3>' +
-      '<p style="color:#d1d5db;margin:0 0 18px;font-size:0.85rem;">' + venueName + '</p>' +
-      '<div id="_mvStarRow" style="display:flex;gap:8px;justify-content:center;margin-bottom:6px;">' + starHtml(selected) + '</div>' +
-      '<div id="_mvStarLabel" style="text-align:center;font-size:0.78rem;color:#9ca3af;height:16px;margin-bottom:14px;">' + (selected > 0 ? starLabels[selected] : '') + '</div>' +
-      '<div id="_mvStarErr" style="color:#ef4444;font-size:0.78rem;text-align:center;margin-bottom:8px;display:none;">Please select a rating.</div>' +
-      '<textarea id="_mvReviewText" rows="3" maxlength="1000" placeholder="Share your experience (optional)\u2026" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#e5e5e5;padding:9px 11px;font-size:0.85rem;resize:vertical;outline:none;margin-bottom:16px;">' + (existingText || '') + '</textarea>' +
-      '<div id="_mvReviewMsg" style="font-size:0.78rem;text-align:center;min-height:16px;margin-bottom:10px;"></div>' +
-      '<div style="display:flex;gap:10px;justify-content:flex-end;">' +
-        '<button id="_mvDeleteBtn" style="padding:7px 18px;background:transparent;color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:6px;font-size:0.82rem;cursor:pointer;' + (isEdit ? '' : 'display:none;') + '">Delete Review</button>' +
-        '<button id="_mvCancelBtn" style="padding:7px 18px;background:transparent;color:#9ca3af;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:0.82rem;cursor:pointer;">Cancel</button>' +
-        '<button id="_mvSubmitBtn" style="padding:7px 20px;background:#06b6d4;color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:600;cursor:pointer;">' + (isEdit ? 'Update Review' : 'Submit Review') + '</button>' +
-      '</div>' +
-    '</div>';
-  document.body.appendChild(ov);
+  const esc = s => String(s||'').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
 
-  function renderStars(n) {
-    ov.querySelectorAll('._mvStar').forEach(function(s) {
-      var v = parseInt(s.dataset.val);
-      s.textContent = v <= n ? '★' : '☆';
-      s.style.color = v <= n ? '#f59e0b' : '#444';
-      s.style.transform = v <= n ? 'scale(1.1)' : 'scale(1)';
-    });
-    var lbl = document.getElementById('_mvStarLabel');
-    if (lbl) lbl.textContent = n > 0 ? starLabels[n] : '';
-  }
+  const body =
+    '<p style="color:#d1d5db;margin:0 0 18px 0;font-size:0.85rem;text-align:center;">' + esc(venueName) + '</p>' +
+    '<div id="_mvStarRow" style="display:flex;gap:8px;justify-content:center;margin-bottom:6px;">' + starHtml(selected) + '</div>' +
+    '<div id="_mvStarLabel" style="text-align:center;font-size:0.78rem;color:#9ca3af;height:16px;margin-bottom:14px;">' + (selected > 0 ? starLabels[selected] : '') + '</div>' +
+    '<div id="_mvStarErr" style="color:#ef4444;font-size:0.78rem;text-align:center;margin-bottom:8px;display:none;">Please select a rating.</div>' +
+    '<textarea id="_mvReviewText" rows="3" maxlength="1000" placeholder="Share your experience (optional)…" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#e5e5e5;padding:9px 11px;font-size:0.85rem;resize:vertical;outline:none;margin-bottom:6px;">' + esc(existingText) + '</textarea>' +
+    '<div id="_mvReviewMsg" style="font-size:0.78rem;text-align:center;min-height:16px;"></div>';
 
-  ov.querySelectorAll('._mvStar').forEach(function(s) {
-    s.addEventListener('mouseover', function() { renderStars(parseInt(s.dataset.val)); });
-    s.addEventListener('mouseout',  function() { renderStars(selected); });
-    s.addEventListener('click',     function() {
-      selected = parseInt(s.dataset.val);
-      renderStars(selected);
-      document.getElementById('_mvStarErr').style.display = 'none';
-    });
-  });
-
-  ov.querySelector('#_mvCancelBtn').addEventListener('click', function() { ov.remove(); });
-  ov.addEventListener('click', function(e) { if (e.target === ov) ov.remove(); });
-
-  var delBtnEl = ov.querySelector('#_mvDeleteBtn');
-  if (delBtnEl) {
-    delBtnEl.addEventListener('click', async function() {
-      var msg = document.getElementById('_mvReviewMsg');
-      delBtnEl.disabled = true; delBtnEl.textContent = 'Deleting…';
-      try {
-        var res = await fetch('/api/artists/' + artistId + '/venues/' + venueId + '/review', {
-          method: 'DELETE', credentials: 'include'
-        });
-        if (!res.ok) throw new Error('Delete failed');
-        if (msg) { msg.style.color = '#10b981'; msg.textContent = '✓ Review deleted.'; }
-        // Reset button in venue row
-        if (triggerBtn) {
-          triggerBtn.textContent = '⭐ Rate Venue';
-          triggerBtn.style.background = 'rgba(6,182,212,0.1)';
-          triggerBtn.style.border = '1px solid rgba(6,182,212,0.3)';
-          triggerBtn.style.color = '#06b6d4';
-          var safeName3 = (venueName || '').replace(/'/g, "\\'");
-          triggerBtn.setAttribute('onclick',
-            "event.stopPropagation(); openVenueRateModal(" + venueId + ", '" + safeName3 + "', " + artistId + ", 0, '', this)");
+  window.showStyledModal(
+    isEdit ? 'Edit Your Review' : 'Rate This Venue',
+    body,
+    [
+      {
+        text: 'Delete Review', style: 'danger',
+        onClick: async () => {
+          const overlay = document.querySelector('.gfm-modal-overlay');
+          const msg = overlay && overlay.querySelector('#_mvReviewMsg');
+          const btns = overlay && overlay.querySelectorAll('.gfm-modal-footer .btn');
+          const delBtn = btns && btns[0];
+          if (delBtn) { delBtn.disabled = true; delBtn.textContent = 'Deleting…'; }
+          try {
+            const res = await fetch('/api/artists/' + artistId + '/venues/' + venueId + '/review', {
+              method: 'DELETE', credentials: 'include'
+            });
+            if (!res.ok) throw new Error('Delete failed');
+            if (msg) { msg.style.color = '#10b981'; msg.textContent = '✓ Review deleted.'; }
+            if (triggerBtn) {
+              triggerBtn.textContent = '⭐ Rate Venue';
+              triggerBtn.style.background = 'rgba(6,182,212,0.1)';
+              triggerBtn.style.border = '1px solid rgba(6,182,212,0.3)';
+              triggerBtn.style.color = '#06b6d4';
+              const safeName3 = (venueName || '').replace(/'/g, "\\'");
+              triggerBtn.setAttribute('onclick',
+                "event.stopPropagation(); openVenueRateModal(" + venueId + ", '" + safeName3 + "', " + artistId + ", 0, '', this)");
+            }
+            setTimeout(() => { if (window.closeAllModals) window.closeAllModals(); }, 1200);
+          } catch (e) {
+            if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Delete failed. Please try again.'; }
+            if (delBtn) { delBtn.disabled = false; delBtn.textContent = 'Delete Review'; }
+            return false;
+          }
+          return false;
         }
-        setTimeout(function() { ov.remove(); }, 1200);
-      } catch(e) {
-        if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Delete failed. Please try again.'; }
-        delBtnEl.disabled = false; delBtnEl.textContent = 'Delete Review';
+      },
+      { text: 'Cancel', style: 'ghost' },
+      {
+        text: isEdit ? 'Update Review' : 'Submit Review', style: 'primary',
+        onClick: async () => {
+          const overlay = document.querySelector('.gfm-modal-overlay');
+          if (!selected) {
+            const err = overlay && overlay.querySelector('#_mvStarErr');
+            if (err) err.style.display = '';
+            return false;
+          }
+          const txt = overlay && overlay.querySelector('#_mvReviewText');
+          const reviewText = (txt && txt.value || '').trim();
+          const msg = overlay && overlay.querySelector('#_mvReviewMsg');
+          const btns = overlay && overlay.querySelectorAll('.gfm-modal-footer .btn');
+          const submitBtn = btns && btns[btns.length - 1];
+          if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
+          try {
+            const res = await fetch('/api/artists/' + artistId + '/venues/' + venueId + '/review', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ rating: selected, review_text: reviewText })
+            });
+            if (!res.ok) throw new Error(await res.text());
+            if (msg) { msg.style.color = '#10b981'; msg.textContent = '✓ Review saved!'; }
+            if (triggerBtn) {
+              triggerBtn.textContent = '✏️ Edit Review';
+              triggerBtn.style.background = 'rgba(245,158,11,0.12)';
+              triggerBtn.style.border = '1px solid rgba(245,158,11,0.35)';
+              triggerBtn.style.color = '#f59e0b';
+              const safeText = reviewText.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+              const safeName2 = (venueName || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+              triggerBtn.setAttribute('onclick',
+                'event.stopPropagation(); openVenueRateModal(' + venueId + ', \'' + safeName2 + '\', ' + artistId + ', ' + selected + ', \'' + safeText + '\', this)');
+            }
+            setTimeout(() => { if (window.closeAllModals) window.closeAllModals(); }, 1200);
+          } catch (e) {
+            if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Failed to save. Please try again.'; }
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = isEdit ? 'Update Review' : 'Submit Review'; }
+            return false;
+          }
+          return false;
+        }
       }
-    });
-  }
+    ],
+    { size: 'md' }
+  );
 
-  ov.querySelector('#_mvSubmitBtn').addEventListener('click', async function() {
-    if (!selected) { document.getElementById('_mvStarErr').style.display = ''; return; }
-    var reviewText = (document.getElementById('_mvReviewText').value || '').trim();
-    var msg = document.getElementById('_mvReviewMsg');
-    var btn = document.getElementById('_mvSubmitBtn');
-    btn.disabled = true; btn.textContent = 'Saving\u2026';
+  // Post-mount wiring: star hover/click, hide Delete button when not editing
+  setTimeout(() => {
+    const overlay = document.querySelector('.gfm-modal-overlay');
+    if (!overlay) return;
+    const delBtn = overlay.querySelectorAll('.gfm-modal-footer .btn')[0];
+    if (delBtn && !isEdit) delBtn.style.display = 'none';
 
-    try {
-      var res = await fetch('/api/artists/' + artistId + '/venues/' + venueId + '/review', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        credentials: 'include',
-        body: JSON.stringify({rating: selected, review_text: reviewText})
+    function renderStars(n) {
+      overlay.querySelectorAll('._mvStar').forEach(s => {
+        const v = parseInt(s.dataset.val);
+        s.textContent = v <= n ? '★' : '☆';
+        s.style.color = v <= n ? '#f59e0b' : '#444';
+        s.style.transform = v <= n ? 'scale(1.1)' : 'scale(1)';
       });
-      if (!res.ok) throw new Error(await res.text());
-
-      msg.style.color = '#10b981';
-      msg.textContent = '\u2713 Review saved!';
-
-      if (triggerBtn) {
-        triggerBtn.textContent = '\u270f\ufe0f Edit Review';
-        triggerBtn.style.background = 'rgba(245,158,11,0.12)';
-        triggerBtn.style.border = '1px solid rgba(245,158,11,0.35)';
-        triggerBtn.style.color = '#f59e0b';
-        var safeText = reviewText.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-        var safeName2 = (venueName || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-        triggerBtn.setAttribute('onclick',
-          'event.stopPropagation(); openVenueRateModal(' + venueId + ', \'' + safeName2 + '\', ' + artistId + ', ' + selected + ', \'' + safeText + '\', this)');
-      }
-      setTimeout(function() { ov.remove(); }, 1200);
-    } catch(e) {
-      msg.style.color = '#ef4444';
-      msg.textContent = 'Failed to save. Please try again.';
-      btn.disabled = false; btn.textContent = isEdit ? 'Update Review' : 'Submit Review';
+      const lbl = overlay.querySelector('#_mvStarLabel');
+      if (lbl) lbl.textContent = n > 0 ? starLabels[n] : '';
     }
-  });
+
+    overlay.querySelectorAll('._mvStar').forEach(s => {
+      s.addEventListener('mouseover', () => renderStars(parseInt(s.dataset.val)));
+      s.addEventListener('mouseout',  () => renderStars(selected));
+      s.addEventListener('click', () => {
+        selected = parseInt(s.dataset.val);
+        renderStars(selected);
+        const err = overlay.querySelector('#_mvStarErr');
+        if (err) err.style.display = 'none';
+      });
+    });
+  }, 50);
 };
 

@@ -2492,221 +2492,200 @@ function showContractSigningModal(gig, preview, artistId) {
  * Standard PDF Contract Modal - Books gig with 24hr hold
  */
 function showPdfContractModal(gig, preview, artistId) {
-  const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:10002; display:flex; align-items:center; justify-content:center;';
-
+  // Phase 3 migration: was a 150-line inline modal that morphed between two
+  // visual states ("hold the gig" → "download + upload"). Now each state is
+  // a separate showStyledModal call with a closeAllModals + reopen in
+  // between. Auto-tone picks 'warning' on state 1 (24h deadline language)
+  // and 'success' on state 2 ("Gig Held Successfully").
   const pdfUrl = preview.pdf_url || '';
   const contractName = preview.name || 'Contract';
 
-  modal.innerHTML = `
-    <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%); border:2px solid rgba(124,107,255,0.4); border-radius:12px; padding:24px; max-width:500px; width:95%; box-shadow:0 8px 32px rgba(124,107,255,0.3);">
-      <h2 style="margin:0 0 16px; font-size:1.1rem; color:#fff;">📋 Contract Required — PDF Signature</h2>
-      <div style="background:rgba(234,179,8,0.1); border:1px solid rgba(234,179,8,0.3); border-radius:8px; padding:14px; margin-bottom:16px;">
-        <p style="color:#eab308; margin:0; font-size:0.85rem; line-height:1.6;">
-          <strong>You have 24 hours</strong> to download, sign, and upload this contract to confirm your booking.
-        </p>
-      </div>
-      <div style="margin-bottom:16px;">
-        <p style="font-size:0.85rem; color:var(--text-gray); margin:0 0 4px;">Contract: <strong style="color:#fff;">${contractName}</strong></p>
-      </div>
-      <div id="pdfUploadArea" style="display:none; margin-bottom:16px;">
-        <p style="font-size:0.8rem; color:var(--text-gray); margin:0 0 8px;">Upload your signed contract (PDF only):</p>
-        <label class="btn primary" style="padding:8px 24px; font-size:0.85rem; cursor:pointer; display:inline-block; border-radius:8px;">
-          ⬆ Upload Signed Contract PDF
-          <input type="file" accept=".pdf" id="pdfSignedUploadInput" style="display:none;">
-        </label>
-        <div id="pdfUploadStatus" style="font-size:0.8rem; margin-top:6px;"></div>
-      </div>
-      <div style="display:flex; gap:12px; justify-content:flex-end; border-top:1px solid var(--border); padding-top:16px;">
-        <button class="btn ghost" onclick="this.closest('[style*=position]').remove()">Cancel</button>
-        <button class="btn primary" id="pdfHoldAndBookBtn">Hold Gig & Download Contract</button>
-      </div>
-      <div id="pdfBookStatus" style="font-size:0.8rem; margin-top:8px; text-align:right;"></div>
-    </div>`;
+  // Helper: refresh all gig-related views after a successful upload.
+  async function _refreshAfterUpload() {
+    if (typeof window.loadGigs === 'function') await window.loadGigs();
+    if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
+    if (typeof window.renderCalendar === 'function') window.renderCalendar();
+    if (window.activityCenter) await window.activityCenter.loadNotifications();
+  }
 
-  document.body.appendChild(modal);
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  // ── State 2: gig is held; show download + upload UI ─────────────────────
+  function showState2(contractId) {
+    const body =
+      '<div class="gf-bubble" style="background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.3);">' +
+        '<p style="color:#eab308;margin:0 0 6px 0;font-size:0.9rem;font-weight:600;">✓ Gig Held Successfully</p>' +
+        '<p style="color:var(--text-muted);margin:0 0 4px 0;font-size:0.85rem;line-height:1.5;">' +
+          'Download, print, sign, and upload the contract PDF to confirm your booking.</p>' +
+        '<p style="color:var(--text-muted);margin:0 0 14px 0;font-size:0.8rem;font-style:italic;opacity:0.8;">' +
+          '(This gig is held for 24 hours so you can sign and upload completed contract.)</p>' +
+        '<div style="display:flex;flex-direction:column;gap:10px;align-items:center;">' +
+          `<a href="${pdfUrl}" download class="btn" style="padding:8px 24px;font-size:0.85rem;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.4);color:#c4b5fd;border-radius:8px;text-decoration:none;display:inline-block;">⬇ Download Contract PDF</a>` +
+          '<label class="btn primary" style="padding:8px 24px;font-size:0.85rem;cursor:pointer;border-radius:8px;">' +
+            '⬆ Upload Signed Contract PDF' +
+            '<input type="file" accept=".pdf" id="pdfSignedUploadInput" style="display:none;">' +
+          '</label>' +
+          '<span style="font-size:0.75rem;color:var(--text-muted);opacity:0.7;">PDF files only</span>' +
+        '</div>' +
+        '<div id="pdfUploadStatus" style="font-size:0.8rem;margin-top:8px;text-align:center;"></div>' +
+      '</div>';
 
-  const holdBtn = modal.querySelector('#pdfHoldAndBookBtn');
-  holdBtn.onclick = async () => {
-    holdBtn.disabled = true;
-    holdBtn.textContent = 'Booking...';
-    const statusEl = modal.querySelector('#pdfBookStatus');
+    window.showStyledModal(
+      '📋 Contract Signature Required',
+      body,
+      [{ text: 'Close', style: 'ghost' }],
+      { tone: 'success', size: 'md' }
+    );
 
-    try {
-      const pdfPayload = { artist_id: artistId };
-      if (window._pendingSlotBooking) pdfPayload.slot_id = window._pendingSlotBooking.slotId;
-      const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pdfPayload)
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Booking failed');
-      }
-      const data = await res.json();
-      window._pendingContractInfo = null;
+    // Trigger download automatically (preserves original behavior)
+    if (pdfUrl) {
+      const a = document.createElement('a');
+      a.href = pdfUrl; a.download = '';
+      document.body.appendChild(a); a.click(); a.remove();
+    }
 
-      // Replace modal content with clean download/upload layout (matches gig details modal)
-      const innerBox = modal.querySelector('div > div');
-      if (innerBox) {
-        innerBox.innerHTML = `
-          <h2 style="margin:0 0 16px; font-size:1.1rem; color:#fff;">📋 Contract Signature Required</h2>
-          <div style="padding: 14px 18px; background: rgba(234, 179, 8, 0.1); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: 8px;">
-            <p style="color: #eab308; margin: 0 0 6px 0; font-size: 0.9rem; font-weight: 600;">
-              ✓ Gig Held Successfully
-            </p>
-            <p style="color: var(--text-muted); margin: 0 0 4px 0; font-size: 0.85rem; line-height: 1.5;">
-              Download, print, sign, and upload the contract PDF to confirm your booking.
-            </p>
-            <p style="color: var(--text-muted); margin: 0 0 14px 0; font-size: 0.8rem; font-style: italic; opacity: 0.8;">
-              (This gig is held for 24 hours so you can sign and upload completed contract.)
-            </p>
-            <div style="display:flex; flex-direction:column; gap:10px; align-items:center;">
-              <a href="${pdfUrl || ''}" download class="btn" style="padding:8px 24px; font-size:0.85rem; background:rgba(139,92,246,0.2); border:1px solid rgba(139,92,246,0.4); color:#c4b5fd; border-radius:8px; text-decoration:none; display:inline-block;">⬇ Download Contract PDF</a>
-              <label class="btn primary" style="padding:8px 24px; font-size:0.85rem; cursor:pointer; border-radius:8px;">
-                ⬆ Upload Signed Contract PDF
-                <input type="file" accept=".pdf" id="pdfSignedUploadInput2" style="display:none;">
-              </label>
-              <span style="font-size:0.75rem; color:var(--text-muted); opacity:0.7;">PDF files only</span>
-            </div>
-            <div id="pdfUploadStatus2" style="font-size:0.8rem; margin-top:8px; text-align:center;"></div>
-          </div>
-          <div style="display:flex; justify-content:flex-end; border-top:1px solid var(--border); padding-top:16px; margin-top:16px;">
-            <button class="btn ghost" onclick="this.closest('[style*=position]').remove()">Close</button>
-          </div>
-        `;
-        // Wire up new upload input
-        const newUpload = document.getElementById('pdfSignedUploadInput2');
-        if (newUpload) {
-          newUpload.onchange = async () => {
-            if (!newUpload.files.length) return;
-            const st = document.getElementById('pdfUploadStatus2');
-            st.innerHTML = '<span style="color:var(--text-gray);">Uploading...</span>';
-            const fd = new FormData();
-            fd.append('file', newUpload.files[0]);
-            try {
-              const r = await fetch('/api/gig-contracts/' + data.contract_id + '/upload-signed', {
-                method: 'POST', credentials: 'include', body: fd
-              });
-              if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || 'Upload failed'); }
-              st.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
-              setTimeout(() => modal.remove(), 1500);
-              if (typeof window.loadGigs === 'function') await window.loadGigs();
-              if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-              if (typeof window.renderCalendar === 'function') window.renderCalendar();
-              if (window.activityCenter) await window.activityCenter.loadNotifications();
-            } catch (e) {
-              st.innerHTML = '<span style="color:#ef4444;">✗ ' + e.message + '</span>';
-            }
-          };
-        }
-      }
-
-      // Refresh calendar behind modal so gig shows correct status
-      if (typeof window.loadGigs === 'function') await window.loadGigs();
-      if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-      if (typeof window.renderCalendar === 'function') window.renderCalendar();
-      if (window.activityCenter) await window.activityCenter.loadNotifications();
-
-      if (pdfUrl) { const a = document.createElement('a'); a.href = pdfUrl; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); }
-
-      const uploadInput = modal.querySelector('#pdfSignedUploadInput');
+    // Wire up the upload input after the modal mounts.
+    setTimeout(() => {
+      const overlay = document.querySelector('.gfm-modal-overlay');
+      if (!overlay) return;
+      const uploadInput = overlay.querySelector('#pdfSignedUploadInput');
+      const statusEl    = overlay.querySelector('#pdfUploadStatus');
+      if (!uploadInput) return;
       uploadInput.onchange = async () => {
         if (!uploadInput.files.length) return;
-        const uploadStatus = modal.querySelector('#pdfUploadStatus');
-        uploadStatus.innerHTML = '<span style="color:var(--text-gray);">Uploading...</span>';
-        const formData = new FormData();
-        formData.append('file', uploadInput.files[0]);
+        statusEl.innerHTML = '<span style="color:var(--text-gray);">Uploading...</span>';
+        const fd = new FormData();
+        fd.append('file', uploadInput.files[0]);
         try {
-          const upRes = await fetch(`/api/gig-contracts/${data.contract_id}/upload-signed`, {
-            method: 'POST', credentials: 'include', body: formData
+          const r = await fetch(`/api/gig-contracts/${contractId}/upload-signed`, {
+            method: 'POST', credentials: 'include', body: fd
           });
-          if (!upRes.ok) {
-            const err = await upRes.json().catch(() => ({}));
-            const msg = Array.isArray(err.detail) ? (err.detail[0] && err.detail[0].msg) || 'Upload failed' : (err.detail || 'Upload failed');
+          if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            const msg = Array.isArray(e.detail) ? (e.detail[0] && e.detail[0].msg) || 'Upload failed' : (e.detail || 'Upload failed');
             throw new Error(msg);
           }
-          uploadStatus.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
-          setTimeout(() => modal.remove(), 1500);
-          if (typeof window.loadGigs === 'function') await window.loadGigs();
-          if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-          if (typeof window.renderCalendar === 'function') window.renderCalendar();
-          if (window.activityCenter) await window.activityCenter.loadNotifications();
+          statusEl.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
+          setTimeout(() => { if (window.closeAllModals) window.closeAllModals(); }, 1500);
+          await _refreshAfterUpload();
         } catch (e) {
-          uploadStatus.innerHTML = `<span style="color:#ef4444;">✗ ${esc(e.message)}</span>`;
+          statusEl.innerHTML = `<span style="color:#ef4444;">✗ ${esc(e.message)}</span>`;
         }
       };
-    } catch (e) {
-      holdBtn.disabled = false;
-      holdBtn.textContent = 'Hold Gig & Download Contract';
-      statusEl.innerHTML = `<span style="color:#ef4444;">${esc(e.message)}</span>`;
-    }
-  };
+    }, 50);
+  }
+
+  // ── State 1: confirm hold (initial entry point) ─────────────────────────
+  const state1Body =
+    '<div class="gf-bubble" style="background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.3);">' +
+      '<p style="color:#eab308;margin:0;font-size:0.85rem;line-height:1.6;">' +
+        '<strong>You have 24 hours</strong> to download, sign, and upload this contract to confirm your booking.</p>' +
+    '</div>' +
+    `<p style="font-size:0.85rem;color:var(--text-gray);margin:14px 0 0 0;">Contract: <strong style="color:#fff;">${esc(contractName)}</strong></p>` +
+    '<div id="pdfBookStatus" style="font-size:0.8rem;margin-top:8px;text-align:right;"></div>';
+
+  window.showStyledModal(
+    '📋 Contract Required — PDF Signature',
+    state1Body,
+    [
+      { text: 'Cancel', style: 'ghost' },
+      {
+        text: 'Hold Gig & Download Contract', style: 'primary',
+        onClick: async () => {
+          const overlay = document.querySelector('.gfm-modal-overlay');
+          const statusEl = overlay && overlay.querySelector('#pdfBookStatus');
+          const holdBtn = overlay && overlay.querySelectorAll('.gfm-modal-footer .btn')[1];
+          if (holdBtn) { holdBtn.disabled = true; holdBtn.textContent = 'Booking...'; }
+          try {
+            const pdfPayload = { artist_id: artistId };
+            if (window._pendingSlotBooking) pdfPayload.slot_id = window._pendingSlotBooking.slotId;
+            const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(pdfPayload)
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.detail || 'Booking failed');
+            }
+            const data = await res.json();
+            window._pendingContractInfo = null;
+            await _refreshAfterUpload();
+            // Swap to state 2 — close current modal and open the next.
+            if (window.closeAllModals) window.closeAllModals();
+            showState2(data.contract_id);
+          } catch (e) {
+            if (holdBtn) { holdBtn.disabled = false; holdBtn.textContent = 'Hold Gig & Download Contract'; }
+            if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">${esc(e.message)}</span>`;
+            return false; // keep modal open so user can see the error
+          }
+        }
+      }
+    ],
+    { tone: 'warning', size: 'md' }
+  );
 }
 
 /**
  * Per-Gig PDF Contract Modal - 48hr hold, venue uploads
  */
 function showPerGigPdfModal(gig, artistId) {
-  const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:10002; display:flex; align-items:center; justify-content:center;';
+  // Phase 3 migration: was a self-built modal. Now uses showStyledModal.
+  // Cyan info bubble — informational tone, not warning. The default neutral
+  // tone is correct here (we're not asking for an immediate action under
+  // pressure — venue has 48h to respond).
+  const body =
+    '<div class="gf-bubble" style="background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.2);">' +
+      '<p style="color:#67e8f9;margin:0;font-size:0.85rem;line-height:1.6;">' +
+        'This venue prepares a <strong>unique contract for each gig</strong>. ' +
+        'The venue will have <strong>48 hours</strong> to upload your contract. ' +
+        "You'll be notified when it's ready.</p>" +
+    '</div>' +
+    '<p style="font-size:0.8rem;color:var(--text-gray);line-height:1.5;margin:14px 0 0 0;">' +
+      'After the venue uploads the contract, you\'ll have <strong>24 hours</strong> ' +
+      'to download, sign, and upload it.</p>' +
+    '<div id="perGigBookStatus" style="font-size:0.8rem;margin-top:8px;text-align:right;"></div>';
 
-  modal.innerHTML = `
-    <div style="background:linear-gradient(135deg,#1a1f2e 0%,#0f1419 100%); border:2px solid rgba(124,107,255,0.4); border-radius:12px; padding:24px; max-width:480px; width:95%; box-shadow:0 8px 32px rgba(124,107,255,0.3);">
-      <h2 style="margin:0 0 16px; font-size:1.1rem; color:#fff;">📋 Contract Required — Venue-Specific</h2>
-      <div style="background:rgba(6,182,212,0.08); border:1px solid rgba(6,182,212,0.2); border-radius:8px; padding:14px; margin-bottom:16px;">
-        <p style="color:#67e8f9; margin:0; font-size:0.85rem; line-height:1.6;">
-          This venue prepares a <strong>unique contract for each gig</strong>. The venue will have <strong>48 hours</strong> to upload your contract. You'll be notified when it's ready.
-        </p>
-      </div>
-      <p style="font-size:0.8rem; color:var(--text-gray); line-height:1.5; margin:0 0 16px;">
-        After the venue uploads the contract, you'll have <strong>24 hours</strong> to download, sign, and upload it.
-      </p>
-      <div style="display:flex; gap:12px; justify-content:flex-end; border-top:1px solid var(--border); padding-top:16px;">
-        <button class="btn ghost" onclick="this.closest('[style*=position]').remove()">Cancel</button>
-        <button class="btn primary" id="perGigRequestBtn">Request Booking</button>
-      </div>
-      <div id="perGigBookStatus" style="font-size:0.8rem; margin-top:8px; text-align:right;"></div>
-    </div>`;
-
-  document.body.appendChild(modal);
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
-
-  const reqBtn = modal.querySelector('#perGigRequestBtn');
-  reqBtn.onclick = async () => {
-    reqBtn.disabled = true;
-    reqBtn.textContent = 'Requesting...';
-    const statusEl = modal.querySelector('#perGigBookStatus');
-
-    try {
-      const pgPayload = { artist_id: artistId };
-      if (window._pendingSlotBooking) pgPayload.slot_id = window._pendingSlotBooking.slotId;
-      const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pgPayload)
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Request failed');
+  window.showStyledModal(
+    '📋 Contract Required — Venue-Specific',
+    body,
+    [
+      { text: 'Cancel', style: 'ghost' },
+      {
+        text: 'Request Booking', style: 'primary',
+        onClick: async () => {
+          const overlay = document.querySelector('.gfm-modal-overlay');
+          const statusEl = overlay && overlay.querySelector('#perGigBookStatus');
+          const reqBtn = overlay && overlay.querySelectorAll('.gfm-modal-footer .btn')[1];
+          if (reqBtn) { reqBtn.disabled = true; reqBtn.textContent = 'Requesting...'; }
+          try {
+            const pgPayload = { artist_id: artistId };
+            if (window._pendingSlotBooking) pgPayload.slot_id = window._pendingSlotBooking.slotId;
+            const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(pgPayload)
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.detail || 'Request failed');
+            }
+            window._pendingContractInfo = null;
+            if (window.closeAllModals) window.closeAllModals();
+            if (typeof window.showSuccessModal === 'function') {
+              window.showSuccessModal('Booking Requested!', 'The venue has been notified to upload your contract.');
+            }
+            if (typeof window.loadGigs === 'function') await window.loadGigs();
+            if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
+            if (typeof window.renderCalendar === 'function') window.renderCalendar();
+          } catch (e) {
+            if (reqBtn) { reqBtn.disabled = false; reqBtn.textContent = 'Request Booking'; }
+            if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">${esc(e.message)}</span>`;
+            return false; // keep modal open
+          }
+        }
       }
-      window._pendingContractInfo = null;
-      modal.remove();
-      if (typeof window.showSuccessModal === 'function') window.showSuccessModal("Booking Requested!", "The venue has been notified to upload your contract.");
-      // Refresh calendar so gig shows correct pending status
-      if (typeof window.loadGigs === 'function') await window.loadGigs();
-      if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-      if (typeof window.loadGigs === 'function') await window.loadGigs();
-      if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-      if (typeof window.renderCalendar === 'function') window.renderCalendar();
-    } catch (e) {
-      reqBtn.disabled = false;
-      reqBtn.textContent = 'Request Booking';
-      statusEl.innerHTML = `<span style="color:#ef4444;">${esc(e.message)}</span>`;
-    }
-  };
+    ],
+    { size: 'md' }
+  );
 }
 
 /**
