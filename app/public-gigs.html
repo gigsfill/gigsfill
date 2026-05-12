@@ -23,6 +23,7 @@
 <link href="/app/static/css/gigsfill.css" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
+  <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet">
 <style>
     /* TABS STYLING - MATCHING USER-PROFILE */
     .tabs {
@@ -262,20 +263,6 @@
     }
 
     /* MODAL - PROPERLY CENTERED WITH WHITE TEXT */
-    .modal-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.85);
-      backdrop-filter: blur(8px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10000;
-      padding: 20px;
-    }
 
     .modal-overlay.hidden {
       display: none;
@@ -295,11 +282,6 @@
     }
     
     /* Day modal sizes to fit its content */
-    .modal.day-modal {
-      width: fit-content;
-      max-width: 98vw;
-      min-width: min(860px, 98vw);
-    }
 
     /* MODAL TITLES - Purple with gradient */
     .modal h2,
@@ -325,32 +307,10 @@
     }
     
     /* BOLD PURPLE SEPARATOR LINE */
-    .modal-separator {
-      height: 3px !important;
-      background: linear-gradient(90deg, #a855f7, #06b6d4, #a855f7) !important;
-      margin: 0 0 24px 0 !important;
-      border-radius: 2px !important;
-      box-shadow: 0 2px 8px rgba(168, 85, 247, 0.4) !important;
-    }
     
     /* Red warning boxes for frequency/denied/revoked */
-    .modal-warning-box {
-      margin: 20px 0;
-      padding: 16px;
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      border-radius: 8px;
-    }
     
-    .modal-warning-box p {
-      color: #ef4444 !important;
-      margin: 0;
-      line-height: 1.6;
-    }
     
-    .modal-warning-box strong {
-      color: #ef4444 !important;
-    }
     
     /* Booked by box styling */
     .booked-by-box {
@@ -423,26 +383,8 @@
       border-radius: 4px;
     }
     
-    .modal h3 {
-      margin-bottom: 20px;
-      font-size: 1.1rem;
-    }
 
-    .modal label {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 16px;
-      font-weight: 500;
-      font-size: 0.9rem;
-    }
 
-    .modal input,
-    .modal textarea {
-      width: 100%;
-      font-family: var(--font-primary);
-      font-size: 0.9rem;
-    }
 
     .modal-actions {
       display: flex;
@@ -466,10 +408,6 @@
       transition: all 0.2s;
     }
     
-    .modal-actions .btn:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--cyan);
-    }
     
     .modal-actions .btn.primary {
       background: var(--cyan);
@@ -482,28 +420,9 @@
       border-color: #06a5ca;
     }
     
-    .modal-actions .btn.danger {
-      background: #ef4444;
-      border-color: #ef4444;
-      color: #fff;
-    }
     
-    .modal-actions .btn.danger:hover {
-      background: #dc2626;
-      border-color: #dc2626;
-    }
     
-    .modal-actions .btn.ghost {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
     
-    .modal-actions .btn.ghost:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--cyan);
-      color: var(--cyan);
-    }
 
     /* OPEN gigs — dusk green - COPIED FROM ARTIST-BOOK-GIGS */
     .calendar .gig.open {

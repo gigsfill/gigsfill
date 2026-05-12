@@ -201,20 +201,6 @@
     }
 
     /* MODAL - PROPERLY CENTERED WITH WHITE TEXT */
-    .modal-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.85);
-      backdrop-filter: blur(8px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10000;
-      padding: 20px;
-    }
 
     .modal-overlay.hidden {
       display: none;
@@ -234,11 +220,6 @@
     }
     
     /* Wider modal for day view with multiple gigs */
-    .modal.day-modal {
-      width: fit-content;
-      max-width: 98vw;
-      min-width: min(860px, 98vw);
-    }
 
     /* MODAL TITLES - Purple with gradient */
     .modal h2,
@@ -264,13 +245,6 @@
     }
     
     /* BOLD PURPLE SEPARATOR LINE */
-    .modal-separator {
-      height: 3px !important;
-      background: linear-gradient(90deg, #a855f7, #06b6d4, #a855f7) !important;
-      margin: 0 0 24px 0 !important;
-      border-radius: 2px !important;
-      box-shadow: 0 2px 8px rgba(168, 85, 247, 0.4) !important;
-    }
     
     .modal h2 {
       font-size: 1.5rem;
@@ -315,26 +289,8 @@
       border-radius: 4px;
     }
     
-    .modal h3 {
-      margin-bottom: 20px;
-      font-size: 1.1rem;
-    }
 
-    .modal label {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 16px;
-      font-weight: 500;
-      font-size: 0.9rem;
-    }
 
-    .modal input,
-    .modal textarea {
-      width: 100%;
-      font-family: var(--font-primary);
-      font-size: 0.9rem;
-    }
 
     /* CRITICAL: White text in modals */
     .modal h2,
@@ -350,26 +306,8 @@
       font-size: 1.25rem;
     }
 
-    .modal h3 {
-      margin-bottom: 20px;
-      font-size: 1.1rem;
-    }
 
-    .modal label {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 16px;
-      font-weight: 500;
-      font-size: 0.9rem;
-    }
 
-    .modal input,
-    .modal textarea {
-      width: 100%;
-      font-family: var(--font-primary);
-      font-size: 0.9rem;
-    }
 
     .modal-actions {
       display: flex;
@@ -402,10 +340,6 @@
       min-width: auto;
     }
     
-    .modal-actions .btn:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--cyan);
-    }
     
     .modal-actions .btn.primary {
       background: #3b82f6;
@@ -418,28 +352,9 @@
       border-color: #2563eb;
     }
     
-    .modal-actions .btn.danger {
-      background: #ef4444;
-      border-color: #ef4444;
-      color: #fff;
-    }
     
-    .modal-actions .btn.danger:hover {
-      background: #dc2626;
-      border-color: #dc2626;
-    }
     
-    .modal-actions .btn.ghost {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
     
-    .modal-actions .btn.ghost:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--cyan);
-      color: var(--cyan);
-    }
 
     /* Pay input wrapper */
     .pay-input-wrapper {
@@ -870,13 +785,6 @@
   }
 
   /* One row = label + field */
-  .modal-clean .modal-row {
-    display: grid;
-    grid-template-columns: 140px 1fr;
-    align-items: center;
-    gap: 14px;
-    margin-bottom: 12px;
-  }
 
   /* Labels */
   .modal-clean .modal-row > label {
@@ -888,11 +796,6 @@
   }
 
   /* Right-side controls */
-  .modal-clean .modal-control {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
 
   /* Inputs */
   .modal-clean input,
@@ -908,10 +811,6 @@
   }
 
   /* Textarea behaves */
-  .modal-clean textarea {
-    width: 100%;
-    resize: vertical;
-  }
 
   /* Select dropdowns - make them awesome and dark */
   .modal-clean select {
@@ -939,46 +838,14 @@
   }
 
   /* Checkbox rows (band lineups, days, etc) */
-  .modal-clean .checkbox-row {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
 
-  .modal-clean .checkbox-row label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    white-space: nowrap;
-  }
 
   /* Nested group (Recurring options) */
-  .modal-clean .subgroup {
-    margin-top: 12px;
-    padding: 12px;
-    background: #12151c;
-    border-radius: 6px;
-  }
 
   /* Band Lineups — force single-line alignment */
-  .modal-clean .band-lineups-row {
-    flex-wrap: nowrap;        /* prevent wrapping */
-    gap: 16px;
-  }
 
-  .modal-clean .band-lineups-row label {
-    margin: 0;
-  }
 
   /* FIX: checkboxes must be inline, not stacked */
-  .modal-clean .modal-control > label {
-    display: inline-flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 0;
-  }
 
   .days-row {
     display: flex;
@@ -992,44 +859,12 @@
    (Recurring "Ends" section)
    =============================== */
 
-  .modal-clean input[type="radio"] {
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-
-    width: 16px;
-    height: 16px;
-    border: 1px solid #555;
-    border-radius: 4px; /* <-- square */
-    background: #0f1116;
-    cursor: pointer;
-    position: relative;
-  }
 
   /* Checked state */
-  .modal-clean input[type="radio"]:checked {
-    background: #2563eb;
-    border-color: #2563eb;
-  }
 
   /* Checkmark */
-  .modal-clean input[type="radio"]:checked::after {
-    content: "";
-    position: absolute;
-    top: 2px;
-    left: 5px;
-    width: 4px;
-    height: 8px;
-    border: solid white;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-  }
 
   /* Focus fix (NO black flash) */
-  .modal-clean input[type="radio"]:focus {
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4);
-  }
 
 /* =====================================================
    UNIVERSAL MODAL CHECKBOX / RADIO SYSTEM (SQUARE)
@@ -1039,49 +874,12 @@
    - Recurring Ends options
    ===================================================== */
 
-   .modal-clean input[type="checkbox"],
-  .modal-clean input[type="radio"] {
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-
-  width: 16px;
-  height: 16px;
-  border: 1px solid #555;
-  border-radius: 4px; /* SQUARE */
-  background: #0f1116;
-  cursor: pointer;
-  position: relative;
-  flex-shrink: 0;
-}
 
 /* Checked state */
-.modal-clean input[type="checkbox"]:checked,
-.modal-clean input[type="radio"]:checked {
-  background: #2563eb;
-  border-color: #2563eb;
-}
 
 /* Checkmark */
-.modal-clean input[type="checkbox"]:checked::after,
-.modal-clean input[type="radio"]:checked::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 5px;
-  width: 4px;
-  height: 8px;
-  border: solid #ffffff;
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
 
 /* Focus — FIXES BLACK FLASH */
-.modal-clean input[type="checkbox"]:focus,
-.modal-clean input[type="radio"]:focus {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4);
-}
 
 /* =========================================
    SEARCH ARTISTS SECTION IMPROVEMENTS
@@ -1405,6 +1203,7 @@
 <link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
   <link href="/app/static/css/mobile.css" rel="stylesheet"/>
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
+  <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet"/>
 </head>
 <body class="dark-ui venue-create-gigs-page artist-edit-page">
 
