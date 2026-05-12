@@ -1049,6 +1049,7 @@
     save: saveContract,
     delete: deleteContract,
     removePdf: removePdf,
+    confirmRemove: confirmRemove,
     closeRemove: closeRemove,
     confirmRemove: confirmRemove,
     openRename: openRename,

@@ -2283,7 +2283,7 @@
     <p style="font-size:0.85rem; color:var(--text-gray); margin-bottom:16px; line-height:1.5;">Are you sure you want to remove this contract? Artists will no longer see a contract when booking.</p>
     <div style="display:flex; gap:8px; justify-content:flex-end;">
       <button class="btn ghost" onclick="document.getElementById('contractRemoveOverlay').style.display='none'">Cancel</button>
-      <button class="btn primary" style="background:#ef4444;" onclick="window.venueContracts.removePdf(); document.getElementById('contractRemoveOverlay').style.display='none'">Remove</button>
+      <button class="btn primary" style="background:#ef4444;" onclick="window.venueContracts.confirmRemove()">Remove</button>
     </div>
   </div>
 </div>

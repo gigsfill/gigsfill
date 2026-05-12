@@ -2591,7 +2591,7 @@ function showPdfContractModal(gig, preview, artistId) {
                 method: 'POST', credentials: 'include', body: fd
               });
               if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || 'Upload failed'); }
-              st.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed.</span>';
+              st.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
               setTimeout(() => modal.remove(), 1500);
               if (typeof window.loadGigs === 'function') await window.loadGigs();
               if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
@@ -2628,7 +2628,7 @@ function showPdfContractModal(gig, preview, artistId) {
             const msg = Array.isArray(err.detail) ? (err.detail[0] && err.detail[0].msg) || 'Upload failed' : (err.detail || 'Upload failed');
             throw new Error(msg);
           }
-          uploadStatus.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed.</span>';
+          uploadStatus.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
           setTimeout(() => modal.remove(), 1500);
           if (typeof window.loadGigs === 'function') await window.loadGigs();
           if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
@@ -2726,7 +2726,7 @@ window._uploadSignedPdf = async function(input, contractId) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Upload failed');
     }
-    if (statusEl) statusEl.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed.</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
     setTimeout(async () => {
       if (typeof window.loadGigs === 'function') await window.loadGigs();
       if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();

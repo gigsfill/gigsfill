@@ -2377,25 +2377,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     const totalSlots = slots.length;
     const isMultiSlot = totalSlots > 1;
 
-    // Pay display: single-slot shows one line at the top (with effective-pay
-    // override applied if an artist is booked). Multi-slot omits the top line
-    // entirely — pay can differ per slot, so it's rendered inline on each
-    // slot row below using `slot.pay` directly (already reflects per-artist
-    // overrides applied at booking time).
-    let payDisplay = '';
-    if (!isMultiSlot) {
-      payDisplay = gig.pay != null && gig.pay !== '' ? '$' + parseFloat(gig.pay).toFixed(2) : '';
-      const artistIdForPay = gig.artist_id || (slots.find(s => s.status === 'booked') || {}).artist_id;
-      if (artistIdForPay) {
-        try {
-          const payRes = await fetch('/api/gigs/' + gig.id + '/effective-pay?artist_id=' + artistIdForPay, { credentials: 'include' });
-          if (payRes.ok) {
-            const payData = await payRes.json();
-            if (payData.pay != null) payDisplay = '$' + Number(payData.pay).toFixed(2);
-          }
-        } catch (e) { console.error('Effective pay (single-slot):', e); }
-      }
-    }
+    // Pay is no longer rendered at the top of the modal — it's shown inline
+    // on the slot row(s) below for BOTH single and multi-slot gigs so the
+    // layout is identical regardless of slot count. slot.pay already reflects
+    // any per-artist override applied at booking time.
 
     gigArtistInfo.style.display = "block";
 
@@ -2405,7 +2390,6 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         <div>${formatDateForDisplay(gig.date)}</div>
         <div style="font-weight: 600;">Event:</div>
         <div>${eventLabel}</div>
-        ${payDisplay ? `<div style="font-weight: 600;">Pay:</div><div>${payDisplay}</div>` : ''}
       </div>
     `;
     
@@ -2434,11 +2418,13 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         if (fmts) typeInfo += ` · ${fmts}`;
         if (stls) typeInfo += ` · ${stls}`;
       }
-      // Per-slot pay shown only on multi-slot gigs (single-slot uses the
-      // top-of-modal Pay line). slot.pay already reflects any per-artist
-      // override applied at booking — see _apply_slot_booking.
-      const slotPayHtml = (isMultiSlot && slot.pay != null && slot.pay !== '')
-        ? `<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(slot.pay).toFixed(2)}</span>`
+      // Per-slot pay shown on every slot row (single + multi). slot.pay
+      // already reflects any per-artist override applied at booking — see
+      // _apply_slot_booking. Falls back to gig.pay for legacy rows that
+      // pre-date the slot.pay column being populated.
+      const _slotPayVal = (slot.pay != null && slot.pay !== '') ? slot.pay : gig.pay;
+      const slotPayHtml = (_slotPayVal != null && _slotPayVal !== '')
+        ? `<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(_slotPayVal).toFixed(2)}</span>`
         : '';
 
       if (isBooked) {
