@@ -5009,23 +5009,25 @@ window._doCountersign = async function(contractId) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Countersign failed');
     }
-    if (status) { status.style.color = '#22c55e'; status.textContent = '✓ Contract countersigned! Booking confirmed.'; }
+    if (status) {
+      status.style.color = '#22c55e';
+      // 5-second auto-close (was 1.5s — too quick to read). User can also
+      // click Close anytime to dismiss sooner.
+      status.innerHTML = '✓ Contract countersigned! Booking confirmed. <span style="color:var(--text-muted);font-size:0.78rem;">(Closing in 5 seconds, or click Close.)</span>';
+    }
     btn.style.display = 'none';
-    // Refresh calendar, activity center, and executed contracts after short delay
+    // Refresh data in background immediately so it's ready when modal closes.
+    if (typeof window.invalidateGigs === 'function' && typeof window.renderCalendar === 'function') {
+      window.invalidateGigs();
+      window.renderCalendar();
+    }
+    if (window.activityCenterVenue) window.activityCenterVenue.loadNotifications();
+    if (window.venueContracts && window.venueContracts.loadExecuted) window.venueContracts.loadExecuted();
+    if (typeof loadVenueBillingHistory === 'function') loadVenueBillingHistory();
     setTimeout(() => {
       const modal = document.getElementById('gigModal');
       if (modal) modal.classList.add('hidden');
-      if (typeof window.invalidateGigs === 'function' && typeof window.renderCalendar === 'function') {
-        window.invalidateGigs();
-        window.renderCalendar();
-      }
-      // Refresh activity center
-      if (window.activityCenterVenue) window.activityCenterVenue.loadNotifications();
-      // Refresh executed contracts list
-      if (window.venueContracts && window.venueContracts.loadExecuted) window.venueContracts.loadExecuted();
-      // Refresh Payments tab so new transaction appears
-      if (typeof loadVenueBillingHistory === 'function') loadVenueBillingHistory();
-    }, 1500);
+    }, 5000);
   } catch (e) {
     btn.disabled = false;
     btn.textContent = 'Countersign & Confirm Booking';

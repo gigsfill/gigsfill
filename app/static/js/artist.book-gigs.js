@@ -2563,8 +2563,8 @@ function showPdfContractModal(gig, preview, artistId) {
             const msg = Array.isArray(e.detail) ? (e.detail[0] && e.detail[0].msg) || 'Upload failed' : (e.detail || 'Upload failed');
             throw new Error(msg);
           }
-          statusEl.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
-          setTimeout(() => { if (window.closeAllModals) window.closeAllModals(); }, 1500);
+          statusEl.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span> <span style="color:var(--text-muted);font-size:0.78rem;display:block;margin-top:6px;">(Closing in 5 seconds, or click Close.)</span>';
+          setTimeout(() => { if (window.closeAllModals) window.closeAllModals(); }, 5000);
           await _refreshAfterUpload();
         } catch (e) {
           statusEl.innerHTML = `<span style="color:#ef4444;">✗ ${esc(e.message)}</span>`;
@@ -2705,13 +2705,18 @@ window._uploadSignedPdf = async function(input, contractId) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Upload failed');
     }
-    if (statusEl) statusEl.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span>';
-    setTimeout(async () => {
-      if (typeof window.loadGigs === 'function') await window.loadGigs();
-      if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
-      if (typeof window.renderCalendar === 'function') window.renderCalendar();
-      if (window.activityCenter) await window.activityCenter.loadNotifications();
-    }, 1000);
+    if (statusEl) statusEl.innerHTML = '<span style="color:#22c55e;">✓ Contract uploaded! Booking confirmed. Waiting for the venue to countersign and confirm.</span> <span style="color:var(--text-muted);font-size:0.78rem;display:block;margin-top:6px;">(Closing in 5 seconds, or click Close.)</span>';
+    // Refresh data immediately so it's ready when modal closes.
+    if (typeof window.loadGigs === 'function') await window.loadGigs();
+    if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
+    if (typeof window.renderCalendar === 'function') window.renderCalendar();
+    if (window.activityCenter) await window.activityCenter.loadNotifications();
+    // Auto-close the gig modal after 5s. User can also dismiss via the
+    // modal's own Close button at any point.
+    setTimeout(() => {
+      const gm = document.getElementById('gigModal');
+      if (gm) gm.classList.add('hidden');
+    }, 5000);
   } catch (e) {
     if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">✗ ${esc(e.message)}</span>`;
   }

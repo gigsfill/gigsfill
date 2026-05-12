@@ -432,12 +432,14 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
   }
 
   // Pay display — rendered as a green pill matching the venue-side modal so
-  // multi-slot gigs read consistently across both views. Visibility rules
-  // unchanged: artists see pay only for their own slot or open & bookable
-  // slots (other slots' negotiated pay isn't artist-facing).
+  // multi-slot gigs read consistently across both views.
+  //   - Artists: only on their own slot or open & bookable slots (other
+  //     artists' negotiated pay isn't artist-facing).
+  //   - Venues: on every slot (it's their gig — they always know the pay).
   let payHtml = '';
   if (slot.pay) {
-    const showPay = isMySlot || (isOpen && rel === 'open_bookable');
+    const isVenue = vType === 'venue';
+    const showPay = isVenue || isMySlot || (isOpen && rel === 'open_bookable');
     if (showPay) {
       payHtml = `<span style="color:#22c55e;font-weight:700;font-size:0.8rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(slot.pay).toFixed(2)}</span>`;
     }

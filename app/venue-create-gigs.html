@@ -2599,16 +2599,9 @@
   </div>
 </div>
 
-<!-- ALERT MODAL -->
-<div class="modal-overlay hidden" id="alertModal">
-  <div class="modal-content" style="max-width: 420px;">
-    <h2 id="alertModalTitle">Alert</h2>
-    <p id="alertModalMessage" style="margin: 16px 0; line-height: 1.6; color: var(--text-muted);"></p>
-    <div class="modal-actions">
-      <button class="btn primary" id="alertModalOk" style="width: 100%;">OK</button>
-    </div>
-  </div>
-</div>
+<!-- Phase 4 (May 12 2026): #alertModal static markup removed — superseded
+     by window.showAlert in gf-modals.js. Comments in venue.create-gigs.js
+     around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
 <script src="/app/static/js/venue-stripe-payment.js?v=5" defer></script>
@@ -2617,9 +2610,9 @@
 <script src="/app/static/js/messages.js?v=3"></script>
 <script src="/app/static/js/review-modal.js?v=3"></script>
 <script src="/app/static/js/artist-reviews.js"></script>
-<script src="/app/static/js/gig-modal.js?v=4"></script>
+<script src="/app/static/js/gig-modal.js?v=5"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=101"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=102"></script>
 <script src="/app/static/js/venue.contracts.js?v=2" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=3" defer></script>
 
