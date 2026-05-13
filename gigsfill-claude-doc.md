@@ -2,12 +2,15 @@
 
 **Purpose of this document.** This is a self-contained reference for the GigsFill codebase. If you're starting a new chat with Claude, paste this whole file in your first message and Claude will have a working understanding of the entire system without re-reading the code.
 
-**Last updated:** May 12, 2026.
+**Last updated:** May 13, 2026.
 
 ## Changelog
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-05-13 — CRITICAL: payout routing bug — Connect account chosen by user_id, not artist_id.** `_transfer_to_artists` and the stalled-retry path in `payout_scheduler.py` both looked up the destination Stripe Connect account by joining `artists.user_id = txn.to_user_id`. For multi-artist users (one account owning >1 artist), this returns multiple rows; `.fetchone()` picks the artist with the lowest id. Result: payouts intended for an artist with a higher id were silently delivered to a sibling artist's Connect account. Stripe accepted them, no error fired, the bal_tx poller threw hourly resource_missing warnings because it couldn't find the destination charge under the expected account but that was just noise. Production impact: two transfers ($16.66 each) for artist_id=3 (Fifty Proof) on gigs 507 and 496 landed in artist_id=1 (Fridays Past)'s account — both artists owned by user 1, so no money movement was needed to recover, just DB sync.
+  - **Fix** (commit `35df328`): both queries now do `SELECT … FROM entity_payment_settings WHERE entity_type='artist' AND entity_id = txn.artist_id` (with the legacy `user_id` join kept as a fallback for very old rows that pre-date the `artist_id` column). This is the same bug pattern fixed in the payout email path on 2026-05-11 (commit `2ea4a1d`); we missed the transfer-destination lookup at the time.
+  - **DB sync**: txns 296 + 305 marked `status='paid'` (was `'transferred'`) so the bank-settlement poller stops trying to look up the destination charge under the wrong account. `artist_id` left at 3 — preserves the booking attribution. Notes column annotated with the full explanation.
 - **2026-05-12 — Modal system Phases 3–5 + UX polish on contract flows.**
   - **Phase 3** (`168bb53`): migrated four custom modals to gf-modals — `showPdfContractModal` (two-state hold→download/upload), `showPerGigPdfModal`, `openReviewModal` (venue→artist star rating), `openVenueRateModal` (artist→venue star rating). Two-state PDF modal uses `closeAllModals` + reopen to transition between states; star modals wire hover/click handlers post-mount via `document.querySelector('.gfm-modal-overlay')`.
   - **Phase 4** (`cb96e27`): removed dead `#alertModal` static markup from venue-create-gigs.html. Survey of the other static modals (`#gigModal`, `#paymentRequiredModal`, `#seriesModal`, `#contractRemoveOverlay`, `#emailDetailModal`) confirmed all are still actively rendered into from JS — kept inline.
