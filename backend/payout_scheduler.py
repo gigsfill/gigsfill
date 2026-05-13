@@ -369,12 +369,25 @@ def process_payouts_now():
 
         for txn in stalled:
             txn_id = txn["id"]
-            artist_row = conn.execute("""
-                SELECT eps.stripe_connect_account_id, eps.stripe_connect_onboarding_complete
-                FROM entity_payment_settings eps
-                JOIN artists a ON a.id = eps.entity_id AND eps.entity_type = 'artist'
-                WHERE a.user_id = ?
-            """, (txn["to_user_id"],)).fetchone()
+            # CRITICAL FIX (May 13 2026): see _transfer_to_artists for the
+            # full bug write-up. Use txn.artist_id directly — joining via
+            # artists.user_id fans out to all artists owned by the same
+            # user and routes the transfer to whichever one happens to
+            # come back first from the DB.
+            if txn["artist_id"]:
+                artist_row = conn.execute("""
+                    SELECT stripe_connect_account_id, stripe_connect_onboarding_complete
+                    FROM entity_payment_settings
+                    WHERE entity_type = 'artist' AND entity_id = ?
+                """, (txn["artist_id"],)).fetchone()
+            else:
+                # Legacy fallback for very old rows without artist_id
+                artist_row = conn.execute("""
+                    SELECT eps.stripe_connect_account_id, eps.stripe_connect_onboarding_complete
+                    FROM entity_payment_settings eps
+                    JOIN artists a ON a.id = eps.entity_id AND eps.entity_type = 'artist'
+                    WHERE a.user_id = ?
+                """, (txn["to_user_id"],)).fetchone()
 
             if not artist_row or not artist_row["stripe_connect_account_id"]:
                 continue  # No connect account at all
@@ -665,13 +678,29 @@ def _transfer_to_artists(conn, stripe, payout_rows, charge_id, venue_id, parent_
     for payout in payout_rows:
         payout_id  = payout["id"]
         to_user_id = payout["to_user_id"]
-
-        artist_row = conn.execute("""
-            SELECT eps.stripe_connect_account_id, eps.stripe_connect_onboarding_complete
-            FROM entity_payment_settings eps
-            JOIN artists a ON a.id = eps.entity_id AND eps.entity_type = 'artist'
-            WHERE a.user_id = ?
-        """, (to_user_id,)).fetchone()
+        # CRITICAL FIX (May 13 2026): the previous query joined on
+        # artists.user_id which fans out to ALL artists owned by the same
+        # user account (multi-user / multi-artist accounts). .fetchone()
+        # returned whichever artist had the lowest id, sending the payout
+        # to the wrong Connect account. Use the transaction's artist_id
+        # directly — that's the authoritative pointer to the artist this
+        # payout is for. This is the same bug pattern fixed in the payout
+        # email path last week (changelog 2026-05-11).
+        artist_id_for_txn = payout["artist_id"] if "artist_id" in payout.keys() else None
+        if artist_id_for_txn:
+            artist_row = conn.execute("""
+                SELECT stripe_connect_account_id, stripe_connect_onboarding_complete
+                FROM entity_payment_settings
+                WHERE entity_type = 'artist' AND entity_id = ?
+            """, (artist_id_for_txn,)).fetchone()
+        else:
+            # Legacy fallback for rows without artist_id (very old data)
+            artist_row = conn.execute("""
+                SELECT eps.stripe_connect_account_id, eps.stripe_connect_onboarding_complete
+                FROM entity_payment_settings eps
+                JOIN artists a ON a.id = eps.entity_id AND eps.entity_type = 'artist'
+                WHERE a.user_id = ?
+            """, (to_user_id,)).fetchone()
 
         if not artist_row or not artist_row["stripe_connect_account_id"] or not artist_row["stripe_connect_onboarding_complete"]:
             conn.execute(
