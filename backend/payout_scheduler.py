@@ -710,7 +710,16 @@ def _transfer_to_artists(conn, stripe, payout_rows, charge_id, venue_id, parent_
             conn.commit()
             logger.warning(f"Payout {payout_id}: Artist not onboarded — pending_transfer")
             try:
-                a_info = conn.execute("SELECT a.id, a.name FROM artists a WHERE a.user_id = ?", (to_user_id,)).fetchone()
+                # GO-LIVE AUDIT FIX (May 13 2026): use txn.artist_id directly
+                # so the onboarding email reaches the artist who is actually
+                # missing a Connect account. Previous user_id lookup would
+                # have emailed Fridays Past about an onboarding issue that
+                # was Fifty Proof's, on multi-artist accounts.
+                _aid = payout["artist_id"] if "artist_id" in payout.keys() else None
+                if _aid:
+                    a_info = conn.execute("SELECT id, name FROM artists WHERE id = ?", (_aid,)).fetchone()
+                else:
+                    a_info = conn.execute("SELECT a.id, a.name FROM artists a WHERE a.user_id = ?", (to_user_id,)).fetchone()
                 if a_info:
                     for email in _get_entity_emails(conn, 'artist', a_info["id"]):
                         _send_html_email(smtp_settings, email,
@@ -1162,13 +1171,30 @@ def _send_payout_email(conn, txn):
 def _send_venue_charged_email(conn, txn, venue_id):
     """Notify venue their card was charged — uses venue_payment_charged email template"""
     try:
-        gig_info = conn.execute("""
-            SELECT g.id as gig_id, g.date, g.pay, v.id as vid, v.venue_name,
-                   a.name as artist_name
-            FROM gigs g JOIN venues v ON g.venue_id = v.id
-            LEFT JOIN artists a ON a.user_id = ?
-            WHERE g.id = ?
-        """, (txn["to_user_id"], txn["gig_id"])).fetchone()
+        # GO-LIVE AUDIT FIX (May 13 2026): see _send_payout_email for the
+        # full incident write-up. Resolve artist by txn.artist_id (the
+        # correct payee), not by user_id which fans out across multi-artist
+        # users and surfaces the wrong artist name in the venue's email.
+        # The multi-slot path below already does this correctly; this
+        # single-slot lookup was the laggard.
+        _txn_artist_id = txn["artist_id"] if "artist_id" in txn.keys() else None
+        if _txn_artist_id:
+            gig_info = conn.execute("""
+                SELECT g.id as gig_id, g.date, g.pay, v.id as vid, v.venue_name,
+                       a.name as artist_name
+                FROM gigs g JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.id = ?
+                WHERE g.id = ?
+            """, (_txn_artist_id, txn["gig_id"])).fetchone()
+        else:
+            # Legacy fallback for rows without artist_id (very old data)
+            gig_info = conn.execute("""
+                SELECT g.id as gig_id, g.date, g.pay, v.id as vid, v.venue_name,
+                       a.name as artist_name
+                FROM gigs g JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.user_id = ?
+                WHERE g.id = ?
+            """, (txn["to_user_id"], txn["gig_id"])).fetchone()
         if not gig_info:
             return
 

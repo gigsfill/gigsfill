@@ -1475,15 +1475,18 @@ def get_venue_upcoming_charges(venue_id: int, user=Depends(get_current_user), db
     if not venue:
         raise HTTPException(404, "Venue not found")
     
+    # GO-LIVE AUDIT FIX (May 13 2026): the previous COALESCE fallbacks used
+    # `WHERE a3.user_id = t.to_user_id LIMIT 1` — for multi-artist users this
+    # picks whichever artist had the lowest id, displaying the wrong artist
+    # name on the venue's upcoming-charges row. The primary JOINs on
+    # a.id = t.artist_id and a2.id = g.artist_id already cover every txn
+    # written by the current code; the user_id fallback is dead defensive
+    # code that was actively misleading. Removed.
     txns = db.execute(
         text("""
             SELECT t.*, g.date as gig_date, g.title as gig_title,
-                   COALESCE(a.name, a2.name, 
-                     (SELECT a3.name FROM artists a3 WHERE a3.user_id = t.to_user_id LIMIT 1)
-                   ) as artist_name,
-                   COALESCE(t.artist_id, g.artist_id,
-                     (SELECT a3.id FROM artists a3 WHERE a3.user_id = t.to_user_id LIMIT 1)
-                   ) as resolved_artist_id
+                   COALESCE(a.name, a2.name) as artist_name,
+                   COALESCE(t.artist_id, g.artist_id) as resolved_artist_id
             FROM transactions t
             JOIN gigs g ON t.gig_id = g.id
             LEFT JOIN artists a ON a.id = t.artist_id
