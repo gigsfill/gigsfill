@@ -777,6 +777,7 @@
 
     <div class="tabs">
       <button class="tab active" onclick="switchTab('platform')">Platform Settings</button>
+      <button class="tab" onclick="switchTab('payments')">💳 Payments</button>
       <button class="tab" onclick="switchTab('support')">Support</button>
       <button class="tab" onclick="switchTab('templates')">Email Templates</button>
       <button class="tab" onclick="switchTab('flyertemplates')">Flyer Templates</button>
@@ -1122,6 +1123,54 @@
         <div id="accountingPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;"></div>
       </div>
 
+    </div>
+
+    <!-- ── PAYMENTS CONSOLE (Tier 1: read-only unified view) ── -->
+    <div class="tab-content" id="payments-tab">
+      <div class="content-card" style="padding:14px;">
+
+        <!-- Header + stats row -->
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;">
+          <div>
+            <span style="font-size:0.85rem;font-weight:700;color:var(--text);">💳 Payments Console</span>
+            <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">Read-only across all venues + artists</span>
+          </div>
+          <button onclick="apReload()" style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+        </div>
+        <div id="apStats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px;"></div>
+
+        <!-- Filter bar -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;padding:10px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;">
+          <input type="text" id="apSearch" placeholder="🔍 Search venue, artist, gig, Stripe ID…" oninput="apDebouncedReload()"
+            style="padding:6px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;grid-column:1/-1;">
+          <select id="apStatus" onchange="apReload()" style="padding:6px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;">
+            <option value="">All statuses</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="charged,paid,transferred">Successful (charged/paid/transferred)</option>
+            <option value="payment_failed,transfer_failed,charge_retry,pending_transfer">⚠ Needs attention</option>
+            <option value="payment_cancelled">Cancelled</option>
+            <option value="disputed,dispute_lost,dispute_won">Disputed</option>
+            <option value="free_trial">Free Trial</option>
+            <option value="suspended">Suspended</option>
+          </select>
+          <select id="apType" onchange="apReload()" style="padding:6px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;">
+            <option value="">All types</option>
+            <option value="venue_charge">Venue charge</option>
+            <option value="artist_payout">Artist payout</option>
+            <option value="single">Single (legacy)</option>
+            <option value="free_trial">Free trial</option>
+            <option value="payment_cancelled">Payment cancelled</option>
+          </select>
+          <input type="date" id="apFromDate" onchange="apReload()" style="padding:6px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;" title="Gig date from">
+          <input type="date" id="apToDate" onchange="apReload()" style="padding:6px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;" title="Gig date to">
+          <input type="number" id="apMinAmount" placeholder="Min $" step="0.01" min="0" onchange="apReload()" style="padding:6px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;">
+          <input type="number" id="apMaxAmount" placeholder="Max $" step="0.01" min="0" onchange="apReload()" style="padding:6px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;">
+        </div>
+
+        <!-- Results table -->
+        <div id="apTable" style="overflow-x:auto;min-height:200px;"></div>
+        <div id="apPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;font-size:0.72rem;color:var(--text-gray);"></div>
+      </div>
     </div>
 
     <div class="tab-content" id="support-tab">
@@ -1861,6 +1910,7 @@ function switchPsTab(tab) {
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
 <script src="/app/static/js/admin-platform.js"></script>
+<script src="/app/static/js/admin-payments.js?v=1"></script>
 <script src="/app/static/js/admin-templates.js"></script>
 <script src="/app/static/js/admin-affiliate.js"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>

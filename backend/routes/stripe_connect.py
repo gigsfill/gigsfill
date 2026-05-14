@@ -2113,6 +2113,164 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
             except Exception as e:
                 logger.error(f"Webhook account.updated error: {e}")
 
+        # ----------------------------------------------------------------
+        # charge.refunded — admin (or system) refunded a charge via Stripe
+        # Dashboard or API. Sync our DB so the row stops looking 'paid'.
+        # ----------------------------------------------------------------
+        elif event_type == "charge.refunded":
+            try:
+                obj = _webhook_get_event_obj(event)
+                charge_id = _webhook_get(obj, "id")
+                pi_id     = _webhook_get(obj, "payment_intent")
+                amount_total       = _webhook_get(obj, "amount") or 0
+                amount_refunded    = _webhook_get(obj, "amount_refunded") or 0
+                is_full = amount_refunded >= amount_total and amount_total > 0
+
+                # Resolve PI if missing
+                if not pi_id and charge_id:
+                    try:
+                        ch = stripe.Charge.retrieve(charge_id)
+                        pi_id = getattr(ch, "payment_intent", None)
+                    except Exception:
+                        pass
+
+                if not pi_id:
+                    logger.warning(f"Webhook charge.refunded: charge {charge_id} — no PI resolved")
+                else:
+                    txn = conn.execute("""
+                        SELECT t.id, t.gig_id, t.status, g.venue_id, g.date,
+                               v.venue_name
+                        FROM transactions t
+                        JOIN gigs g ON t.gig_id = g.id
+                        LEFT JOIN venues v ON v.id = g.venue_id
+                        WHERE t.stripe_payment_intent_id = ?
+                        LIMIT 1
+                    """, (pi_id,)).fetchone()
+                    if txn:
+                        new_status = 'payment_cancelled' if is_full else txn["status"]
+                        note = (
+                            f"Stripe refund {('FULL' if is_full else 'PARTIAL')} ${amount_refunded/100:.2f} of ${amount_total/100:.2f} "
+                            f"(charge {charge_id}) — synced from webhook"
+                        )
+                        conn.execute("""
+                            UPDATE transactions SET status = ?,
+                                notes = COALESCE(notes || ' | ', '') || ?
+                            WHERE id = ?
+                        """, (new_status, note, txn["id"]))
+                        conn.commit()
+                        logger.info(f"Webhook charge.refunded: txn {txn['id']} synced ({'full' if is_full else 'partial'})")
+                        _wh_admin_alert(conn,
+                            f"Refund synced — {txn['venue_name']}",
+                            f"<p>Stripe refund detected and DB synced.</p>"
+                            f"<ul><li>Txn: #{txn['id']}</li>"
+                            f"<li>Venue: {txn['venue_name']}</li>"
+                            f"<li>Refunded: ${amount_refunded/100:.2f} of ${amount_total/100:.2f}</li>"
+                            f"<li>New status: {new_status}</li></ul>")
+                    else:
+                        logger.info(f"Webhook charge.refunded: PI {pi_id} — no matching transaction (may be unrelated)")
+            except Exception as e:
+                logger.error(f"Webhook charge.refunded error: {e}")
+
+        # ----------------------------------------------------------------
+        # transfer.reversed — admin reversed a Connect transfer in Stripe
+        # Dashboard. Sync the matching artist_payout row to cancelled state.
+        # ----------------------------------------------------------------
+        elif event_type == "transfer.reversed":
+            try:
+                obj = _webhook_get_event_obj(event)
+                transfer_id    = _webhook_get(obj, "id")
+                amount_reversed = _webhook_get(obj, "amount_reversed") or 0
+                amount_total    = _webhook_get(obj, "amount") or 0
+
+                txn = conn.execute("""
+                    SELECT t.id, t.gig_id, t.status, t.artist_id, g.venue_id,
+                           v.venue_name, a.name as artist_name
+                    FROM transactions t
+                    JOIN gigs g ON t.gig_id = g.id
+                    LEFT JOIN venues v ON v.id = g.venue_id
+                    LEFT JOIN artists a ON a.id = t.artist_id
+                    WHERE t.stripe_transfer_id = ?
+                    LIMIT 1
+                """, (transfer_id,)).fetchone()
+                if txn:
+                    is_full = amount_reversed >= amount_total and amount_total > 0
+                    new_status = 'payment_cancelled' if is_full else txn["status"]
+                    note = (
+                        f"Stripe transfer {('FULL' if is_full else 'PARTIAL')} reversal "
+                        f"${amount_reversed/100:.2f} of ${amount_total/100:.2f} "
+                        f"({transfer_id}) — synced from webhook"
+                    )
+                    conn.execute("""
+                        UPDATE transactions SET status = ?,
+                            notes = COALESCE(notes || ' | ', '') || ?
+                        WHERE id = ?
+                    """, (new_status, note, txn["id"]))
+                    conn.commit()
+                    logger.info(f"Webhook transfer.reversed: txn {txn['id']} synced")
+                    _wh_admin_alert(conn,
+                        f"Transfer reversed — {txn['artist_name'] or 'artist'}",
+                        f"<p>Stripe transfer reversal detected and DB synced.</p>"
+                        f"<ul><li>Txn: #{txn['id']}</li>"
+                        f"<li>Artist: {txn['artist_name']}</li>"
+                        f"<li>Reversed: ${amount_reversed/100:.2f} of ${amount_total/100:.2f}</li>"
+                        f"<li>New status: {new_status}</li></ul>")
+                else:
+                    logger.info(f"Webhook transfer.reversed: transfer {transfer_id} — no matching transaction")
+            except Exception as e:
+                logger.error(f"Webhook transfer.reversed error: {e}")
+
+        # ----------------------------------------------------------------
+        # charge.dispute.closed — chargeback resolved (won/lost/warning_closed)
+        # ----------------------------------------------------------------
+        elif event_type == "charge.dispute.closed":
+            try:
+                obj = _webhook_get_event_obj(event)
+                dispute_status = _webhook_get(obj, "status") or "unknown"
+                charge_id    = _webhook_get(obj, "charge")
+                pi_from_evt  = _webhook_get(obj, "payment_intent")
+                pi_id = pi_from_evt
+                if not pi_id and charge_id:
+                    try:
+                        ch = stripe.Charge.retrieve(charge_id)
+                        pi_id = getattr(ch, "payment_intent", None)
+                    except Exception:
+                        pass
+
+                if pi_id:
+                    txn = conn.execute("""
+                        SELECT t.id, t.gig_id, t.status, g.venue_id,
+                               v.venue_name
+                        FROM transactions t
+                        JOIN gigs g ON t.gig_id = g.id
+                        LEFT JOIN venues v ON v.id = g.venue_id
+                        WHERE t.stripe_payment_intent_id = ?
+                        LIMIT 1
+                    """, (pi_id,)).fetchone()
+                    if txn:
+                        # Map Stripe dispute status → our internal status
+                        # won           → dispute_won (we keep the charge)
+                        # lost          → dispute_lost (venue won, charge reversed)
+                        # warning_closed/warning_needs_response/warning_under_review → leave as disputed
+                        if dispute_status == "won":
+                            new_status = "dispute_won"
+                        elif dispute_status == "lost":
+                            new_status = "dispute_lost"
+                        else:
+                            new_status = txn["status"]
+                        conn.execute("""
+                            UPDATE transactions SET status = ?,
+                                notes = COALESCE(notes || ' | ', '') || ?
+                            WHERE id = ?
+                        """, (new_status, f"Dispute closed: {dispute_status} — synced from webhook", txn["id"]))
+                        conn.commit()
+                        logger.info(f"Webhook charge.dispute.closed: txn {txn['id']} → {new_status}")
+                        _wh_admin_alert(conn,
+                            f"Dispute closed — {txn['venue_name']} ({dispute_status})",
+                            f"<p>Stripe dispute on txn #{txn['id']} closed: <strong>{dispute_status}</strong>.</p>"
+                            f"<p>Status updated to <code>{new_status}</code>.</p>")
+            except Exception as e:
+                logger.error(f"Webhook charge.dispute.closed error: {e}")
+
         else:
             logger.info(f"Stripe webhook: unhandled event type '{event_type}' — ignored")
 

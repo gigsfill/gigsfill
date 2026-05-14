@@ -149,7 +149,7 @@ from backend.routes.auth import get_current_user
 from backend.routes import (
     auth, artists, venues, gigs, me, media,
     preferred_artists, notifications,
-    cities, admin, emails, venue_emails, entity_users,
+    cities, admin, admin_payments, emails, venue_emails, entity_users,
     analytics, tax, contracts, stripe_connect, flyers, onboarding,
     reviews, messages, availability, waitlist, affiliate
 )
@@ -219,6 +219,7 @@ app.include_router(preferred_artists.router)
 app.include_router(notifications.router)
 app.include_router(cities.router)
 app.include_router(admin.router)
+app.include_router(admin_payments.router)
 app.include_router(emails.router)
 app.include_router(venue_emails.router)
 app.include_router(entity_users.router)
