@@ -541,7 +541,18 @@ def process_payouts_now():
                                 bt = stripe.BalanceTransaction.retrieve(
                                     bt_id_str, stripe_account=connect_acct
                                 )
-                                if getattr(bt, "status", "") == "paid":
+                                # FIX (May 14 2026): accept 'available' as
+                                # settled too. Connect Express accounts on
+                                # MANUAL payout schedule (Stripe's default for
+                                # many live setups) leave bal_tx in 'available'
+                                # indefinitely — Stripe never auto-issues a
+                                # Payout, so status='paid' never happens. From
+                                # the artist's perspective, 'available' means
+                                # the money is in their Connect balance and
+                                # they can withdraw whenever. Marking our row
+                                # 'paid' is correct — we've completed our job.
+                                # 'pending' → still in the 2-day hold, leave.
+                                if getattr(bt, "status", "") in ("paid", "available"):
                                     bank_settled = True
                         except stripe.error.PermissionError:
                             # Connected account hasn't granted balance read
