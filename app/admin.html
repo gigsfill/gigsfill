@@ -783,8 +783,7 @@
       <button class="tab" onclick="switchTab('flyertemplates')">Flyer Templates</button>
       <button class="tab" onclick="switchTab('affiliates')">Affiliates</button>
       <button class="tab" onclick="switchTab('analytics')">Analytics</button>
-      <button class="tab" onclick="switchTab('logs')">Logs</button>
-      <button class="tab" onclick="switchTab('database')">Database</button>
+      <button class="tab" onclick="switchTab('dblogs')">DB / Logs</button>
     </div>
 
     <!-- PLATFORM SETTINGS TAB -->
@@ -1627,8 +1626,15 @@
     <!-- ACCOUNTING TAB -->
 
 
-    <!-- LOGS TAB -->
-    <div class="tab-content" id="logs-tab">
+    <!-- DB/LOGS TAB (consolidated; Database default, Logs as subtab) -->
+    <div class="tab-content" id="dblogs-tab">
+      <div class="ps-subtabs">
+        <button class="ps-subtab active" onclick="switchDbLogsTab('database')">🗄️ Database</button>
+        <button class="ps-subtab"        onclick="switchDbLogsTab('logs')">🪵 Logs</button>
+      </div>
+
+      <!-- Logs subtab content -->
+      <div class="ps-subtab-content" id="dblogs-logs">
       <div class="content-card">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
           <h2 style="font-size:1rem;color:var(--text);margin:0;">🪵 Application Logs</h2>
@@ -1691,11 +1697,10 @@
           <li>For persistent log storage, set <code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;">GIGSFILL_LOG_FILE=/var/log/gigsfill.log</code> on your server.</li>
         </ul>
       </div>
-    </div>
+      </div><!-- /#dblogs-logs -->
 
-
-    <!-- DATABASE TAB -->
-    <div class="tab-content" id="database-tab">
+      <!-- Database subtab content (default active) -->
+      <div class="ps-subtab-content active" id="dblogs-database">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
         <div>
           <h2 style="font-size:1rem;color:var(--text);margin:0 0 2px;">🗄️ Database Browser</h2>
@@ -1770,7 +1775,8 @@
           Use the dedicated admin UI panels for those operations.
         </p>
       </div>
-    </div>
+      </div><!-- /#dblogs-database -->
+    </div><!-- /#dblogs-tab -->
 
 
     <!-- Accounting Export Modal -->
@@ -1906,6 +1912,25 @@ function switchPsTab(tab) {
   }
   if (tab === 'email') { typeof loadEmailSettings === 'function' && loadEmailSettings(); }
 }
+
+function switchDbLogsTab(tab) {
+  // Sub-tabs inside the DB/Logs top-level tab. Scoped to the dblogs-tab
+  // container so we don't disturb the Platform Settings or Affiliates
+  // sub-tabs (which share the .ps-subtab class).
+  const container = document.getElementById('dblogs-tab');
+  if (!container) return;
+  container.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
+  container.querySelectorAll('.ps-subtab-content').forEach(c => c.classList.remove('active'));
+  const btn = container.querySelector('.ps-subtab[onclick*="' + tab + '"]');
+  if (btn) btn.classList.add('active');
+  const panel = document.getElementById('dblogs-' + tab);
+  if (panel) panel.classList.add('active');
+  // Lazy-load on first activation of each subtab
+  if (tab === 'logs'     && typeof fetchLogs === 'function') fetchLogs(true);
+  if (tab === 'database' && typeof initDbTab === 'function') initDbTab();
+  // Stop logs auto-refresh when leaving the Logs subtab
+  if (tab !== 'logs' && typeof stopLogsAutoRefresh === 'function') stopLogsAutoRefresh();
+}
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
@@ -1939,8 +1964,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (tab === 'templates')     { typeof loadEmailTemplates === 'function'     && loadEmailTemplates(); }
     if (tab === 'flyertemplates'){ typeof loadAdminFlyerTemplates === 'function' && loadAdminFlyerTemplates(); }
     if (tab === 'analytics')     { typeof loadAnalytics === 'function'          && loadAnalytics(); }
-    if (tab === 'logs')          { typeof fetchLogs === 'function'              && fetchLogs(true); }
-    if (tab === 'database')      { typeof initDbTab === 'function'              && initDbTab(); }
+    if (tab === 'dblogs')        {
+      // Default subtab is Database — fire its loader on top-level activation.
+      // The Logs loader fires when the user clicks the Logs subtab.
+      typeof initDbTab === 'function' && initDbTab();
+    }
     if (tab === 'affiliates')    { typeof loadAffiliatesTab === 'function'      && loadAffiliatesTab(); }
     if (tab === 'platform')      { typeof loadEmailSettings === 'function'      && loadEmailSettings(); }
   };
