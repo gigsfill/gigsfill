@@ -214,6 +214,29 @@ def get_gig_modal_data(
     """), {"gid": gig_id}).mappings().all()
     slots = [dict(s) for s in slot_rows]
 
+    # GO-LIVE FIX (May 15 2026): apply per-artist pay override on the slot's
+    # `pay` value when the viewer is an artist who has an override at this
+    # venue. Same logic the new-gig blast email uses (and that booking time
+    # uses via _get_effective_pay). Without this the modal showed the raw
+    # published pay (e.g. $10) while the email correctly showed the override
+    # ($20) — confusing for the artist when deciding whether to book.
+    if viewer_type == "artist" and viewer_id:
+        try:
+            _ov = db.execute(text(
+                "SELECT pay_dollars_override, pay_cents_override "
+                "FROM preferred_artists "
+                "WHERE venue_id = :vid AND artist_id = :aid"
+            ), {"vid": gig["venue_id"], "aid": viewer_id}).mappings().first()
+            if _ov and _ov.get("pay_dollars_override") is not None:
+                _override_pay = float(_ov["pay_dollars_override"]) + float(_ov.get("pay_cents_override") or 0) / 100
+                for _s in slots:
+                    _slot_pay = float(_s.get("pay") or 0)
+                    if _override_pay > _slot_pay:
+                        _s["pay"] = _override_pay
+        except Exception:
+            # Non-fatal — fall back to published pay
+            pass
+
     # ── Load contracts for this gig ───────────────────────────────────────
     contract_rows = db.execute(text("""
         SELECT gc.id, gc.artist_id, gc.contract_type, gc.status,
