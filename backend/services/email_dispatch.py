@@ -621,14 +621,83 @@ def send_contract_sign_email(db, venue_id: int, artist_id: int, gig_id: int, gig
         venue_name = venue['venue_name']
         artist_name = artist['name']
 
+        # Build a rich slot-details block (Time / Pay / Type / Lineup / Styles)
+        # for the artist's specific slot(s) so the venue email matches the
+        # detail level of the other gig emails. May 15 2026 — was just a
+        # bare "{{slot_times}}" inline string before.
+        from sqlalchemy import text as _cse_text2
+        gig_row = db.execute(_cse_text2("""
+            SELECT g.title, g.notes, g.start_time, g.end_time, g.pay,
+                   g.artist_type, g.band_formats, g.styles
+            FROM gigs g WHERE g.id = :gid
+        """), {"gid": gig_id}).mappings().first()
+        slot_rows = db.execute(_cse_text2("""
+            SELECT gs.slot_number, gs.start_time, gs.end_time, gs.pay,
+                   gs.artist_type, gs.band_formats, gs.styles
+            FROM gig_slots gs
+            WHERE gs.gig_id = :gid AND gs.artist_id = :aid
+              AND gs.status IN ('booked', 'pending_contract', 'awaiting_venue_contract')
+            ORDER BY gs.slot_number ASC
+        """), {"gid": gig_id, "aid": artist_id}).mappings().all()
+
+        def _fmt_pay(v):
+            try:
+                pf = float(v); return f"{pf:.2f}" if pf != int(pf) else str(int(pf))
+            except (ValueError, TypeError):
+                return str(v or '')
+
+        def _commas(s):
+            return ', '.join(x.strip() for x in (s or '').split(',') if x.strip())
+
+        ROW = ('<tr><td style="padding:6px 0;font-size:14px;color:#6b7280;width:130px;">{label}</td>'
+               '<td style="padding:6px 0;font-size:14px;color:{color};font-weight:{weight};">{value}</td></tr>')
+        SEP = '<tr><td colspan="2" style="padding:4px 0;border-top:1px solid #e5e7eb;"></td></tr>'
+
+        slot_rows_html = []
+        if slot_rows:
+            for i, sl in enumerate(slot_rows):
+                if i > 0:
+                    slot_rows_html.append(SEP)
+                t_s = format_time_12hr(sl["start_time"] or '')
+                t_e = format_time_12hr(sl["end_time"] or '')
+                time_str = f"{t_s} – {t_e}" if t_e else t_s
+                pay = _fmt_pay(sl.get("pay") or (gig_row.get("pay") if gig_row else ''))
+                atype  = sl.get("artist_type")  or (gig_row.get("artist_type")  if gig_row else '')
+                lineup = _commas(sl.get("band_formats") or (gig_row.get("band_formats") if gig_row else ''))
+                styles = _commas(sl.get("styles")       or (gig_row.get("styles")       if gig_row else ''))
+                slot_rows_html.append(ROW.format(label="Time",   color="#111827", weight="500", value=time_str))
+                slot_rows_html.append(ROW.format(label="Pay",    color="#059669", weight="600", value=f"${pay}"))
+                if atype:  slot_rows_html.append(ROW.format(label="Type",   color="#111827", weight="500", value=atype))
+                if lineup: slot_rows_html.append(ROW.format(label="Lineup", color="#111827", weight="500", value=lineup))
+                if styles: slot_rows_html.append(ROW.format(label="Styles", color="#111827", weight="500", value=styles))
+        elif gig_row:
+            # Legacy single-slot fallback — use gig's umbrella time + pay
+            t_s = format_time_12hr(gig_row["start_time"] or '')
+            t_e = format_time_12hr(gig_row["end_time"]   or '')
+            time_str = f"{t_s} – {t_e}" if t_e else t_s
+            pay = _fmt_pay(gig_row.get("pay"))
+            atype  = gig_row.get("artist_type") or ''
+            lineup = _commas(gig_row.get("band_formats"))
+            styles = _commas(gig_row.get("styles"))
+            slot_rows_html.append(ROW.format(label="Time",  color="#111827", weight="500", value=time_str))
+            slot_rows_html.append(ROW.format(label="Pay",   color="#059669", weight="600", value=f"${pay}"))
+            if atype:  slot_rows_html.append(ROW.format(label="Type",   color="#111827", weight="500", value=atype))
+            if lineup: slot_rows_html.append(ROW.format(label="Lineup", color="#111827", weight="500", value=lineup))
+            if styles: slot_rows_html.append(ROW.format(label="Styles", color="#111827", weight="500", value=styles))
+
+        slots_html = ''.join(slot_rows_html)
+        gig_title  = (gig_row.get("title") if gig_row else '') or ''
+
         email_vars = {
             'artist_name': artist_name,
             'venue_name': venue_name,
             'venue_id': str(venue_id),
             'date': date_display,
-            # The artist's specific slot's time on multi-slot gigs;
-            # falls back to gig overall start-end on single-slot.
+            # Keep slot_times for backward-compat with anything still using it
             'slot_times': compute_slot_times(db, gig_id, artist_id=artist_id),
+            'gig_title': gig_title,
+            'title': gig_title,
+            'slots_html': slots_html,
         }
 
         venue_users = get_all_entity_users(db, 'venue', venue_id)

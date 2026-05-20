@@ -1590,7 +1590,7 @@ TEMPLATES = {
     },
 
     "venue_contract_sign_needed": {
-        "subject": '{{artist_name}} has booked a gig - sign the contract to confirm',
+        "subject": '{{artist_name}} has booked a gig! Sign the contract to confirm.',
         "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
 <tbody>
 <tr>
@@ -1602,8 +1602,23 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 32px 40px;">
-<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Sign the contract to confirm</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> has booked a gig at <strong>{{venue_name}}</strong> on {{date}} ({{slot_times}}). Please countersign the contract to confirm the booking.</p>
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">{{artist_name}} has booked a gig!</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> has booked a gig at <strong>{{venue_name}}</strong>. Please countersign the contract to confirm the booking.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
+<tbody>
+<tr>
+<td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tbody>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 130px;">Date</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td></tr>
+{{#title}}<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Event</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{title}}</td></tr>{{/title}}
+{{slots_html}}
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>
 <p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">Until you sign, the gig is not officially confirmed and booked.</p>
 <a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Calendar &amp; Countersign</a></td>
 </tr>
