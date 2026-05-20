@@ -544,15 +544,32 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
 
       case 'venue_booked':
         if (slot.artist_id) {
+          // FIX (May 15 2026): match the _showBookedGigModal booked-slot
+          // layout. Add the ✕ Cancel button and Rate Artist button so
+          // every booked-slot view (whether the gig is in pending-contract
+          // state with siblings or fully booked) looks identical.
           const _vbName = _esc(slot.artist_name || 'Booked');
-          const _msgCb = `typeof openMessageModal==='function'&&openMessageModal(${data.id},'${_esc(data.venue_name)}',${slot.artist_id})`;
-          rightHtml = `<div style="display:flex;align-items:center;gap:8px;">
+          const _vbAnameJs = (slot.artist_name || 'Artist').replace(/['"]/g, '');
+          const _msgCb  = `typeof openMessageModal==='function'&&openMessageModal(${data.id},'${_esc(data.venue_name)}',${slot.artist_id})`;
+          const _rateCb = `typeof openReviewModal==='function'&&openReviewModal({artistId:${slot.artist_id},artistName:'${_vbAnameJs}',gigId:${data.id},gigDate:'${_esc(data.date||'')}',gigTitle:'${_esc(data.title||'')}'})`;
+          const _cancelCb = `window.cancelSlotBooking&&cancelSlotBooking(${data.id}, ${slot.id}, ${slot.slot_number}, ${slot.artist_id || 'null'})`;
+          const _cancelBtnHtml = (!isPast)
+            ? `<button onclick="${_cancelCb}"
+                style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;"
+                title="Cancel this slot booking">✕</button>`
+            : '';
+          rightHtml = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <a href="/app/artist-profile.html?artist_id=${slot.artist_id}" target="_blank"
               style="color:#22c55e;font-size:0.8rem;text-decoration:none;font-weight:500;">${_vbName}</a>
             <button onclick="${_msgCb}"
               style="background:transparent;border:1px solid rgba(6,182,212,0.4);color:#06b6d4;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;">
               Message
             </button>
+            <button onclick="${_rateCb}"
+              style="background:transparent;border:1px solid rgba(245,158,11,0.4);color:#f59e0b;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;">
+              Rate Artist
+            </button>
+            ${_cancelBtnHtml}
           </div>`;
         } else {
           rightHtml = `<span style="color:#22c55e;font-size:0.8rem;font-weight:500;">Booked</span>`;
