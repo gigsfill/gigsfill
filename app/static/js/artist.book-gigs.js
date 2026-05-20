@@ -394,7 +394,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       return "booked-other";
     }
 
-    // For open multi-slot gigs: detect pending contract via contract_status or contract_hold
+    // For open multi-slot gigs: detect pending contract via contract_status or contract_hold.
+    //
+    // BUG FIX (May 15 2026): previously this short-circuited for EVERY other
+    // artist viewing the gig — even on multi-slot gigs where other slots
+    // were still open. So if Fridays Past held Slot 1's contract, Fifty
+    // Proof saw the entire gig in pending-contract state and couldn't
+    // book Slot 2. Now we only short-circuit if:
+    //   (a) THIS viewer holds the pending contract  → show "mine"
+    //   (b) it's a single-slot gig and ALL slots are booked or pending →
+    //       the gig is effectively locked, show "pending-contract"
+    // Otherwise fall through so the gig keeps rendering as open and
+    // bookable for whichever slots are still available.
     if (gig.status === "open") {
       const _pendingContractStates = ['artist_signed', 'pending', 'awaiting_venue_upload'];
       const _hasPendingContract = gig.contract_hold_artist_id ||
@@ -405,7 +416,15 @@ document.addEventListener("DOMContentLoaded", async () => {
           s.artist_id === aid && (s.status === 'pending_contract' || s.status === 'awaiting_venue_contract')
         );
         const isContractHolder = gig.contract_artist_id && gig.contract_artist_id === aid;
-        return (myPendingSlotPC || isContractHolder) ? "pending-contract-mine" : "pending-contract";
+        if (myPendingSlotPC || isContractHolder) return "pending-contract-mine";
+        // Other artist: only lock the gig out if there are NO open slots
+        // left. /gigs returns the full slots array, so count directly.
+        const _gigSlots = gig.slots || [];
+        const _openSlotsRemaining = _gigSlots.filter(s => s.status === 'open').length;
+        if (_gigSlots.length === 0 || _openSlotsRemaining === 0) {
+          return "pending-contract";
+        }
+        // Fall through — gig still has bookable open slots; render as open.
       }
     }
 
