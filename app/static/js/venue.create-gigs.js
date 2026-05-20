@@ -1592,13 +1592,44 @@ async function renderCalendar() {
           s.status === 'pending_contract' || s.status === 'awaiting_venue_contract'))
       )) {
       // PENDING CONTRACT — unified modal renderer
+      // FIX (May 15 2026): previously this branch hid the Delete/Cancel
+      // button entirely, leaving the venue unable to cancel a gig stuck
+      // in contract-pending state without going elsewhere. Now we set
+      // the button up just like _showBookedGigModal does for booked-slot
+      // gigs — same Cancel/Delete affordances regardless of whether the
+      // slot is fully booked or still in contract flow. The countersign
+      // UI inside gigArtistInfo is unchanged; this only adds the
+      // gig-level action buttons.
       const recurringBlock = document.getElementById("recurringBlock");
       if (recurringBlock) recurringBlock.style.display = "none";
       const modalSection = document.querySelector('.modal-section');
       if (modalSection) modalSection.style.display = "none";
       gigInputFields.forEach(f => f.style.display = "none");
       if (saveBtn) saveBtn.style.display = "none";
-      if (deleteBtn) { deleteBtn.classList.add("hidden"); deleteBtn.style.display = "none"; }
+
+      // Configure the gig-level Cancel/Delete button. Treat pending_contract
+      // slots as booked for the purpose of counting how many artists need to
+      // be notified on cancel.
+      let _pcBookedCount = 0;
+      try {
+        _pcBookedCount = (gig.slots || []).filter(s =>
+          s.status === 'booked' || s.status === 'pending_contract' || s.status === 'awaiting_venue_contract'
+        ).length;
+      } catch (_) {}
+      if (deleteBtn) {
+        deleteBtn.classList.remove("hidden");
+        deleteBtn.style.display = "inline-block";
+        deleteBtn.style.visibility = "visible";
+        deleteBtn.style.background = ""; // clear any leftover red from a prior cancel-confirm state
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = _pcBookedCount > 0 ? "Cancel Gig" : "Delete Event";
+        deleteBtn.dataset.cancelMode = "false";
+        deleteBtn.dataset.multiSlotDelete = 'true';
+        deleteBtn.dataset.multiSlotBookedCount = String(_pcBookedCount);
+        deleteBtn.dataset.confirmDelete = 'false';
+      }
+      const _pcModalActions = document.querySelector('#gigModal .modal-actions');
+      if (_pcModalActions) { _pcModalActions.style.display = 'flex'; _pcModalActions.style.visibility = 'visible'; }
       if (cancelGigBtn) cancelGigBtn.textContent = "Close";
 
       let separator = document.querySelector('.modal-separator');

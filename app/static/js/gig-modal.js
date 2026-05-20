@@ -561,10 +561,23 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
 
       case 'venue_pending_contract': {
         const cs2 = slot.contract_status;
+        // FIX (May 15 2026): include a per-slot Cancel button so the venue
+        // can drop the slot even while a contract is in flight — same
+        // affordance the booked-slot view (_showBookedGigModal) gives.
+        // Wires to the same window.cancelSlotBooking() the booked view uses.
+        const _vpcAname = (slot.artist_name || 'Artist').replace(/['"]/g, '');
+        const _vpcCancelBtn = (!isPast && slot.artist_id)
+          ? `<button onclick="window.cancelSlotBooking&&cancelSlotBooking(${data.id}, ${slot.id}, ${slot.slot_number}, ${slot.artist_id || 'null'})"
+              style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;"
+              title="Cancel this slot booking">✕</button>`
+          : '';
         rightHtml = slot.artist_id
-          ? `<a href="/app/artist-profile.html?artist_id=${slot.artist_id}" target="_blank"
-              style="color:#a78bfa;font-size:0.8rem;text-decoration:none;font-weight:500;">
-              ${_esc(slot.artist_name||'Artist')}</a>`
+          ? `<div style="display:flex;align-items:center;gap:8px;">
+              <a href="/app/artist-profile.html?artist_id=${slot.artist_id}" target="_blank"
+                style="color:#a78bfa;font-size:0.8rem;text-decoration:none;font-weight:500;">
+                ${_esc(slot.artist_name||'Artist')}</a>
+              ${_vpcCancelBtn}
+            </div>`
           : `<span style="color:#a78bfa;font-size:0.8rem;">Pending Contract</span>`;
 
         if (cs2 === 'artist_signed') {
