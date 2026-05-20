@@ -4986,19 +4986,23 @@ window._showCancelPaymentModal = function(gigId) {
 // ============================================
 
 window._doCountersign = async function(contractId) {
-  // Support both legacy id and new per-contract id from unified modal
+  // Per-contract ids (multi-slot can have >1 pending block in one modal).
+  // Fall back to legacy non-suffixed ids for the standalone overlay
+  // version still used by Activity Center deep-links.
   const nameEl = document.getElementById('modalCountersignName_' + contractId)
                || document.getElementById('modalCountersignName');
-  const btn    = document.getElementById('modalCountersignBtn');
-  const status = document.getElementById('modalCountersignStatus');
-  
+  const btn    = document.getElementById('modalCountersignBtn_' + contractId)
+               || document.getElementById('modalCountersignBtn');
+  const status = document.getElementById('modalCountersignStatus_' + contractId)
+               || document.getElementById('modalCountersignStatus');
+
   const name = (nameEl && nameEl.value || '').trim();
   if (!name) { alert('Please type your full legal name.'); return; }
-  
+
   btn.disabled = true;
   btn.textContent = 'Countersigning...';
   if (status) status.textContent = '';
-  
+
   try {
     const res = await fetch('/api/gig-contracts/' + contractId + '/countersign', {
       method: 'POST', credentials: 'include',
@@ -5009,13 +5013,10 @@ window._doCountersign = async function(contractId) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Countersign failed');
     }
-    if (status) {
-      status.style.color = '#22c55e';
-      // 5-second auto-close (was 1.5s — too quick to read). User can also
-      // click Close anytime to dismiss sooner.
-      status.innerHTML = '✓ Contract countersigned! Booking confirmed. <span style="color:var(--text-muted);font-size:0.78rem;">(Closing in 5 seconds, or click Close.)</span>';
-    }
+
+    // Hide this slot's button so it can't be re-clicked.
     btn.style.display = 'none';
+
     // Refresh data in background immediately so it's ready when modal closes.
     if (typeof window.invalidateGigs === 'function' && typeof window.renderCalendar === 'function') {
       window.invalidateGigs();
@@ -5024,9 +5025,64 @@ window._doCountersign = async function(contractId) {
     if (window.activityCenterVenue) window.activityCenterVenue.loadNotifications();
     if (window.venueContracts && window.venueContracts.loadExecuted) window.venueContracts.loadExecuted();
     if (typeof loadVenueBillingHistory === 'function') loadVenueBillingHistory();
+
+    // Multi-slot UX: if there are OTHER pending countersign blocks in the
+    // same modal, leave the modal open so the venue can keep signing.
+    // Mark THIS block as done and only auto-close once every pending
+    // countersign for this gig is signed.
+    const thisBlock = document.querySelector(
+      '[data-countersign-block="' + contractId + '"]'
+    );
+    if (thisBlock) {
+      // Replace this block's contents with a compact "signed" confirmation.
+      thisBlock.innerHTML =
+        '<div style="background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.3);' +
+        'border-radius:6px;padding:10px 12px;">' +
+        '<p style="margin:0;font-size:0.85rem;color:#22c55e;font-weight:600;">' +
+        '✓ Contract countersigned. Booking confirmed.</p></div>';
+    }
+
+    // Are there any unsigned countersign blocks left?
+    const remaining = document.querySelectorAll(
+      '[data-countersign-block] input[id^="modalCountersignName_"]'
+    ).length;
+
+    if (remaining > 0) {
+      // Multi-slot, more pending — keep modal open. Show a transient hint
+      // up top so the user knows.
+      try {
+        const titleEl = document.getElementById('modalTitle');
+        if (titleEl && !titleEl.dataset.csHintShown) {
+          const hint = document.createElement('div');
+          hint.id = 'csMultiHint';
+          hint.style.cssText = 'margin:8px 0 0;padding:6px 10px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:6px;font-size:0.78rem;color:#22c55e;';
+          hint.textContent = '✓ Signed. ' + remaining + ' more contract' + (remaining > 1 ? 's' : '') + ' to countersign below.';
+          titleEl.insertAdjacentElement('afterend', hint);
+          titleEl.dataset.csHintShown = '1';
+          // Auto-update the hint count whenever another contract is signed.
+          // (We just set the text; subsequent calls will re-find #csMultiHint.)
+        } else {
+          const existing = document.getElementById('csMultiHint');
+          if (existing) existing.textContent = '✓ Signed. ' + remaining + ' more contract' + (remaining > 1 ? 's' : '') + ' to countersign below.';
+        }
+      } catch (_) {}
+      return;
+    }
+
+    // No more pending — show the final confirmation and auto-close.
+    const finalHint = document.getElementById('csMultiHint');
+    if (finalHint) finalHint.remove();
+    if (status) {
+      status.style.color = '#22c55e';
+      status.innerHTML = '✓ Contract countersigned! Booking confirmed. <span style="color:var(--text-muted);font-size:0.78rem;">(Closing in 5 seconds, or click Close.)</span>';
+    }
     setTimeout(() => {
       const modal = document.getElementById('gigModal');
       if (modal) modal.classList.add('hidden');
+      // Reset the multi-slot hint flag so the next time the modal opens
+      // we don't suppress the hint.
+      const titleEl2 = document.getElementById('modalTitle');
+      if (titleEl2 && titleEl2.dataset.csHintShown) delete titleEl2.dataset.csHintShown;
     }, 5000);
   } catch (e) {
     btn.disabled = false;

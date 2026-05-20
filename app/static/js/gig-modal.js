@@ -722,8 +722,12 @@ function _countersignBlock(slot, onCountersign, gigId) {
   const contractBodyHtml = slot.contract_body
     ? `<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:12px;max-height:200px;overflow-y:auto;margin-bottom:10px;font-size:0.8rem;line-height:1.7;color:var(--text);">${slot.contract_body}</div>`
     : '';
+  // Per-contract DOM ids so multiple pending countersign blocks in the same
+  // modal don't collide. data-countersign-block lets _doCountersign find
+  // and replace just THIS slot's block on success while leaving siblings
+  // intact (multi-slot gigs where the venue signs slots one at a time).
   return `
-    <div style="margin-top:10px;padding:10px 12px;background:rgba(139,92,246,0.07);border:1px solid rgba(139,92,246,0.2);border-radius:6px;">
+    <div data-countersign-block="${slot.contract_id}" style="margin-top:10px;padding:10px 12px;background:rgba(139,92,246,0.07);border:1px solid rgba(139,92,246,0.2);border-radius:6px;">
       ${contractBodyHtml}
       <div style="background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.2);border-radius:6px;padding:8px;margin-bottom:10px;">
         <p style="margin:0;font-size:0.8rem;color:#22c55e;">
@@ -739,7 +743,7 @@ function _countersignBlock(slot, onCountersign, gigId) {
       <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <button onclick="window._doCountersign && window._doCountersign(${slot.contract_id})"
-            id="modalCountersignBtn"
+            id="modalCountersignBtn_${slot.contract_id}"
             style="padding:6px 16px;font-size:0.85rem;background:#3b82f6;border:1px solid #3b82f6;color:#fff;border-radius:6px;cursor:pointer;font-weight:600;transition:background 0.2s;"
             onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'">
             Countersign & Confirm Booking
@@ -749,7 +753,7 @@ function _countersignBlock(slot, onCountersign, gigId) {
             💬 Message Artist
           </button>` : ''}
         </div>
-        <span id="modalCountersignStatus" style="font-size:0.82rem;"></span>
+        <span id="modalCountersignStatus_${slot.contract_id}" style="font-size:0.82rem;"></span>
       </div>
     </div>`;
 }
