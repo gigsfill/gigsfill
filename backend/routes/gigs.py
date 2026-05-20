@@ -5071,24 +5071,40 @@ def batch_blast(venue_id: int, data: dict, background_tasks: BackgroundTasks,
     def _build_gigs_html(gig_subset, pay_overrides=None):
         """pay_overrides: optional dict of {gig_id: effective_pay_float}
 
-        FIX (May 15 2026): for multi-slot gigs, render one row per OPEN slot
-        with that slot's actual start/end + pay. Previously we showed only
-        the parent gig's umbrella window ("7pm-11pm") and the parent's
-        single pay value — so an artist invited to a 2-slot gig with
-        $10 + $20 slots would just see "7-11pm $10" instead of seeing the
-        two real choices.
+        FIX (May 15 2026): mirror the per-slot rendering used by
+        scheduler.py:_build_slots_html_for_scheduler (the helper that
+        powers the open_gig_*w / open_gig_36h blast emails). For
+        multi-slot gigs, each slot can have its own artist_type, lineup,
+        styles, and pay — show all of them stacked per slot with a
+        separator between slots, then a thicker separator between gigs.
+        Single-slot gigs render exactly as before.
         """
+        slot_sep = '<tr><td colspan="2" style="padding:4px 0;border-top:1px solid #e5e7eb;"></td></tr>'
+        gig_sep  = '<tr><td colspan="2" style="padding:8px 0;border-top:1px solid #fde68a;"></td></tr>'
+
+        def _commas(s):
+            return ', '.join(x.strip() for x in (s or '').split(',') if x.strip())
+
+        def _fmt_pay(val):
+            try:
+                return f"${float(val):.2f}"
+            except (ValueError, TypeError):
+                return f"${val}"
+
         parts = []
         for i, g in enumerate(gig_subset):
             if i > 0:
-                parts.append('<tr><td colspan="2" style="padding:8px 0;border-top:1px solid #fde68a;"></td></tr>')
+                parts.append(gig_sep)
 
-            # Fetch this gig's open slots (status='open' — we don't surface
-            # booked slots in the "available" email).
+            # Pull this gig's open slots with their per-slot artist_type,
+            # band_formats, styles, and pay. status='open' only — booked
+            # slots aren't bookable so they're omitted from the email.
             slots = db.execute(
-                text("SELECT start_time, end_time, pay FROM gig_slots "
-                     "WHERE gig_id = :gid AND status = 'open' "
-                     "ORDER BY slot_number ASC"),
+                text("""SELECT start_time, end_time, pay, artist_type,
+                               band_formats, styles
+                        FROM gig_slots
+                        WHERE gig_id = :gid AND status = 'open'
+                        ORDER BY slot_number ASC"""),
                 {"gid": g["id"]}
             ).mappings().all()
 
@@ -5096,38 +5112,37 @@ def batch_blast(venue_id: int, data: dict, background_tasks: BackgroundTasks,
             if g.get("title"):
                 parts.append(_row("Event", g["title"]))
 
-            if slots and len(slots) > 1:
-                # Multi-slot gig — list each slot separately
-                override_pay = (pay_overrides or {}).get(g["id"])
-                for idx, sl in enumerate(slots, start=1):
+            override_pay = (pay_overrides or {}).get(g["id"])
+
+            if slots:
+                for j, sl in enumerate(slots):
+                    if j > 0:
+                        parts.append(slot_sep)
                     t = format_time_12hr(sl["start_time"] or "")
                     if sl.get("end_time"):
                         t += " – " + format_time_12hr(sl["end_time"])
-                    parts.append(_row(f"Slot {idx}", t))
-                    sl_pay = override_pay or sl.get("pay")
+                    parts.append(_row("Time", t))
+                    sl_pay = override_pay or sl.get("pay") or g.get("pay")
                     if sl_pay:
-                        try:
-                            parts.append(_row("Pay", f"${float(sl_pay):.2f}", "#059669", "600"))
-                        except (ValueError, TypeError):
-                            parts.append(_row("Pay", f"${sl_pay}", "#059669", "600"))
+                        parts.append(_row("Pay", _fmt_pay(sl_pay), "#059669", "600"))
+                    atype  = sl.get("artist_type") or g.get("artist_type")
+                    lineup = _commas(sl.get("band_formats") or g.get("band_formats"))
+                    styles = _commas(sl.get("styles") or g.get("styles"))
+                    if atype:  parts.append(_row("Type",   atype))
+                    if lineup: parts.append(_row("Lineup", lineup))
+                    if styles: parts.append(_row("Styles", styles))
             else:
-                # Single-slot (or no slot rows yet — legacy) — show the
-                # umbrella time + pay as before.
+                # Legacy gigs (no gig_slots rows) — fall back to umbrella
+                # time + parent pay/type as before.
                 t = format_time_12hr(g["start_time"] or "")
                 if g.get("end_time"):
                     t += " – " + format_time_12hr(g["end_time"])
                 parts.append(_row("Time", t))
-                effective_pay = (pay_overrides or {}).get(g["id"]) or g.get("pay")
-                if slots:  # exactly one slot row exists — prefer its pay
-                    effective_pay = (pay_overrides or {}).get(g["id"]) or slots[0].get("pay") or g.get("pay")
+                effective_pay = override_pay or g.get("pay")
                 if effective_pay:
-                    try:
-                        parts.append(_row("Pay", f"${float(effective_pay):.2f}", "#059669", "600"))
-                    except (ValueError, TypeError):
-                        parts.append(_row("Pay", f"${effective_pay}", "#059669", "600"))
-
-            if g.get("artist_type"):
-                parts.append(_row("Type", g["artist_type"]))
+                    parts.append(_row("Pay", _fmt_pay(effective_pay), "#059669", "600"))
+                if g.get("artist_type"):
+                    parts.append(_row("Type", g["artist_type"]))
         return f'<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"><tbody>{"".join(parts)}</tbody></table>'
 
     def _send(artist_email, artist_name, artist_id, gig_subset, pay_overrides=None):
