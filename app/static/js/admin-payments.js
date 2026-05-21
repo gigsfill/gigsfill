@@ -572,6 +572,10 @@
           <span style="font-size:0.65rem;font-weight:400;color:var(--text-gray);">${esc(sub || '')}</span>
         </button>`;
 
+      // Mark Resolved + Resend Email always render — Mark Resolved is the
+      // last-resort admin override that applies to any row state; Resend
+      // Email applies to rows in send-eligible states (the batch modal
+      // greys out rows where no template fits).
       const gigActionsButtons = [
         gigCanRefundVenue ? gigBtn(
           '↩ Refund Venue',
@@ -585,6 +589,18 @@
           `apOpenReverseTransfer(${firstReversibleChild.id})`,
           'Pick one or more paid artist transfers to reverse. Step 2 can also refund the venue.'
         ) : '',
+        gigBtn(
+          '✉ Resend Emails',
+          '139,92,246',
+          `apOpenResendEmailBatch(${t.id})`,
+          'Pick which rows to resend the payment-event email for. Template is auto-picked per row.'
+        ),
+        gigBtn(
+          '✓ Mark Rows Resolved',
+          '6,182,212',
+          `apOpenMarkResolvedBatch(${t.id})`,
+          'Force a status on one or more rows with a shared reason. Admin override — no Stripe call.'
+        ),
       ].filter(Boolean).join('');
 
       const gigActionsHtml = gigActionsButtons
@@ -633,12 +649,13 @@
                         || t.transaction_type_resolved === 'single') && !isChild;
       const isPayoutRow = t.transaction_type_resolved === 'artist_payout' || isChild;
 
+      // Mark Resolved + Resend Email moved up to Gig Actions (gig-wide
+      // batch). Only genuinely-per-row operations live here now:
+      //   Re-route Payout — each row may need a different destination
+      //   Re-fire         — narrowly scoped to one failed row
       const showReroute = isPayoutRow && t.status === 'scheduled';
       const showRefire  = (isVenueRow  && ['payment_failed','charge_retry'].includes(t.status))
                        || (isPayoutRow && ['transfer_failed','pending_transfer'].includes(t.status));
-      const showResend  = (isVenueRow  && ['paid','charged'].includes(t.status))
-                       || (isPayoutRow && ['transferred','paid'].includes(t.status));
-      const showMark    = true;  // always available
 
       const btn = (label, color, onclick, sub) => `
         <button onclick="${onclick}"
@@ -648,16 +665,14 @@
         </button>`;
 
       const buttons = [
-        showReroute ? btn('↪ Re-route Payout',  '6,182,212',  `apOpenReroute(${txnId})`,        'Send this payout to a different artist Connect account.') : '',
-        showRefire  ? btn('↻ Re-fire',          '245,158,11', `apOpenRefire(${txnId})`,         'Reset this failed row to scheduled; scheduler will retry.') : '',
-        showResend  ? btn('✉ Resend Email',     '139,92,246', `apOpenResend(${txnId})`,         'Re-send the payment-event email for this row.') : '',
-        showMark    ? btn('✓ Mark Resolved',    '6,182,212',  `apOpenMarkResolved(${txnId})`,   'Force a status with a reason (admin override, no Stripe call).') : '',
+        showReroute ? btn('↪ Re-route Payout',  '6,182,212',  `apOpenReroute(${txnId})`, 'Send this payout to a different artist Connect account.') : '',
+        showRefire  ? btn('↻ Re-fire',          '245,158,11', `apOpenRefire(${txnId})`,  'Reset this failed row to scheduled; scheduler will retry.') : '',
       ].filter(Boolean).join('');
 
       const actionsHtml = buttons
         ? `<div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
              <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Row Actions — #${t.id}</div>
-             <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:8px;">Less-common operations that affect only this specific row. Refund and Reverse live in <strong>Gig Actions</strong> above because they almost always need to be coordinated across the whole gig.</div>
+             <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:8px;">Operations that genuinely apply to only this row. Gig-wide actions (Refund Venue, Reverse Transfers, Resend Emails, Mark Rows Resolved) all live in <strong>Gig Actions</strong> above.</div>
              <div style="display:flex;flex-wrap:wrap;align-items:flex-start;">${buttons}</div>
            </div>` : '';
 
@@ -719,6 +734,262 @@
   // ── Tier 2: Mark-resolved ────────────────────────────────────────────────
   // Pure DB override — no Stripe, no email. Use for stuck rows (e.g.
   // dispute_won that didn't sync from a webhook).
+  // ── Tier 2 (gig-wide): Mark Rows Resolved — batch ───────────────────────
+  // Lists every row in the gig with a per-row "new status" dropdown plus a
+  // single shared reason field. Submit batches the changes — same audit
+  // logging as the single-row variant.
+  window.apOpenMarkResolvedBatch = async function(anyTxnId) {
+    let data;
+    try { data = await apEnsureDetailFor(anyTxnId); }
+    catch (e) {
+      window.showErrorModal && window.showErrorModal('Mark Rows Resolved', e.message || 'Failed to load.');
+      return;
+    }
+    const t = data.transaction;
+    const siblings = data.siblings || [];
+    const slots = (data.slots || []).slice().sort((a, b) => (a.slot_number||0) - (b.slot_number||0));
+    const sameCount = slots.length === siblings.filter(s => s.transaction_type === 'artist_payout').length;
+    const slotByChildId = {};
+    siblings.filter(s => s.transaction_type === 'artist_payout')
+      .sort((a, b) => a.id - b.id)
+      .forEach((c, i) => {
+        slotByChildId[c.id] = sameCount ? slots[i]
+          : slots.find(s => s.artist_id === c.artist_id);
+      });
+
+    const ordered = siblings.slice().sort((a, b) => {
+      const av = (a.transaction_type === 'venue_charge' || a.transaction_type === 'single') ? 0 : 1;
+      const bv = (b.transaction_type === 'venue_charge' || b.transaction_type === 'single') ? 0 : 1;
+      if (av !== bv) return av - bv;
+      return a.id - b.id;
+    });
+
+    const STATUS_OPTS = ['paid','transferred','payment_cancelled','suspended','dispute_won','dispute_lost'];
+    function rowMarkup(r) {
+      const sl = slotByChildId[r.id];
+      const isPayout = r.transaction_type === 'artist_payout';
+      const label = isPayout
+        ? `Slot ${sl ? sl.slot_number : '?'} · ${(sl && sl.artist_name) || (r.id === t.id ? t.artist_name : 'Artist')}`
+        : `Venue charge · ${esc(t.venue_name || '')}`;
+      // Pick a sensible default for the new status — keep current selected
+      // so admin doesn't accidentally force an unintended change.
+      const opts = STATUS_OPTS.map(s =>
+        `<option value="${s}" ${s === r.status ? 'disabled' : ''}>${s}</option>`
+      ).join('');
+      return `
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);">
+          <input type="checkbox" class="apMrkCb" data-cid="${r.id}" style="width:auto;flex-shrink:0;cursor:pointer;">
+          <span style="flex:0 0 56px;font-size:0.72rem;color:var(--text-gray);">#${r.id}</span>
+          <span style="flex:1;min-width:0;font-size:0.78rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>
+          <span style="flex:0 0 110px;font-size:0.72rem;">${statusPill(r.status)}</span>
+          <span style="font-size:0.7rem;color:var(--text-gray);">→</span>
+          <select class="apMrkNew" data-cid="${r.id}"
+            style="flex:0 0 170px;padding:5px 8px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.75rem;box-sizing:border-box;">
+            <option value="">— pick status —</option>
+            ${opts}
+          </select>
+        </div>`;
+    }
+
+    const formHtml = `
+      <p style="font-size:0.75rem;color:var(--text);margin:0 0 10px;line-height:1.5;">
+        Force a status on one or more rows. Reason is required and shared across the batch. This is an admin override — no Stripe call is made. Audit-logged per row.
+      </p>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason (required, min 5 chars, applied to every checked row)</div>
+        <textarea id="apMrkReason" rows="2" maxlength="1000" placeholder="e.g. Stripe Dashboard shows these were refunded 2026-05-22 — webhook never fired; syncing manually."
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
+      </label>
+      <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;background:rgba(0,0,0,0.15);">
+        ${ordered.map(rowMarkup).join('')}
+      </div>
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:12px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
+        <input id="apMrkDryRun" type="checkbox" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
+        <span><strong>Dry run (safe test mode)</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Validates without writing the status changes.</span>
+        </span>
+      </label>`;
+
+    window.showStyledModal(
+      '✓ Mark Rows Resolved — Gig #' + t.gig_id,
+      formHtml,
+      [
+        { text: 'Cancel', style: 'ghost',   onClick: () => {} },
+        { text: 'Apply',  style: 'primary', onClick: () => apSubmitMarkResolvedBatch(t.id) },
+      ],
+      { tone: 'info', size: 'lg' }
+    );
+  };
+
+  async function apSubmitMarkResolvedBatch(txnId) {
+    const reason = (document.getElementById('apMrkReason')?.value || '').trim();
+    const dry_run = !!document.getElementById('apMrkDryRun')?.checked;
+    if (reason.length < 5) {
+      window.showErrorModal && window.showErrorModal('Mark Resolved', 'Reason required (min 5 chars).');
+      return;
+    }
+    const rows = [];
+    document.querySelectorAll('.apMrkCb').forEach(cb => {
+      if (!cb.checked) return;
+      const cid = parseInt(cb.dataset.cid, 10);
+      const sel = document.querySelector('.apMrkNew[data-cid="' + cid + '"]');
+      const ns  = sel ? sel.value : '';
+      if (!ns) return;  // skip rows where admin didn't pick a new status
+      rows.push({ txn_id: cid, new_status: ns });
+    });
+    if (!rows.length) {
+      window.showErrorModal && window.showErrorModal('Mark Resolved',
+        'Tick at least one row and pick its new status.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/payments/mark-resolved-batch', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows, reason, dry_run }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Mark Resolved failed',
+          json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const failRows = (json.results || []).filter(r => !r.ok);
+      let lines = [`${json.ok_count} row${json.ok_count===1?'':'s'} updated, ${json.fail_count} failed.`];
+      if (failRows.length) {
+        lines.push('Failures:\n' + failRows.slice(0, 10).map(r => `  • #${r.txn_id}: ${r.error}`).join('\n'));
+      }
+      const fn = failRows.length
+        ? (window.showErrorModal || window.showStyledModal)
+        : window.showSuccessModal;
+      fn(prefix + 'Mark Resolved', lines.join('\n\n'),
+        () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } });
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Mark Resolved failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Tier 2 (gig-wide): Resend Emails — batch ────────────────────────────
+  // Lists each row, auto-derives the template per row (venue_charge →
+  // venue_charged email; artist_payout → artist_payout_sent email). Rows
+  // whose status doesn't fit a template are greyed and not pickable.
+  window.apOpenResendEmailBatch = async function(anyTxnId) {
+    let data;
+    try { data = await apEnsureDetailFor(anyTxnId); }
+    catch (e) {
+      window.showErrorModal && window.showErrorModal('Resend Emails', e.message || 'Failed to load.');
+      return;
+    }
+    const t = data.transaction;
+    const siblings = data.siblings || [];
+    const slots = (data.slots || []).slice().sort((a, b) => (a.slot_number||0) - (b.slot_number||0));
+    const sameCount = slots.length === siblings.filter(s => s.transaction_type === 'artist_payout').length;
+    const slotByChildId = {};
+    siblings.filter(s => s.transaction_type === 'artist_payout')
+      .sort((a, b) => a.id - b.id)
+      .forEach((c, i) => {
+        slotByChildId[c.id] = sameCount ? slots[i]
+          : slots.find(s => s.artist_id === c.artist_id);
+      });
+    const ordered = siblings.slice().sort((a, b) => {
+      const av = (a.transaction_type === 'venue_charge' || a.transaction_type === 'single') ? 0 : 1;
+      const bv = (b.transaction_type === 'venue_charge' || b.transaction_type === 'single') ? 0 : 1;
+      if (av !== bv) return av - bv;
+      return a.id - b.id;
+    });
+
+    function rowMarkup(r) {
+      const sl = slotByChildId[r.id];
+      const isPayout = r.transaction_type === 'artist_payout';
+      const label = isPayout
+        ? `Slot ${sl ? sl.slot_number : '?'} · ${(sl && sl.artist_name) || (r.id === t.id ? t.artist_name : 'Artist')}`
+        : `Venue charge · ${esc(t.venue_name || '')}`;
+      const isVenue = r.transaction_type === 'venue_charge' || r.transaction_type === 'single';
+      const canResend = isVenue
+        ? ['paid','charged'].includes(r.status)
+        : ['transferred','paid'].includes(r.status);
+      const template = isVenue ? 'venue_charged (to venue)' : 'artist_payout_sent (to artist)';
+      const tmplDisplay = canResend
+        ? `<span style="color:var(--text);font-size:0.72rem;">${esc(template)}</span>`
+        : `<span style="color:var(--text-gray);font-size:0.7rem;font-style:italic;">no template for status "${esc(r.status)}"</span>`;
+      return `
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);${canResend ? '' : 'opacity:0.5;'}">
+          <input type="checkbox" class="apResendCb" data-cid="${r.id}"
+            ${canResend ? 'checked' : 'disabled'}
+            style="width:auto;flex-shrink:0;cursor:${canResend ? 'pointer' : 'not-allowed'};">
+          <span style="flex:0 0 56px;font-size:0.72rem;color:var(--text-gray);">#${r.id}</span>
+          <span style="flex:0 0 220px;font-size:0.78rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>
+          <span style="flex:0 0 110px;font-size:0.72rem;">${statusPill(r.status)}</span>
+          <span style="flex:1;min-width:0;">→ ${tmplDisplay}</span>
+        </div>`;
+    }
+
+    const formHtml = `
+      <p style="font-size:0.75rem;color:var(--text);margin:0 0 10px;line-height:1.5;">
+        Pick which rows to re-send the payment-event email for. Template is auto-picked: venue rows get the "Venue charged" email, artist payout rows get the "Artist payout sent" email. Rows in a status that has no template are greyed out.
+      </p>
+      <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;background:rgba(0,0,0,0.15);">
+        ${ordered.map(rowMarkup).join('')}
+      </div>
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:12px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
+        <input id="apResendDryRun" type="checkbox" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
+        <span><strong>Dry run (safe test mode)</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Validates wiring without sending email.</span>
+        </span>
+      </label>`;
+
+    window.showStyledModal(
+      '✉ Resend Emails — Gig #' + t.gig_id,
+      formHtml,
+      [
+        { text: 'Cancel', style: 'ghost',   onClick: () => {} },
+        { text: 'Send',   style: 'primary', onClick: () => apSubmitResendEmailBatch(t.id) },
+      ],
+      { tone: 'info', size: 'lg' }
+    );
+  };
+
+  async function apSubmitResendEmailBatch(txnId) {
+    const dry_run = !!document.getElementById('apResendDryRun')?.checked;
+    const txn_ids = [];
+    document.querySelectorAll('.apResendCb').forEach(cb => {
+      if (cb.checked && !cb.disabled) txn_ids.push(parseInt(cb.dataset.cid, 10));
+    });
+    if (!txn_ids.length) {
+      window.showErrorModal && window.showErrorModal('Resend Emails', 'Tick at least one row.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/payments/resend-email-batch', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txn_ids, dry_run }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Resend failed',
+          json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const failRows = (json.results || []).filter(r => !r.ok);
+      let lines = [`${json.ok_count} email${json.ok_count===1?'':'s'} sent, ${json.fail_count} failed.`];
+      if (failRows.length) {
+        lines.push('Failures:\n' + failRows.slice(0, 10).map(r => `  • #${r.txn_id}: ${r.error}`).join('\n'));
+      }
+      const fn = failRows.length
+        ? (window.showErrorModal || window.showStyledModal)
+        : window.showSuccessModal;
+      fn(prefix + 'Resend Emails', lines.join('\n\n'),
+        () => { if (!json.dry_run) window.apShowDetail(txnId); });
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Resend failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Single-row Mark Resolved (still wired but not surfaced in UI now;
+  //    kept around for direct curl/external use) ─────────────────────────
   window.apOpenMarkResolved = function(txnId) {
     const data = window._apLastDetail;
     const t = data && data.transaction;

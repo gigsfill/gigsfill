@@ -1499,6 +1499,207 @@ def reverse_batch(
     }
 
 
+# ─── Batch: MARK ROWS RESOLVED + RESEND EMAILS ──────────────────────────────
+
+# Gig-wide variants of the single-row Mark Resolved and Resend Email actions.
+# Same audit + same per-row validation as the single-row endpoints, just
+# applied across several rows of the same gig in one admin click. Admin can
+# pick a different target status per row (different from /bulk, which forces
+# one status for all rows). Reason is shared across the batch — it's one
+# logical action.
+
+
+@router.post("/api/admin/payments/mark-resolved-batch")
+def mark_resolved_batch(
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Body:
+      rows     (required list) — [{txn_id, new_status}, ...]
+      reason   (required str)  — shared across the batch, min 5 chars.
+      dry_run  (optional bool)
+    Returns: {ok, dry_run, ok_count, fail_count, results: [...]}
+    """
+    rows = payload.get("rows") or []
+    reason = (payload.get("reason") or "").strip()[:1000]
+    dry_run = bool(payload.get("dry_run"))
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "rows must be a non-empty list")
+    if len(rows) > 50:
+        raise HTTPException(400, "Max 50 rows per batch")
+    if len(reason) < 5:
+        raise HTTPException(400, "reason is required (min 5 chars)")
+
+    results = []
+    ok_count = 0
+    fail_count = 0
+    for entry in rows:
+        if not isinstance(entry, dict):
+            results.append({"txn_id": entry, "ok": False, "error": "entry not a dict"})
+            fail_count += 1
+            continue
+        tid_raw = entry.get("txn_id")
+        ns = (entry.get("new_status") or "").strip()
+        try:
+            tid = int(tid_raw)
+        except (TypeError, ValueError):
+            results.append({"txn_id": tid_raw, "ok": False, "error": "txn_id must be an integer"})
+            fail_count += 1
+            continue
+        if ns not in _MARK_RESOLVED_TARGETS:
+            results.append({"txn_id": tid, "ok": False,
+                            "error": f"new_status '{ns}' not allowed"})
+            fail_count += 1
+            continue
+        try:
+            row = db.execute(text("""
+                SELECT id, gig_id, status FROM transactions WHERE id = :tid
+            """), {"tid": tid}).mappings().first()
+            if not row:
+                raise HTTPException(404, "not found")
+            if row["status"] == ns:
+                raise HTTPException(400, f"already '{ns}'")
+
+            if not dry_run:
+                note = (f"Admin mark-resolved (batch): {row['status']} → {ns} "
+                        f"({getattr(admin, 'email', 'admin')}) — {reason}")
+                db.execute(text("""
+                    UPDATE transactions
+                       SET status = :s, notes = COALESCE(notes || ' | ', '') || :n
+                     WHERE id = :tid
+                """), {"s": ns, "n": note, "tid": tid})
+                db.commit()
+                log_admin_action(
+                    db, admin, "payments_mark_resolved",
+                    target_table="transactions", target_id=tid,
+                    before={"status": row["status"]},
+                    after={"status": ns},
+                    metadata={"gig_id": row["gig_id"], "reason": reason, "batch": True},
+                    request=request,
+                )
+                db.commit()
+            results.append({"txn_id": tid, "ok": True,
+                            "from": row["status"], "to": ns})
+            ok_count += 1
+        except HTTPException as e:
+            results.append({"txn_id": tid, "ok": False, "error": str(e.detail)})
+            fail_count += 1
+        except Exception as e:
+            results.append({"txn_id": tid, "ok": False, "error": str(e)})
+            fail_count += 1
+
+    return {"ok": True, "dry_run": dry_run, "ok_count": ok_count,
+            "fail_count": fail_count, "results": results}
+
+
+@router.post("/api/admin/payments/resend-email-batch")
+def resend_email_batch(
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Body:
+      txn_ids  (required list[int])  — rows to resend for.
+      dry_run  (optional bool)
+    Template is auto-derived per row:
+      venue_charge / single  → venue_charged
+      artist_payout           → artist_payout_sent
+    Each row also has to be in a status the template applies to (paid /
+    charged for venue, transferred / paid for payout). Otherwise that row
+    fails with a friendly per-row error.
+    """
+    txn_ids = payload.get("txn_ids") or []
+    dry_run = bool(payload.get("dry_run"))
+    if not isinstance(txn_ids, list) or not txn_ids:
+        raise HTTPException(400, "txn_ids must be a non-empty list")
+    if len(txn_ids) > 50:
+        raise HTTPException(400, "Max 50 rows per batch")
+
+    results = []
+    ok_count = 0
+    fail_count = 0
+
+    # Open one raw sqlite connection for the run since the underlying sender
+    # functions expect sqlite Row-shaped data.
+    rconn = None
+    if not dry_run:
+        try:
+            import sqlite3
+            from backend.db import get_db_connection
+            from backend.payout_scheduler import (_send_venue_charged_email,
+                                                  _send_payout_email)
+            rconn = get_db_connection()
+            rconn.row_factory = sqlite3.Row
+        except Exception as e:
+            raise HTTPException(502, f"Email subsystem unavailable: {e}")
+
+    try:
+        for tid_raw in txn_ids:
+            try:
+                tid = int(tid_raw)
+            except (TypeError, ValueError):
+                results.append({"txn_id": tid_raw, "ok": False, "error": "txn_id must be an integer"})
+                fail_count += 1
+                continue
+            try:
+                row = db.execute(text("""
+                    SELECT id, gig_id, parent_transaction_id, transaction_type, status
+                    FROM transactions WHERE id = :tid
+                """), {"tid": tid}).mappings().first()
+                if not row:
+                    raise HTTPException(404, "not found")
+                ttype = row["transaction_type"] or "single"
+                if ttype in ('venue_charge', 'single'):
+                    if row["status"] not in ('paid', 'charged'):
+                        raise HTTPException(400, f"venue row status '{row['status']}' has no email template")
+                    template = "venue_charged"
+                elif ttype == 'artist_payout':
+                    if row["status"] not in ('transferred', 'paid'):
+                        raise HTTPException(400, f"payout row status '{row['status']}' has no email template")
+                    template = "artist_payout_sent"
+                else:
+                    raise HTTPException(400, f"unsupported transaction_type '{ttype}'")
+
+                if not dry_run:
+                    t_row = rconn.execute("SELECT * FROM transactions WHERE id = ?", (tid,)).fetchone()
+                    if not t_row:
+                        raise HTTPException(404, "not found (raw conn)")
+                    if template == 'venue_charged':
+                        gig = rconn.execute("SELECT venue_id FROM gigs WHERE id = ?", (row["gig_id"],)).fetchone()
+                        if not gig:
+                            raise HTTPException(404, "gig not found")
+                        _send_venue_charged_email(rconn, t_row, gig["venue_id"])
+                    else:
+                        _send_payout_email(rconn, t_row)
+
+                    log_admin_action(
+                        db, admin, "payments_resend_email",
+                        target_table="transactions", target_id=tid,
+                        metadata={"template": template, "gig_id": row["gig_id"], "batch": True},
+                        request=request,
+                    )
+                    db.commit()
+
+                results.append({"txn_id": tid, "ok": True, "template": template})
+                ok_count += 1
+            except HTTPException as e:
+                results.append({"txn_id": tid, "ok": False, "error": str(e.detail)})
+                fail_count += 1
+            except Exception as e:
+                results.append({"txn_id": tid, "ok": False, "error": str(e)})
+                fail_count += 1
+    finally:
+        if rconn:
+            try: rconn.close()
+            except Exception: pass
+
+    return {"ok": True, "dry_run": dry_run, "ok_count": ok_count,
+            "fail_count": fail_count, "results": results}
+
+
 # ─── Tier 3: RE-ROUTE PAYOUT ────────────────────────────────────────────────
 
 @router.post("/api/admin/payments/{txn_id}/reroute-payout")
