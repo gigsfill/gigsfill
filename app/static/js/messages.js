@@ -267,9 +267,13 @@ function openMessageModal(gigId, title, artistId, venueId) {
 
   const modal = document.createElement('div');
   modal.id = 'gigMessageModal';
+  // FIX (May 21 2026): z-index was 9999, but .modal-overlay (gig modal) is
+  // at z-index 10000 — so opening a message thread from inside the gig
+  // modal put the message modal BEHIND and looked like the Message Artist
+  // button "did nothing." Bumped above the gig modal.
   modal.style.cssText = `
     position:fixed;top:0;left:0;right:0;bottom:0;
-    background:rgba(0,0,0,0.7);z-index:9999;
+    background:rgba(0,0,0,0.7);z-index:10010;
     display:flex;align-items:center;justify-content:center;
     padding:20px;box-sizing:border-box;
   `;
@@ -328,7 +332,7 @@ window.openInboxModal = async function({ side = 'venue', artistId = null, venueI
   // Create modal skeleton with loading state
   const modal = document.createElement('div');
   modal.id = 'msgInboxModal';
-  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:10009;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
   modal.innerHTML = `
     <div id="msgInboxInner" style="background:var(--bg,#0f1117);border-radius:14px;width:100%;max-width:860px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.6);overflow:hidden;">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--border,#1e2433);">
