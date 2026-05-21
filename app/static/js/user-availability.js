@@ -198,16 +198,32 @@
     }
   };
 
-  window.uaDelete = async function (id) {
-    if (!confirm('Delete this blackout?')) return;
-    try {
-      const res = await fetch('/api/me/availability/' + id, {
-        method: 'DELETE', credentials: 'include'
-      });
-      if (!res.ok) throw new Error('Delete failed');
-      await uaLoad();
-    } catch (e) {
-      alert('Failed to delete: ' + e.message);
+  window.uaDelete = function (id) {
+    const doDelete = async () => {
+      try {
+        const res = await fetch('/api/me/availability/' + id, {
+          method: 'DELETE', credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Delete failed');
+        await uaLoad();
+      } catch (e) {
+        if (window.showErrorModal) {
+          window.showErrorModal('Delete failed', e.message || 'Could not delete blackout.');
+        } else {
+          alert('Failed to delete: ' + e.message);
+        }
+      }
+    };
+    if (window.showConfirm) {
+      window.showConfirm(
+        'Delete Blackout Date?',
+        'This blackout date will be removed from your availability.',
+        doDelete,
+        null,
+        { tone: 'warning', confirmLabel: 'Delete', cancelLabel: 'Cancel', confirmStyle: 'danger' }
+      );
+    } else if (confirm('Delete this blackout date?')) {
+      doDelete();
     }
   };
 
