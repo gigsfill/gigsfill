@@ -844,9 +844,9 @@
             <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Commission captured at venue-charge time. Refunding this requires the Step 2 venue refund below — it can't be returned via the Stripe transfer reversal alone.</div>
           </label>
         </div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text-gray);margin-bottom:8px;">
-          <input id="apReverseAppFee" type="checkbox" style="width:auto;">
-          Also refund the Stripe <em>application fee</em> on the transfer (advanced — only matters if the transfer was created with <code>application_fee_amount</code>; ours aren't, so this is usually a no-op)
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:0.72rem;color:var(--text-gray);margin-bottom:8px;line-height:1.5;">
+          <input id="apReverseAppFee" type="checkbox" style="width:auto;flex-shrink:0;margin-top:2px;">
+          <span>Also refund the Stripe <em>application fee</em> on the transfer (advanced — only matters if the transfer was created with <code>application_fee_amount</code>; ours aren't, so this is usually a no-op)</span>
         </label>
         <label style="display:block;">
           <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
@@ -859,11 +859,14 @@
       <div style="${stepCardCss}">
         <div style="${stepLabelCss}">Step 2 (optional) — Also refund the venue</div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.78rem;color:var(--text);">
-          <input id="apReverseAlsoRefund" type="checkbox" onchange="apReverseToggleRefundSection()" style="width:auto;">
-          Push reversed funds back to the venue's card in the same call
+          <input id="apReverseAlsoRefund" type="checkbox" onchange="apReverseToggleRefundSection()" style="width:auto;flex-shrink:0;">
+          <span>Push reversed funds back to the venue's card in the same call</span>
         </label>
-        <div style="font-size:0.7rem;color:var(--text-gray);margin-top:2px;margin-left:24px;">
-          When unchecked, reversed funds sit in the GigsFill Stripe balance. Parent venue charge: <strong>$${parentDollars}</strong> (#${parent.id}, ${esc(parentStatus)}).
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;margin-left:24px;line-height:1.5;">
+          When unchecked, reversed funds sit in the GigsFill Stripe balance.
+        </div>
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;margin-left:24px;line-height:1.5;">
+          Parent venue charge: <strong>$${parentDollars}</strong> (#${parent.id}, ${esc(parentStatus)}).
         </div>
         <div id="apReverseRefundFields" style="display:none;margin-top:10px;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
