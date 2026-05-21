@@ -565,29 +565,31 @@
       );
       const gigCanReverseTransfers = !!firstReversibleChild;
 
+      // Uniform-width buttons via grid: each cell is 1fr so every button
+      // matches the longest one. Buttons themselves stretch (width:100%)
+      // to fill their cell.
       const gigBtn = (label, color, onclick, sub) => `
         <button onclick="${onclick}"
-          style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 16px;background:rgba(${color},0.15);border:1px solid rgba(${color},0.45);color:rgb(${color});border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;margin:0 8px 8px 0;text-align:left;min-width:200px;">
+          style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 14px;background:rgba(${color},0.15);border:1px solid rgba(${color},0.45);color:rgb(${color});border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;text-align:left;width:100%;box-sizing:border-box;">
           <span>${label}</span>
-          <span style="font-size:0.65rem;font-weight:400;color:var(--text-gray);">${esc(sub || '')}</span>
+          <span style="font-size:0.65rem;font-weight:400;color:var(--text-gray);line-height:1.4;">${esc(sub || '')}</span>
         </button>`;
 
-      // Mark Resolved + Resend Email always render — Mark Resolved is the
-      // last-resort admin override that applies to any row state; Resend
-      // Email applies to rows in send-eligible states (the batch modal
-      // greys out rows where no template fits).
+      // ONE button covers both the venue-side (refund) and the artist-side
+      // (reverse transfers). The modal it opens has both Step 1 (reverse
+      // artists) and Step 2 (refund venue) — admin checks whatever
+      // combination they actually need. So a single button is enough.
+      const gigCanUndo = gigCanRefundVenue || gigCanReverseTransfers;
+      const undoTargetId = (firstReversibleChild && firstReversibleChild.id)
+                       || (parentTxn && parentTxn.id)
+                       || t.id;
+
       const gigActionsButtons = [
-        gigCanRefundVenue ? gigBtn(
-          '↩ Refund Venue',
+        gigCanUndo ? gigBtn(
+          '↺ Refund / Reverse',
           '239,68,68',
-          `apOpenRefund(${parentTxn.id})`,
-          'Refund the parent venue charge (#' + parentTxn.id + '). Cancels any still-scheduled artist payouts when full.'
-        ) : '',
-        gigCanReverseTransfers ? gigBtn(
-          '⤺ Reverse Artist Transfers',
-          '239,68,68',
-          `apOpenReverseTransfer(${firstReversibleChild.id})`,
-          'Pick one or more paid artist transfers to reverse. Step 2 can also refund the venue.'
+          `apOpenReverseTransfer(${undoTargetId})`,
+          'Reverse one or more artist transfers, refund the venue, or both — all in one submit.'
         ) : '',
         gigBtn(
           '✉ Resend Emails',
@@ -607,7 +609,7 @@
         ? `<div style="margin-top:14px;padding:10px 12px;background:rgba(139,92,246,0.05);border:1px solid rgba(139,92,246,0.25);border-radius:6px;">
              <div style="font-size:0.7rem;color:#c4b5fd;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Gig Actions</div>
              <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:8px;">Operate on the gig as a whole — same end result whether admin clicked the venue charge row or an artist payout row.</div>
-             <div style="display:flex;flex-wrap:wrap;align-items:flex-start;">${gigActionsButtons}</div>
+             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;">${gigActionsButtons}</div>
            </div>`
         : '';
 
@@ -702,9 +704,9 @@
             ${overviewRow('Selected', selectedLine)}
           </table>
         </div>
-        ${t.notes ? `<div style="margin-top:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border-left:3px solid var(--cyan);font-size:0.72rem;color:var(--text-gray);"><strong style="color:var(--text);">Notes (selected row):</strong> ${esc(t.notes)}</div>` : ''}
         ${gigActionsHtml}
         ${sibsHtml}
+        ${t.notes ? `<div style="margin-top:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border-left:3px solid var(--cyan);font-size:0.72rem;color:var(--text-gray);"><strong style="color:var(--text);">Notes (selected row):</strong> ${esc(t.notes)}</div>` : ''}
         ${slotsHtml}
         ${actionsHtml}
         ${auditHtml}`;
@@ -1211,13 +1213,23 @@
     const t = data.transaction;
 
     // ── Gather the parent + sibling payouts so admin can pick which slots
-    // to reverse in one batch. siblings includes the parent row + all
-    // children of the same parent_transaction_id.
+    // to reverse in one batch, and/or refund the venue. Works whether the
+    // modal was opened from a child payout row OR from the gig-level
+    // "↺ Refund / Reverse" button passing the parent's id.
     const siblings = data.siblings || [];
-    const parent = siblings.find(s => s.id === t.parent_transaction_id) || null;
+    // Parent is the venue_charge / single row with no parent_transaction_id.
+    // Find it regardless of which row admin clicked.
+    const parent = siblings.find(s =>
+      !s.parent_transaction_id
+      && (s.transaction_type === 'venue_charge' || s.transaction_type === 'single')
+    ) || (
+      // Fall back: if t itself is the parent, siblings might just contain t.
+      (!t.parent_transaction_id && (t.transaction_type_resolved === 'venue_charge' || t.transaction_type_resolved === 'single'))
+        ? t : null
+    );
     if (!parent) {
-      window.showErrorModal && window.showErrorModal('Reverse Transfer',
-        'Parent venue charge not found in the loaded data. Reopen the transaction and try again.');
+      window.showErrorModal && window.showErrorModal('Refund / Reverse',
+        'Could not resolve the venue charge for this gig. Reopen the transaction and try again.');
       return;
     }
     const parentCharge = parent.venue_charge_cents || parent.amount_cents || 0;
@@ -1227,10 +1239,10 @@
       && ['charged','paid','transferred'].includes(parentStatus);
 
     // All artist_payout children of this parent (ordered by id ASC so the
-    // slot ↔ child pairing below is stable). Includes the current row.
+    // slot ↔ child pairing below is stable).
     const allChildren = siblings
       .filter(s => s.parent_transaction_id === parent.id
-                && (s.transaction_type === 'artist_payout' || s.transaction_type === 'single'))
+                && s.transaction_type === 'artist_payout')
       .sort((a, b) => a.id - b.id);
 
     // Pair each child with its corresponding gig_slot. Strategy: if slot
@@ -1270,7 +1282,10 @@
         status,
         reversible,
         reasonNotEnabled,
-        is_current: c.id === t.id,    // the row admin clicked to open this
+        // No "current row" concept anymore — modal is gig-level. Every
+        // reversible row defaults to checked so admin can untick the ones
+        // they want to keep.
+        is_current: false,
       };
     });
 
@@ -1299,7 +1314,10 @@
       const time = (r.start_time && r.end_time)
         ? `${fmtTime12(r.start_time)} – ${fmtTime12(r.end_time)}`
         : (r.start_time ? fmtTime12(r.start_time) : '');
-      const checked = r.reversible && r.is_current ? 'checked' : '';
+      // Default all reversible rows to CHECKED — admin opened the gig-level
+      // "↺ Refund / Reverse" so they likely want to undo most/all of it.
+      // They can untick individual rows to keep them.
+      const checked = r.reversible ? 'checked' : '';
       const disabled = r.reversible ? '' : 'disabled';
       const greyed = r.reversible
         ? `id="apRevRow_${r.child_id}" data-cid="${r.child_id}" data-max="${payoutDollars}"`
@@ -1354,6 +1372,7 @@
         </table>
       </div>
 
+      ${stepOneHasAny ? `
       <div style="${stepCardCss}">
         <div style="${stepLabelCss}">Step 1 — Select payouts to reverse</div>
         ${noReversibleMsg}
@@ -1369,19 +1388,27 @@
           <textarea id="apReverseNotes" rows="2" maxlength="500" placeholder="e.g. Artist no-showed; venue wants payment back"
             style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
         </label>
-      </div>
+      </div>` : `
+      <div style="${stepCardCss}">
+        <div style="${stepLabelCss}">Step 1 — Reverse artist transfers</div>
+        <div style="font-size:0.72rem;color:var(--text-gray);">
+          No artist payouts on this gig (single-slot row, or all children already handled). Use Step 2 below to refund the venue.
+        </div>
+      </div>`}
 
       ${parentRefundable ? `
       <div style="${stepCardCss}">
-        <div style="${stepLabelCss}">Step 2 (optional) — Also refund the venue</div>
+        <div style="${stepLabelCss}">Step 2${stepOneHasAny && reversibleCount > 0 ? ' (optional)' : ''} — Refund the venue</div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.78rem;color:var(--text);">
-          <input id="apReverseAlsoRefund" type="checkbox" onchange="apReverseToggleRefundSection()" style="width:auto;flex-shrink:0;">
+          <input id="apReverseAlsoRefund" type="checkbox"
+            ${(!stepOneHasAny || reversibleCount === 0) ? 'checked' : ''}
+            onchange="apReverseToggleRefundSection()" style="width:auto;flex-shrink:0;">
           <span>Send funds back to the venue's card in the same call</span>
         </label>
         <div style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;margin-left:24px;line-height:1.5;">
           When unchecked, reversed funds sit in the GigsFill Stripe balance.
         </div>
-        <div id="apReverseRefundFields" style="display:none;margin-top:10px;">
+        <div id="apReverseRefundFields" style="display:${(!stepOneHasAny || reversibleCount === 0) ? '' : 'none'};margin-top:10px;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
             <label>
               <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Venue Refund Amount (USD)</div>
@@ -1430,17 +1457,18 @@
     // IDs map to which inputs.
     window._apReverseCtx = {
       parent_id: parent.id,
+      parentChargeCents: parentCharge,  // for Step-2 fallback when Step 1 empty
       child_ids: rows.filter(r => r.reversible).map(r => r.child_id),
       // Track whether admin manually edited Step 2 amount so auto-sync stops.
       refundManuallyEdited: false,
     };
 
     window.showStyledModal(
-      '⤺ Reverse Transfer — Gig #' + t.gig_id,
+      '↺ Refund / Reverse — Gig #' + t.gig_id,
       formHtml,
       [
         { text: 'Cancel',  style: 'ghost',  onClick: () => {} },
-        { text: 'Reverse', style: 'danger', onClick: () => apSubmitReverseTransfer(txnId) },
+        { text: 'Apply',   style: 'danger', onClick: () => apSubmitReverseTransfer(txnId) },
       ],
       { tone: 'warning', size: 'lg' }
     );
@@ -1460,7 +1488,9 @@
   };
 
   // Recompute Step 1 total and (if not manually edited) mirror it into the
-  // Step 2 refund amount.
+  // Step 2 refund amount. When Step 1 has nothing checked, fall back to the
+  // parent's full venue charge so the venue-refund-only flow still has a
+  // sensible default (admin doesn't have to type the amount manually).
   window.apReverseRecomputeTotal = function() {
     let total = 0;
     document.querySelectorAll('.apRevRowCb').forEach(cb => {
@@ -1473,7 +1503,9 @@
     if (totalEl) totalEl.textContent = '$' + (total / 100).toFixed(2);
     const refund = document.getElementById('apReverseRefundAmount');
     if (refund && !window._apReverseCtx?.refundManuallyEdited) {
-      refund.value = (total / 100).toFixed(2);
+      const fallback = window._apReverseCtx?.parentChargeCents || 0;
+      const cents = total > 0 ? total : fallback;
+      refund.value = (cents / 100).toFixed(2);
     }
   };
 
@@ -1512,13 +1544,14 @@
       if (!Number.isFinite(amt) || amt <= 0) return;
       reversals.push({ child_id: cid, amount_cents: Math.round(amt * 100) });
     });
-    if (!reversals.length) {
-      window.showErrorModal && window.showErrorModal('Reverse',
-        'Tick at least one payout to reverse, or close this modal.');
+    const alsoRefund = !!document.getElementById('apReverseAlsoRefund')?.checked;
+    if (!reversals.length && !alsoRefund) {
+      // Neither step is ticked — nothing to do. Tell admin so they don't
+      // silently submit an empty action.
+      window.showErrorModal && window.showErrorModal('Refund / Reverse',
+        'Tick at least one payout to reverse, or tick "Refund the venue" to refund the venue.');
       return;
     }
-
-    const alsoRefund = !!document.getElementById('apReverseAlsoRefund')?.checked;
     const body = {
       reversals,
       notes: (document.getElementById('apReverseNotes')?.value || '').trim(),

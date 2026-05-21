@@ -1239,8 +1239,13 @@ def reverse_batch(
     dry_run = bool(payload.get("dry_run"))
     notes_in = (payload.get("notes") or "").strip()[:500]
     reversals = payload.get("reversals") or []
-    if not isinstance(reversals, list) or not reversals:
-        raise HTTPException(400, "reversals must be a non-empty list of {child_id, amount_cents}")
+    also_refund = bool(payload.get("also_refund_venue"))
+    if not isinstance(reversals, list):
+        raise HTTPException(400, "reversals must be a list of {child_id, amount_cents}")
+    if not reversals and not also_refund:
+        # Need at least one of: reversal entries OR the venue refund flag.
+        # Otherwise the call is a no-op.
+        raise HTTPException(400, "reversals or also_refund_venue is required")
     if len(reversals) > 50:
         raise HTTPException(400, "Max 50 reversals per batch")
 
@@ -1258,7 +1263,11 @@ def reverse_batch(
             f"Parent #{parent_id} type '{p_type}' is not a venue charge")
 
     # Process each reversal independently — Stripe call + DB update + audit.
-    if not dry_run:
+    # Init Stripe only when we actually need it (at least one Stripe write
+    # in either the reversal loop or the optional refund step). Saves the
+    # "Stripe not configured" precheck for pure dry-run + venue-only-refund
+    # corner cases.
+    if not dry_run and reversals:
         from backend.routes.stripe_connect import init_stripe
         stripe, _keys = init_stripe(db)
 
