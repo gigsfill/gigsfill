@@ -494,7 +494,7 @@
   <script src="/app/static/js/api-globals.js"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=3"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=4"></script>
   
 </head>
 
@@ -642,8 +642,16 @@
     <!-- SECTION 8: AUDIO -->
     <div class="content-card">
       <h2>Audio</h2>
-      <button id="addAudioBtn" class="btn primary">+ Add Audio</button>
-      <input id="audioInput" type="file" accept="audio/*" hidden />
+      <p style="color:var(--text-gray);font-size:0.8rem;margin:-4px 0 12px;">
+        Upload up to <strong>3 MP3 files</strong>, plus unlimited links to external audio
+        (SoundCloud, Bandcamp, etc.).
+      </p>
+      <button id="addAudioBtn" class="btn primary">+ Add MP3 File <span id="addAudioBtnCount" style="opacity:0.7;font-weight:400;"></span></button>
+      <input id="audioInput" type="file" accept="audio/*,.mp3" hidden />
+      <div class="add-media-row" style="margin-top:12px;">
+        <input id="audioLinkUrl" type="text" placeholder="SoundCloud / Bandcamp / other audio URL" />
+        <button id="addAudioLinkBtn" class="btn primary">+ Add Audio Link</button>
+      </div>
       <div id="audio" class="audio-container"></div>
     </div>
 
@@ -652,7 +660,7 @@
       <h2>Videos</h2>
       <div class="add-media-row">
         <input id="videoUrl" type="text" placeholder="YouTube / Vimeo URL" />
-        <button id="addVideoBtn" class="btn primary">+ Add Video</button>
+        <button id="addVideoBtn" class="btn primary">+ Add Video Link</button>
       </div>
       <div id="videos" class="media-grid"></div>
     </div>
@@ -689,7 +697,7 @@
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
-<script src="/app/static/js/artist-availability.js"></script>
+<script src="/app/static/js/artist-availability.js?v=2"></script>
 <script src="/app/static/js/artist-member-availability.js?v=3"></script>
 <script src="/app/static/js/artist-edit-init.js"></script>
 <script src="/app/static/js/onboarding-checklist.js" defer></script>

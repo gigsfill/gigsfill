@@ -165,7 +165,7 @@ def upload_media(
     
     user_id = verify_session_token(session_token)
 
-    if media_type not in ["profile", "picture", "audio", "video"]:
+    if media_type not in ["profile", "picture", "audio", "video", "audio_link"]:
         raise HTTPException(400, "Invalid media type")
 
     db = SessionLocal()
@@ -175,6 +175,22 @@ def upload_media(
         db.close()
         raise HTTPException(403, "You don't have access to this artist")
 
+    # MP3 cap: max 3 audio file uploads per artist (audio_link URLs uncapped)
+    if media_type == "audio":
+        existing_audio = (
+            db.query(ArtistMedia)
+            .filter(ArtistMedia.artist_id == artist_id,
+                    ArtistMedia.media_type == "audio")
+            .count()
+        )
+        if existing_audio >= 3:
+            db.close()
+            raise HTTPException(
+                400,
+                "You've reached the 3 MP3 file limit. Delete an existing MP3 "
+                "or add a link to external audio (SoundCloud, etc.) instead."
+            )
+
     order = (
         db.query(ArtistMedia)
         .filter(ArtistMedia.artist_id == artist_id)
@@ -182,7 +198,7 @@ def upload_media(
     )
 
     # PROFILE / PICTURE / AUDIO (file-based)
-    if media_type != "video":
+    if media_type not in ("video", "audio_link"):
         # Validate file: extension whitelist, MIME type, size limit
         ext = validate_upload(file, media_type)
 
@@ -219,7 +235,7 @@ def upload_media(
             display_order=order
         )
 
-    # VIDEO (URL-based)
+    # VIDEO / AUDIO_LINK (URL-based; both use the video_url column)
     else:
         if not video_url:
             db.close()
@@ -227,7 +243,7 @@ def upload_media(
 
         media = ArtistMedia(
             artist_id=artist_id,
-            media_type="video",
+            media_type=media_type,
             video_url=video_url,
             title=title,
             display_order=order

@@ -571,32 +571,71 @@ async function loadArtist() {
       loadMedia(artistId);
     };
   
-    // AUDIO
-    qs("addAudioBtn").onclick = () => qs("audioInput").click();
+    // AUDIO (MP3 file upload — capped at 3 per artist; the cap is enforced
+    // server-side too in routes/media.py)
+    qs("addAudioBtn").onclick = () => {
+      const count = document.querySelectorAll('#audio .audio-row[data-kind="audio"]').length;
+      if (count >= 3) {
+        const msg = "You've reached the 3 MP3 file limit. Delete an existing "
+                  + "MP3 or add a link to external audio instead.";
+        if (window.showErrorModal) window.showErrorModal("MP3 limit reached", msg);
+        else alert(msg);
+        return;
+      }
+      qs("audioInput").click();
+    };
     qs("audioInput").onchange = async e => {
       const file = e.target.files[0];
       if (!file) return;
-  
+
       const fd = new FormData();
       fd.append("file", file);
-  
-      await fetch(`/api/artists/${artistId}/media/audio`, {
+
+      const res = await fetch(`/api/artists/${artistId}/media/audio`, {
         method: "POST",
         credentials: "include",
         body: fd
       });
-  
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        const msg = detail.detail || "Upload failed.";
+        if (window.showErrorModal) window.showErrorModal("Upload failed", msg);
+        else alert(msg);
+      }
+      e.target.value = "";  // reset so re-uploading the same file fires onchange
       loadMedia(artistId);
     };
-  
-    // VIDEO
+
+    // AUDIO LINK (URL — SoundCloud / Bandcamp / etc. — unlimited)
+    qs("addAudioLinkBtn").onclick = async () => {
+      const input = qs("audioLinkUrl");
+      const url = input.value.trim();
+      if (!url) return;
+      const fd = new FormData();
+      fd.append("video_url", url);
+      const res = await fetch(
+        `/api/artists/${artistId}/media/audio_link`,
+        { method: "POST", credentials: "include", body: fd }
+      );
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        const msg = detail.detail || "Failed to add audio link.";
+        if (window.showErrorModal) window.showErrorModal("Couldn't add link", msg);
+        else alert(msg);
+        return;
+      }
+      input.value = "";
+      loadMedia(artistId);
+    };
+
+    // VIDEO LINK
     qs("addVideoBtn").onclick = async () => {
       const url = qs("videoUrl").value.trim();
       if (!url) return;
-    
+
       const fd = new FormData();
       fd.append("video_url", url);
-    
+
       const res = await fetch(
         `/api/artists/${artistId}/media/video`,
         {
@@ -605,16 +644,16 @@ async function loadArtist() {
           body: fd
         }
       );
-    
+
       if (!res.ok) {
         console.error("Failed to add video");
         return;
       }
-    
+
       qs("videoUrl").value = "";
       loadMedia(artistId);
     };
-    
+
   }
 
   function getVideoThumbnail(url) {
@@ -691,13 +730,13 @@ async function loadArtist() {
       }
   
       // -----------------------------
-      // AUDIO
+      // AUDIO (MP3 file)
       // -----------------------------
       if (m.media_type === "audio") {
         hasAudio = true;
-  
+
         audioEl.insertAdjacentHTML("beforeend", `
-          <div class="audio-row" data-id="${m.id}">
+          <div class="audio-row" data-id="${m.id}" data-kind="audio">
             <span class="drag-handle" draggable="true">☰</span>
             <input
               class="media-title"
@@ -707,6 +746,32 @@ async function loadArtist() {
               data-id="${m.id}"
             />
             <audio controls src="${m.file_path}"></audio>
+            <button class="delete-btn" data-id="${m.id}">Delete</button>
+          </div>
+        `);
+      }
+
+      // -----------------------------
+      // AUDIO LINK (external URL — SoundCloud / Bandcamp / etc.)
+      // -----------------------------
+      if (m.media_type === "audio_link") {
+        hasAudio = true;
+        const url = m.video_url || "";
+        const displayUrl = url.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+
+        audioEl.insertAdjacentHTML("beforeend", `
+          <div class="audio-row" data-id="${m.id}" data-kind="audio_link">
+            <span class="drag-handle" draggable="true">☰</span>
+            <input
+              class="media-title"
+              value="${m.title || ""}"
+              placeholder="Title"
+              maxlength="65"
+              data-id="${m.id}"
+            />
+            <a href="${url}" target="_blank" rel="noopener"
+               style="flex:1;min-width:0;color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;"
+               title="${url}">🔗 ${displayUrl}</a>
             <button class="delete-btn" data-id="${m.id}">Delete</button>
           </div>
         `);
@@ -736,6 +801,11 @@ async function loadArtist() {
         `);
       }
     });
+
+    // Surface MP3 count on the upload button (e.g. "+ Add MP3 File (2/3)")
+    const audioCount = items.filter(m => m.media_type === "audio").length;
+    const countEl = document.getElementById("addAudioBtnCount");
+    if (countEl) countEl.textContent = audioCount ? `(${audioCount}/3)` : "";
   }
   
   

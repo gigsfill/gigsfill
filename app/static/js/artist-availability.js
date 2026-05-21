@@ -48,17 +48,17 @@ function _renderAvailabilityUI(container, artistId, blackouts) {
 
       <!-- Add form -->
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:16px;">
-        <div class="field" style="flex:1;min-width:130px;">
+        <div class="field" style="flex:1;min-width:130px;margin-bottom:0;">
           <label style="font-size:0.7rem;">From</label>
           <input type="date" id="blackoutStart_${artistId}" min="${today}"
             style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
         </div>
-        <div class="field" style="flex:1;min-width:130px;">
+        <div class="field" style="flex:1;min-width:130px;margin-bottom:0;">
           <label style="font-size:0.7rem;">To</label>
           <input type="date" id="blackoutEnd_${artistId}" min="${today}"
             style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
         </div>
-        <div class="field" style="flex:2;min-width:160px;">
+        <div class="field" style="flex:2;min-width:160px;margin-bottom:0;">
           <label style="font-size:0.7rem;">Reason (optional)</label>
           <input type="text" id="blackoutReason_${artistId}" placeholder="e.g. Tour, Vacation"
             maxlength="200" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
