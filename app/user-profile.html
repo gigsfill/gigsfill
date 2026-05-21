@@ -347,6 +347,7 @@
       <button class="tab" onclick="switchTab('my-venues')">My Venues <span id="venueCount">(0)</span></button>
       <button class="tab" onclick="switchTab('email')">Notifications</button>
       <button class="tab" onclick="switchTab('affiliates')">Affiliates</button>
+      <button class="tab" onclick="switchTab('availability')">📅 My Availability</button>
     </div>
 
     <!-- USER SETTINGS TAB -->
@@ -689,6 +690,71 @@
     </div>
 
   </div><!-- end affiliates-tab -->
+
+  <!-- ── MY AVAILABILITY TAB ────────────────────────────────────────────── -->
+  <div class="tab-content" id="availability-tab" style="display:none;">
+    <div class="content-card">
+      <h2 class="section-header">📅 My Availability</h2>
+      <p style="color:var(--text-gray);font-size:0.9rem;margin-bottom:18px;line-height:1.5;">
+        Block out dates when you personally can't perform. Other band members will see these on
+        your shared artist pages, and any booking attempt for those dates will alert the band before
+        confirming. This does <strong>not</strong> hard-block — bands can still book if they plan to
+        perform without you (e.g. as a duo).
+      </p>
+
+      <!-- Add Blackout Form -->
+      <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:24px;">
+        <h3 style="font-size:0.95rem;margin:0 0 14px;color:var(--text);">Add a Blackout</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+          <label style="display:block;">
+            <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">Start date</span>
+            <input type="date" id="uaStartDate" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
+          </label>
+          <label style="display:block;">
+            <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">End date (defaults to start)</span>
+            <input type="date" id="uaEndDate" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
+          </label>
+        </div>
+        <label style="display:block;margin-bottom:12px;">
+          <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">Reason (optional, visible to your bandmates)</span>
+          <input type="text" id="uaReason" maxlength="300" placeholder="e.g. Out of town, family commitment, sick"
+            style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
+        </label>
+        <div style="margin-bottom:14px;">
+          <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:6px;font-weight:600;">Applies to</span>
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+            <input type="radio" name="uaScope" value="all" checked onchange="uaToggleScope()">
+            All my bands
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+            <input type="radio" name="uaScope" value="specific" onchange="uaToggleScope()">
+            Specific bands only
+          </label>
+          <div id="uaArtistChecks" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+            <div style="color:var(--text-gray);font-size:0.78rem;">Loading your bands…</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button onclick="uaAddBlackout()" class="btn primary" style="padding:8px 18px;">Add Blackout</button>
+          <span id="uaAddStatus" style="font-size:0.82rem;"></span>
+        </div>
+      </div>
+
+      <!-- My Blackouts -->
+      <div style="margin-bottom:24px;">
+        <h3 style="font-size:0.9rem;margin:0 0 10px;color:var(--text);">My Blackouts</h3>
+        <div id="uaUserBlackouts" style="font-size:0.85rem;color:var(--text-gray);">Loading…</div>
+      </div>
+
+      <!-- Band-level Blackouts (read-only) -->
+      <div>
+        <h3 style="font-size:0.9rem;margin:0 0 4px;color:var(--text);">Band-Wide Blackouts <span style="font-size:0.72rem;color:var(--text-gray);font-weight:400;">(read-only — edited on each artist's edit page)</span></h3>
+        <p style="color:var(--text-gray);font-size:0.78rem;margin:0 0 10px;">These apply to the whole band and hard-block bookings on the affected dates.</p>
+        <div id="uaBandBlackouts" style="font-size:0.85rem;color:var(--text-gray);">Loading…</div>
+      </div>
+    </div>
+  </div><!-- end availability-tab -->
+
   </div><!-- end profile-container -->
 
 <footer>
@@ -998,6 +1064,7 @@
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/user-profile.js"></script>
   <script src="/app/static/js/user-affiliate.js"></script>
+  <script src="/app/static/js/user-availability.js?v=1"></script>
   
 
   <!-- Delete Account Modal -->

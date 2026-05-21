@@ -1428,6 +1428,30 @@ def setup_database():
     c4.execute("CREATE INDEX IF NOT EXISTS idx_availability_artist ON artist_availability(artist_id)")
     c4.execute("CREATE INDEX IF NOT EXISTS idx_availability_dates ON artist_availability(blackout_start, blackout_end)")
 
+    # Per-user member-level availability (May 21 2026). Sibling to
+    # artist_availability — that's band-wide ("the band can't perform"),
+    # this is per-member ("Jim Smith can't perform on these dates").
+    #   - artist_id NULL → applies to every artist this user is a member of
+    #   - artist_id set  → applies only to that specific artist
+    # Booking-time: band-level rows hard-block; user-level rows surface
+    # as a soft warning that the booking artist can confirm through.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS user_availability (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            artist_id INTEGER,
+            blackout_start DATE NOT NULL,
+            blackout_end DATE NOT NULL,
+            reason TEXT DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (artist_id) REFERENCES artists(id)
+        )
+    """)
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_user_availability_user ON user_availability(user_id)")
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_user_availability_artist ON user_availability(artist_id)")
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_user_availability_dates ON user_availability(blackout_start, blackout_end)")
+
     try:
         c4.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_gig_artist_unique

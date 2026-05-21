@@ -2463,7 +2463,7 @@ async function runBookingPrecheck(gigId, artistId, slotId) {
       const whenPhrase = data.direction === 'before'
         ? `ends ${hoursDisplay} before this one starts`
         : `starts ${hoursDisplay} after this one ends`;
-      return await new Promise(resolve => {
+      const proceed = await new Promise(resolve => {
         window.showConfirm(
           '⏰ Close to Another Booking',
           `You're already booked at ${o.venue_name} on ${o.gig_date} (${o.start_time}–${o.end_time}). That gig ${whenPhrase}. Book this gig anyway?`,
@@ -2472,6 +2472,38 @@ async function runBookingPrecheck(gigId, artistId, slotId) {
           { tone: 'warning', confirmLabel: 'Book Anyway', cancelLabel: 'Never Mind', confirmStyle: 'primary' }
         );
       });
+      if (!proceed) return false;
+    }
+
+    // Member blackouts — soft warning. Surfaces when one or more band
+    // members have personal blackouts covering this gig's date. Band can
+    // confirm through (e.g. perform without the unavailable member).
+    if (data.member_blackouts && data.member_blackouts.length) {
+      // showStyledModal allows raw HTML in content; showConfirm escapes.
+      const _escTxt = s => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+        ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const itemsHtml = data.member_blackouts.map(b => {
+        const range = b.blackout_end && b.blackout_end !== b.blackout_start
+          ? `${b.blackout_start} – ${b.blackout_end}` : `${b.blackout_start}`;
+        return `<li style="margin:4px 0;"><strong>${_escTxt(b.name || 'Member')}</strong>: ${_escTxt(range)}` +
+               (b.reason ? ` — <em>${_escTxt(b.reason)}</em>` : '') + '</li>';
+      }).join('');
+      const body =
+        '<p style="margin:0 0 6px;">One or more band members have these dates blocked:</p>' +
+        `<ul style="margin:0;padding-left:20px;font-size:0.88rem;color:var(--text);">${itemsHtml}</ul>` +
+        '<p style="margin-top:10px;font-size:0.82rem;color:var(--text-gray);">Book anyway? (e.g. if performing without them.)</p>';
+      const proceedMember = await new Promise(resolve => {
+        window.showStyledModal(
+          '⚠️ Band Member Unavailable',
+          body,
+          [
+            { text: 'Never Mind', style: 'ghost',   onClick: () => resolve(false) },
+            { text: 'Book Anyway', style: 'primary', onClick: () => resolve(true) },
+          ],
+          { tone: 'warning', size: 'md' }
+        );
+      });
+      if (!proceedMember) return false;
     }
 
     return true;

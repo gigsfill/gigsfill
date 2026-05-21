@@ -1263,10 +1263,23 @@ def booking_precheck(gig_id: int, artist_id: int, slot_id: int = None,
                                      gig.get("start_time"), gig.get("end_time"))
 
     if not new_dt:
-        return {"overlap": False, "within_window": False}
+        return {"overlap": False, "within_window": False, "member_blackouts": []}
 
     new_start, new_end = new_dt
-    return _check_artist_time_conflict(db, artist_id, gig_id, new_start, new_end)
+    result = _check_artist_time_conflict(db, artist_id, gig_id, new_start, new_end)
+
+    # ALSO surface member-level (user_availability) blackouts that fall on
+    # this gig date. These are SOFT warnings — the booking artist confirms
+    # through them (band might perform without the unavailable member).
+    # Band-level (artist_availability) is enforced separately as a hard
+    # block inside book_gig/book_slot/book_with_contract — we don't duplicate
+    # that here. Per user direction: band-block wins, member warning ignored.
+    try:
+        from backend.routes.availability import _member_blackouts_for_gig
+        result["member_blackouts"] = _member_blackouts_for_gig(db, artist_id, gig.get("date"))
+    except Exception:
+        result["member_blackouts"] = []
+    return result
 
 
 def _check_artist_time_conflict(db, artist_id: int, gig_id: int,
