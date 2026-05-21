@@ -2503,9 +2503,14 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         ? `<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(_slotPayVal).toFixed(2)}</span>`
         : '';
 
+      // FIX (May 21 2026): hide ✕ when the SLOT itself has started/ended.
+      // Per-slot check (isSlotStartedToday) — multi-slot gigs can have slot
+      // 1 already underway while slot 2 hasn't started yet; only the
+      // in-progress slot loses its cancel affordance.
+      const _slotHasStarted = isSlotStartedToday(gig, slot);
       if (isBooked) {
         const _aname = (slot.artist_name || 'Artist').replace(/['"]/g, '');
-        const cancelBtn = !isPastGig
+        const cancelBtn = (!isPastGig && !_slotHasStarted)
           ? `<button onclick="cancelSlotBooking(${gig.id}, ${slot.id}, ${slot.slot_number}, ${slot.artist_id || 'null'})"
                style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 9px;font-size:0.75rem;cursor:pointer;white-space:nowrap;"
                title="Cancel this slot booking">✕</button>`
@@ -2536,12 +2541,8 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           </div>
         `;
       } else {
-        // FIX (May 21 2026): empty/open slot now also gets a ✕ Cancel
-        // button so the venue can drop the slot from the gig — same
-        // affordance the booked-slot row already had. Wires to the
-        // existing cancelSlotBooking with artist_id=null which routes
-        // through the open-slot "Remove slot" confirmation flow.
-        const _openCancelBtn = !isPastGig
+        // Open/empty slot ✕ — also hidden if this specific slot has started.
+        const _openCancelBtn = (!isPastGig && !_slotHasStarted)
           ? `<button onclick="cancelSlotBooking(${gig.id}, ${slot.id}, ${slot.slot_number}, null)"
                style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 9px;font-size:0.75rem;cursor:pointer;white-space:nowrap;"
                title="Remove this slot from the gig">✕</button>`

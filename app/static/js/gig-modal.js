@@ -578,7 +578,7 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
           const _msgCb  = `typeof openMessageModal==='function'&&openMessageModal(${data.id},'${_esc(data.venue_name)}',${slot.artist_id})`;
           const _rateCb = `typeof openReviewModal==='function'&&openReviewModal({artistId:${slot.artist_id},artistName:'${_vbAnameJs}',gigId:${data.id},gigDate:'${_esc(data.date||'')}',gigTitle:'${_esc(data.title||'')}'})`;
           const _cancelCb = `window.cancelSlotBooking&&cancelSlotBooking(${data.id}, ${slot.id}, ${slot.slot_number}, ${slot.artist_id || 'null'})`;
-          const _cancelBtnHtml = (!isPast)
+          const _cancelBtnHtml = (!isPast && !slotStarted)
             ? `<button onclick="${_cancelCb}"
                 style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;"
                 title="Cancel this slot booking">✕</button>`
@@ -608,7 +608,7 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
         // affordance the booked-slot view (_showBookedGigModal) gives.
         // Wires to the same window.cancelSlotBooking() the booked view uses.
         const _vpcAname = (slot.artist_name || 'Artist').replace(/['"]/g, '');
-        const _vpcCancelBtn = (!isPast && slot.artist_id)
+        const _vpcCancelBtn = (!isPast && !slotStarted && slot.artist_id)
           ? `<button onclick="window.cancelSlotBooking&&cancelSlotBooking(${data.id}, ${slot.id}, ${slot.slot_number}, ${slot.artist_id || 'null'})"
               style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;"
               title="Cancel this slot booking">✕</button>`
@@ -755,7 +755,7 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
         // multi-slot gig. Same handler the booked-slot delete uses;
         // for null artist_id, cancelSlotBooking routes through the
         // open-slot delete flow.
-        const _opCancelHtml = (!isPast && vType === 'venue')
+        const _opCancelHtml = (!isPast && !slotStarted && vType === 'venue')
           ? `<button onclick="window.cancelSlotBooking&&cancelSlotBooking(${data.id}, ${slot.id}, ${slot.slot_number}, null)"
               style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;"
               title="Remove this slot from the gig">✕</button>`
