@@ -487,77 +487,62 @@
            </div>` : '';
 
       // Tier 2 actions toolbar — show only the actions that make sense for
-      // this row. Disabled buttons still appear (with a tooltip) so admins
-      // see what's *possible* for this row shape.
-      const isChild = t.parent_transaction_id != null;
-      const parentTypes = new Set(['venue_charge', 'single']);
-      const refundableStatus = new Set(['charged', 'paid', 'transferred']);
-      const refirableStatus  = new Set(['payment_failed', 'charge_retry',
-                                        'transfer_failed', 'pending_transfer']);
+      // Action eligibility — each button is shown ONLY when it actually
+      // applies to this row. We don't render disabled buttons with
+      // explainer tooltips anymore — the toolbar gets crowded and admins
+      // tried to click them. Clean rules below:
+      //
+      //   Refund          venue rows in {charged, paid, transferred} + PI
+      //   Reverse Transfer payout rows in {transferred, paid} + transfer_id
+      //   Re-route Payout  payout rows in {scheduled}
+      //   Re-fire         venue rows in {payment_failed, charge_retry},
+      //                   OR payout rows in {transfer_failed, pending_transfer}
+      //   Resend Email    venue rows in {charged, paid}  (template: venue_charged)
+      //                   OR payout rows in {transferred, paid} (template: artist_payout_sent)
+      //   Mark Resolved   always — admin override, last-resort.
+      //
+      // Net effect: a "scheduled" venue row gets only Mark Resolved.
+      // A "scheduled" payout row gets Re-route + Mark Resolved.
+      // A "paid" venue row gets Refund + Resend + Mark Resolved.
+      // A "paid" payout row gets Reverse Transfer + Resend + Mark Resolved.
+      // A "payment_cancelled" row of either kind gets just Mark Resolved.
+      const isChild     = t.parent_transaction_id != null;
+      const isVenueRow  = (t.transaction_type_resolved === 'venue_charge'
+                        || t.transaction_type_resolved === 'single') && !isChild;
+      const isPayoutRow = t.transaction_type_resolved === 'artist_payout' || isChild;
 
-      const reversibleTransferStatus = new Set(['transferred', 'paid']);
+      const showRefund  = isVenueRow
+                       && ['charged','paid','transferred'].includes(t.status)
+                       && !!t.stripe_payment_intent_id;
+      const showReverse = isPayoutRow
+                       && ['transferred','paid'].includes(t.status)
+                       && !!t.stripe_transfer_id;
+      const showReroute = isPayoutRow && t.status === 'scheduled';
+      const showRefire  = (isVenueRow  && ['payment_failed','charge_retry'].includes(t.status))
+                       || (isPayoutRow && ['transfer_failed','pending_transfer'].includes(t.status));
+      const showResend  = (isVenueRow  && ['paid','charged'].includes(t.status))
+                       || (isPayoutRow && ['transferred','paid'].includes(t.status));
+      const showMark    = true;  // always available
 
-      const canRefund = !isChild
-                     && parentTypes.has(t.transaction_type_resolved)
-                     && refundableStatus.has(t.status)
-                     && !!t.stripe_payment_intent_id;
-      const canRefire = refirableStatus.has(t.status);
-      const canMark   = true;
-      const canResendVenue  = parentTypes.has(t.transaction_type_resolved)
-                              && (t.status === 'paid' || t.status === 'charged');
-      const canResendPayout = t.transaction_type_resolved === 'artist_payout'
-                              && (t.status === 'transferred' || t.status === 'paid');
-      const canResend = canResendVenue || canResendPayout;
-      const isPayoutChild = t.transaction_type_resolved === 'artist_payout' || isChild;
-      const canReverseTransfer = isPayoutChild
-                              && reversibleTransferStatus.has(t.status)
-                              && !!t.stripe_transfer_id;
-      const canReroute = isPayoutChild && t.status === 'scheduled';
-
-      const reasons = {
-        refund: !canRefund
-          ? (isChild ? 'Refund the parent venue charge, not the child payout.'
-             : !parentTypes.has(t.transaction_type_resolved) ? 'Not a venue charge.'
-             : !refundableStatus.has(t.status) ? `Status "${t.status}" is not refundable.`
-             : !t.stripe_payment_intent_id ? 'No Stripe payment_intent on this row.'
-             : '') : '',
-        refire: canRefire ? '' : `Only re-firable when status is in: payment_failed / charge_retry / transfer_failed / pending_transfer.`,
-        resend: canResend ? '' : `No suitable email template for type "${t.transaction_type_resolved}" + status "${t.status}".`,
-        reverse: canReverseTransfer ? ''
-          : !isPayoutChild ? 'Only artist_payout rows can be reversed.'
-          : !reversibleTransferStatus.has(t.status) ? `Status "${t.status}" can't be reversed.`
-          : 'No stripe_transfer_id on this row — nothing to reverse.',
-        reroute: canReroute ? ''
-          : !isPayoutChild ? 'Only artist_payout rows can be re-routed.'
-          : `Only 'scheduled' payouts can be re-routed (this is '${t.status}').`,
-      };
-
-      const btn = (id, label, color, enabled, tip, onclick) => `
+      const btn = (label, color, onclick) => `
         <button onclick="${onclick}"
-          ${enabled ? '' : 'disabled'}
-          title="${esc(tip || '')}"
-          style="padding:6px 14px;background:${enabled ? `rgba(${color},0.15)` : 'rgba(255,255,255,0.03)'};border:1px solid ${enabled ? `rgba(${color},0.45)` : 'var(--border)'};color:${enabled ? `rgb(${color})` : 'var(--text-gray)'};border-radius:5px;font-size:0.75rem;font-weight:600;cursor:${enabled ? 'pointer' : 'not-allowed'};margin:0 6px 6px 0;">
+          style="padding:6px 14px;background:rgba(${color},0.15);border:1px solid rgba(${color},0.45);color:rgb(${color});border-radius:5px;font-size:0.75rem;font-weight:600;cursor:pointer;margin:0 6px 6px 0;">
           ${label}
         </button>`;
 
-      // Hide Reverse Transfer / Re-route entirely on non-payout rows — they
-      // can never apply to a venue_charge row, so showing them disabled just
-      // adds visual noise. Refund stays visible-but-disabled on payout rows
-      // because its tooltip points the admin to the parent venue charge.
+      const buttons = [
+        showRefund  ? btn('↩ Refund',           '239,68,68',  `apOpenRefund(${txnId})`)         : '',
+        showReverse ? btn('⤺ Reverse Transfer', '239,68,68',  `apOpenReverseTransfer(${txnId})`) : '',
+        showReroute ? btn('↪ Re-route Payout',  '6,182,212',  `apOpenReroute(${txnId})`)        : '',
+        showRefire  ? btn('↻ Re-fire',          '245,158,11', `apOpenRefire(${txnId})`)         : '',
+        showResend  ? btn('✉ Resend Email',     '139,92,246', `apOpenResend(${txnId})`)         : '',
+        showMark    ? btn('✓ Mark Resolved',    '6,182,212',  `apOpenMarkResolved(${txnId})`)   : '',
+      ].filter(Boolean).join('');
+
       const actionsHtml = `
         <div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
           <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Actions</div>
-          <div style="display:flex;flex-wrap:wrap;align-items:center;">
-            ${btn('refund',  '↩ Refund',           '239,68,68',  canRefund,          reasons.refund,  `apOpenRefund(${txnId})`)}
-            ${isPayoutChild ? btn('reverse', '⤺ Reverse Transfer', '239,68,68',  canReverseTransfer, reasons.reverse, `apOpenReverseTransfer(${txnId})`) : ''}
-            ${isPayoutChild ? btn('reroute', '↪ Re-route Payout',  '6,182,212',  canReroute,         reasons.reroute, `apOpenReroute(${txnId})`) : ''}
-            ${btn('refire',  '↻ Re-fire',          '245,158,11', canRefire,          reasons.refire,  `apOpenRefire(${txnId})`)}
-            ${btn('mark',    '✓ Mark Resolved',   '6,182,212',  canMark,            '',              `apOpenMarkResolved(${txnId})`)}
-            ${btn('resend',  '✉ Resend Email',    '139,92,246', canResend,          reasons.resend,  `apOpenResend(${txnId})`)}
-          </div>
-          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:4px;">
-            Reverse-transfer pulls money from artist Connect back to platform. Re-route changes the destination on a still-scheduled payout.
-          </div>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;">${buttons}</div>
         </div>`;
 
       const body = `
