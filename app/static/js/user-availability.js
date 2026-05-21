@@ -116,6 +116,16 @@
     `;
   }
 
+  // Auto-default end date to start date when start changes (only
+  // when end is empty or already before start — preserves any later
+  // end the user picked manually).
+  window.uaSyncEndDate = function () {
+    const start = document.getElementById('uaStartDate');
+    const end   = document.getElementById('uaEndDate');
+    if (!start || !end || !start.value) return;
+    if (!end.value || end.value < start.value) end.value = start.value;
+  };
+
   // Two checkboxes acting as mutually-exclusive options (styled as
   // checkboxes per UI request — semantically a radio pair). Clicking
   // either makes it the active one and unchecks the other; clicking
