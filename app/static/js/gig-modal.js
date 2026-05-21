@@ -749,6 +749,24 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
           title="Preferred status required">Book</button>`;
         break;
 
+      case 'open': {
+        // Venue viewer on an unbooked slot — show Open pill + ✕ Cancel
+        // (remove slot) so the venue can drop an empty slot from a
+        // multi-slot gig. Same handler the booked-slot delete uses;
+        // for null artist_id, cancelSlotBooking routes through the
+        // open-slot delete flow.
+        const _opCancelHtml = (!isPast && vType === 'venue')
+          ? `<button onclick="window.cancelSlotBooking&&cancelSlotBooking(${data.id}, ${slot.id}, ${slot.slot_number}, null)"
+              style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;white-space:nowrap;"
+              title="Remove this slot from the gig">✕</button>`
+          : '';
+        rightHtml = `<div style="display:flex;align-items:center;gap:8px;">
+          <span style="color:#22c55e;font-size:0.78rem;font-weight:700;background:rgba(34,197,94,0.12);padding:2px 10px;border-radius:10px;border:1px solid rgba(34,197,94,0.3);">Open</span>
+          ${_opCancelHtml}
+        </div>`;
+        break;
+      }
+
       default:
         rightHtml = isBooked
           ? `<span style="color:#22c55e;font-size:0.8rem;">${_esc(slot.artist_name||'Booked')}</span>`
