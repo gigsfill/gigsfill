@@ -800,6 +800,8 @@
     if (!t || t.id !== txnId) return;
     const payoutCents = t.artist_payout_cents || 0;
     const payoutDollars = (payoutCents / 100).toFixed(2);
+    const platformFeeCents = t.commission_cents || 0;
+    const platformFeeDollars = (platformFeeCents / 100).toFixed(2);
 
     // Look up the parent venue_charge so the optional refund section can
     // default to the parent's full charge amount.
@@ -808,10 +810,14 @@
     const parentCharge = parent ? (parent.venue_charge_cents || parent.amount_cents || 0) : 0;
     const parentDollars = (parentCharge / 100).toFixed(2);
     const parentStatus = parent ? parent.status : null;
-    // Parent must be refundable; if not, hide the refund section entirely.
     const parentRefundable = parent
       && (parent.transaction_type === 'venue_charge' || parent.transaction_type === 'single')
       && ['charged','paid','transferred'].includes(parentStatus);
+
+    // Shared style for the cyan uppercase section header so Step 1 and Step 2
+    // line up identically.
+    const stepLabelCss = 'font-size:0.72rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;';
+    const stepCardCss  = 'margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;';
 
     const formHtml = `
       <div style="margin-bottom:12px;padding:10px 12px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.25);border-radius:6px;">
@@ -821,8 +827,8 @@
         </div>
       </div>
 
-      <div style="margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
-        <div style="font-size:0.72rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Step 1 — Reverse transfer from artist</div>
+      <div style="${stepCardCss}">
+        <div style="${stepLabelCss}">Step 1 — Reverse transfer from artist</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
           <label>
             <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
@@ -831,11 +837,17 @@
               style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
             <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Transfer total: $${payoutDollars}</div>
           </label>
-          <label style="display:flex;align-items:center;gap:8px;align-self:end;font-size:0.72rem;color:var(--text-gray);">
-            <input id="apReverseAppFee" type="checkbox" style="width:auto;">
-            Also refund the platform fee captured at transfer time (uncommon)
+          <label>
+            <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Platform fee on this transfer</div>
+            <input type="text" readonly value="$${platformFeeDollars}"
+              style="width:100%;padding:7px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:5px;color:var(--text-gray);font-size:0.85rem;box-sizing:border-box;font-family:monospace;">
+            <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Commission captured at venue-charge time. Refunding this requires the Step 2 venue refund below — it can't be returned via the Stripe transfer reversal alone.</div>
           </label>
         </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text-gray);margin-bottom:8px;">
+          <input id="apReverseAppFee" type="checkbox" style="width:auto;">
+          Also refund the Stripe <em>application fee</em> on the transfer (advanced — only matters if the transfer was created with <code>application_fee_amount</code>; ours aren't, so this is usually a no-op)
+        </label>
         <label style="display:block;">
           <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
           <textarea id="apReverseNotes" rows="2" maxlength="500" placeholder="e.g. Artist no-showed; venue wants payment back"
@@ -844,21 +856,22 @@
       </div>
 
       ${parentRefundable ? `
-      <div style="margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+      <div style="${stepCardCss}">
+        <div style="${stepLabelCss}">Step 2 (optional) — Also refund the venue</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.78rem;color:var(--text);">
           <input id="apReverseAlsoRefund" type="checkbox" onchange="apReverseToggleRefundSection()" style="width:auto;">
-          <strong>Step 2 (optional) — Also refund the venue</strong>
+          Push reversed funds back to the venue's card in the same call
         </label>
         <div style="font-size:0.7rem;color:var(--text-gray);margin-top:2px;margin-left:24px;">
-          When unchecked, reversed funds sit in the GigsFill Stripe balance and the venue is not made whole. Tick to push the money back to the venue's card in the same call. Parent venue charge: <strong>$${parentDollars}</strong> (#${parent.id}, ${esc(parentStatus)}).
+          When unchecked, reversed funds sit in the GigsFill Stripe balance. Parent venue charge: <strong>$${parentDollars}</strong> (#${parent.id}, ${esc(parentStatus)}).
         </div>
-        <div id="apReverseRefundFields" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(6,182,212,0.04);border:1px solid rgba(6,182,212,0.25);border-radius:5px;">
+        <div id="apReverseRefundFields" style="display:none;margin-top:10px;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
             <label>
               <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Refund amount (USD)</div>
               <input id="apReverseRefundAmount" type="number" step="0.01" min="0.01" max="${parentDollars}" value="${payoutDollars}"
                 style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-              <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Charge total: $${parentDollars} (default = same as Step 1 amount)</div>
+              <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Charge total: $${parentDollars} · auto-filled with Step 1 amount; edit to refund a different portion.</div>
             </label>
             <label>
               <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason</div>
@@ -876,8 +889,11 @@
           </label>
         </div>
       </div>` : `
-      <div style="margin-bottom:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;font-size:0.72rem;color:var(--text-gray);">
-        Combined venue refund unavailable: parent venue charge ${parent ? `#${parent.id} is in status '${esc(parent.status)}'` : 'not found'}. To refund the venue separately, open the parent venue_charge row and use ↩ Refund.
+      <div style="${stepCardCss}">
+        <div style="${stepLabelCss}">Step 2 (optional) — Also refund the venue</div>
+        <div style="font-size:0.72rem;color:var(--text-gray);">
+          Combined venue refund unavailable: parent venue charge ${parent ? `#${parent.id} is in status '${esc(parent.status)}'` : 'not found'}. To refund the venue separately, open the parent venue_charge row and use ↩ Refund.
+        </div>
       </div>`}
 
       <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:6px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
@@ -1433,7 +1449,7 @@
     if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; btn.textContent = '⏳ Scanning…'; }
     if (wrap) wrap.innerHTML = '<div style="text-align:center;color:var(--text-gray);padding:16px;font-size:0.85rem;">Scanning… this may take a few seconds.</div>';
     try {
-      const url = '/api/admin/payments/reconcile?from_date=' + encodeURIComponent(fd)
+      const url = '/api/admin/payments/reports/reconcile?from_date=' + encodeURIComponent(fd)
                 + '&to_date=' + encodeURIComponent(td)
                 + '&only_mismatches=' + (om ? 'true' : 'false');
       const res = await fetch(url, { credentials: 'include' });

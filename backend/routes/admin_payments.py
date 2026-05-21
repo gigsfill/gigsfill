@@ -1398,7 +1398,13 @@ def bulk_action(
 _RECON_MAX_TXNS = 200
 
 
-@router.get("/api/admin/payments/reconcile")
+# NOTE: Path uses /reports/reconcile (not /reconcile) on purpose. FastAPI
+# matches routes in registration order, and the earlier-registered GET
+# /api/admin/payments/{txn_id} with `txn_id: int` would catch any single-
+# segment path and fail with 422 ("Input should be a valid integer") before
+# this handler could be tried. Putting "reconcile" under /reports/ avoids the
+# clash without having to reorder the file.
+@router.get("/api/admin/payments/reports/reconcile")
 def reconcile(
     from_date: str = Query(..., description="YYYY-MM-DD, gig date inclusive"),
     to_date:   str = Query(..., description="YYYY-MM-DD, gig date inclusive"),
