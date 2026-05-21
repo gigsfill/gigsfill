@@ -1,22 +1,33 @@
 """
-Admin Payments Console — Tier 1 (read-only)
-============================================
-Unified searchable view of every transaction across every venue and artist.
+Admin Payments Console
+======================
+Unified searchable view of every transaction across every venue and artist,
+plus admin-initiated actions on individual rows.
 
-Tier 1 is read-only — no Stripe writes. Tier 2 (refunds, mark-resolved, etc.)
-will live in this same file behind separate endpoints with confirmation/audit.
-
-Endpoints:
+Tier 1 (read-only — shipped 2026-05-13):
   GET  /api/admin/payments/search        — paginated, filterable txn list
   GET  /api/admin/payments/{txn_id}      — full details + related rows
   GET  /api/admin/payments/stats         — aggregate KPIs for the filtered set
+
+Tier 2 (single-row mutations):
+  POST /api/admin/payments/{txn_id}/refund
+        Full or partial refund on a venue charge. Calls stripe.Refund.create,
+        writes admin_audit_log, optionally cancels still-scheduled child
+        artist_payouts (full refund only). Refuses if any child has already
+        transferred — that needs Tier 3's reverse-transfer flow.
+
+Stripe Dashboard webhook handler in stripe_connect.py (`charge.refunded`) will
+also fire and sync the DB, so manual Stripe Dashboard refunds and refunds
+initiated here both converge to the same state.
 """
+import time
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
 from backend.db import get_db
 from backend.routes.admin import check_admin
+from backend.utils import log_admin_action
 
 router = APIRouter()
 
@@ -306,22 +317,24 @@ def payment_detail(
         ORDER BY slot_number ASC
     """), {"gid": result["gig_id"]}).mappings().all()
 
-    # Recent admin actions on this transaction or its gig (best-effort —
-    # the audit_log table may not store every action with a direct txn pointer)
+    # Recent admin actions on this transaction or its gig. Uses admin_audit_log
+    # (defined in db.py — there's no plain `audit_log` table). Best-effort —
+    # never blocks the detail view on audit errors.
     audit = []
     try:
         audit_rows = db.execute(text("""
-            SELECT id, admin_user_id, action_type, target_table, target_id,
-                   before_state, after_state, metadata, ip_address, created_at
-            FROM audit_log
-            WHERE (target_table = 'transactions' AND target_id = :tid)
-               OR (metadata LIKE :gid_like)
+            SELECT id, admin_user_id, admin_email, action,
+                   target_table, target_id, before_json, after_json,
+                   metadata_json, ip_address, created_at
+            FROM admin_audit_log
+            WHERE (target_table = 'transactions' AND target_id = :tid_str)
+               OR (metadata_json LIKE :gid_like)
             ORDER BY id DESC
             LIMIT 20
-        """), {"tid": txn_id, "gid_like": f'%"gig_id": {result["gig_id"]}%'}).mappings().all()
+        """), {"tid_str": str(txn_id),
+               "gid_like": f'%"gig_id": {result["gig_id"]}%'}).mappings().all()
         audit = [dict(a) for a in audit_rows]
     except Exception:
-        # audit_log may not exist on older databases — non-fatal
         audit = []
 
     return {
@@ -329,4 +342,217 @@ def payment_detail(
         "siblings": siblings,
         "slots": [dict(s) for s in slots],
         "audit": audit,
+    }
+
+
+# ─── Tier 2: REFUND ─────────────────────────────────────────────────────────
+
+# Stripe accepts only these three values for the `reason` field on a Refund.
+# Anything else is silently coerced; we map our friendly options to these.
+_STRIPE_REFUND_REASONS = {'requested_by_customer', 'duplicate', 'fraudulent'}
+
+# Statuses where a refund still makes sense. Anything else (scheduled,
+# payment_failed, payment_cancelled, etc.) means there's no charge to refund
+# or it's already been undone.
+_REFUNDABLE_STATUSES = {'charged', 'paid', 'transferred'}
+
+# Parent transaction types we allow refunds on. Children (artist_payout) are
+# refunded by reversing their own transfer in Tier 3, not by refunding the
+# venue charge they roll up to.
+_REFUNDABLE_TXN_TYPES = {'venue_charge', 'single'}
+
+
+@router.post("/api/admin/payments/{txn_id}/refund")
+def refund_payment(
+    txn_id: int,
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Refund a venue charge in full or part.
+
+    Body:
+      amount_cents     (optional int) — omit or pass venue_charge_cents for a
+                                        full refund; less for partial.
+      reason           (optional str) — 'requested_by_customer' (default),
+                                        'duplicate', or 'fraudulent'. Sent to
+                                        Stripe and recorded in our notes.
+      notes            (optional str) — admin's free-text explanation, saved
+                                        on the txn and in admin_audit_log.
+      cancel_pending_payouts (optional bool, default True for full refunds) —
+                                        when refunding in full, cancel any
+                                        child artist_payout rows that are
+                                        still 'scheduled' (haven't transferred
+                                        yet). No-op for partial refunds.
+
+    Hard refusals (400):
+      • Txn is a child (parent_transaction_id IS NOT NULL).
+      • transaction_type not in {'venue_charge','single'}.
+      • status not in {'charged','paid','transferred'}.
+      • No stripe_payment_intent_id on the row.
+      • A full refund is requested but a child payout has already transferred
+        — operator needs Tier 3 (reverse_transfer) first.
+      • amount_cents > venue_charge_cents or <= 0 (when amount specified).
+
+    On success the row's status becomes 'payment_cancelled' (full refund) or
+    stays as-is with a partial-refund note appended (partial refund). The
+    Stripe `charge.refunded` webhook will also fire and re-converge, which
+    is harmless — we use the same status sink.
+    """
+    # 1. Load the txn + sanity-check it's refundable ───────────────────────
+    row = db.execute(text("""
+        SELECT id, gig_id, parent_transaction_id, transaction_type,
+               status, amount_cents, venue_charge_cents, artist_payout_cents,
+               commission_cents, stripe_payment_intent_id, notes
+        FROM transactions
+        WHERE id = :tid
+    """), {"tid": txn_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Transaction not found")
+
+    if row["parent_transaction_id"] is not None:
+        raise HTTPException(400,
+            "This is a child payout row. Refund the parent venue charge, "
+            "or use the (Tier 3) reverse-transfer action on this row.")
+
+    txn_type = row["transaction_type"] or "single"
+    if txn_type not in _REFUNDABLE_TXN_TYPES:
+        raise HTTPException(400,
+            f"Cannot refund transactions of type '{txn_type}'.")
+
+    if row["status"] not in _REFUNDABLE_STATUSES:
+        raise HTTPException(400,
+            f"Cannot refund a transaction in status '{row['status']}'. "
+            f"Refundable: {', '.join(sorted(_REFUNDABLE_STATUSES))}.")
+
+    pi_id = row["stripe_payment_intent_id"]
+    if not pi_id:
+        raise HTTPException(400,
+            "No Stripe payment_intent on this transaction — nothing to refund.")
+
+    # 2. Validate the requested amount ─────────────────────────────────────
+    charge_cents = int(row["venue_charge_cents"] or 0)
+    requested = payload.get("amount_cents")
+    if requested is None or requested == "":
+        amount_cents = charge_cents  # full refund
+    else:
+        try:
+            amount_cents = int(requested)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "amount_cents must be an integer")
+    if amount_cents <= 0:
+        raise HTTPException(400, "amount_cents must be > 0")
+    if amount_cents > charge_cents:
+        raise HTTPException(400,
+            f"Refund amount (${amount_cents/100:.2f}) exceeds charge "
+            f"(${charge_cents/100:.2f}).")
+    is_full = (amount_cents == charge_cents)
+
+    # 3. For FULL refunds, ensure no child has already transferred ─────────
+    children = db.execute(text("""
+        SELECT id, status, stripe_transfer_id, artist_payout_cents
+        FROM transactions
+        WHERE parent_transaction_id = :pid
+    """), {"pid": txn_id}).mappings().all()
+    transferred_children = [c for c in children
+                            if c["status"] in ('transferred', 'paid')]
+    if is_full and transferred_children:
+        ids = ", ".join(f"#{c['id']}" for c in transferred_children)
+        raise HTTPException(400,
+            f"Cannot full-refund: child payout(s) {ids} have already "
+            f"transferred to artists. Use the (Tier 3) reverse-transfer "
+            f"action on each transferred child first, then come back.")
+
+    # 4. Pick & sanitize the Stripe `reason` ───────────────────────────────
+    reason = (payload.get("reason") or "requested_by_customer").strip()
+    if reason not in _STRIPE_REFUND_REASONS:
+        reason = "requested_by_customer"
+
+    notes_in = (payload.get("notes") or "").strip()[:500]
+
+    # 5. Fire the Stripe refund ────────────────────────────────────────────
+    from backend.routes.stripe_connect import init_stripe
+    stripe, _keys = init_stripe(db)
+
+    idem_key = f"admin_refund_txn_{txn_id}_{int(time.time())}"
+    try:
+        refund = stripe.Refund.create(
+            payment_intent=pi_id,
+            amount=amount_cents,         # cents
+            reason=reason,
+            idempotency_key=idem_key,
+            metadata={
+                "txn_id": str(txn_id),
+                "gig_id": str(row["gig_id"]),
+                "initiated_by": "admin_payments_console",
+                "admin_user_id": str(getattr(admin, "id", "") or ""),
+            },
+        )
+    except Exception as e:
+        # Surface the Stripe error verbatim so the admin sees what went wrong
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(502, f"Stripe refund failed: {msg}")
+
+    # 6. Update our DB ─────────────────────────────────────────────────────
+    flavor = "FULL" if is_full else "PARTIAL"
+    refund_note = (f"Admin refund {flavor} ${amount_cents/100:.2f} "
+                   f"of ${charge_cents/100:.2f} (reason: {reason}, "
+                   f"refund_id: {getattr(refund, 'id', '?')})"
+                   + (f" — {notes_in}" if notes_in else ""))
+
+    new_status = 'payment_cancelled' if is_full else row["status"]
+    db.execute(text("""
+        UPDATE transactions
+           SET status = :status,
+               notes  = COALESCE(notes || ' | ', '') || :note
+         WHERE id = :tid
+    """), {"status": new_status, "note": refund_note, "tid": txn_id})
+
+    # Cancel pending child payouts when doing a full refund (default on).
+    cancelled_children = []
+    cancel_kids = payload.get("cancel_pending_payouts")
+    if cancel_kids is None:
+        cancel_kids = is_full
+    if is_full and cancel_kids:
+        for c in children:
+            if c["status"] == 'scheduled':
+                db.execute(text("""
+                    UPDATE transactions
+                       SET status = 'payment_cancelled',
+                           notes  = COALESCE(notes || ' | ', '') || :note
+                     WHERE id = :cid
+                """), {"cid": c["id"],
+                       "note": f"Cancelled by admin refund of parent #{txn_id}"})
+                cancelled_children.append(c["id"])
+
+    db.commit()
+
+    # 7. Audit ─────────────────────────────────────────────────────────────
+    log_admin_action(
+        db, admin, "payments_refund",
+        target_table="transactions", target_id=txn_id,
+        before={"status": row["status"]},
+        after={"status": new_status},
+        metadata={
+            "gig_id": row["gig_id"],
+            "amount_cents": amount_cents,
+            "charge_cents": charge_cents,
+            "is_full": is_full,
+            "stripe_refund_id": getattr(refund, "id", None),
+            "reason": reason,
+            "notes": notes_in,
+            "cancelled_child_payouts": cancelled_children,
+        },
+        request=request,
+    )
+    db.commit()
+
+    return {
+        "ok": True,
+        "stripe_refund_id": getattr(refund, "id", None),
+        "amount_cents": amount_cents,
+        "is_full": is_full,
+        "new_status": new_status,
+        "cancelled_child_payouts": cancelled_children,
     }

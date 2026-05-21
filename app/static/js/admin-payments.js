@@ -213,6 +213,117 @@
   window.apFilterVenue  = function(id) { $('apSearch').value = ''; apPage = 1; apReload(); /* TODO: dedicated filter for venue_id */ };
   window.apFilterArtist = function(id) { $('apSearch').value = ''; apPage = 1; apReload(); /* TODO: dedicated filter for artist_id */ };
 
+  // ── Tier 2: Refund ───────────────────────────────────────────────────────
+  // Opens a themed prompt inside the existing gf-modals stack. The user can
+  // edit the amount (default = full venue charge), pick a Stripe reason, and
+  // add free-text notes. On submit, POSTs to /api/admin/payments/{id}/refund
+  // and reloads both the detail view and the table.
+  window.apOpenRefund = function(txnId) {
+    const data = window._apLastDetail;
+    const t = data && data.transaction;
+    if (!t || t.id !== txnId) {
+      if (window.showErrorModal) window.showErrorModal('Refund', 'Reopen the transaction and try again.');
+      return;
+    }
+    const chargeCents = t.venue_charge_cents || t.amount_cents || 0;
+    const chargeDollars = (chargeCents / 100).toFixed(2);
+    const transferredChildren = (data.siblings || []).filter(
+      s => s.id !== t.id && (s.status === 'transferred' || s.status === 'paid')
+    );
+    const warning = transferredChildren.length
+      ? `<div style="padding:8px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.35);border-radius:5px;font-size:0.72rem;color:#fca5a5;margin-bottom:10px;">
+           ⚠ Child payout(s) ${transferredChildren.map(c => '#' + c.id).join(', ')} have already transferred to artists. A <strong>full</strong> refund will be blocked until those are reversed (Tier 3). A partial refund up to $${chargeDollars} is OK.
+         </div>` : '';
+    const formHtml =
+      warning +
+      `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <label>
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
+          <input id="apRefundAmount" type="number" step="0.01" min="0.01" max="${chargeDollars}" value="${chargeDollars}"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Charge total: $${chargeDollars}</div>
+        </label>
+        <label>
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason</div>
+          <select id="apRefundReason"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+            <option value="requested_by_customer">Requested by customer</option>
+            <option value="duplicate">Duplicate</option>
+            <option value="fraudulent">Fraudulent</option>
+          </select>
+        </label>
+      </div>
+      <label style="display:block;margin-bottom:6px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional, internal — saved on the txn + audit log)</div>
+        <textarea id="apRefundNotes" rows="2" maxlength="500" placeholder="e.g. Venue called about double-charge after Stripe retry"
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:var(--text-gray);margin-top:8px;">
+        <input id="apRefundCancelKids" type="checkbox" checked style="width:auto;">
+        Also cancel any still-scheduled child artist payouts (full refunds only)
+      </label>`;
+
+    window.showStyledModal(
+      '↩ Refund Transaction #' + txnId,
+      formHtml,
+      [
+        { text: 'Cancel', style: 'ghost', onClick: () => {} },
+        { text: 'Refund', style: 'danger', onClick: () => apSubmitRefund(txnId) },
+      ],
+      { tone: 'warning', size: 'md' }
+    );
+  };
+
+  async function apSubmitRefund(txnId) {
+    const amountStr = (document.getElementById('apRefundAmount')?.value || '').trim();
+    const reason    = document.getElementById('apRefundReason')?.value || 'requested_by_customer';
+    const notes     = (document.getElementById('apRefundNotes')?.value || '').trim();
+    const cancelKids = !!document.getElementById('apRefundCancelKids')?.checked;
+    const amountDollars = parseFloat(amountStr);
+    if (!Number.isFinite(amountDollars) || amountDollars <= 0) {
+      if (window.showErrorModal) window.showErrorModal('Refund', 'Enter a valid amount.');
+      return;
+    }
+    const body = {
+      amount_cents: Math.round(amountDollars * 100),
+      reason,
+      notes,
+      cancel_pending_payouts: cancelKids,
+    };
+    try {
+      const res = await fetch('/api/admin/payments/' + txnId + '/refund', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = json.detail || ('HTTP ' + res.status);
+        if (window.showErrorModal) window.showErrorModal('Refund failed', msg);
+        else alert(msg);
+        return;
+      }
+      // Success — surface a small confirm, then reload table + reopen detail
+      if (window.showSuccessModal) {
+        window.showSuccessModal(
+          'Refund ' + (json.is_full ? 'completed' : 'partial-refund completed'),
+          `Stripe refund ${json.stripe_refund_id || ''} for $${(json.amount_cents/100).toFixed(2)} processed.`,
+          () => {
+            apReload();
+            window.apShowDetail(txnId);
+          }
+        );
+      } else {
+        apReload();
+        window.apShowDetail(txnId);
+      }
+    } catch (e) {
+      const msg = (e && e.message) || 'Network error';
+      if (window.showErrorModal) window.showErrorModal('Refund failed', msg);
+      else alert(msg);
+    }
+  }
+
   // ── Detail modal ─────────────────────────────────────────────────────────
   window.apShowDetail = async function(txnId) {
     if (typeof window.showStyledModal !== 'function') {
@@ -284,11 +395,40 @@
         ? `<div style="margin-top:14px;">
              <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Recent admin actions (${data.audit.length})</div>
              ${data.audit.slice(0,5).map(a => `<div style="padding:6px 8px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:4px;margin-bottom:4px;font-size:0.7rem;">
-               <span style="color:var(--text);font-weight:600;">${esc(a.action_type)}</span>
+               <span style="color:var(--text);font-weight:600;">${esc(a.action)}</span>
                <span style="color:var(--text-gray);margin-left:8px;">${esc(fmtDateTime(a.created_at))}</span>
-               <span style="color:var(--text-gray);margin-left:8px;">admin #${esc(a.admin_user_id)}</span>
+               <span style="color:var(--text-gray);margin-left:8px;">${esc(a.admin_email || 'admin #' + a.admin_user_id)}</span>
              </div>`).join('')}
            </div>` : '';
+
+      // Tier 2 actions toolbar. Show only those that make sense for this txn.
+      const isChild = t.parent_transaction_id != null;
+      const parentTypes = new Set(['venue_charge', 'single']);
+      const refundableStatus = new Set(['charged', 'paid', 'transferred']);
+      const canRefund = !isChild
+                     && parentTypes.has(t.transaction_type_resolved)
+                     && refundableStatus.has(t.status)
+                     && !!t.stripe_payment_intent_id;
+      const refundDisabledReason =
+        isChild ? 'Refund the parent venue charge, not the child payout.' :
+        !parentTypes.has(t.transaction_type_resolved) ? 'Not a venue charge.' :
+        !refundableStatus.has(t.status) ? `Status "${t.status}" is not refundable.` :
+        !t.stripe_payment_intent_id ? 'No Stripe payment_intent on this row.' :
+        '';
+
+      const actionsHtml = `
+        <div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
+          <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Actions</div>
+          <button onclick="apOpenRefund(${txnId})"
+            ${canRefund ? '' : 'disabled'}
+            title="${esc(refundDisabledReason)}"
+            style="padding:6px 14px;background:${canRefund ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.03)'};border:1px solid ${canRefund ? 'rgba(239,68,68,0.45)' : 'var(--border)'};color:${canRefund ? '#ef4444' : 'var(--text-gray)'};border-radius:5px;font-size:0.75rem;font-weight:600;cursor:${canRefund ? 'pointer' : 'not-allowed'};margin-right:6px;">
+            ↩ Refund
+          </button>
+          <span style="font-size:0.68rem;color:var(--text-gray);margin-left:6px;">
+            More actions (Mark-resolved, Re-fire, Resend email) coming next.
+          </span>
+        </div>`;
 
       const body = `
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
@@ -310,10 +450,11 @@
         ${t.notes ? `<div style="margin-top:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border-left:3px solid var(--cyan);font-size:0.72rem;color:var(--text-gray);"><strong style="color:var(--text);">Notes:</strong> ${esc(t.notes)}</div>` : ''}
         ${sibsHtml}
         ${slotsHtml}
-        ${auditHtml}
-        <div style="margin-top:12px;padding:8px 10px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25);border-radius:6px;font-size:0.7rem;color:#fbbf24;">
-          🛠 <strong>Tier 1 (read-only).</strong> Refund / reverse / re-route actions will come in Tier 2.
-        </div>`;
+        ${actionsHtml}
+        ${auditHtml}`;
+
+      // Stash the loaded txn so the refund modal can read amounts off it.
+      window._apLastDetail = data;
 
       // Re-render body by querying the open modal's body element directly
       const overlay = document.querySelector('.gfm-modal-overlay');
