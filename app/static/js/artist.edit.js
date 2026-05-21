@@ -841,18 +841,49 @@ async function loadArtist() {
   document.addEventListener("click", async e => {
     if (!(e.target instanceof HTMLElement)) return;
     if (!e.target.classList.contains("delete-btn")) return;
-  
-    const id = e.target.dataset.id;
-    if (!confirm("Delete this media?")) return;
-  
-    await fetch(`/api/media/${id}`, {
-      method: "DELETE",
-      credentials: "include"
-    });
-  
-    // Support both .media-card and .audio-row
-    const card = e.target.closest(".media-card") || e.target.closest(".audio-row");
-    if (card) card.remove();
+
+    const btn = e.target;
+    const id = btn.dataset.id;
+    const card = btn.closest(".media-card") || btn.closest(".audio-row");
+
+    // Pick a label by media kind so the modal is specific.
+    const kind = card && card.dataset.kind;
+    let label = "Delete this media?";
+    if (kind === "audio")       label = "Delete this MP3 file?";
+    else if (kind === "audio_link") label = "Delete this audio link?";
+
+    const doDelete = async () => {
+      const res = await fetch(`/api/media/${id}`, {
+        method: "DELETE",
+        credentials: "include"
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        const msg = detail.detail || "Delete failed.";
+        if (window.showErrorModal) window.showErrorModal("Delete failed", msg);
+        else alert(msg);
+        return;
+      }
+      if (card) card.remove();
+      // Refresh audio button's count badge if we just removed an MP3
+      if (kind === "audio") {
+        const remaining = document.querySelectorAll('#audio .audio-row[data-kind="audio"]').length;
+        const countEl = document.getElementById("addAudioBtnCount");
+        if (countEl) countEl.textContent = remaining ? `(${remaining}/3)` : "";
+      }
+    };
+
+    if (window.showConfirm) {
+      window.showConfirm(
+        label,
+        "This action can't be undone.",
+        doDelete,
+        null,
+        { tone: 'warning', confirmLabel: 'Delete', cancelLabel: 'Cancel', confirmStyle: 'danger' }
+      );
+    } else if (confirm(label)) {
+      doDelete();
+    }
   });
   
 

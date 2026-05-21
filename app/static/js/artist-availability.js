@@ -63,9 +63,7 @@ function _renderAvailabilityUI(container, artistId, blackouts) {
           <input type="text" id="blackoutReason_${artistId}" placeholder="e.g. Tour, Vacation"
             maxlength="200" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
         </div>
-        <button onclick="addBlackout(${artistId})"
-          style="background:var(--cyan);color:#fff;border:none;border-radius:6px;
-                 padding:8px 16px;font-size:0.8rem;font-weight:600;cursor:pointer;white-space:nowrap;">
+        <button onclick="addBlackout(${artistId})" class="btn primary" style="white-space:nowrap;">
           + Block Dates
         </button>
       </div>

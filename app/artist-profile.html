@@ -245,8 +245,8 @@
     <div class="profile-tabs" id="profileTabs">
       <button onclick="switchTab('info')">Artist Info</button>
       <button class="active" onclick="switchTab('calendar')">Calendar</button>
-      <button onclick="switchTab('videos')">Videos</button>
       <button onclick="switchTab('pictures')">Pictures</button>
+      <button onclick="switchTab('videos')">Videos</button>
       <button onclick="switchTab('audio')">Audio</button>
       <button onclick="switchTab('social')">Social Media</button>
       <button onclick="switchTab('reviews')">Reviews</button>
@@ -839,6 +839,7 @@
         if (m.media_type === "logo" || m.media_type === "profile") document.getElementById("artistLogo").src = m.file_path;
         if (m.media_type === "picture") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(m.file_path)}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.file_path, "image"); pics.appendChild(d); }
         if (m.media_type === "audio") { const d = document.createElement("div"); d.className = "audio-row"; d.innerHTML = `<strong>${esc((m.title||"").substring(0,50))}</strong><audio controls src="${escAttr(m.file_path)}"></audio>`; audio.appendChild(d); d.querySelector("audio").addEventListener("play", function(){ document.querySelectorAll("#audio audio").forEach(a => { if(a!==this) a.pause(); }); }); }
+        if (m.media_type === "audio_link") { const url = m.video_url || ''; const display = url.replace(/^https?:\/\//i, '').replace(/\/+$/, ''); const d = document.createElement("div"); d.className = "audio-row"; d.innerHTML = `<strong>${esc((m.title||"").substring(0,50))}</strong><a href="${escAttr(url)}" target="_blank" rel="noopener" style="flex:1;min-width:0;color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;" title="${escAttr(url)}">🔗 ${esc(display)}</a>`; audio.appendChild(d); }
         if (m.media_type === "video") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(ytThumb(m.video_url))}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.video_url, "video"); videos.appendChild(d); }
       });
       if (!pics.children.length) document.getElementById('picturesEmpty').style.display = 'block';
