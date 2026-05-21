@@ -2436,11 +2436,26 @@ Hi {{artist_name}}, <strong>{{venue_name}}</strong> has just added new gig dates
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 24px;">
 <tbody><tr><td style="padding: 20px;">
 <p style="margin: 0 0 12px 0; font-size: 13px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.05em;">Available Dates</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tbody>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 130px;">Venue</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_name}}</td></tr>
+{{#venue_address}}<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Address</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_address_link}}</td></tr>{{/venue_address}}
+</tbody>
+</table>
 {{gigs_list_html}}
-<tr><td colspan="2" style="padding: 12px 0 4px 0; border-top: 1px solid #fcd34d;">
-<p style="margin:0;font-size:13px;color:#6b7280;">Venue: <strong style="color:#111827;">{{venue_name}}</strong></p>
-{{#venue_address}}<p style="margin:4px 0 0;font-size:13px;color:#6b7280;">{{venue_address_link}}</p>{{/venue_address}}
-</td></tr>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-top:8px;">
+<tbody>
+<tr><td colspan="2" style="padding: 4px 0; border-top: 1px solid #fcd34d;"></td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 130px;">Capacity</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_capacity}}</td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Arrival</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{arrival_info}}</td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Bar Tab</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{bar_tab}}</td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Food Tab</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{food_tab}}</td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Stage</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{stage_info}}</td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Sound</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{sound_info}}</td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Engineer</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{engineer_info}}</td></tr>
+<tr><td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Lighting</td><td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{lighting_info}}</td></tr>
+</tbody>
+</table>
 </td></tr></tbody>
 </table>
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto 24px;">

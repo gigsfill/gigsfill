@@ -5028,7 +5028,7 @@ def batch_blast(venue_id: int, data: dict, background_tasks: BackgroundTasks,
         gig_id = gr.get("id")
         gig = db.execute(text("""
             SELECT g.id, g.date, g.start_time, g.end_time, g.pay, g.title,
-                   g.artist_type, g.band_formats, g.styles, g.status
+                   g.artist_type, g.band_formats, g.styles, g.notes, g.status
             FROM gigs g WHERE g.id = :gid AND g.venue_id = :vid
         """), {"gid": gig_id, "vid": venue_id}).mappings().first()
         if not gig or gig["status"] != "open":
@@ -5047,6 +5047,9 @@ def batch_blast(venue_id: int, data: dict, background_tasks: BackgroundTasks,
             "pay": gig["pay"],
             "title": gig["title"],
             "artist_type": gig["artist_type"],
+            "band_formats": gig["band_formats"],
+            "styles": gig["styles"],
+            "notes": gig["notes"],
             "blast_preferred": gr.get("blast_preferred", True),
             "blast_all": gr.get("blast_all", False),
             "blast_radius": int(gr.get("blast_radius", 20)),
@@ -5115,9 +5118,21 @@ def batch_blast(venue_id: int, data: dict, background_tasks: BackgroundTasks,
             override_pay = (pay_overrides or {}).get(g["id"])
 
             if slots:
+                # Multi-slot gigs get a "Slot N" header row per slot — matches
+                # the cancelled_blast email shape (which uses slots_html).
+                # Single-slot gigs skip the header (would be redundant).
+                _multi = len(slots) > 1
                 for j, sl in enumerate(slots):
                     if j > 0:
                         parts.append(slot_sep)
+                    if _multi:
+                        # Slot N header row, full-width (one cell spanning both)
+                        parts.append(
+                            '<tr><td colspan="2" style="padding:8px 0 4px;font-size:14px;'
+                            'color:#7c6bff;font-weight:700;">'
+                            f"Slot {j + 1}"
+                            '</td></tr>'
+                        )
                     t = format_time_12hr(sl["start_time"] or "")
                     if sl.get("end_time"):
                         t += " – " + format_time_12hr(sl["end_time"])
@@ -5143,6 +5158,12 @@ def batch_blast(venue_id: int, data: dict, background_tasks: BackgroundTasks,
                     parts.append(_row("Pay", _fmt_pay(effective_pay), "#059669", "600"))
                 if g.get("artist_type"):
                     parts.append(_row("Type", g["artist_type"]))
+
+            # Per-gig Notes row (after the slots — notes are gig-level,
+            # not slot-level, and the user wants them surfaced in the
+            # email like the cancelled_blast / open_gig blast emails do).
+            if g.get("notes"):
+                parts.append(_row("Notes", g["notes"]))
         return f'<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"><tbody>{"".join(parts)}</tbody></table>'
 
     def _send(artist_email, artist_name, artist_id, gig_subset, pay_overrides=None):
