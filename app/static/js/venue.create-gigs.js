@@ -1632,6 +1632,31 @@ async function renderCalendar() {
       if (_pcModalActions) { _pcModalActions.style.display = 'flex'; _pcModalActions.style.visibility = 'visible'; }
       if (cancelGigBtn) cancelGigBtn.textContent = "Close";
 
+      // ── Edit Gig button (green, left of Cancel Gig) ──────────────────────
+      // FIX (May 21 2026): the pending-contract / partially-booked modal
+      // didn't surface the Edit Gig button. Venue should still be able to
+      // edit notes, title, etc. while a contract is in flight on one slot
+      // (and definitely while OTHER slots are still open). Same setup as
+      // _showBookedGigModal — green button inserted before deleteBtn, wired
+      // to openBookedGigEdit. Hidden when the gig has already started.
+      const _pcStarted = (typeof isGigStartedToday === 'function' && isGigStartedToday(gig))
+                     && !(typeof isGigEndPassed === 'function' && isGigEndPassed(gig));
+      let _pcEditBtn = document.getElementById('editGigBtn');
+      if (_pcStarted) {
+        if (_pcEditBtn) _pcEditBtn.style.display = 'none';
+      } else {
+        if (!_pcEditBtn) {
+          _pcEditBtn = document.createElement('button');
+          _pcEditBtn.id = 'editGigBtn';
+          _pcEditBtn.className = 'btn';
+          _pcEditBtn.style.cssText = 'background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.4);';
+          _pcEditBtn.textContent = 'Edit Gig';
+          if (_pcModalActions && deleteBtn) _pcModalActions.insertBefore(_pcEditBtn, deleteBtn);
+        }
+        _pcEditBtn.style.display = '';
+        _pcEditBtn.onclick = () => openBookedGigEdit(gig);
+      }
+
       let separator = document.querySelector('.modal-separator');
       if (!separator) {
         separator = document.createElement('div');
