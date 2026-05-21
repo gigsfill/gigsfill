@@ -125,7 +125,13 @@ async function renderGigModal(data, callbacks = {}) {
                ${_esc(data.city || '')}${data.state ? ', ' + _esc(data.state) : ''}
              </div>`;
   }
-  if (data.artist_type) {
+  // For MULTI-SLOT gigs, skip the gig-level Artist Type / Lineup / Styles
+  // rows — each slot can have its own values, and they're rendered per
+  // slot below. Showing gig-level too would be misleading (it'd reflect
+  // only the parent's defaults, not what each slot was set to).
+  // FIX (May 15 2026).
+  const _isMultiSlotHdr = Array.isArray(data.slots) && data.slots.length > 1;
+  if (data.artist_type && !_isMultiSlotHdr) {
     html += `<div style="font-weight:600;color:var(--text-primary);">Artist Type:</div>
              <div style="color:var(--text-primary);">${_esc(data.artist_type)}</div>`;
     if (data.artist_type === 'Live Band' && data.band_formats) {
