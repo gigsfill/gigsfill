@@ -106,46 +106,65 @@ async function renderGigModal(data, callbacks = {}) {
   html += `<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:0.95rem;line-height:1.6;margin-bottom:16px;">`;
   html += `<div style="font-weight:600;color:var(--text-primary);">Date:</div>
            <div style="color:var(--text-primary);">${_fmtDate(data.date)}</div>`;
-  if (displayStart) {
-    html += `<div style="font-weight:600;color:var(--text-primary);">Time:</div>
-             <div style="color:var(--text-primary);">${displayStart} – ${displayEnd}</div>`;
-  }
-  html += `<div style="font-weight:600;color:var(--text-primary);">Venue:</div>
-           <div style="color:var(--text-primary);">
-             <a href="/app/venue-profile.html?venue_id=${data.venue_id}" target="_blank"
-                style="color:var(--accent-cyan,#06b6d4);text-decoration:none;"
-                onmouseover="this.style.textDecoration='underline'"
-                onmouseout="this.style.textDecoration='none'">${_esc(data.venue_name)}</a>
-           </div>`;
-  if (data.address_line_1 || data.city) {
-    html += `<div style="font-weight:600;color:var(--text-primary);">Location:</div>
-             <div style="color:var(--text-primary);">
-               ${data.address_line_1 ? _esc(data.address_line_1) + '<br>' : ''}
-               ${data.address_line_2 ? _esc(data.address_line_2) + '<br>' : ''}
-               ${_esc(data.city || '')}${data.state ? ', ' + _esc(data.state) : ''}
-             </div>`;
-  }
-  // For MULTI-SLOT gigs, skip the gig-level Artist Type / Lineup / Styles
-  // rows — each slot can have its own values, and they're rendered per
-  // slot below. Showing gig-level too would be misleading (it'd reflect
-  // only the parent's defaults, not what each slot was set to).
-  // FIX (May 15 2026).
+
+  // FIX (May 21 2026): for VENUE viewers, the modal now matches the
+  // Past Event Details shape — just Date + Event at the top. The venue
+  // owns the venue, so Venue / Location / Artist Type / Lineup / Styles /
+  // Notes are either redundant (venue knows) or per-slot data shown in
+  // the slot rows below. Artists still see the full header since they
+  // need the where/what context.
   const _isMultiSlotHdr = Array.isArray(data.slots) && data.slots.length > 1;
-  if (data.artist_type && !_isMultiSlotHdr) {
-    html += `<div style="font-weight:600;color:var(--text-primary);">Artist Type:</div>
-             <div style="color:var(--text-primary);">${_esc(data.artist_type)}</div>`;
-    if (data.artist_type === 'Live Band' && data.band_formats) {
-      html += `<div style="font-weight:600;color:var(--text-primary);">Lineup:</div>
-               <div style="color:var(--text-primary);">${_esc(data.band_formats.split(',').map(s=>s.trim()).join(', '))}</div>`;
+  const _isVenueView    = vType === 'venue';
+
+  if (_isVenueView) {
+    if (displayStart) {
+      html += `<div style="font-weight:600;color:var(--text-primary);">Time:</div>
+               <div style="color:var(--text-primary);">${displayStart} – ${displayEnd}</div>`;
     }
-    if (data.artist_type === 'Live Band' && data.styles) {
-      html += `<div style="font-weight:600;color:var(--text-primary);">Styles:</div>
-               <div style="color:var(--text-primary);">${_esc(data.styles.split(',').map(s=>s.trim()).join(', '))}</div>`;
+    if (data.title) {
+      html += `<div style="font-weight:600;color:var(--text-primary);">Event:</div>
+               <div style="color:var(--text-primary);">${_esc(data.title)}</div>`;
     }
-  }
-  if (data.notes) {
-    html += `<div style="font-weight:600;color:var(--text-primary);">Notes:</div>
-             <div style="color:var(--text-primary);">${_esc(data.notes)}</div>`;
+  } else {
+    // Artist view — keep the full header (they need where/what).
+    if (displayStart) {
+      html += `<div style="font-weight:600;color:var(--text-primary);">Time:</div>
+               <div style="color:var(--text-primary);">${displayStart} – ${displayEnd}</div>`;
+    }
+    html += `<div style="font-weight:600;color:var(--text-primary);">Venue:</div>
+             <div style="color:var(--text-primary);">
+               <a href="/app/venue-profile.html?venue_id=${data.venue_id}" target="_blank"
+                  style="color:var(--accent-cyan,#06b6d4);text-decoration:none;"
+                  onmouseover="this.style.textDecoration='underline'"
+                  onmouseout="this.style.textDecoration='none'">${_esc(data.venue_name)}</a>
+             </div>`;
+    if (data.address_line_1 || data.city) {
+      html += `<div style="font-weight:600;color:var(--text-primary);">Location:</div>
+               <div style="color:var(--text-primary);">
+                 ${data.address_line_1 ? _esc(data.address_line_1) + '<br>' : ''}
+                 ${data.address_line_2 ? _esc(data.address_line_2) + '<br>' : ''}
+                 ${_esc(data.city || '')}${data.state ? ', ' + _esc(data.state) : ''}
+               </div>`;
+    }
+    // For MULTI-SLOT gigs, skip the gig-level Artist Type / Lineup / Styles
+    // rows — each slot can have its own values, and they're rendered per
+    // slot below.
+    if (data.artist_type && !_isMultiSlotHdr) {
+      html += `<div style="font-weight:600;color:var(--text-primary);">Artist Type:</div>
+               <div style="color:var(--text-primary);">${_esc(data.artist_type)}</div>`;
+      if (data.artist_type === 'Live Band' && data.band_formats) {
+        html += `<div style="font-weight:600;color:var(--text-primary);">Lineup:</div>
+                 <div style="color:var(--text-primary);">${_esc(data.band_formats.split(',').map(s=>s.trim()).join(', '))}</div>`;
+      }
+      if (data.artist_type === 'Live Band' && data.styles) {
+        html += `<div style="font-weight:600;color:var(--text-primary);">Styles:</div>
+                 <div style="color:var(--text-primary);">${_esc(data.styles.split(',').map(s=>s.trim()).join(', '))}</div>`;
+      }
+    }
+    if (data.notes) {
+      html += `<div style="font-weight:600;color:var(--text-primary);">Notes:</div>
+               <div style="color:var(--text-primary);">${_esc(data.notes)}</div>`;
+    }
   }
   html += `</div>`;
 
