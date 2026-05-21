@@ -1267,18 +1267,28 @@ def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
     vtax = db.execute(_t("SELECT require_w9 FROM venue_tax_settings WHERE venue_id=:vid"),
                       {"vid": venue_id}).first()
     if vtax and vtax[0]:
-        from datetime import date as _d
+        # TZ FIX (May 21 2026): venue-local year, not server UTC date.
+        from datetime import datetime as _dt
+        from backend.utils import get_venue_timezone as _gvt
+        _current_year = _dt.now(_gvt(db, venue_id)).year
         w9 = db.execute(_t("SELECT tax_year FROM w9_forms WHERE entity_type='artist' AND entity_id=:aid ORDER BY tax_year DESC LIMIT 1"),
                         {"aid": artist_id}).first()
-        if not w9 or w9[0] < _d.today().year:
+        if not w9 or w9[0] < _current_year:
             raise HTTPException(403, "W9_REQUIRED: This venue requires an up-to-date W-9 on file before booking.")
 
     # 4. Frequency check (waived on blast token or blast window)
+    # TZ FIX (May 21 2026): use venue-local "today" so days_until matches the
+    # venue's calendar day, not server UTC. Same bug pattern fixed in
+    # book_slot on 2026-05-11 (commit a932ea8) — _run_prebooking_checks
+    # was missed at the time, so book-with-contract still 403'd a TONIGHT
+    # multi-slot booking when the server (UTC) had already rolled to
+    # tomorrow but the venue (Pacific) hadn't.
     _blast_waives = token_valid
     if not _blast_waives:
         try:
-            from datetime import date as _dc
-            _today = _dc.today()
+            from datetime import date as _dc, datetime as _dt
+            from backend.utils import get_venue_timezone as _gvt
+            _today = _dt.now(_gvt(db, venue_id)).date()
             _gig_d = _dc.fromisoformat(str(gig_date)[:10])
             _days = (_gig_d - _today).days
             if _days >= 0:
