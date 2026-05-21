@@ -1124,17 +1124,27 @@
 
     </div>
 
-    <!-- ── PAYMENTS CONSOLE (Tier 1: read-only unified view) ── -->
+    <!-- ── PAYMENTS CONSOLE — Tier 1 (read) + Tier 2/3 (single-row actions) + Tier 4 (bulk + reconcile) ── -->
     <div class="tab-content" id="payments-tab">
       <div class="content-card" style="padding:14px;">
 
         <!-- Header + stats row -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;">
           <div>
-            <span style="font-size:0.85rem;font-weight:700;color:var(--text);">💳 Payments Console</span>
-            <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">Read-only across all venues + artists</span>
+            <span style="font-size:0.85rem;font-weight:700;color:var(--text);">Payments Console</span>
+            <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">All venues + artists. Click any row for actions.</span>
           </div>
-          <button onclick="apReload()" style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+          <div style="display:flex;gap:6px;">
+            <button onclick="apOpenReconcile()" style="padding:5px 12px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.45);border-radius:6px;color:#c4b5fd;cursor:pointer;font-size:0.72rem;font-weight:600;">⟳ Reconcile</button>
+            <button onclick="apReload()" style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+          </div>
+        </div>
+
+        <!-- Bulk action bar (shown when >=1 row selected) -->
+        <div id="apBulkBar" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.35);border-radius:6px;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-size:0.78rem;color:var(--text);"><strong id="apBulkCount">0</strong> selected</span>
+          <button onclick="apOpenBulk()" style="padding:4px 12px;background:rgba(6,182,212,0.18);border:1px solid rgba(6,182,212,0.45);border-radius:5px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">Bulk action…</button>
+          <button onclick="apClearSelection()" style="padding:4px 12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:5px;color:var(--text-gray);cursor:pointer;font-size:0.72rem;">Clear</button>
         </div>
         <div id="apStats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px;"></div>
 
@@ -1935,7 +1945,7 @@ function switchDbLogsTab(tab) {
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
 <script src="/app/static/js/admin-platform.js"></script>
-<script src="/app/static/js/admin-payments.js?v=4"></script>
+<script src="/app/static/js/admin-payments.js?v=5"></script>
 <script src="/app/static/js/admin-templates.js"></script>
 <script src="/app/static/js/admin-affiliate.js"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>

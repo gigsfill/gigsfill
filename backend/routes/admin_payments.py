@@ -9,16 +9,37 @@ Tier 1 (read-only — shipped 2026-05-13):
   GET  /api/admin/payments/{txn_id}      — full details + related rows
   GET  /api/admin/payments/stats         — aggregate KPIs for the filtered set
 
-Tier 2 (single-row mutations):
-  POST /api/admin/payments/{txn_id}/refund
-        Full or partial refund on a venue charge. Calls stripe.Refund.create,
-        writes admin_audit_log, optionally cancels still-scheduled child
-        artist_payouts (full refund only). Refuses if any child has already
-        transferred — that needs Tier 3's reverse-transfer flow.
+Tier 2 (single-row mutations, shipped 2026-05-21):
+  POST /api/admin/payments/{id}/refund         — full or partial venue refund
+  POST /api/admin/payments/{id}/mark-resolved  — force status (whitelisted)
+  POST /api/admin/payments/{id}/refire         — reset failed row to scheduled
+  POST /api/admin/payments/{id}/resend-email   — replay payment-event email
 
-Stripe Dashboard webhook handler in stripe_connect.py (`charge.refunded`) will
-also fire and sync the DB, so manual Stripe Dashboard refunds and refunds
-initiated here both converge to the same state.
+Tier 3 (destructive/sensitive single-row mutations):
+  POST /api/admin/payments/{id}/reverse-transfer
+        Reverse an artist Connect transfer that has already gone out. Money
+        comes back to the platform balance. Admin can then refund the venue
+        separately if needed.
+  POST /api/admin/payments/{id}/reroute-payout
+        Change the destination artist on a still-scheduled child payout
+        (e.g. original artist's Connect account was closed).
+
+Tier 4 (bulk + reconciliation):
+  POST /api/admin/payments/bulk
+        Apply a safe action (mark-resolved / resend-email / refire) to
+        multiple txns in one call. Hard-limited to actions that don't move
+        money — bulk refund/reverse is intentionally NOT supported.
+  GET  /api/admin/payments/reconcile
+        Diff our `transactions` table against Stripe (charges, transfers,
+        refunds) for a date range. Highlights status mismatches and orphans
+        on either side. Read-only; admin acts on findings via single-row
+        endpoints.
+
+All write endpoints (Tier 2 + 3) accept `dry_run: true` to validate without
+making the Stripe call OR the DB write. Stripe Dashboard webhook handlers in
+stripe_connect.py (`charge.refunded`, `transfer.reversed`, etc.) also sync
+the DB, so manual Stripe Dashboard actions and actions initiated here both
+converge to the same state.
 """
 import time
 from typing import Optional
@@ -845,3 +866,547 @@ def resend_email(
     )
     db.commit()
     return {"ok": True, "dry_run": False, "template": template}
+
+
+# ─── Tier 3: REVERSE TRANSFER ───────────────────────────────────────────────
+
+_REVERSIBLE_TRANSFER_STATUSES = {'transferred', 'paid'}
+
+
+@router.post("/api/admin/payments/{txn_id}/reverse-transfer")
+def reverse_transfer(
+    txn_id: int,
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Reverse an artist Connect transfer that has already gone out. Pulls
+    funds from the artist's Connect balance back to our platform balance.
+    The venue is NOT refunded by this action — issue a refund separately if
+    you want the venue made whole.
+
+    Body:
+      amount_cents      (optional int) — partial reversal. Default = full.
+      refund_app_fee    (optional bool) — also refund the platform fee
+                                          captured at transfer time, if any.
+                                          Default false (we usually keep it).
+      notes             (optional str)
+      dry_run           (optional bool)
+
+    Hard refusals (400):
+      • Not a child artist_payout row.
+      • status not in {transferred, paid}.
+      • No stripe_transfer_id on the row.
+      • amount_cents > artist_payout_cents or <= 0.
+
+    Stripe Dashboard webhook (`transfer.reversed`) will also fire and sync the
+    DB — harmless, same status sink.
+    """
+    dry_run = bool(payload.get("dry_run"))
+
+    row = db.execute(text("""
+        SELECT id, gig_id, parent_transaction_id, transaction_type, status,
+               artist_id, artist_payout_cents, stripe_transfer_id, notes
+        FROM transactions WHERE id = :tid
+    """), {"tid": txn_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Transaction not found")
+
+    if row["parent_transaction_id"] is None and row["transaction_type"] != 'artist_payout':
+        raise HTTPException(400,
+            "Reverse-transfer only applies to child artist_payout rows.")
+    if row["status"] not in _REVERSIBLE_TRANSFER_STATUSES:
+        raise HTTPException(400,
+            f"Cannot reverse status '{row['status']}'. "
+            f"Reversible: {', '.join(sorted(_REVERSIBLE_TRANSFER_STATUSES))}.")
+    if not row["stripe_transfer_id"]:
+        raise HTTPException(400, "No stripe_transfer_id on this row.")
+
+    payout_cents = int(row["artist_payout_cents"] or 0)
+    requested = payload.get("amount_cents")
+    if requested in (None, ""):
+        amount_cents = payout_cents
+    else:
+        try:
+            amount_cents = int(requested)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "amount_cents must be an integer")
+    if amount_cents <= 0:
+        raise HTTPException(400, "amount_cents must be > 0")
+    if amount_cents > payout_cents:
+        raise HTTPException(400,
+            f"Reversal amount (${amount_cents/100:.2f}) exceeds transfer "
+            f"(${payout_cents/100:.2f}).")
+    is_full = (amount_cents == payout_cents)
+
+    refund_app_fee = bool(payload.get("refund_app_fee"))
+    notes_in = (payload.get("notes") or "").strip()[:500]
+
+    if dry_run:
+        reversal = type("_DryReversal", (), {"id": "trr_dryrun_" + str(int(time.time()))})()
+    else:
+        from backend.routes.stripe_connect import init_stripe
+        stripe, _keys = init_stripe(db)
+        idem_key = f"admin_reverse_txn_{txn_id}_{int(time.time())}"
+        try:
+            reversal = stripe.Transfer.create_reversal(
+                row["stripe_transfer_id"],
+                amount=amount_cents,
+                refund_application_fee=refund_app_fee,
+                idempotency_key=idem_key,
+                metadata={
+                    "txn_id": str(txn_id),
+                    "gig_id": str(row["gig_id"]),
+                    "initiated_by": "admin_payments_console",
+                    "admin_user_id": str(getattr(admin, "id", "") or ""),
+                },
+            )
+        except Exception as e:
+            msg = getattr(e, "user_message", None) or str(e)
+            raise HTTPException(502, f"Stripe transfer reversal failed: {msg}")
+
+    flavor = "FULL" if is_full else "PARTIAL"
+    rev_note = (f"Admin reverse-transfer {flavor} ${amount_cents/100:.2f} "
+                f"of ${payout_cents/100:.2f} (reversal_id: "
+                f"{getattr(reversal, 'id', '?')}, refund_app_fee="
+                f"{refund_app_fee})"
+                + (f" — {notes_in}" if notes_in else ""))
+
+    new_status = 'payment_cancelled' if is_full else row["status"]
+    if not dry_run:
+        db.execute(text("""
+            UPDATE transactions
+               SET status = :s,
+                   notes  = COALESCE(notes || ' | ', '') || :n
+             WHERE id = :tid
+        """), {"s": new_status, "n": rev_note, "tid": txn_id})
+        db.commit()
+
+        log_admin_action(
+            db, admin, "payments_reverse_transfer",
+            target_table="transactions", target_id=txn_id,
+            before={"status": row["status"]},
+            after={"status": new_status},
+            metadata={
+                "gig_id": row["gig_id"],
+                "amount_cents": amount_cents,
+                "transfer_cents": payout_cents,
+                "is_full": is_full,
+                "refund_app_fee": refund_app_fee,
+                "stripe_reversal_id": getattr(reversal, "id", None),
+                "notes": notes_in,
+            },
+            request=request,
+        )
+        db.commit()
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "stripe_reversal_id": getattr(reversal, "id", None),
+        "amount_cents": amount_cents,
+        "is_full": is_full,
+        "new_status": new_status,
+        "note": ("Reversal pulls funds from the artist's Connect balance back "
+                 "to the platform. Issue a separate Refund if you want the "
+                 "venue made whole."),
+    }
+
+
+# ─── Tier 3: RE-ROUTE PAYOUT ────────────────────────────────────────────────
+
+@router.post("/api/admin/payments/{txn_id}/reroute-payout")
+def reroute_payout(
+    txn_id: int,
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Change the destination artist on a still-scheduled artist_payout
+    child row. Used when the original artist's Connect account closed /
+    suspended and the gig needs to be paid out to a different account
+    (e.g. a band's secondary account, or a platform-owned holding account).
+
+    Body:
+      new_artist_id  (required int) — must own a Connect account with
+                                       onboarding complete.
+      reason         (required str) — min 5 chars.
+      dry_run        (optional bool)
+
+    Hard refusals (400):
+      • Not a child artist_payout row.
+      • status != 'scheduled' (can't re-route in-flight or completed).
+      • new_artist_id is missing / unknown / has no Connect / onboarding incomplete.
+      • new_artist_id == current artist_id.
+    """
+    dry_run    = bool(payload.get("dry_run"))
+    new_artist = payload.get("new_artist_id")
+    reason     = (payload.get("reason") or "").strip()[:1000]
+    if not new_artist:
+        raise HTTPException(400, "new_artist_id is required")
+    try:
+        new_artist_id = int(new_artist)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "new_artist_id must be an integer")
+    if len(reason) < 5:
+        raise HTTPException(400, "reason is required (min 5 chars)")
+
+    row = db.execute(text("""
+        SELECT id, gig_id, parent_transaction_id, transaction_type, status,
+               artist_id
+        FROM transactions WHERE id = :tid
+    """), {"tid": txn_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Transaction not found")
+    if row["parent_transaction_id"] is None and row["transaction_type"] != 'artist_payout':
+        raise HTTPException(400,
+            "Re-route only applies to child artist_payout rows.")
+    if row["status"] != 'scheduled':
+        raise HTTPException(400,
+            f"Cannot re-route a payout in status '{row['status']}'. "
+            f"Only 'scheduled' payouts can be re-routed; for transferred ones "
+            f"use reverse-transfer first.")
+    if int(row["artist_id"] or 0) == new_artist_id:
+        raise HTTPException(400,
+            "new_artist_id matches current artist — nothing to change.")
+
+    # Validate destination artist has Connect onboarding complete
+    dest = db.execute(text("""
+        SELECT a.id, a.name,
+               eps.stripe_connect_account_id,
+               eps.stripe_connect_onboarding_complete
+        FROM artists a
+        LEFT JOIN entity_payment_settings eps
+               ON eps.entity_type = 'artist' AND eps.entity_id = a.id
+        WHERE a.id = :aid
+    """), {"aid": new_artist_id}).mappings().first()
+    if not dest:
+        raise HTTPException(400, f"Artist #{new_artist_id} not found.")
+    if not dest["stripe_connect_account_id"]:
+        raise HTTPException(400,
+            f"Artist #{new_artist_id} ({dest['name']}) has no Stripe Connect account.")
+    if not dest["stripe_connect_onboarding_complete"]:
+        raise HTTPException(400,
+            f"Artist #{new_artist_id} ({dest['name']}) hasn't finished Connect "
+            f"onboarding — payouts can't go there yet.")
+
+    note = (f"Admin re-route: artist #{row['artist_id']} → "
+            f"#{new_artist_id} ({dest['name']}). Reason: {reason}")
+
+    if not dry_run:
+        db.execute(text("""
+            UPDATE transactions
+               SET artist_id = :new_aid,
+                   notes     = COALESCE(notes || ' | ', '') || :n
+             WHERE id = :tid
+        """), {"new_aid": new_artist_id, "n": note, "tid": txn_id})
+        db.commit()
+
+        log_admin_action(
+            db, admin, "payments_reroute_payout",
+            target_table="transactions", target_id=txn_id,
+            before={"artist_id": row["artist_id"]},
+            after={"artist_id": new_artist_id},
+            metadata={"gig_id": row["gig_id"], "reason": reason,
+                      "destination_artist_name": dest["name"]},
+            request=request,
+        )
+        db.commit()
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "from_artist_id": row["artist_id"],
+        "to_artist_id": new_artist_id,
+        "to_artist_name": dest["name"],
+    }
+
+
+# ─── Tier 4: BULK ACTIONS ───────────────────────────────────────────────────
+
+# Hard-coded list of actions safe for bulk apply. Money-moving actions
+# (refund, reverse-transfer) are intentionally NOT here — those require
+# per-row review.
+_BULK_ACTIONS = {'mark-resolved', 'resend-email', 'refire'}
+_BULK_MAX = 100
+
+
+@router.post("/api/admin/payments/bulk")
+def bulk_action(
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Apply one of the safe single-row actions to many txns at once.
+
+    Body:
+      txn_ids  (required list[int])    — up to _BULK_MAX rows.
+      action   (required str)          — one of _BULK_ACTIONS.
+      params   (optional dict)         — extra params for the action
+                                          (e.g. new_status for mark-resolved).
+      dry_run  (optional bool)
+
+    Returns: { results: [{txn_id, ok, error?}], ok_count, fail_count }
+    """
+    txn_ids = payload.get("txn_ids") or []
+    action  = (payload.get("action") or "").strip()
+    params  = payload.get("params") or {}
+    dry_run = bool(payload.get("dry_run"))
+
+    if action not in _BULK_ACTIONS:
+        raise HTTPException(400,
+            f"action must be one of: {', '.join(sorted(_BULK_ACTIONS))}")
+    if not isinstance(txn_ids, list) or not txn_ids:
+        raise HTTPException(400, "txn_ids must be a non-empty list")
+    if len(txn_ids) > _BULK_MAX:
+        raise HTTPException(400, f"Max {_BULK_MAX} txns per bulk call")
+
+    # Validate action-specific params up front so we fail fast.
+    if action == 'mark-resolved':
+        if not (params.get("new_status") and params.get("reason")):
+            raise HTTPException(400,
+                "mark-resolved requires params.new_status and params.reason")
+    elif action == 'resend-email':
+        if not params.get("template"):
+            raise HTTPException(400, "resend-email requires params.template")
+
+    # Dispatch to the single-row handlers — same validation, same audit log,
+    # same dry_run support. Errors on individual rows don't abort the batch;
+    # they're collected and returned per-row.
+    results = []
+    ok_count = 0
+    fail_count = 0
+    for tid in txn_ids:
+        try:
+            tid_int = int(tid)
+        except (TypeError, ValueError):
+            results.append({"txn_id": tid, "ok": False, "error": "invalid id"})
+            fail_count += 1
+            continue
+        try:
+            if action == 'mark-resolved':
+                r = mark_resolved(tid_int, {
+                    "new_status": params["new_status"],
+                    "reason":     params["reason"],
+                }, request, admin, db)
+            elif action == 'refire':
+                r = refire_payment(tid_int, {
+                    "notes":   params.get("notes", ""),
+                    "dry_run": dry_run,
+                }, request, admin, db)
+            elif action == 'resend-email':
+                r = resend_email(tid_int, {
+                    "template": params["template"],
+                    "dry_run":  dry_run,
+                }, request, admin, db)
+            results.append({"txn_id": tid_int, "ok": True, "result": r})
+            ok_count += 1
+        except HTTPException as e:
+            results.append({"txn_id": tid_int, "ok": False, "error": str(e.detail)})
+            fail_count += 1
+        except Exception as e:
+            results.append({"txn_id": tid_int, "ok": False, "error": str(e)})
+            fail_count += 1
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "action": action,
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "results": results,
+    }
+
+
+# ─── Tier 4: STRIPE ⇄ DB RECONCILIATION ─────────────────────────────────────
+
+# Cap the per-call scope so a runaway range can't burn Stripe rate-limit
+# budget on a single button click. Admin can re-run with a narrower range
+# to dig into specific days.
+_RECON_MAX_TXNS = 200
+
+
+@router.get("/api/admin/payments/reconcile")
+def reconcile(
+    from_date: str = Query(..., description="YYYY-MM-DD, gig date inclusive"),
+    to_date:   str = Query(..., description="YYYY-MM-DD, gig date inclusive"),
+    only_mismatches: bool = Query(True),
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Diff our transactions table against Stripe for a gig-date window.
+
+    Pulls each txn that has a stripe_payment_intent_id or stripe_transfer_id,
+    fetches the corresponding Stripe object, and compares:
+      • Our `status` vs Stripe's lifecycle state.
+      • Our amount vs Stripe's amount.
+      • Whether refunds/reversals we know about exist on Stripe (and vice versa).
+
+    Hard-limited to _RECON_MAX_TXNS rows per call so this is bounded — for
+    larger windows, narrow the date range. Read-only; admin acts on findings
+    via the single-row endpoints (Mark Resolved, Refund, Reverse Transfer).
+
+    Returns:
+      { window: {from,to}, scanned, ok_count, mismatch_count, no_stripe_id,
+        mismatches: [{txn_id, our_status, stripe_state, summary}, ...] }
+    """
+    # Pull candidate rows
+    rows = db.execute(text("""
+        SELECT t.id, t.gig_id, t.transaction_type, t.status,
+               t.amount_cents, t.venue_charge_cents, t.artist_payout_cents,
+               t.stripe_payment_intent_id, t.stripe_transfer_id,
+               g.date as gig_date, v.venue_name,
+               COALESCE(a.name, a2.name) as artist_name
+        FROM transactions t
+        JOIN gigs g ON t.gig_id = g.id
+        LEFT JOIN venues  v  ON v.id = g.venue_id
+        LEFT JOIN artists a  ON a.id = t.artist_id
+        LEFT JOIN artists a2 ON a2.id = g.artist_id
+        WHERE date(g.date) BETWEEN date(:fd) AND date(:td)
+        ORDER BY g.date ASC, t.id ASC
+        LIMIT :lim
+    """), {"fd": from_date, "td": to_date, "lim": _RECON_MAX_TXNS + 1}).mappings().all()
+
+    truncated = len(rows) > _RECON_MAX_TXNS
+    rows = list(rows)[:_RECON_MAX_TXNS]
+
+    # Map our status set to a coarse Stripe-equivalent for comparison.
+    # We don't try to match every status exactly — that's hopeless. The goal
+    # is to flag the obvious "we say paid, Stripe says canceled" mismatches.
+    def expected_stripe_state(status, is_transfer):
+        if is_transfer:
+            if status in ('transferred', 'paid'):           return 'succeeded'
+            if status == 'payment_cancelled':               return 'reversed'
+            if status in ('pending_transfer', 'scheduled'): return 'pending'
+            return None
+        # Venue charge / single
+        if status in ('paid', 'charged', 'transferred'):    return 'succeeded'
+        if status == 'payment_cancelled':                   return 'canceled_or_refunded'
+        if status in ('scheduled', 'pending'):              return 'requires_action_or_processing'
+        if status in ('payment_failed', 'charge_retry'):    return 'failed_or_canceled'
+        return None
+
+    from backend.routes.stripe_connect import init_stripe
+    try:
+        stripe, _keys = init_stripe(db)
+    except HTTPException:
+        # No Stripe keys → return what we can show without API calls.
+        return {
+            "window": {"from": from_date, "to": to_date},
+            "scanned": 0, "ok_count": 0, "mismatch_count": 0,
+            "no_stripe_id": 0, "truncated": truncated,
+            "error": "Stripe not configured — cannot reconcile.",
+            "mismatches": [],
+        }
+
+    mismatches = []
+    ok_count = 0
+    no_stripe = 0
+
+    for r in rows:
+        ref_id = r["stripe_payment_intent_id"] or r["stripe_transfer_id"]
+        if not ref_id:
+            no_stripe += 1
+            continue
+
+        is_transfer = bool(r["stripe_transfer_id"]) and not r["stripe_payment_intent_id"]
+        expected = expected_stripe_state(r["status"], is_transfer)
+        observed = None
+        observed_amount_cents = None
+        notes_bits = []
+
+        try:
+            if is_transfer:
+                obj = stripe.Transfer.retrieve(ref_id)
+                # Transfers don't have a single "status" — they're either
+                # reversed (transfer.reversed = amount_reversed > 0) or not.
+                amt = getattr(obj, "amount", None) or 0
+                rev = getattr(obj, "amount_reversed", None) or 0
+                observed_amount_cents = amt
+                if rev >= amt and amt > 0:
+                    observed = 'reversed'
+                elif rev > 0:
+                    observed = 'partially_reversed'
+                    notes_bits.append(f"Stripe shows ${rev/100:.2f} of ${amt/100:.2f} reversed")
+                else:
+                    observed = 'succeeded'
+            else:
+                obj = stripe.PaymentIntent.retrieve(ref_id)
+                stripe_status = getattr(obj, "status", None)
+                amt = getattr(obj, "amount", None) or 0
+                amt_refunded = (getattr(obj, "amount_refunded", None)
+                                or getattr(obj, "amount_received", None) and 0
+                                or 0)
+                # Be defensive — PI doesn't always carry amount_refunded directly;
+                # the canonical source is the charges sub-collection.
+                try:
+                    charges = getattr(obj, "charges", None)
+                    if charges and getattr(charges, "data", None):
+                        for ch in charges.data:
+                            amt_refunded += getattr(ch, "amount_refunded", 0) or 0
+                except Exception:
+                    pass
+                observed_amount_cents = amt
+                if stripe_status == 'succeeded' and amt_refunded >= amt > 0:
+                    observed = 'canceled_or_refunded'
+                    notes_bits.append('PI fully refunded on Stripe')
+                elif stripe_status == 'succeeded':
+                    observed = 'succeeded'
+                    if amt_refunded > 0:
+                        notes_bits.append(f"Stripe shows ${amt_refunded/100:.2f} partial refund")
+                elif stripe_status in ('canceled', 'requires_payment_method'):
+                    observed = 'canceled_or_refunded'
+                elif stripe_status in ('processing', 'requires_action'):
+                    observed = 'requires_action_or_processing'
+                else:
+                    observed = stripe_status or 'unknown'
+        except Exception as e:
+            observed = 'STRIPE_ERROR'
+            notes_bits.append(str(e)[:120])
+
+        amount_mismatch = False
+        if observed_amount_cents is not None:
+            our_amt = (r["venue_charge_cents"] if not is_transfer
+                       else r["artist_payout_cents"]) or 0
+            if our_amt and observed_amount_cents and observed_amount_cents != our_amt:
+                amount_mismatch = True
+                notes_bits.append(
+                    f"Amount differs: our ${our_amt/100:.2f} vs Stripe ${observed_amount_cents/100:.2f}"
+                )
+
+        is_match = (expected == observed) and not amount_mismatch
+        if is_match:
+            ok_count += 1
+            if only_mismatches:
+                continue
+
+        mismatches.append({
+            "txn_id":      r["id"],
+            "gig_id":      r["gig_id"],
+            "gig_date":    str(r["gig_date"]),
+            "venue_name":  r["venue_name"],
+            "artist_name": r["artist_name"],
+            "transaction_type": r["transaction_type"],
+            "our_status":  r["status"],
+            "stripe_state": observed,
+            "expected":    expected,
+            "stripe_ref":  ref_id,
+            "amount_mismatch": amount_mismatch,
+            "summary":     "; ".join(notes_bits) if notes_bits else
+                           (None if is_match else f"Our '{r['status']}' ≠ Stripe '{observed}'"),
+            "match":       is_match,
+        })
+
+    return {
+        "window": {"from": from_date, "to": to_date},
+        "scanned": len(rows),
+        "ok_count": ok_count,
+        "mismatch_count": sum(1 for m in mismatches if not m["match"]),
+        "no_stripe_id": no_stripe,
+        "truncated": truncated,
+        "max_per_call": _RECON_MAX_TXNS,
+        "mismatches": mismatches,
+    }

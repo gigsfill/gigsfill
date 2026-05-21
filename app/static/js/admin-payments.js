@@ -163,8 +163,13 @@
       const stripeBadge = stripeRef
         ? `<a href="https://dashboard.stripe.com/${stripeRef.startsWith('pi_') ? 'payments/' : 'connect/transfers/'}${esc(stripeRef)}" target="_blank" onclick="event.stopPropagation()" style="font-family:monospace;font-size:0.65rem;color:#94a3b8;text-decoration:none;border-bottom:1px dashed rgba(148,163,184,0.4);" title="Open in Stripe Dashboard">${esc(stripeRef.slice(0,16))}…</a>`
         : '<span style="color:var(--text-gray);font-size:0.7rem;">—</span>';
+      const isSelected = window._apSelected && window._apSelected.has(r.id);
       return `
-        <tr onclick="apShowDetail(${r.id})" style="cursor:pointer;border-bottom:1px solid var(--border);">
+        <tr onclick="apShowDetail(${r.id})" style="cursor:pointer;border-bottom:1px solid var(--border);${isSelected ? 'background:rgba(6,182,212,0.06);' : ''}">
+          <td style="padding:6px 8px;width:24px;" onclick="event.stopPropagation()">
+            <input type="checkbox" class="ap-row-cb" data-txn-id="${r.id}" ${isSelected ? 'checked' : ''}
+              onchange="apToggleRow(${r.id}, this.checked)" style="cursor:pointer;">
+          </td>
           <td style="padding:6px 8px;font-size:0.72rem;color:var(--text-gray);white-space:nowrap;">${indent}#${r.id}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:var(--text);white-space:nowrap;">${esc(TYPE_LABEL[r.transaction_type] || r.transaction_type)}</td>
           <td style="padding:6px 8px;">${statusPill(r.status)}</td>
@@ -180,6 +185,9 @@
       <table style="width:100%;border-collapse:collapse;font-size:0.72rem;">
         <thead>
           <tr style="background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border);">
+            <th style="padding:7px 8px;text-align:left;width:24px;" onclick="event.stopPropagation()">
+              <input type="checkbox" onchange="apToggleAllOnPage(this.checked)" title="Select all on this page" style="cursor:pointer;">
+            </th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">ID</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Type</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Status</th>
@@ -193,6 +201,7 @@
         </thead>
         <tbody>${rows}</tbody>
       </table>`;
+    apUpdateBulkBar();
   }
 
   function renderPagination() {
@@ -459,19 +468,24 @@
       const refirableStatus  = new Set(['payment_failed', 'charge_retry',
                                         'transfer_failed', 'pending_transfer']);
 
+      const reversibleTransferStatus = new Set(['transferred', 'paid']);
+
       const canRefund = !isChild
                      && parentTypes.has(t.transaction_type_resolved)
                      && refundableStatus.has(t.status)
                      && !!t.stripe_payment_intent_id;
       const canRefire = refirableStatus.has(t.status);
-      // Mark-resolved is admin-override — always allowed except on rows
-      // that are already in a clean terminal state.
       const canMark   = true;
       const canResendVenue  = parentTypes.has(t.transaction_type_resolved)
                               && (t.status === 'paid' || t.status === 'charged');
       const canResendPayout = t.transaction_type_resolved === 'artist_payout'
                               && (t.status === 'transferred' || t.status === 'paid');
       const canResend = canResendVenue || canResendPayout;
+      const isPayoutChild = t.transaction_type_resolved === 'artist_payout' || isChild;
+      const canReverseTransfer = isPayoutChild
+                              && reversibleTransferStatus.has(t.status)
+                              && !!t.stripe_transfer_id;
+      const canReroute = isPayoutChild && t.status === 'scheduled';
 
       const reasons = {
         refund: !canRefund
@@ -482,6 +496,13 @@
              : '') : '',
         refire: canRefire ? '' : `Only re-firable when status is in: payment_failed / charge_retry / transfer_failed / pending_transfer.`,
         resend: canResend ? '' : `No suitable email template for type "${t.transaction_type_resolved}" + status "${t.status}".`,
+        reverse: canReverseTransfer ? ''
+          : !isPayoutChild ? 'Only artist_payout rows can be reversed.'
+          : !reversibleTransferStatus.has(t.status) ? `Status "${t.status}" can't be reversed.`
+          : 'No stripe_transfer_id on this row — nothing to reverse.',
+        reroute: canReroute ? ''
+          : !isPayoutChild ? 'Only artist_payout rows can be re-routed.'
+          : `Only 'scheduled' payouts can be re-routed (this is '${t.status}').`,
       };
 
       const btn = (id, label, color, enabled, tip, onclick) => `
@@ -496,13 +517,15 @@
         <div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
           <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Actions</div>
           <div style="display:flex;flex-wrap:wrap;align-items:center;">
-            ${btn('refund', '↩ Refund',          '239,68,68',   canRefund, reasons.refund, `apOpenRefund(${txnId})`)}
-            ${btn('refire', '↻ Re-fire',         '245,158,11',  canRefire, reasons.refire, `apOpenRefire(${txnId})`)}
-            ${btn('mark',   '✓ Mark Resolved',  '6,182,212',   canMark,   '',            `apOpenMarkResolved(${txnId})`)}
-            ${btn('resend', '✉ Resend Email',   '139,92,246',  canResend, reasons.resend, `apOpenResend(${txnId})`)}
+            ${btn('refund',  '↩ Refund',           '239,68,68',  canRefund,          reasons.refund,  `apOpenRefund(${txnId})`)}
+            ${btn('reverse', '⤺ Reverse Transfer', '239,68,68',  canReverseTransfer, reasons.reverse, `apOpenReverseTransfer(${txnId})`)}
+            ${btn('reroute', '↪ Re-route Payout',  '6,182,212',  canReroute,         reasons.reroute, `apOpenReroute(${txnId})`)}
+            ${btn('refire',  '↻ Re-fire',          '245,158,11', canRefire,          reasons.refire,  `apOpenRefire(${txnId})`)}
+            ${btn('mark',    '✓ Mark Resolved',   '6,182,212',  canMark,            '',              `apOpenMarkResolved(${txnId})`)}
+            ${btn('resend',  '✉ Resend Email',    '139,92,246', canResend,          reasons.resend,  `apOpenResend(${txnId})`)}
           </div>
           <div style="font-size:0.65rem;color:var(--text-gray);margin-top:4px;">
-            Tier 3 (reverse-transfer, re-route, status-override) and Tier 4 (bulk + reconciliation) coming later.
+            Reverse-transfer pulls money from artist Connect back to platform. Re-route changes the destination on a still-scheduled payout.
           </div>
         </div>`;
 
@@ -750,6 +773,417 @@
       );
     } catch (e) {
       window.showErrorModal && window.showErrorModal('Resend failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Tier 3: Reverse Transfer ─────────────────────────────────────────────
+  // Pulls a child artist_payout's funds from the artist's Connect balance
+  // back to the platform. Doesn't refund the venue — that's a separate
+  // Refund action on the parent.
+  window.apOpenReverseTransfer = function(txnId) {
+    const data = window._apLastDetail;
+    const t = data && data.transaction;
+    if (!t || t.id !== txnId) return;
+    const payoutCents = t.artist_payout_cents || 0;
+    const payoutDollars = (payoutCents / 100).toFixed(2);
+    const formHtml = `
+      <div style="margin-bottom:12px;padding:10px 12px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.25);border-radius:6px;">
+        <div style="font-size:0.7rem;color:#fca5a5;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">⚠ Destructive — moves money</div>
+        <div style="font-size:0.75rem;color:var(--text);line-height:1.5;">
+          Reversing pulls <strong>$${payoutDollars}</strong> from <strong>${esc(t.artist_name || 'the artist')}</strong>'s Stripe Connect balance back to our platform balance. The artist's bank account will show the reversal at next settlement. <br><br>
+          This action does <em>not</em> refund the venue — if you also want the venue made whole, issue a Refund on the parent venue_charge separately.
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <label>
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
+          <input id="apReverseAmount" type="number" step="0.01" min="0.01" max="${payoutDollars}" value="${payoutDollars}"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Transfer total: $${payoutDollars}</div>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;align-self:end;font-size:0.75rem;color:var(--text-gray);">
+          <input id="apReverseAppFee" type="checkbox" style="width:auto;">
+          Also refund the platform fee captured at transfer time (uncommon)
+        </label>
+      </div>
+      <label style="display:block;margin-bottom:6px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
+        <textarea id="apReverseNotes" rows="2" maxlength="500" placeholder="e.g. Artist no-showed; venue wants payment back"
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:10px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
+        <input id="apReverseDryRun" type="checkbox" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
+        <span><strong>Dry run (safe test mode)</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Validates the wiring without calling Stripe or modifying the DB.</span>
+        </span>
+      </label>`;
+    window.showStyledModal(
+      '⤺ Reverse Transfer — Transaction #' + txnId,
+      formHtml,
+      [
+        { text: 'Cancel',  style: 'ghost',  onClick: () => {} },
+        { text: 'Reverse', style: 'danger', onClick: () => apSubmitReverseTransfer(txnId) },
+      ],
+      { tone: 'warning', size: 'md' }
+    );
+  };
+  async function apSubmitReverseTransfer(txnId) {
+    const amountStr = (document.getElementById('apReverseAmount')?.value || '').trim();
+    const amountDollars = parseFloat(amountStr);
+    if (!Number.isFinite(amountDollars) || amountDollars <= 0) {
+      window.showErrorModal && window.showErrorModal('Reverse Transfer', 'Enter a valid amount.');
+      return;
+    }
+    const body = {
+      amount_cents: Math.round(amountDollars * 100),
+      refund_app_fee: !!document.getElementById('apReverseAppFee')?.checked,
+      notes: (document.getElementById('apReverseNotes')?.value || '').trim(),
+      dry_run: !!document.getElementById('apReverseDryRun')?.checked,
+    };
+    try {
+      const res = await fetch('/api/admin/payments/' + txnId + '/reverse-transfer', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Reverse failed', json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const msg = json.dry_run
+        ? `Validation passed for ${json.is_full ? 'full' : 'partial'} reversal of $${(json.amount_cents/100).toFixed(2)}.`
+        : `Reversal ${json.stripe_reversal_id || ''} for $${(json.amount_cents/100).toFixed(2)} processed.\n\n${json.note || ''}`;
+      window.showSuccessModal && window.showSuccessModal(
+        prefix + 'Reverse Transfer', msg,
+        () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } }
+      );
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Reverse failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Tier 3: Re-route Payout ──────────────────────────────────────────────
+  // Changes the destination artist on a still-scheduled artist_payout child.
+  // Use when the original artist's Connect account closed before the
+  // scheduler fired the transfer.
+  window.apOpenReroute = function(txnId) {
+    const data = window._apLastDetail;
+    const t = data && data.transaction;
+    if (!t || t.id !== txnId) return;
+    const formHtml = `
+      <div style="margin-bottom:12px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;font-size:0.78rem;color:var(--text);line-height:1.5;">
+        Change the destination artist on this still-scheduled payout. The new artist must have completed Stripe Connect onboarding — we'll reject otherwise. Current destination: <strong>${esc(t.artist_name || 'artist #' + t.artist_id)}</strong>.
+      </div>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">New artist id</div>
+        <input id="apRerouteArtistId" type="number" min="1" placeholder="e.g. 42"
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+        <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Find the id on the artist's edit page URL: <code>?artist_id=N</code>.</div>
+      </label>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason (required, min 5 chars)</div>
+        <textarea id="apRerouteReason" rows="2" maxlength="1000" placeholder="e.g. Original artist's Connect account was suspended by Stripe — band asked us to route to their backup account."
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:10px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
+        <input id="apRerouteDryRun" type="checkbox" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
+        <span><strong>Dry run (safe test mode)</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Validates the destination artist's Connect status without writing the change.</span>
+        </span>
+      </label>`;
+    window.showStyledModal(
+      '↪ Re-route Payout — Transaction #' + txnId,
+      formHtml,
+      [
+        { text: 'Cancel',   style: 'ghost',   onClick: () => {} },
+        { text: 'Re-route', style: 'primary', onClick: () => apSubmitReroute(txnId) },
+      ],
+      { tone: 'info', size: 'md' }
+    );
+  };
+  async function apSubmitReroute(txnId) {
+    const new_artist_id = parseInt(document.getElementById('apRerouteArtistId')?.value || '0', 10);
+    const reason        = (document.getElementById('apRerouteReason')?.value || '').trim();
+    const dry_run       = !!document.getElementById('apRerouteDryRun')?.checked;
+    if (!new_artist_id) {
+      window.showErrorModal && window.showErrorModal('Re-route', 'Enter the new artist id.');
+      return;
+    }
+    if (reason.length < 5) {
+      window.showErrorModal && window.showErrorModal('Re-route', 'Reason is required (min 5 chars).');
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/payments/' + txnId + '/reroute-payout', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_artist_id, reason, dry_run }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Re-route failed', json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const msg = json.dry_run
+        ? `Validation passed. ${json.to_artist_name} (#${json.to_artist_id}) is a valid destination.`
+        : `Payout re-routed from artist #${json.from_artist_id} → #${json.to_artist_id} (${json.to_artist_name}).`;
+      window.showSuccessModal && window.showSuccessModal(prefix + 'Re-route',
+        msg,
+        () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } }
+      );
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Re-route failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Tier 4: Bulk actions + Reconciliation ────────────────────────────────
+  // Bulk state lives in this Set so it survives table re-renders within the
+  // same page session. Clearing happens on tab switch / reload.
+  const apSelected = new Set();
+  window._apSelected = apSelected;
+
+  window.apToggleRow = function(txnId, checked) {
+    if (checked) apSelected.add(txnId); else apSelected.delete(txnId);
+    apUpdateBulkBar();
+  };
+  window.apToggleAllOnPage = function(checked) {
+    document.querySelectorAll('.ap-row-cb').forEach(cb => {
+      cb.checked = checked;
+      const id = parseInt(cb.dataset.txnId, 10);
+      if (checked) apSelected.add(id); else apSelected.delete(id);
+    });
+    apUpdateBulkBar();
+  };
+  window.apClearSelection = function() {
+    apSelected.clear();
+    document.querySelectorAll('.ap-row-cb').forEach(cb => cb.checked = false);
+    apUpdateBulkBar();
+  };
+
+  function apUpdateBulkBar() {
+    const bar = document.getElementById('apBulkBar');
+    if (!bar) return;
+    if (apSelected.size === 0) { bar.style.display = 'none'; return; }
+    // 'flex' (not '') because the bar relies on align-items + gap from
+    // its inline style, which only apply when display:flex.
+    bar.style.display = 'flex';
+    const countEl = document.getElementById('apBulkCount');
+    if (countEl) countEl.textContent = String(apSelected.size);
+  }
+
+  window.apOpenBulk = function() {
+    if (apSelected.size === 0) return;
+    const ids = Array.from(apSelected);
+    const formHtml = `
+      <p style="font-size:0.78rem;color:var(--text);margin:0 0 10px;">
+        Apply a safe action to <strong>${ids.length}</strong> selected transaction${ids.length === 1 ? '' : 's'}. Refund / reverse-transfer are intentionally NOT bulk-available — those need per-row review.
+      </p>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Action</div>
+        <select id="apBulkAction" onchange="apBulkActionChanged()"
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+          <option value="refire">↻ Re-fire (reset failed → scheduled)</option>
+          <option value="resend-email">✉ Resend Email</option>
+          <option value="mark-resolved">✓ Mark Resolved</option>
+        </select>
+      </label>
+      <div id="apBulkParams"></div>
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:10px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
+        <input id="apBulkDryRun" type="checkbox" checked style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
+        <span><strong>Dry run (safe test mode)</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Recommended for the first run — surfaces per-row errors without committing.</span>
+        </span>
+      </label>`;
+    window.showStyledModal(
+      'Bulk Action — ' + ids.length + ' transaction' + (ids.length === 1 ? '' : 's'),
+      formHtml,
+      [
+        { text: 'Cancel', style: 'ghost',   onClick: () => {} },
+        { text: 'Apply', style: 'primary', onClick: () => apSubmitBulk(ids) },
+      ],
+      { tone: 'info', size: 'md' }
+    );
+    setTimeout(apBulkActionChanged, 0);
+  };
+
+  window.apBulkActionChanged = function() {
+    const action = document.getElementById('apBulkAction')?.value;
+    const wrap = document.getElementById('apBulkParams');
+    if (!wrap) return;
+    if (action === 'mark-resolved') {
+      wrap.innerHTML = `
+        <label style="display:block;margin-bottom:8px;">
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">New status</div>
+          <select id="apBulkNewStatus"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+            ${['paid','transferred','payment_cancelled','suspended','dispute_won','dispute_lost']
+              .map(s => `<option value="${s}">${s}</option>`).join('')}
+          </select>
+        </label>
+        <label style="display:block;">
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason (required, min 5 chars)</div>
+          <textarea id="apBulkReason" rows="2" maxlength="1000"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
+        </label>`;
+    } else if (action === 'resend-email') {
+      wrap.innerHTML = `
+        <label style="display:block;">
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Template</div>
+          <select id="apBulkTemplate"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+            <option value="venue_charged">Venue charged (to venue)</option>
+            <option value="artist_payout_sent">Artist payout sent (to artist)</option>
+          </select>
+          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Rows that don't match this template will fail individually — that's fine, the batch continues.</div>
+        </label>`;
+    } else {
+      wrap.innerHTML = '<div style="font-size:0.72rem;color:var(--text-gray);">No extra parameters. Re-fire works on rows in payment_failed / charge_retry / transfer_failed / pending_transfer.</div>';
+    }
+  };
+
+  async function apSubmitBulk(ids) {
+    const action  = document.getElementById('apBulkAction')?.value;
+    const dry_run = !!document.getElementById('apBulkDryRun')?.checked;
+    let params = {};
+    if (action === 'mark-resolved') {
+      const new_status = document.getElementById('apBulkNewStatus')?.value;
+      const reason     = (document.getElementById('apBulkReason')?.value || '').trim();
+      if (reason.length < 5) {
+        window.showErrorModal && window.showErrorModal('Bulk', 'Reason required (min 5 chars).');
+        return;
+      }
+      params = { new_status, reason };
+    } else if (action === 'resend-email') {
+      params = { template: document.getElementById('apBulkTemplate')?.value };
+    }
+    try {
+      const res = await fetch('/api/admin/payments/bulk', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txn_ids: ids, action, params, dry_run }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Bulk failed', json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const failRows = (json.results || []).filter(r => !r.ok);
+      let failDetail = '';
+      if (failRows.length) {
+        failDetail = '<div style="margin-top:8px;font-size:0.7rem;color:var(--text-gray);max-height:200px;overflow:auto;">'
+                   + failRows.slice(0, 20).map(r => `<div>• #${r.txn_id}: ${esc(r.error || 'unknown')}</div>`).join('')
+                   + (failRows.length > 20 ? `<div>… and ${failRows.length - 20} more</div>` : '')
+                   + '</div>';
+      }
+      const bodyHtml = `${prefix}${json.ok_count} succeeded, ${json.fail_count} failed (action: ${esc(action)}).${failDetail}`;
+      window.showStyledModal('Bulk results', bodyHtml,
+        [{ text: 'Close', style: 'primary', onClick: () => {
+          if (!json.dry_run) { apClearSelection(); apReload(); }
+        }}],
+        { tone: failRows.length ? 'warning' : 'info', size: 'md' });
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Bulk failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Tier 4: Reconciliation report ────────────────────────────────────────
+  window.apOpenReconcile = function() {
+    const today = new Date();
+    const monthAgo = new Date(today); monthAgo.setDate(monthAgo.getDate() - 30);
+    const fmt = d => d.toISOString().slice(0, 10);
+    const formHtml = `
+      <p style="font-size:0.78rem;color:var(--text);margin:0 0 10px;">
+        Compares our <code>transactions</code> table to Stripe (PaymentIntents + Transfers) for a gig-date window. Highlights status mismatches and amount divergences. Read-only — act on findings via the single-row actions on each row.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+        <label>
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">From (gig date)</div>
+          <input id="apReconFrom" type="date" value="${fmt(monthAgo)}"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+        </label>
+        <label>
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">To (gig date)</div>
+          <input id="apReconTo" type="date" value="${fmt(today)}"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+        </label>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:var(--text-gray);">
+        <input id="apReconOnlyMismatches" type="checkbox" checked style="width:auto;">
+        Only show mismatches (uncheck to see every scanned row)
+      </label>
+      <div style="font-size:0.65rem;color:var(--text-gray);margin-top:6px;">
+        Capped at 200 txns per run — narrow the date range for larger windows. Each row calls Stripe, so this takes a few seconds.
+      </div>
+      <div id="apReconResults" style="margin-top:12px;"></div>`;
+    window.showStyledModal(
+      'Stripe ⇄ DB Reconciliation',
+      formHtml,
+      [
+        { text: 'Close', style: 'ghost',   onClick: () => {} },
+        { text: 'Run',   style: 'primary', onClick: () => apRunReconcile() },
+      ],
+      { tone: 'info', size: 'lg' }
+    );
+  };
+
+  async function apRunReconcile() {
+    const fd = document.getElementById('apReconFrom')?.value;
+    const td = document.getElementById('apReconTo')?.value;
+    const om = !!document.getElementById('apReconOnlyMismatches')?.checked;
+    const wrap = document.getElementById('apReconResults');
+    if (!fd || !td) return;
+    if (wrap) wrap.innerHTML = '<div style="text-align:center;color:var(--text-gray);padding:16px;font-size:0.85rem;">Scanning… this may take a few seconds.</div>';
+    try {
+      const url = '/api/admin/payments/reconcile?from_date=' + encodeURIComponent(fd)
+                + '&to_date=' + encodeURIComponent(td)
+                + '&only_mismatches=' + (om ? 'true' : 'false');
+      const res = await fetch(url, { credentials: 'include' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        wrap.innerHTML = `<div style="color:#ef4444;padding:8px;">${esc(json.detail || ('HTTP ' + res.status))}</div>`;
+        return;
+      }
+      const m = json.mismatches || [];
+      const header = `
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-size:0.75rem;">
+          <span style="padding:4px 10px;border-radius:4px;background:rgba(34,197,94,0.10);color:#22c55e;border:1px solid rgba(34,197,94,0.3);"><strong>${json.ok_count}</strong> match</span>
+          <span style="padding:4px 10px;border-radius:4px;background:rgba(239,68,68,0.10);color:#ef4444;border:1px solid rgba(239,68,68,0.3);"><strong>${json.mismatch_count}</strong> mismatch</span>
+          <span style="padding:4px 10px;border-radius:4px;background:rgba(148,163,184,0.10);color:var(--text-gray);border:1px solid var(--border);"><strong>${json.no_stripe_id}</strong> no Stripe id</span>
+          <span style="padding:4px 10px;border-radius:4px;background:rgba(148,163,184,0.10);color:var(--text-gray);border:1px solid var(--border);">scanned ${json.scanned}</span>
+          ${json.truncated ? '<span style="padding:4px 10px;border-radius:4px;background:rgba(245,158,11,0.10);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);">⚠ truncated at ' + json.max_per_call + '</span>' : ''}
+        </div>`;
+      const rows = m.map(x => `
+        <tr style="border-bottom:1px solid var(--border);${x.match ? '' : 'background:rgba(239,68,68,0.04);'}">
+          <td style="padding:5px;"><a href="javascript:void(0)" onclick="window.apShowDetail(${x.txn_id})" style="color:var(--cyan);">#${x.txn_id}</a></td>
+          <td style="padding:5px;">${esc(fmtDate(x.gig_date))}</td>
+          <td style="padding:5px;">${esc(x.venue_name || '—')}</td>
+          <td style="padding:5px;">${esc(x.artist_name || '—')}</td>
+          <td style="padding:5px;">${esc(TYPE_LABEL[x.transaction_type] || x.transaction_type)}</td>
+          <td style="padding:5px;">${statusPill(x.our_status)}</td>
+          <td style="padding:5px;color:${x.match ? '#22c55e' : '#ef4444'};">${esc(x.stripe_state || '—')}</td>
+          <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(x.summary || (x.match ? '✓' : ''))}</td>
+        </tr>`).join('');
+      const table = `
+        <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+          <thead><tr style="background:rgba(255,255,255,0.03);">
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Txn</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Gig date</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Venue</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Artist</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Type</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Our status</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Stripe</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);">Notes</th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text-gray);">No rows to show.</td></tr>'}</tbody>
+        </table>`;
+      wrap.innerHTML = header + table;
+    } catch (e) {
+      wrap.innerHTML = `<div style="color:#ef4444;padding:8px;">${esc(e.message || 'Network error')}</div>`;
     }
   }
 
