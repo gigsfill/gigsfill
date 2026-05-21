@@ -329,8 +329,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "font-src 'self' data: https://fonts.gstatic.com",
             "img-src 'self' data: blob: https:",
             "connect-src 'self' https://api.stripe.com",
-            "frame-src 'self' https://js.stripe.com https://www.youtube.com https://youtube.com",
-            "media-src 'self' blob:",
+            "frame-src 'self' https://js.stripe.com https://www.youtube.com https://youtube.com https://w.soundcloud.com https://bandcamp.com https://*.bandcamp.com",
+            # media-src: allow any https source so artist-uploaded audio_link URLs
+            # (direct MP3s on artists' own sites, etc.) play in <audio> elements.
+            # Without this the player renders but the browser blocks playback.
+            "media-src 'self' blob: https:",
             "object-src 'none'",
             "base-uri 'self'",
             "form-action 'self'",
