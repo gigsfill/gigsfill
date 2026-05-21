@@ -1172,6 +1172,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === venueModal) closeAddVenueModal();
     if (e.target === deleteModal) closeDeleteConfirmModal();
   });
+
+  // Deep-link support: open a specific tab when the URL hash matches a tab id.
+  // Used by the booking flow's "Cancel Blackout Date" button — it sends users
+  // here as /app/user-profile.html#availability. switchTab() relies on
+  // event.target, so we trigger an actual click on the tab button rather than
+  // calling switchTab directly.
+  const hash = (window.location.hash || '').replace(/^#/, '');
+  if (hash) {
+    const btn = document.querySelector(`.tab[onclick*="switchTab('${hash}')"]`);
+    if (btn) setTimeout(() => btn.click(), 0);
+  }
 });
 
 // v96: Drag and Drop for entity ordering

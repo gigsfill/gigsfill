@@ -543,10 +543,15 @@ def artist_member_availability(artist_id: int,
     return {"members": result}
 
 
-def _member_blackouts_for_gig(db, artist_id: int, gig_date: str):
+def _member_blackouts_for_gig(db, artist_id: int, gig_date: str,
+                              current_user_id: int = None):
     """Return member-level blackouts that conflict with a given gig date,
-    for booking-precheck. Returns list of {user_id, name, blackout_start,
-    blackout_end, reason}. Empty list when no conflicts."""
+    for booking-precheck. Returns list of {id, user_id, name, blackout_start,
+    blackout_end, reason, is_self}. `is_self` is True when the row belongs
+    to current_user_id — the booking-precheck modal uses this to switch from
+    the generic "one or more members have blocked this date" copy to a
+    personal "you have these dates blocked" variant with a deep link to the
+    user's My Availability tab. Empty list when no conflicts."""
     if not gig_date:
         return []
     rows = db.execute(text("""
@@ -563,4 +568,9 @@ def _member_blackouts_for_gig(db, artist_id: int, gig_date: str):
           )
           AND date(:gd) BETWEEN date(ua.blackout_start) AND date(ua.blackout_end)
     """), {"aid": artist_id, "gd": str(gig_date)[:10]}).mappings().all()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["is_self"] = (current_user_id is not None and d.get("user_id") == current_user_id)
+        out.append(d)
+    return out

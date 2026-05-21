@@ -1276,7 +1276,9 @@ def booking_precheck(gig_id: int, artist_id: int, slot_id: int = None,
     # that here. Per user direction: band-block wins, member warning ignored.
     try:
         from backend.routes.availability import _member_blackouts_for_gig
-        result["member_blackouts"] = _member_blackouts_for_gig(db, artist_id, gig.get("date"))
+        result["member_blackouts"] = _member_blackouts_for_gig(
+            db, artist_id, gig.get("date"), current_user_id=user.id
+        )
     except Exception:
         result["member_blackouts"] = []
     return result

@@ -2475,31 +2475,69 @@ async function runBookingPrecheck(gigId, artistId, slotId) {
       if (!proceed) return false;
     }
 
-    // Member blackouts — soft warning. Surfaces when one or more
-    // members have personal blackouts covering this gig's date. Artist can
-    // confirm through (e.g. perform without the unavailable member).
+    // Member blackouts — soft warning. Two flavors:
+    //   • SELF (the booker themself has a blackout on this date): personalized
+    //     copy + a "Cancel Blackout Date(s)" button that deep-links to their
+    //     profile's My Availability tab. No "Book Anyway" — they're being
+    //     asked to clear their own block first.
+    //   • OTHER (one or more bandmates blocked, but not the booker): the
+    //     original "perform without them?" Book Anyway flow.
+    // If both are true, treat as SELF — the booker can't reasonably book a gig
+    // they've personally blacked out without cancelling their own block first.
     if (data.member_blackouts && data.member_blackouts.length) {
-      // showStyledModal allows raw HTML in content; showConfirm escapes.
       const _escTxt = s => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
         ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-      const itemsHtml = data.member_blackouts.map(b => {
+      const selfRows = data.member_blackouts.filter(b => b.is_self);
+      const isSelf = selfRows.length > 0;
+      const rowsToShow = isSelf ? selfRows : data.member_blackouts;
+
+      const itemsHtml = rowsToShow.map(b => {
         const range = b.blackout_end && b.blackout_end !== b.blackout_start
           ? `${b.blackout_start} – ${b.blackout_end}` : `${b.blackout_start}`;
         return `<li style="margin:4px 0;"><strong>${_escTxt(b.name || 'Member')}</strong>: ${_escTxt(range)}` +
                (b.reason ? ` — <em>${_escTxt(b.reason)}</em>` : '') + '</li>';
       }).join('');
-      const body =
-        '<p style="margin:0 0 6px;">One or more members have these dates blocked:</p>' +
-        `<ul style="margin:0;padding-left:20px;font-size:0.88rem;color:var(--text);">${itemsHtml}</ul>` +
-        '<p style="margin-top:10px;font-size:0.82rem;color:var(--text-gray);">Book anyway? (e.g. if performing without them.)</p>';
+
+      let body, buttons;
+      if (isSelf) {
+        body =
+          '<p style="margin:0 0 6px;">You have these dates blocked:</p>' +
+          `<ul style="margin:0;padding-left:20px;font-size:0.88rem;color:var(--text);">${itemsHtml}</ul>` +
+          '<p style="margin-top:10px;font-size:0.82rem;color:var(--text-gray);">Cancel this blackout date to book this gig.</p>';
+        const cancelLabel = selfRows.length > 1 ? 'Cancel Blackout Dates' : 'Cancel Blackout Date';
+        buttons = [
+          { text: 'Never Mind', style: 'ghost', onClick: () => { /* resolves false below */ } },
+          { text: cancelLabel,  style: 'primary', onClick: () => {
+              window.location.href = '/app/user-profile.html#availability';
+            } },
+        ];
+      } else {
+        body =
+          '<p style="margin:0 0 6px;">One or more members have these dates blocked:</p>' +
+          `<ul style="margin:0;padding-left:20px;font-size:0.88rem;color:var(--text);">${itemsHtml}</ul>` +
+          '<p style="margin-top:10px;font-size:0.82rem;color:var(--text-gray);">Book anyway? (e.g. if performing without them.)</p>';
+        buttons = [
+          { text: 'Never Mind',  style: 'ghost',   onClick: null  /* resolves false */ },
+          { text: 'Book Anyway', style: 'primary', onClick: 'proceed' /* sentinel */ },
+        ];
+      }
+
       const proceedMember = await new Promise(resolve => {
+        // Wire button handlers — only "Book Anyway" (other-member case)
+        // resolves true. Everything else resolves false; the "Cancel
+        // Blackout Date(s)" button has already navigated away by then.
+        const wired = buttons.map(b => ({
+          text: b.text, style: b.style,
+          onClick: () => {
+            if (b.onClick === 'proceed') { resolve(true); return; }
+            if (typeof b.onClick === 'function') { try { b.onClick(); } catch(_){} }
+            resolve(false);
+          },
+        }));
         window.showStyledModal(
           '⚠️ Member Unavailable',
           body,
-          [
-            { text: 'Never Mind', style: 'ghost',   onClick: () => resolve(false) },
-            { text: 'Book Anyway', style: 'primary', onClick: () => resolve(true) },
-          ],
+          wired,
           { tone: 'warning', size: 'md' }
         );
       });
