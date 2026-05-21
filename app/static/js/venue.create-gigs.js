@@ -2491,6 +2491,16 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           </div>
         `;
       } else {
+        // FIX (May 21 2026): empty/open slot now also gets a ✕ Cancel
+        // button so the venue can drop the slot from the gig — same
+        // affordance the booked-slot row already had. Wires to the
+        // existing cancelSlotBooking with artist_id=null which routes
+        // through the open-slot "Remove slot" confirmation flow.
+        const _openCancelBtn = !isPastGig
+          ? `<button onclick="cancelSlotBooking(${gig.id}, ${slot.id}, ${slot.slot_number}, null)"
+               style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 9px;font-size:0.75rem;cursor:pointer;white-space:nowrap;"
+               title="Remove this slot from the gig">✕</button>`
+          : '';
         html += `
           <div style="padding:9px 14px 9px 12px;margin-bottom:6px;background:${bg};border:1px solid ${color}33;border-left:3px solid #a855f7;border-radius:6px;font-size:0.85rem;">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -2499,6 +2509,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
               ${slotPayHtml}
               <span style="flex:1;"></span>
               <span style="color:#22c55e;font-weight:700;font-size:0.78rem;background:rgba(34,197,94,0.12);padding:2px 10px;border-radius:10px;border:1px solid rgba(34,197,94,0.3);">Open</span>
+              ${_openCancelBtn}
             </div>
             ${typeInfo ? `<div style="margin-top:5px;color:var(--text-muted);font-size:0.78rem;line-height:1.4;font-style:italic;">${typeInfo}</div>` : ''}
           </div>
