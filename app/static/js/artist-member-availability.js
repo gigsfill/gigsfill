@@ -1,12 +1,12 @@
 /**
  * Artist Edit → Member Availability (read-only summary)
  * ======================================================
- * Lists each band member and their upcoming personal blackouts that
+ * Lists each member and their upcoming personal blackouts that
  * apply to this artist (member-level user_availability rows where
  * artist_id IS NULL or matches this artist).
  *
  * Soft warnings only — booking attempts surface these in a confirm
- * modal but don't hard-block. Hard-block lives at the band level
+ * modal but don't hard-block. Hard-block lives at the artist level
  * (artist_availability), edited above this section.
  */
 (function () {
@@ -64,7 +64,7 @@
                   ${_esc(_rangeLabel(b.blackout_start, b.blackout_end))}
                 </span>
                 <span style="font-size:0.72rem;color:#f59e0b;background:rgba(245,158,11,0.1);padding:1px 7px;border-radius:4px;border:1px solid rgba(245,158,11,0.25);">
-                  ${b.artist_id ? 'This band only' : 'All their bands'}
+                  ${b.artist_id ? 'This artist only' : 'All their artists'}
                 </span>
                 ${b.reason ? '<span style="font-style:italic;">' + _esc(b.reason) + '</span>' : ''}
               </div>

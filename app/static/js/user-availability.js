@@ -6,7 +6,7 @@
  *
  * Soft warning model: blackouts here do NOT hard-block bookings — they
  * surface at booking time as "Jim Smith has these days blocked. Book anyway?"
- * Hard blocks remain at the band level (artist_availability).
+ * Hard blocks remain at the artist level (artist_availability).
  */
 (function () {
   'use strict';
@@ -48,7 +48,7 @@
     const wrap = document.getElementById('uaArtistChecks');
     if (!wrap) return;
     if (!_uaMyArtists.length) {
-      wrap.innerHTML = '<p style="color:var(--text-gray);font-size:0.78rem;margin:0;">You\'re not a member of any artists yet. Add the blackout against "All my bands" and it will apply once you join an artist.</p>';
+      wrap.innerHTML = '<p style="color:var(--text-gray);font-size:0.78rem;margin:0;">You\'re not a member of any artists yet. Add the blackout against "All my artists" and it will apply once you join an artist.</p>';
       return;
     }
     wrap.innerHTML = _uaMyArtists.map(a => `
@@ -80,8 +80,8 @@
               <div style="font-weight:600;color:var(--text);">${_esc(_rangeLabel(r.blackout_start, r.blackout_end))}</div>
               <div style="font-size:0.78rem;color:var(--text-gray);">
                 ${r.artist_id
-                  ? '🎸 ' + _esc(r.artist_name || 'Band #' + r.artist_id)
-                  : 'All my bands'}
+                  ? '🎸 ' + _esc(r.artist_name || 'Artist #' + r.artist_id)
+                  : 'All my artists'}
                 ${r.reason ? ' · ' + _esc(r.reason) : ''}
               </div>
             </div>
@@ -99,7 +99,7 @@
     const wrap = document.getElementById('uaBandBlackouts');
     if (!wrap) return;
     if (!rows.length) {
-      wrap.innerHTML = '<p style="color:var(--text-gray);">No band-wide blackouts.</p>';
+      wrap.innerHTML = '<p style="color:var(--text-gray);">No artist-wide blackouts.</p>';
       return;
     }
     wrap.innerHTML = `
@@ -133,7 +133,7 @@
       artistIds = Array.from(document.querySelectorAll('.ua-artist-cb:checked'))
         .map(cb => parseInt(cb.value, 10)).filter(Boolean);
       if (!artistIds.length) {
-        status.textContent = 'Pick at least one band, or switch to "All my bands".';
+        status.textContent = 'Pick at least one artist, or switch to "All my artists".';
         status.style.color = '#ef4444';
         return;
       }
@@ -153,7 +153,7 @@
           blackout_start: start,
           blackout_end: end || start,
           reason: reason,
-          artist_ids: artistIds,  // null = all my bands
+          artist_ids: artistIds,  // null = all my artists
         })
       });
       if (!res.ok) {

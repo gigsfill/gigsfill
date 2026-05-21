@@ -2475,8 +2475,8 @@ async function runBookingPrecheck(gigId, artistId, slotId) {
       if (!proceed) return false;
     }
 
-    // Member blackouts — soft warning. Surfaces when one or more band
-    // members have personal blackouts covering this gig's date. Band can
+    // Member blackouts — soft warning. Surfaces when one or more
+    // members have personal blackouts covering this gig's date. Artist can
     // confirm through (e.g. perform without the unavailable member).
     if (data.member_blackouts && data.member_blackouts.length) {
       // showStyledModal allows raw HTML in content; showConfirm escapes.
@@ -2489,12 +2489,12 @@ async function runBookingPrecheck(gigId, artistId, slotId) {
                (b.reason ? ` — <em>${_escTxt(b.reason)}</em>` : '') + '</li>';
       }).join('');
       const body =
-        '<p style="margin:0 0 6px;">One or more band members have these dates blocked:</p>' +
+        '<p style="margin:0 0 6px;">One or more members have these dates blocked:</p>' +
         `<ul style="margin:0;padding-left:20px;font-size:0.88rem;color:var(--text);">${itemsHtml}</ul>` +
         '<p style="margin-top:10px;font-size:0.82rem;color:var(--text-gray);">Book anyway? (e.g. if performing without them.)</p>';
       const proceedMember = await new Promise(resolve => {
         window.showStyledModal(
-          '⚠️ Band Member Unavailable',
+          '⚠️ Member Unavailable',
           body,
           [
             { text: 'Never Mind', style: 'ghost',   onClick: () => resolve(false) },
