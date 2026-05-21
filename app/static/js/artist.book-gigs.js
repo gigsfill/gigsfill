@@ -1434,6 +1434,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         const slotId  = btn.dataset.slotId;
         const slotNum = btn.dataset.slotNum;
 
+        // Time-conflict precheck: hard-block on overlap, confirm on proximity.
+        // Single gateway — applies to direct book + all 3 contract flows below.
+        const _pc = await runBookingPrecheck(data.id, artistId, slotId);
+        if (!_pc) return;
+
         // Contract check
         let contractInfo = null;
         try {
@@ -2411,6 +2416,70 @@ document.addEventListener("DOMContentLoaded", async () => {
 // based on title text is handled centrally inside gf-modals._buildModal,
 // so every call site across the app gets consistent tones without each
 // caller needing to pass {tone:'error'} explicitly.
+/**
+ * Pre-booking time-conflict check. Calls /api/gigs/{id}/booking-precheck.
+ * Returns:
+ *   true   → no conflict OR user confirmed proximity warning → proceed with booking
+ *   false  → hard overlap with existing booking, alert shown → caller MUST abort
+ *
+ * Soft-fails to true on network/server error — the backend's _enforce check
+ * is the authoritative gate; the precheck is just for UX.
+ *
+ * Why a single helper: the slot-book button gates ALL booking flows
+ * (direct, contract-signing modal, PDF contract, per-gig PDF), so one
+ * precheck call up-front covers every downstream path.
+ */
+async function runBookingPrecheck(gigId, artistId, slotId) {
+  try {
+    const url = `/api/gigs/${gigId}/booking-precheck?artist_id=${artistId}` +
+                (slotId ? '&slot_id=' + slotId : '');
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) return true; // backend will hard-block real conflicts anyway
+    const data = await res.json();
+
+    if (data.overlap && data.other) {
+      const o = data.other;
+      const _fmt = (t) => {
+        if (!t || typeof t !== 'string' || !t.includes(':')) return t || '';
+        const [h, m] = t.split(':').map(n => parseInt(n, 10));
+        if (isNaN(h)) return t;
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        return `${((h + 11) % 12) + 1}:${String(m||0).padStart(2,'0')} ${ampm}`;
+      };
+      window.showAlert(
+        `You're already booked at ${o.venue_name} on ${o.gig_date} from ${_fmt(o.start_time)} to ${_fmt(o.end_time)}. ` +
+        `Cancel that booking first if you want to take this one instead.`,
+        'Time Conflict — Cannot Book'
+      );
+      return false;
+    }
+
+    if (data.within_window && data.other) {
+      const o = data.other;
+      const mins = data.minutes_apart || 0;
+      const hoursDisplay = mins < 60
+        ? `${mins} minute${mins === 1 ? '' : 's'}`
+        : `${(mins / 60).toFixed(1).replace(/\.0$/, '')} hours`;
+      const whenPhrase = data.direction === 'before'
+        ? `ends ${hoursDisplay} before this one starts`
+        : `starts ${hoursDisplay} after this one ends`;
+      return await new Promise(resolve => {
+        window.showConfirm(
+          '⏰ Close to Another Booking',
+          `You're already booked at ${o.venue_name} on ${o.gig_date} (${o.start_time}–${o.end_time}). That gig ${whenPhrase}. Book this gig anyway?`,
+          () => resolve(true),
+          () => resolve(false),
+          { tone: 'warning', confirmLabel: 'Book Anyway', cancelLabel: 'Never Mind', confirmStyle: 'primary' }
+        );
+      });
+    }
+
+    return true;
+  } catch (_e) {
+    return true; // network glitch — backend will catch a true overlap
+  }
+}
+
 function showStyledModal(title, content, buttons, opts) {
   const adapted = (buttons || []).map(b => ({
     text:    b.text,

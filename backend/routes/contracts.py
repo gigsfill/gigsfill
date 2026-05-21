@@ -1972,8 +1972,16 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
 
     # ── Pre-booking checks — shared with book_gig and book_slot ─────────────
     _blast_token = request.query_params.get("blast_token") or data.get("blast_token") or ""
-    from backend.routes.gigs import _run_prebooking_checks, _is_same_day_booking, _ensure_approval_columns
+    from backend.routes.gigs import _run_prebooking_checks, _is_same_day_booking, _ensure_approval_columns, _enforce_no_artist_time_overlap
     _check_result = _run_prebooking_checks(db, gig_id, artist_id, venue_id, str(gig.get("date", "")), _blast_token)
+    # Hard-block on time overlap with the artist's other commitments.
+    # Use slot times if booking a slot; gig umbrella times for single-slot.
+    if slot_id and slot:
+        _enforce_no_artist_time_overlap(db, artist_id, gig_id, venue_id,
+                                        gig.get("date"), slot["start_time"], slot["end_time"])
+    else:
+        _enforce_no_artist_time_overlap(db, artist_id, gig_id, venue_id,
+                                        gig.get("date"), gig.get("start_time"), gig.get("end_time"))
     # ─────────────────────────────────────────────────────────────────────────
 
     # Same-day check: radius artists (non-preferred) need venue approval even with contract

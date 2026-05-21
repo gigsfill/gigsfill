@@ -1225,6 +1225,197 @@ def _open_blast_bypass_active(db, venue_id: int, gig_id: int) -> bool:
         return False
 
 
+PROXIMITY_HOURS = 3  # warn (but don't block) if another booking is within this window
+
+
+@router.get("/api/gigs/{gig_id}/booking-precheck")
+def booking_precheck(gig_id: int, artist_id: int, slot_id: int = None,
+                     user=Depends(get_current_user), db=Depends(get_db)):
+    """Pre-booking conflict check for the frontend's confirm flow.
+    Returns {'overlap': bool, 'within_window': bool, 'minutes_apart': N,
+    'other': {gig info}}. Frontend uses 'overlap' to hard-stop the booking
+    and 'within_window' to confirm the user wants to proceed despite proximity.
+
+    Does NOT mutate any state — purely informational. The real overlap
+    enforcement happens inside the book_gig / book_slot / book_with_contract
+    endpoints, so a malicious caller can't skip the precheck."""
+    from backend.utils import check_artist_access
+    check_artist_access(db, artist_id, user.id)
+
+    gig = db.execute(
+        text("SELECT id, venue_id, date, start_time, end_time FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+
+    if slot_id:
+        slot = db.execute(
+            text("SELECT start_time, end_time FROM gig_slots WHERE id = :sid AND gig_id = :gid"),
+            {"sid": slot_id, "gid": gig_id}
+        ).mappings().first()
+        if not slot:
+            raise HTTPException(404, "Slot not found")
+        new_dt = _parse_gig_slot_dt(db, gig["venue_id"], gig["date"],
+                                     slot["start_time"], slot["end_time"])
+    else:
+        new_dt = _parse_gig_slot_dt(db, gig["venue_id"], gig["date"],
+                                     gig.get("start_time"), gig.get("end_time"))
+
+    if not new_dt:
+        return {"overlap": False, "within_window": False}
+
+    new_start, new_end = new_dt
+    return _check_artist_time_conflict(db, artist_id, gig_id, new_start, new_end)
+
+
+def _check_artist_time_conflict(db, artist_id: int, gig_id: int,
+                                 new_start_dt, new_end_dt):
+    """Check if booking this slot would conflict with the artist's other bookings.
+    Returns dict:
+      {'overlap': True,  'other': {gig info}}            → HARD BLOCK
+      {'overlap': False, 'within_window': True,  ...}    → WARN ONLY (caller decides)
+      {'overlap': False, 'within_window': False}         → CLEAR
+
+    new_start_dt / new_end_dt are timezone-aware datetimes (or both naive in
+    the same reference). Caller is responsible for tz-normalizing.
+    """
+    from sqlalchemy import text as _t
+    from datetime import datetime as _dt, timedelta as _td
+    from backend.utils import get_venue_timezone_str
+    from zoneinfo import ZoneInfo
+
+    # Pull every gig+slot the artist is committed to (booked, pending_contract,
+    # pending_venue_approval, awaiting_venue_contract) EXCEPT this one.
+    rows = db.execute(_t("""
+        SELECT g.id as gig_id, g.venue_id, g.date as gig_date,
+               g.start_time as g_start, g.end_time as g_end,
+               g.title, v.venue_name,
+               gs.start_time as s_start, gs.end_time as s_end,
+               gs.slot_number, gs.status as slot_status,
+               g.status as gig_status
+        FROM gigs g
+        JOIN venues v ON v.id = g.venue_id
+        LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
+        WHERE g.id != :gid
+          AND (
+            -- Single-slot booking: artist on gig itself
+            (g.artist_id = :aid AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval'))
+            OR
+            -- Multi-slot booking: artist on a specific slot
+            (gs.artist_id = :aid AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval'))
+          )
+    """), {"aid": artist_id, "gid": gig_id}).mappings().all()
+
+    if not rows:
+        return {"overlap": False, "within_window": False}
+
+    closest = None
+    closest_minutes = None
+    overlap_row = None
+
+    for r in rows:
+        # Prefer slot times if present (multi-slot), else gig-level times
+        st_str = r["s_start"] or r["g_start"]
+        et_str = r["s_end"]   or r["g_end"]
+        if not st_str or not et_str or not r["gig_date"]:
+            continue
+        try:
+            venue_tz = ZoneInfo(get_venue_timezone_str(db, r["venue_id"]))
+            other_start = _dt.strptime(f"{str(r['gig_date'])[:10]} {st_str}", "%Y-%m-%d %H:%M").replace(tzinfo=venue_tz)
+            other_end   = _dt.strptime(f"{str(r['gig_date'])[:10]} {et_str}", "%Y-%m-%d %H:%M").replace(tzinfo=venue_tz)
+            # Overnight roll: if end <= start, the slot ends after midnight
+            if other_end <= other_start:
+                other_end = other_end + _td(days=1)
+        except Exception:
+            continue
+
+        # Overlap: max(starts) < min(ends)
+        latest_start  = max(new_start_dt, other_start)
+        earliest_end  = min(new_end_dt, other_end)
+        if latest_start < earliest_end:
+            overlap_row = r
+            break  # hard block, no need to look further
+
+        # Proximity: closest distance between this booking and the new one
+        if other_end <= new_start_dt:
+            gap = (new_start_dt - other_end).total_seconds() / 60.0
+            direction = "before"
+        elif new_end_dt <= other_start:
+            gap = (other_start - new_end_dt).total_seconds() / 60.0
+            direction = "after"
+        else:
+            gap = 0.0
+            direction = "overlap"  # caught above
+        if closest_minutes is None or gap < closest_minutes:
+            closest_minutes = gap
+            closest = {"row": r, "direction": direction,
+                       "other_start": other_start, "other_end": other_end}
+
+    def _fmt(r):
+        return {
+            "gig_id": r["gig_id"],
+            "venue_name": r["venue_name"],
+            "gig_date": str(r["gig_date"])[:10],
+            "start_time": r["s_start"] or r["g_start"],
+            "end_time":   r["s_end"]   or r["g_end"],
+            "title": r["title"] or "",
+            "slot_number": r["slot_number"],
+        }
+
+    if overlap_row is not None:
+        return {"overlap": True, "other": _fmt(overlap_row)}
+
+    if closest_minutes is not None and closest_minutes <= PROXIMITY_HOURS * 60:
+        r = closest["row"]
+        return {
+            "overlap": False,
+            "within_window": True,
+            "minutes_apart": int(closest_minutes),
+            "direction": closest["direction"],  # 'before' = other ends before new starts
+            "other": _fmt(r),
+        }
+
+    return {"overlap": False, "within_window": False}
+
+
+def _enforce_no_artist_time_overlap(db, artist_id: int, gig_id: int, venue_id: int,
+                                     gig_date, start_time, end_time):
+    """Raise HTTPException(403, 'TIME_OVERLAP: ...') if the artist is already
+    committed to another gig that overlaps this slot's time window. No-op
+    when slot times are missing or the artist has no conflict."""
+    dt_pair = _parse_gig_slot_dt(db, venue_id, gig_date, start_time, end_time)
+    if not dt_pair:
+        return
+    new_start, new_end = dt_pair
+    conflict = _check_artist_time_conflict(db, artist_id, gig_id, new_start, new_end)
+    if conflict.get("overlap"):
+        other = conflict["other"]
+        raise HTTPException(403,
+            f"TIME_OVERLAP: You're already booked at {other['venue_name']} "
+            f"on {other['gig_date']} from {other['start_time']} to {other['end_time']}. "
+            f"Cancel that booking first if you want to take this one instead.")
+
+
+def _parse_gig_slot_dt(db, venue_id: int, gig_date, start_time, end_time):
+    """Build timezone-aware (start_dt, end_dt) for a gig/slot in the venue's tz.
+    Handles overnight (end <= start → end is next day). Returns None on bad input."""
+    from datetime import datetime as _dt, timedelta as _td
+    from backend.utils import get_venue_timezone_str
+    from zoneinfo import ZoneInfo
+    if not gig_date or not start_time or not end_time:
+        return None
+    try:
+        tz = ZoneInfo(get_venue_timezone_str(db, venue_id))
+        s = _dt.strptime(f"{str(gig_date)[:10]} {start_time}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+        e = _dt.strptime(f"{str(gig_date)[:10]} {end_time}",   "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+        if e <= s:
+            e = e + _td(days=1)
+        return (s, e)
+    except Exception:
+        return None
+
+
 # BOOK GIG (ARTIST) - COMPLETELY REWRITTEN
 
 def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
@@ -1472,6 +1663,12 @@ def book_gig(
         pass  # Artist re-submitting their own pending gig — allow through
     elif gig["status"] != "open":
         raise HTTPException(403, "Gig is not open")
+
+    # FIX (May 21 2026): hard-block if booking this gig would overlap the
+    # artist's other commitments at ANY venue. Proximity warning (within 3h)
+    # is surfaced by the precheck endpoint — frontend handles confirm flow.
+    _enforce_no_artist_time_overlap(db, artist_id, gig_id, gig["venue_id"],
+                                    gig.get("date"), gig.get("start_time"), gig.get("end_time"))
 
     # Check preferred approval — bypass if:
     #   a) a valid radius_blast_token is presented (email deep-link path), OR
@@ -3305,6 +3502,10 @@ def book_slot(
     ).mappings().first()
     if not gig:
         raise HTTPException(404, "Gig not found")
+
+    # FIX (May 21 2026): hard-block on time-overlap with another booking.
+    _enforce_no_artist_time_overlap(db, artist_id, gig_id, gig["venue_id"],
+                                    gig.get("date"), slot.get("start_time"), slot.get("end_time"))
 
     # ── Waitlist lock — same rule as single-slot booking ────────────────────
     slot_active_offer = db.execute(
