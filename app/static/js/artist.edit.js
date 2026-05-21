@@ -588,8 +588,16 @@ async function loadArtist() {
       const file = e.target.files[0];
       if (!file) return;
 
+      // Auto-populate Title from the uploaded filename (drop extension,
+      // turn _ / - into spaces, trim). User can edit it after upload.
+      const titleFromFilename = file.name
+        .replace(/\.[^.]+$/, "")
+        .replace(/[_-]+/g, " ")
+        .trim();
+
       const fd = new FormData();
       fd.append("file", file);
+      if (titleFromFilename) fd.append("title", titleFromFilename);
 
       const res = await fetch(`/api/artists/${artistId}/media/audio`, {
         method: "POST",
@@ -654,6 +662,31 @@ async function loadArtist() {
       loadMedia(artistId);
     };
 
+  }
+
+  // Pick the right embed for an audio link based on its URL:
+  //   • SoundCloud track/playlist URLs → the public widget iframe
+  //   • Direct audio file (.mp3 / .wav / .ogg / .m4a / .aac / .flac) → <audio>
+  //   • Anything else → a clickable 🔗 link (link still opens in a new tab)
+  function renderAudioLinkPlayer(rawUrl) {
+    const url = String(rawUrl || "");
+    if (!url) return "";
+    const safeUrl = url.replace(/"/g, "&quot;");
+
+    if (/soundcloud\.com\//i.test(url)) {
+      const src = "https://w.soundcloud.com/player/?url=" + encodeURIComponent(url)
+                + "&color=%238b5cf6&inverse=true&auto_play=false&hide_related=true"
+                + "&show_comments=false&show_user=true&show_reposts=false&show_teaser=false";
+      return `<iframe class="audio-link-iframe" width="100%" height="100" scrolling="no" frameborder="no" allow="autoplay" src="${src.replace(/"/g,'&quot;')}" style="flex:1;min-width:0;border-radius:6px;"></iframe>`;
+    }
+    if (/\.(mp3|wav|ogg|m4a|aac|flac)(\?|#|$)/i.test(url)) {
+      return `<audio controls src="${safeUrl}" style="flex:1;min-width:0;"></audio>`;
+    }
+    const displayUrl = url.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    const safeDisplay = displayUrl.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<a href="${safeUrl}" target="_blank" rel="noopener"
+               style="flex:1;min-width:0;color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;"
+               title="${safeUrl}">🔗 ${safeDisplay}</a>`;
   }
 
   function getVideoThumbnail(url) {
@@ -752,12 +785,12 @@ async function loadArtist() {
       }
 
       // -----------------------------
-      // AUDIO LINK (external URL — SoundCloud / Bandcamp / etc.)
+      // AUDIO LINK (external URL — SoundCloud / Bandcamp / direct file)
       // -----------------------------
       if (m.media_type === "audio_link") {
         hasAudio = true;
         const url = m.video_url || "";
-        const displayUrl = url.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+        const playerHtml = renderAudioLinkPlayer(url);
 
         audioEl.insertAdjacentHTML("beforeend", `
           <div class="audio-row" data-id="${m.id}" data-kind="audio_link">
@@ -769,9 +802,7 @@ async function loadArtist() {
               maxlength="65"
               data-id="${m.id}"
             />
-            <a href="${url}" target="_blank" rel="noopener"
-               style="flex:1;min-width:0;color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;"
-               title="${url}">🔗 ${displayUrl}</a>
+            ${playerHtml}
             <button class="delete-btn" data-id="${m.id}">Delete</button>
           </div>
         `);

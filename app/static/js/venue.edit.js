@@ -883,14 +883,37 @@ document.addEventListener("blur", async e => {
 
 document.addEventListener("click", async e => {
   if (!e.target.classList.contains("delete-btn")) return;
-  if (!confirm("Delete this media?")) return;
 
-  await fetch(`/api/venues/media/${e.target.dataset.id}`, {
-    method: "DELETE",
-    credentials: "include"
-  });
+  const btn = e.target;
+  const card = btn.closest(".media-card");
+  const id = btn.dataset.id;
 
-  e.target.closest(".media-card").remove();
+  const doDelete = async () => {
+    const res = await fetch(`/api/venues/media/${id}`, {
+      method: "DELETE",
+      credentials: "include"
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      const msg = detail.detail || "Delete failed.";
+      if (window.showErrorModal) window.showErrorModal("Delete failed", msg);
+      else alert(msg);
+      return;
+    }
+    if (card) card.remove();
+  };
+
+  if (window.showConfirm) {
+    window.showConfirm(
+      "Delete this media?",
+      "This action can't be undone.",
+      doDelete,
+      null,
+      { tone: 'warning', confirmLabel: 'Delete', cancelLabel: 'Cancel', confirmStyle: 'danger' }
+    );
+  } else if (confirm("Delete this media?")) {
+    doDelete();
+  }
 });
 
 // -----------------------------
