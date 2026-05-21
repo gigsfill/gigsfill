@@ -430,51 +430,97 @@
         ? `<a href="https://dashboard.stripe.com/${stripeRef.startsWith('pi_') ? 'payments/' : 'connect/transfers/'}${esc(stripeRef)}" target="_blank" title="${esc(stripeRef)}" style="color:var(--cyan);font-family:monospace;font-size:0.78rem;">${esc(stripeShort)} ↗</a>`
         : '<span style="color:var(--text-gray);">—</span>';
 
-      const sibsHtml = (data.siblings && data.siblings.length)
+      // Combined per-gig transactions table — replaces the old separate
+      // "Related rows" and "Gig slots" sections. Each row shows: ID, Slot,
+      // Time, Type, Artist, Status, Gig $ (the gig's gross pay for that
+      // slot), Paid (what changed hands on Stripe), Processed timestamp.
+      // The clicked row is highlighted in cyan with a "(this)" tag.
+      const allTxns = data.siblings || [t];
+      const slots   = (data.slots || []).slice().sort((a, b) =>
+        (a.slot_number || 0) - (b.slot_number || 0));
+      const childTxns = allTxns
+        .filter(s => s.transaction_type === 'artist_payout')
+        .sort((a, b) => a.id - b.id);
+      const sameCount = slots.length === childTxns.length && childTxns.length > 0;
+      // Map child txn id → matching slot. If slot count matches child count,
+      // zip by id ASC ↔ slot_number ASC; otherwise fall back to artist_id.
+      const slotByChildId = {};
+      childTxns.forEach((c, i) => {
+        slotByChildId[c.id] = sameCount
+          ? slots[i]
+          : slots.find(s => s.artist_id === c.artist_id);
+      });
+
+      function gigDollarsFor(s) {
+        // Parent (venue_charge / single) — amount_cents is the gross gig pay
+        // (sum of slot pays). Child (artist_payout) — slot.pay.
+        if (s.transaction_type === 'artist_payout') {
+          const sl = slotByChildId[s.id];
+          return sl ? `$${Number(sl.pay || 0).toFixed(2)}` : '—';
+        }
+        return dollars(s.amount_cents);
+      }
+      function paidFor(s) {
+        // Venue side: what the venue actually paid (incl fees).
+        // Artist side: what the artist actually received (net of commission).
+        if (s.transaction_type === 'artist_payout') return dollars(s.artist_payout_cents);
+        return dollars(s.venue_charge_cents || s.amount_cents);
+      }
+      function rowMarkup(s) {
+        const isThis = s.id == txnId;
+        const sl = slotByChildId[s.id];
+        const slotN = sl ? esc(String(sl.slot_number)) : '—';
+        const time  = (sl && sl.start_time && sl.end_time)
+          ? `${esc(fmtTime12(sl.start_time))}–${esc(fmtTime12(sl.end_time))}`
+          : '—';
+        let artist = '—';
+        if (s.transaction_type === 'artist_payout') {
+          artist = sl && sl.artist_name ? esc(sl.artist_name)
+                 : (isThis ? esc(t.artist_name || '—') : '—');
+        }
+        return `<tr style="border-bottom:1px solid var(--border);${isThis ? 'background:rgba(6,182,212,0.07);' : ''}">
+          <td style="padding:5px;">#${s.id}${isThis ? ' (this)' : ''}</td>
+          <td style="padding:5px;">${slotN}</td>
+          <td style="padding:5px;">${time}</td>
+          <td style="padding:5px;">${esc(TYPE_LABEL[s.transaction_type] || s.transaction_type)}</td>
+          <td style="padding:5px;">${artist}</td>
+          <td style="padding:5px;">${statusPill(s.status)}</td>
+          <td style="padding:5px;text-align:right;font-family:monospace;">${gigDollarsFor(s)}</td>
+          <td style="padding:5px;text-align:right;font-family:monospace;font-weight:600;">${paidFor(s)}</td>
+          <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(fmtDateTime(s.processed_at || s.scheduled_process_at))}</td>
+        </tr>`;
+      }
+      // Order: parent venue_charge first, then child payouts in slot order.
+      const orderedRows = allTxns
+        .slice()
+        .sort((a, b) => {
+          const av = (a.transaction_type === 'venue_charge' || a.transaction_type === 'single') ? 0 : 1;
+          const bv = (b.transaction_type === 'venue_charge' || b.transaction_type === 'single') ? 0 : 1;
+          if (av !== bv) return av - bv;
+          return a.id - b.id;
+        });
+
+      const sibsHtml = orderedRows.length
         ? `<div style="margin-top:14px;">
-             <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Related rows (parent + siblings)</div>
-             <table style="width:100%;border-collapse:collapse;font-size:0.7rem;">
+             <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Transactions on this gig</div>
+             <table style="width:100%;border-collapse:collapse;font-size:0.72rem;">
                <thead><tr style="background:rgba(255,255,255,0.03);">
                  <th style="padding:5px;text-align:left;color:var(--text-gray);">ID</th>
+                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Slot</th>
+                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Time</th>
                  <th style="padding:5px;text-align:left;color:var(--text-gray);">Type</th>
+                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Artist</th>
                  <th style="padding:5px;text-align:left;color:var(--text-gray);">Status</th>
-                 <th style="padding:5px;text-align:right;color:var(--text-gray);">Amount</th>
-                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Stripe</th>
+                 <th style="padding:5px;text-align:right;color:var(--text-gray);">Gig $</th>
+                 <th style="padding:5px;text-align:right;color:var(--text-gray);">Paid</th>
+                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Processed</th>
                </tr></thead><tbody>
-               ${data.siblings.map(s => {
-                 const amt = s.transaction_type === 'artist_payout' ? s.artist_payout_cents : (s.venue_charge_cents || s.amount_cents);
-                 const sStripe = s.stripe_transfer_id || '';
-                 return `<tr style="border-bottom:1px solid var(--border);${s.id == txnId ? 'background:rgba(6,182,212,0.07);' : ''}">
-                   <td style="padding:5px;">#${s.id}${s.id == txnId ? ' (this)' : ''}</td>
-                   <td style="padding:5px;">${esc(TYPE_LABEL[s.transaction_type] || s.transaction_type)}</td>
-                   <td style="padding:5px;">${statusPill(s.status)}</td>
-                   <td style="padding:5px;text-align:right;">${dollars(amt)}</td>
-                   <td style="padding:5px;font-family:monospace;font-size:0.65rem;color:var(--text-gray);">${esc((sStripe || '').slice(0,18))}${sStripe ? '…' : '—'}</td>
-                 </tr>`;
-               }).join('')}
+               ${orderedRows.map(rowMarkup).join('')}
              </tbody></table>
            </div>` : '';
 
-      const slotsHtml = (data.slots && data.slots.length > 1)
-        ? `<div style="margin-top:14px;">
-             <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Gig slots (${data.slots.length})</div>
-             <table style="width:100%;border-collapse:collapse;font-size:0.7rem;">
-               <thead><tr style="background:rgba(255,255,255,0.03);">
-                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Slot</th>
-                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Time</th>
-                 <th style="padding:5px;text-align:right;color:var(--text-gray);">Pay</th>
-                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Status</th>
-                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Artist</th>
-               </tr></thead><tbody>
-               ${data.slots.map(sl => `<tr style="border-bottom:1px solid var(--border);">
-                 <td style="padding:5px;">${esc(sl.slot_number)}</td>
-                 <td style="padding:5px;">${esc(fmtTime12(sl.start_time) || '—')}–${esc(fmtTime12(sl.end_time) || '—')}</td>
-                 <td style="padding:5px;text-align:right;">$${Number(sl.pay || 0).toFixed(2)}</td>
-                 <td style="padding:5px;">${esc(sl.status)}</td>
-                 <td style="padding:5px;">${esc(sl.artist_name || '—')}</td>
-               </tr>`).join('')}
-             </tbody></table>
-           </div>` : '';
+      // Old separate "Gig slots" section is now merged into the table above.
+      const slotsHtml = '';
 
       const auditHtml = (data.audit && data.audit.length)
         ? `<div style="margin-top:14px;">
@@ -545,24 +591,33 @@
           <div style="display:flex;flex-wrap:wrap;align-items:center;">${buttons}</div>
         </div>`;
 
+      // Gig-level overview replaces the old 14-cell grid that mixed gig
+      // info with single-txn info. Per-txn detail lives in the table below;
+      // the clicked row is flagged there.
+      const venueLine = t.venue_name
+        ? esc(t.venue_name) + (t.venue_city ? ` <span style="color:var(--text-gray);">· ${esc(t.venue_city)}${t.venue_state ? ', ' + esc(t.venue_state) : ''}</span>` : '')
+        : '—';
+      const gigTime = t.gig_start_time ? ' · ' + esc(fmtTime12(t.gig_start_time)) : '';
+      const gigLine = '#' + t.gig_id + (t.gig_title ? ' — ' + esc(t.gig_title) : '');
+      const selectedLine = `#${t.id} (${esc(TYPE_LABEL[t.transaction_type_resolved] || t.transaction_type_resolved)} · ${statusPill(t.status)})`
+        + (stripeRef ? ` · ${stripeLink}` : '');
+
+      const overviewRow = (label, val) => `
+        <tr>
+          <td style="padding:3px 8px 3px 0;color:var(--text-gray);font-size:0.7rem;white-space:nowrap;width:1%;">${esc(label)}</td>
+          <td style="padding:3px 0;font-size:0.82rem;color:var(--text);">${val}</td>
+        </tr>`;
+
       const body = `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
-          ${cell('Status',          statusPill(t.status))}
-          ${cell('Type',            esc(TYPE_LABEL[t.transaction_type_resolved] || t.transaction_type_resolved))}
-          ${cell('Venue',           esc(t.venue_name || '—'))}
-          ${cell('Artist',          esc(t.artist_name || '—'))}
-          ${cell('Gig',             '#' + t.gig_id + (t.gig_title ? ' — ' + esc(t.gig_title) : ''))}
-          ${cell('Gig date',        fmtDate(t.gig_date) + (t.gig_start_time ? ' ' + esc(fmtTime12(t.gig_start_time)) : ''))}
-          ${cell('Amount (gross)',  dollars(t.amount_cents))}
-          ${cell('Venue charge',    dollars(t.venue_charge_cents))}
-          ${cell('Artist payout',   dollars(t.artist_payout_cents))}
-          ${cell('Commission',      dollars(t.commission_cents))}
-          ${cell('Scheduled',       fmtDateTime(t.scheduled_process_at))}
-          ${cell('Processed',       fmtDateTime(t.processed_at))}
-          ${cell('Created',         fmtDateTime(t.created_at))}
-          ${cell('Stripe ref',      stripeLink)}
+        <div style="padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+          <table style="border-collapse:collapse;">
+            ${overviewRow('Gig',      gigLine)}
+            ${overviewRow('Venue',    venueLine)}
+            ${overviewRow('Date',     esc(fmtDate(t.gig_date)) + gigTime)}
+            ${overviewRow('Selected', selectedLine)}
+          </table>
         </div>
-        ${t.notes ? `<div style="margin-top:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border-left:3px solid var(--cyan);font-size:0.72rem;color:var(--text-gray);"><strong style="color:var(--text);">Notes:</strong> ${esc(t.notes)}</div>` : ''}
+        ${t.notes ? `<div style="margin-top:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border-left:3px solid var(--cyan);font-size:0.72rem;color:var(--text-gray);"><strong style="color:var(--text);">Notes (selected row):</strong> ${esc(t.notes)}</div>` : ''}
         ${sibsHtml}
         ${slotsHtml}
         ${actionsHtml}
