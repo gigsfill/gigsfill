@@ -1375,8 +1375,22 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
 
 
 def _correct_transaction_amount_if_needed(db, txn, venue_id, artist_id, gig_pay):
-    """If txn is scheduled/test and effective pay > stored amount, update transaction to effective pay (venue override)."""
+    """If txn is scheduled/test and effective pay > stored amount, update transaction to effective pay (venue override).
+
+    FIX (May 21 2026): this corrector was originally designed for single-slot
+    gigs where gig.pay = slot.pay. For MULTI-SLOT gigs the parent gig.pay
+    is MAX(slot pays) — so calling _get_effective_pay with gig.pay would
+    bump ANY non-max artist's amount to the max slot pay (e.g. Fridays Past
+    at $10 got "corrected" to $15 because Fifty Proof's slot was $15).
+    Multi-slot child rows have their amount locked to their slot.pay at
+    booking time (which already reflects any per-artist override), so the
+    corrector is a no-op for them.
+    """
     if txn.get("status") not in ("scheduled", "test"):
+        return
+    if (txn.get("transaction_type") or "").lower() == "artist_payout":
+        # Multi-slot child — amount is authoritatively the slot's pay,
+        # set at booking time. Don't try to second-guess it.
         return
     from backend.routes.gigs import _get_effective_pay
     effective = _get_effective_pay(db, venue_id, artist_id, gig_pay)
