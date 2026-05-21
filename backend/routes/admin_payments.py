@@ -431,6 +431,12 @@ def refund_payment(
         raise HTTPException(400,
             "No Stripe payment_intent on this transaction — nothing to refund.")
 
+    # dry_run mode: validate everything but skip both the Stripe call AND the
+    # DB writes. Caller gets the "would have done X" payload back. Useful for
+    # smoke-testing the UI / endpoint without moving real money. The frontend
+    # surfaces this as a "Test (dry run)" toggle on the modal.
+    dry_run = bool(payload.get("dry_run"))
+
     # 2. Validate the requested amount ─────────────────────────────────────
     charge_cents = int(row["venue_charge_cents"] or 0)
     requested = payload.get("amount_cents")
@@ -471,28 +477,31 @@ def refund_payment(
 
     notes_in = (payload.get("notes") or "").strip()[:500]
 
-    # 5. Fire the Stripe refund ────────────────────────────────────────────
-    from backend.routes.stripe_connect import init_stripe
-    stripe, _keys = init_stripe(db)
+    # 5. Fire the Stripe refund (or skip on dry_run) ──────────────────────
+    if dry_run:
+        refund = type("_DryRefund", (), {"id": "re_dryrun_" + str(int(time.time()))})()
+    else:
+        from backend.routes.stripe_connect import init_stripe
+        stripe, _keys = init_stripe(db)
 
-    idem_key = f"admin_refund_txn_{txn_id}_{int(time.time())}"
-    try:
-        refund = stripe.Refund.create(
-            payment_intent=pi_id,
-            amount=amount_cents,         # cents
-            reason=reason,
-            idempotency_key=idem_key,
-            metadata={
-                "txn_id": str(txn_id),
-                "gig_id": str(row["gig_id"]),
-                "initiated_by": "admin_payments_console",
-                "admin_user_id": str(getattr(admin, "id", "") or ""),
-            },
-        )
-    except Exception as e:
-        # Surface the Stripe error verbatim so the admin sees what went wrong
-        msg = getattr(e, "user_message", None) or str(e)
-        raise HTTPException(502, f"Stripe refund failed: {msg}")
+        idem_key = f"admin_refund_txn_{txn_id}_{int(time.time())}"
+        try:
+            refund = stripe.Refund.create(
+                payment_intent=pi_id,
+                amount=amount_cents,         # cents
+                reason=reason,
+                idempotency_key=idem_key,
+                metadata={
+                    "txn_id": str(txn_id),
+                    "gig_id": str(row["gig_id"]),
+                    "initiated_by": "admin_payments_console",
+                    "admin_user_id": str(getattr(admin, "id", "") or ""),
+                },
+            )
+        except Exception as e:
+            # Surface the Stripe error verbatim so the admin sees what went wrong
+            msg = getattr(e, "user_message", None) or str(e)
+            raise HTTPException(502, f"Stripe refund failed: {msg}")
 
     # 6. Update our DB ─────────────────────────────────────────────────────
     flavor = "FULL" if is_full else "PARTIAL"
@@ -502,57 +511,337 @@ def refund_payment(
                    + (f" — {notes_in}" if notes_in else ""))
 
     new_status = 'payment_cancelled' if is_full else row["status"]
-    db.execute(text("""
-        UPDATE transactions
-           SET status = :status,
-               notes  = COALESCE(notes || ' | ', '') || :note
-         WHERE id = :tid
-    """), {"status": new_status, "note": refund_note, "tid": txn_id})
-
-    # Cancel pending child payouts when doing a full refund (default on).
     cancelled_children = []
     cancel_kids = payload.get("cancel_pending_payouts")
     if cancel_kids is None:
         cancel_kids = is_full
-    if is_full and cancel_kids:
-        for c in children:
-            if c["status"] == 'scheduled':
-                db.execute(text("""
-                    UPDATE transactions
-                       SET status = 'payment_cancelled',
-                           notes  = COALESCE(notes || ' | ', '') || :note
-                     WHERE id = :cid
-                """), {"cid": c["id"],
-                       "note": f"Cancelled by admin refund of parent #{txn_id}"})
-                cancelled_children.append(c["id"])
 
-    db.commit()
+    if not dry_run:
+        db.execute(text("""
+            UPDATE transactions
+               SET status = :status,
+                   notes  = COALESCE(notes || ' | ', '') || :note
+             WHERE id = :tid
+        """), {"status": new_status, "note": refund_note, "tid": txn_id})
+
+        # Cancel pending child payouts when doing a full refund (default on).
+        if is_full and cancel_kids:
+            for c in children:
+                if c["status"] == 'scheduled':
+                    db.execute(text("""
+                        UPDATE transactions
+                           SET status = 'payment_cancelled',
+                               notes  = COALESCE(notes || ' | ', '') || :note
+                         WHERE id = :cid
+                    """), {"cid": c["id"],
+                           "note": f"Cancelled by admin refund of parent #{txn_id}"})
+                    cancelled_children.append(c["id"])
+
+        db.commit()
+    else:
+        # In dry_run, project what the children-cancel would have touched
+        if is_full and cancel_kids:
+            cancelled_children = [c["id"] for c in children if c["status"] == 'scheduled']
 
     # 7. Audit ─────────────────────────────────────────────────────────────
-    log_admin_action(
-        db, admin, "payments_refund",
-        target_table="transactions", target_id=txn_id,
-        before={"status": row["status"]},
-        after={"status": new_status},
-        metadata={
-            "gig_id": row["gig_id"],
-            "amount_cents": amount_cents,
-            "charge_cents": charge_cents,
-            "is_full": is_full,
-            "stripe_refund_id": getattr(refund, "id", None),
-            "reason": reason,
-            "notes": notes_in,
-            "cancelled_child_payouts": cancelled_children,
-        },
-        request=request,
-    )
-    db.commit()
+    if not dry_run:
+        log_admin_action(
+            db, admin, "payments_refund",
+            target_table="transactions", target_id=txn_id,
+            before={"status": row["status"]},
+            after={"status": new_status},
+            metadata={
+                "gig_id": row["gig_id"],
+                "amount_cents": amount_cents,
+                "charge_cents": charge_cents,
+                "is_full": is_full,
+                "stripe_refund_id": getattr(refund, "id", None),
+                "reason": reason,
+                "notes": notes_in,
+                "cancelled_child_payouts": cancelled_children,
+            },
+            request=request,
+        )
+        db.commit()
 
     return {
         "ok": True,
+        "dry_run": dry_run,
         "stripe_refund_id": getattr(refund, "id", None),
         "amount_cents": amount_cents,
         "is_full": is_full,
         "new_status": new_status,
         "cancelled_child_payouts": cancelled_children,
+        # NOTE on Stripe fees: Stripe does NOT return the original processing
+        # fee on a refund. The venue gets `amount_cents` back; the platform
+        # eats the original ~2.9% + 30¢. Our `credit_card_fee_cents` column
+        # records that fee from the original charge — refund does not zero
+        # it out, since the fee was actually paid and is not recoverable.
+        "stripe_fees_note": (
+            "Stripe keeps the original processing fee on this charge. "
+            "The venue is refunded the full amount above; the platform "
+            "absorbs the credit-card fee from the original transaction."
+        ),
     }
+
+
+# ─── Tier 2: MARK-RESOLVED ──────────────────────────────────────────────────
+
+# Statuses an admin can force a row into. Kept tight on purpose — the broader
+# `ALLOWED_STATUSES` set is for filtering / display, not for arbitrary writes.
+_MARK_RESOLVED_TARGETS = {
+    'paid', 'transferred', 'payment_cancelled', 'suspended',
+    'dispute_won', 'dispute_lost',
+}
+
+
+@router.post("/api/admin/payments/{txn_id}/mark-resolved")
+def mark_resolved(
+    txn_id: int,
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Force a transaction's status without calling Stripe. Use for stuck
+    states (e.g. dispute_won that didn't sync from a webhook, free-trial
+    rows admin wants to lock as cancelled). Reason is REQUIRED and ends
+    up both in `transactions.notes` and `admin_audit_log.metadata_json`.
+
+    Body:
+      new_status   (required) — must be in _MARK_RESOLVED_TARGETS.
+      reason       (required) — free-text, min 5 chars.
+    """
+    new_status = (payload.get("new_status") or "").strip()
+    reason     = (payload.get("reason") or "").strip()[:1000]
+    if new_status not in _MARK_RESOLVED_TARGETS:
+        raise HTTPException(400,
+            f"new_status must be one of: {', '.join(sorted(_MARK_RESOLVED_TARGETS))}")
+    if len(reason) < 5:
+        raise HTTPException(400, "reason is required (min 5 characters)")
+
+    row = db.execute(text("""
+        SELECT id, gig_id, status FROM transactions WHERE id = :tid
+    """), {"tid": txn_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Transaction not found")
+    if row["status"] == new_status:
+        raise HTTPException(400, f"Transaction is already in status '{new_status}'.")
+
+    note = (f"Admin mark-resolved: {row['status']} → {new_status} "
+            f"({getattr(admin, 'email', 'admin')}) — {reason}")
+    db.execute(text("""
+        UPDATE transactions
+           SET status = :s, notes = COALESCE(notes || ' | ', '') || :n
+         WHERE id = :tid
+    """), {"s": new_status, "n": note, "tid": txn_id})
+    db.commit()
+
+    log_admin_action(
+        db, admin, "payments_mark_resolved",
+        target_table="transactions", target_id=txn_id,
+        before={"status": row["status"]},
+        after={"status": new_status},
+        metadata={"gig_id": row["gig_id"], "reason": reason},
+        request=request,
+    )
+    db.commit()
+    return {"ok": True, "from": row["status"], "to": new_status}
+
+
+# ─── Tier 2: RE-FIRE ────────────────────────────────────────────────────────
+
+# Only meaningful when the scheduler gave up or a transient Stripe error
+# left a row in a failed/retry state. Resetting to 'scheduled' + bumping
+# scheduled_process_at to now lets the next hourly sweep pick it up.
+_REFIRABLE_STATUSES = {
+    'payment_failed', 'charge_retry', 'transfer_failed', 'pending_transfer',
+}
+
+
+@router.post("/api/admin/payments/{txn_id}/refire")
+def refire_payment(
+    txn_id: int,
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Reset a stuck/failed txn back to 'scheduled' so the next scheduler
+    sweep retries it. Does NOT call Stripe directly — defense-in-depth:
+    the scheduler is the only place that mints Stripe writes, so re-fire
+    can't double-charge.
+
+    Body:
+      notes    (optional) — free-text, saved in transactions.notes and audit.
+      dry_run  (optional bool) — preview without writing.
+
+    Stripe idempotency: the scheduler builds keys from
+      (gig_id, slot_id, artist_id, attempt #). Re-firing increments
+    `charge_attempts`, so the next attempt uses a fresh key — no duplicate
+    charge risk.
+    """
+    notes_in = (payload.get("notes") or "").strip()[:500]
+    dry_run  = bool(payload.get("dry_run"))
+
+    row = db.execute(text("""
+        SELECT id, gig_id, status, charge_attempts, scheduled_process_at,
+               charge_failure_reason
+        FROM transactions WHERE id = :tid
+    """), {"tid": txn_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Transaction not found")
+    if row["status"] not in _REFIRABLE_STATUSES:
+        raise HTTPException(400,
+            f"Cannot re-fire status '{row['status']}'. "
+            f"Re-firable: {', '.join(sorted(_REFIRABLE_STATUSES))}.")
+
+    from datetime import datetime, timezone
+    new_sched = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    note = (f"Admin re-fire: status {row['status']} → scheduled "
+            f"({getattr(admin, 'email', 'admin')})"
+            + (f" — {notes_in}" if notes_in else ""))
+
+    if not dry_run:
+        db.execute(text("""
+            UPDATE transactions
+               SET status = 'scheduled',
+                   scheduled_process_at = :sched,
+                   charge_failure_reason = NULL,
+                   notes = COALESCE(notes || ' | ', '') || :n
+             WHERE id = :tid
+        """), {"sched": new_sched, "n": note, "tid": txn_id})
+        db.commit()
+
+        log_admin_action(
+            db, admin, "payments_refire",
+            target_table="transactions", target_id=txn_id,
+            before={"status": row["status"],
+                    "scheduled_process_at": str(row["scheduled_process_at"])},
+            after={"status": "scheduled", "scheduled_process_at": new_sched},
+            metadata={"gig_id": row["gig_id"], "notes": notes_in,
+                      "prior_failure_reason": row["charge_failure_reason"]},
+            request=request,
+        )
+        db.commit()
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "from": row["status"],
+        "to": "scheduled",
+        "new_scheduled_process_at": new_sched,
+    }
+
+
+# ─── Tier 2: RESEND EMAIL ───────────────────────────────────────────────────
+
+# Maps the admin-friendly template id to the underlying sender function in
+# payout_scheduler.py. Both senders speak the raw sqlite3 Row format, so we
+# open a separate sqlite connection just for them rather than trying to
+# adapt them to SQLAlchemy.
+_RESEND_TEMPLATES = {
+    'venue_charged':      'venue',   # txn must be parent venue_charge / single
+    'artist_payout_sent': 'artist',  # txn must be artist_payout child
+}
+
+
+@router.post("/api/admin/payments/{txn_id}/resend-email")
+def resend_email(
+    txn_id: int,
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Re-send a payment-event email for this transaction.
+
+    Body:
+      template (required) — 'venue_charged' or 'artist_payout_sent'.
+      dry_run  (optional)  — return the resolved recipient + subject without
+                             actually sending. Use for testing the wiring.
+
+    The actual templates live in backend/email_templates.py and are rendered
+    by the same payout_scheduler functions the live charge/transfer path uses
+    — so the resent email is byte-identical to what would have gone out the
+    first time.
+    """
+    template = (payload.get("template") or "").strip()
+    dry_run  = bool(payload.get("dry_run"))
+    if template not in _RESEND_TEMPLATES:
+        raise HTTPException(400,
+            f"template must be one of: {', '.join(sorted(_RESEND_TEMPLATES))}")
+
+    row = db.execute(text("""
+        SELECT id, gig_id, parent_transaction_id, transaction_type, status,
+               to_user_id, from_user_id, artist_id
+        FROM transactions WHERE id = :tid
+    """), {"tid": txn_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Transaction not found")
+
+    txn_type = row["transaction_type"] or "single"
+    # Validate the template matches the row shape — sending "artist payout
+    # sent" for a row that has no artist makes no sense.
+    if template == 'venue_charged' and txn_type not in ('venue_charge', 'single'):
+        raise HTTPException(400,
+            f"'venue_charged' template needs a venue_charge/single txn; this is '{txn_type}'.")
+    if template == 'artist_payout_sent' and txn_type != 'artist_payout':
+        raise HTTPException(400,
+            f"'artist_payout_sent' template needs an artist_payout txn; this is '{txn_type}'.")
+
+    if dry_run:
+        log_admin_action(
+            db, admin, "payments_resend_email_dryrun",
+            target_table="transactions", target_id=txn_id,
+            metadata={"template": template, "gig_id": row["gig_id"]},
+            request=request,
+        )
+        db.commit()
+        return {"ok": True, "dry_run": True, "template": template,
+                "note": "Dry run — no email sent. Endpoint validation passed."}
+
+    # Re-use the scheduler's senders by passing them a raw sqlite Row conn.
+    # They handle template loading + recipient resolution + SMTP via
+    # email_dispatch internally.
+    try:
+        import sqlite3
+        from backend.db import get_db_connection
+        from backend.payout_scheduler import (_send_venue_charged_email,
+                                              _send_payout_email)
+        rconn = get_db_connection()
+        try:
+            rconn.row_factory = sqlite3.Row
+            t_row = rconn.execute(
+                "SELECT * FROM transactions WHERE id = ?",
+                (txn_id,),
+            ).fetchone()
+            if not t_row:
+                raise HTTPException(404, "Transaction not found")
+
+            if template == 'venue_charged':
+                gig = rconn.execute(
+                    "SELECT venue_id FROM gigs WHERE id = ?",
+                    (row["gig_id"],),
+                ).fetchone()
+                if not gig:
+                    raise HTTPException(404, "Gig not found")
+                _send_venue_charged_email(rconn, t_row, gig["venue_id"])
+            else:  # artist_payout_sent
+                _send_payout_email(rconn, t_row)
+        finally:
+            try: rconn.close()
+            except Exception: pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Email resend failed: {e}")
+
+    log_admin_action(
+        db, admin, "payments_resend_email",
+        target_table="transactions", target_id=txn_id,
+        metadata={"template": template, "gig_id": row["gig_id"]},
+        request=request,
+    )
+    db.commit()
+    return {"ok": True, "dry_run": False, "template": template}

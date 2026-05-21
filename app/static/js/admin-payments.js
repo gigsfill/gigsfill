@@ -261,7 +261,14 @@
       <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:var(--text-gray);margin-top:8px;">
         <input id="apRefundCancelKids" type="checkbox" checked style="width:auto;">
         Also cancel any still-scheduled child artist payouts (full refunds only)
-      </label>`;
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:#fbbf24;margin-top:6px;padding:6px 8px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25);border-radius:5px;">
+        <input id="apRefundDryRun" type="checkbox" style="width:auto;">
+        <span><strong>Dry run</strong> — validate only; don't call Stripe or modify the DB.</span>
+      </label>
+      <div style="font-size:0.65rem;color:var(--text-gray);margin-top:8px;line-height:1.4;">
+        <strong>Stripe fees:</strong> the original processing fee is NOT returned. The venue is refunded the amount above; the platform absorbs the credit-card fee from the original charge.
+      </div>`;
 
     window.showStyledModal(
       '↩ Refund Transaction #' + txnId,
@@ -284,11 +291,13 @@
       if (window.showErrorModal) window.showErrorModal('Refund', 'Enter a valid amount.');
       return;
     }
+    const dryRun = !!document.getElementById('apRefundDryRun')?.checked;
     const body = {
       amount_cents: Math.round(amountDollars * 100),
       reason,
       notes,
       cancel_pending_payouts: cancelKids,
+      dry_run: dryRun,
     };
     try {
       const res = await fetch('/api/admin/payments/' + txnId + '/refund', {
@@ -304,18 +313,23 @@
         return;
       }
       // Success — surface a small confirm, then reload table + reopen detail
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const msg = json.dry_run
+        ? `Validation passed for ${json.is_full ? 'full' : 'partial'} refund of $${(json.amount_cents/100).toFixed(2)}. No Stripe call made; DB untouched.`
+        : `Stripe refund ${json.stripe_refund_id || ''} for $${(json.amount_cents/100).toFixed(2)} processed.`;
       if (window.showSuccessModal) {
         window.showSuccessModal(
-          'Refund ' + (json.is_full ? 'completed' : 'partial-refund completed'),
-          `Stripe refund ${json.stripe_refund_id || ''} for $${(json.amount_cents/100).toFixed(2)} processed.`,
+          prefix + (json.is_full ? 'Refund completed' : 'Partial refund completed'),
+          msg,
           () => {
-            apReload();
-            window.apShowDetail(txnId);
+            if (!json.dry_run) {
+              apReload();
+              window.apShowDetail(txnId);
+            }
           }
         );
       } else {
-        apReload();
-        window.apShowDetail(txnId);
+        if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
       }
     } catch (e) {
       const msg = (e && e.message) || 'Network error';
@@ -401,33 +415,60 @@
              </div>`).join('')}
            </div>` : '';
 
-      // Tier 2 actions toolbar. Show only those that make sense for this txn.
+      // Tier 2 actions toolbar — show only the actions that make sense for
+      // this row. Disabled buttons still appear (with a tooltip) so admins
+      // see what's *possible* for this row shape.
       const isChild = t.parent_transaction_id != null;
       const parentTypes = new Set(['venue_charge', 'single']);
       const refundableStatus = new Set(['charged', 'paid', 'transferred']);
+      const refirableStatus  = new Set(['payment_failed', 'charge_retry',
+                                        'transfer_failed', 'pending_transfer']);
+
       const canRefund = !isChild
                      && parentTypes.has(t.transaction_type_resolved)
                      && refundableStatus.has(t.status)
                      && !!t.stripe_payment_intent_id;
-      const refundDisabledReason =
-        isChild ? 'Refund the parent venue charge, not the child payout.' :
-        !parentTypes.has(t.transaction_type_resolved) ? 'Not a venue charge.' :
-        !refundableStatus.has(t.status) ? `Status "${t.status}" is not refundable.` :
-        !t.stripe_payment_intent_id ? 'No Stripe payment_intent on this row.' :
-        '';
+      const canRefire = refirableStatus.has(t.status);
+      // Mark-resolved is admin-override — always allowed except on rows
+      // that are already in a clean terminal state.
+      const canMark   = true;
+      const canResendVenue  = parentTypes.has(t.transaction_type_resolved)
+                              && (t.status === 'paid' || t.status === 'charged');
+      const canResendPayout = t.transaction_type_resolved === 'artist_payout'
+                              && (t.status === 'transferred' || t.status === 'paid');
+      const canResend = canResendVenue || canResendPayout;
+
+      const reasons = {
+        refund: !canRefund
+          ? (isChild ? 'Refund the parent venue charge, not the child payout.'
+             : !parentTypes.has(t.transaction_type_resolved) ? 'Not a venue charge.'
+             : !refundableStatus.has(t.status) ? `Status "${t.status}" is not refundable.`
+             : !t.stripe_payment_intent_id ? 'No Stripe payment_intent on this row.'
+             : '') : '',
+        refire: canRefire ? '' : `Only re-firable when status is in: payment_failed / charge_retry / transfer_failed / pending_transfer.`,
+        resend: canResend ? '' : `No suitable email template for type "${t.transaction_type_resolved}" + status "${t.status}".`,
+      };
+
+      const btn = (id, label, color, enabled, tip, onclick) => `
+        <button onclick="${onclick}"
+          ${enabled ? '' : 'disabled'}
+          title="${esc(tip || '')}"
+          style="padding:6px 14px;background:${enabled ? `rgba(${color},0.15)` : 'rgba(255,255,255,0.03)'};border:1px solid ${enabled ? `rgba(${color},0.45)` : 'var(--border)'};color:${enabled ? `rgb(${color})` : 'var(--text-gray)'};border-radius:5px;font-size:0.75rem;font-weight:600;cursor:${enabled ? 'pointer' : 'not-allowed'};margin:0 6px 6px 0;">
+          ${label}
+        </button>`;
 
       const actionsHtml = `
         <div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
           <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Actions</div>
-          <button onclick="apOpenRefund(${txnId})"
-            ${canRefund ? '' : 'disabled'}
-            title="${esc(refundDisabledReason)}"
-            style="padding:6px 14px;background:${canRefund ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.03)'};border:1px solid ${canRefund ? 'rgba(239,68,68,0.45)' : 'var(--border)'};color:${canRefund ? '#ef4444' : 'var(--text-gray)'};border-radius:5px;font-size:0.75rem;font-weight:600;cursor:${canRefund ? 'pointer' : 'not-allowed'};margin-right:6px;">
-            ↩ Refund
-          </button>
-          <span style="font-size:0.68rem;color:var(--text-gray);margin-left:6px;">
-            More actions (Mark-resolved, Re-fire, Resend email) coming next.
-          </span>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;">
+            ${btn('refund', '↩ Refund',          '239,68,68',   canRefund, reasons.refund, `apOpenRefund(${txnId})`)}
+            ${btn('refire', '↻ Re-fire',         '245,158,11',  canRefire, reasons.refire, `apOpenRefire(${txnId})`)}
+            ${btn('mark',   '✓ Mark Resolved',  '6,182,212',   canMark,   '',            `apOpenMarkResolved(${txnId})`)}
+            ${btn('resend', '✉ Resend Email',   '139,92,246',  canResend, reasons.resend, `apOpenResend(${txnId})`)}
+          </div>
+          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:4px;">
+            Tier 3 (reverse-transfer, re-route, status-override) and Tier 4 (bulk + reconciliation) coming later.
+          </div>
         </div>`;
 
       const body = `
@@ -466,6 +507,216 @@
       if (bodyEl) bodyEl.innerHTML = `<p style="color:#ef4444;text-align:center;padding:24px;">Failed to load: ${esc(e.message)}</p>`;
     }
   };
+
+  // ── Tier 2: Mark-resolved ────────────────────────────────────────────────
+  // Pure DB override — no Stripe, no email. Use for stuck rows (e.g.
+  // dispute_won that didn't sync from a webhook).
+  window.apOpenMarkResolved = function(txnId) {
+    const data = window._apLastDetail;
+    const t = data && data.transaction;
+    if (!t || t.id !== txnId) return;
+    const targets = ['paid','transferred','payment_cancelled','suspended','dispute_won','dispute_lost']
+      .filter(s => s !== t.status);
+    const formHtml = `
+      <p style="font-size:0.75rem;color:var(--text-gray);margin:0 0 12px;">
+        Force this transaction into a new status without touching Stripe.
+        Recorded in <code>admin_audit_log</code> with the reason you give.
+      </p>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Current status</div>
+        <div style="padding:6px 10px;font-size:0.85rem;color:var(--text);background:#151b28;border:1px solid var(--border);border-radius:5px;">
+          ${esc(t.status)}
+        </div>
+      </label>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">New status</div>
+        <select id="apMarkNewStatus"
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+          ${targets.map(s => `<option value="${s}">${esc(s)}</option>`).join('')}
+        </select>
+      </label>
+      <label style="display:block;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason (required, min 5 chars)</div>
+        <textarea id="apMarkReason" rows="3" maxlength="1000" placeholder="e.g. Dispute won on Stripe Dashboard 2026-05-21 but webhook never fired; syncing manually."
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
+      </label>`;
+    window.showStyledModal(
+      '✓ Mark Resolved — Transaction #' + txnId,
+      formHtml,
+      [
+        { text: 'Cancel', style: 'ghost', onClick: () => {} },
+        { text: 'Apply',  style: 'primary', onClick: () => apSubmitMarkResolved(txnId) },
+      ],
+      { tone: 'info', size: 'md' }
+    );
+  };
+  async function apSubmitMarkResolved(txnId) {
+    const new_status = document.getElementById('apMarkNewStatus')?.value || '';
+    const reason     = (document.getElementById('apMarkReason')?.value || '').trim();
+    if (reason.length < 5) {
+      window.showErrorModal && window.showErrorModal('Mark Resolved', 'Reason is required (min 5 chars).');
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/payments/' + txnId + '/mark-resolved', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_status, reason }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Mark Resolved failed', json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      window.showSuccessModal && window.showSuccessModal(
+        'Status updated', `Transaction #${txnId}: ${json.from} → ${json.to}`,
+        () => { apReload(); window.apShowDetail(txnId); }
+      );
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Mark Resolved failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Tier 2: Re-fire ──────────────────────────────────────────────────────
+  // Reset a stuck/failed row back to 'scheduled' so the next scheduler sweep
+  // retries it. Defense-in-depth: the scheduler is the only place that mints
+  // real Stripe writes — re-fire just nudges the queue, can't double-charge.
+  window.apOpenRefire = function(txnId) {
+    const data = window._apLastDetail;
+    const t = data && data.transaction;
+    if (!t || t.id !== txnId) return;
+    const formHtml = `
+      <p style="font-size:0.75rem;color:var(--text-gray);margin:0 0 12px;">
+        Reset this row to <code>scheduled</code> with <code>scheduled_process_at = now</code>.
+        The next scheduler sweep (top of each hour) will retry the charge or
+        transfer. Stripe idempotency uses <code>charge_attempts</code> — re-firing
+        bumps it so a fresh key is generated and there's no double-charge risk.
+      </p>
+      <div style="font-size:0.72rem;color:var(--text-gray);margin-bottom:10px;">
+        Current status: <strong style="color:var(--text);">${esc(t.status)}</strong>
+        ${t.charge_failure_reason ? `<br>Last failure: <em>${esc(t.charge_failure_reason)}</em>` : ''}
+      </div>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
+        <textarea id="apRefireNotes" rows="2" maxlength="500" placeholder="e.g. Card was declined as 'insufficient_funds' — venue confirmed they topped up the account."
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:#fbbf24;padding:6px 8px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25);border-radius:5px;">
+        <input id="apRefireDryRun" type="checkbox" style="width:auto;">
+        <span><strong>Dry run</strong> — validate only; don't reset the row.</span>
+      </label>`;
+    window.showStyledModal(
+      '↻ Re-fire — Transaction #' + txnId,
+      formHtml,
+      [
+        { text: 'Cancel',  style: 'ghost',   onClick: () => {} },
+        { text: 'Re-fire', style: 'primary', onClick: () => apSubmitRefire(txnId) },
+      ],
+      { tone: 'warning', size: 'md' }
+    );
+  };
+  async function apSubmitRefire(txnId) {
+    const notes = (document.getElementById('apRefireNotes')?.value || '').trim();
+    const dry_run = !!document.getElementById('apRefireDryRun')?.checked;
+    try {
+      const res = await fetch('/api/admin/payments/' + txnId + '/refire', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes, dry_run }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Re-fire failed', json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const msg = json.dry_run
+        ? `Validation passed. No DB write performed.`
+        : `Row reset: ${json.from} → ${json.to}. Next scheduler sweep will retry.`;
+      window.showSuccessModal && window.showSuccessModal(prefix + 'Re-fire',
+        msg,
+        () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } }
+      );
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Re-fire failed', e.message || 'Network error');
+    }
+  }
+
+  // ── Tier 2: Resend Email ─────────────────────────────────────────────────
+  // Re-fires the same email the scheduler would have sent on the original
+  // payout-time event. Useful when an SMTP hiccup means the venue never got
+  // their "charged" notice, or an artist's spam filter ate their payout email.
+  window.apOpenResend = function(txnId) {
+    const data = window._apLastDetail;
+    const t = data && data.transaction;
+    if (!t || t.id !== txnId) return;
+    // Offer only the templates that match this row shape.
+    const opts = [];
+    const parentTypes = new Set(['venue_charge', 'single']);
+    if (parentTypes.has(t.transaction_type_resolved) && (t.status === 'paid' || t.status === 'charged')) {
+      opts.push({ value: 'venue_charged',      label: 'Venue charged (to venue)' });
+    }
+    if (t.transaction_type_resolved === 'artist_payout' && (t.status === 'transferred' || t.status === 'paid')) {
+      opts.push({ value: 'artist_payout_sent', label: 'Artist payout sent (to artist)' });
+    }
+    if (!opts.length) {
+      window.showErrorModal && window.showErrorModal('Resend email',
+        `No suitable template for type "${t.transaction_type_resolved}" + status "${t.status}".`);
+      return;
+    }
+    const formHtml = `
+      <p style="font-size:0.75rem;color:var(--text-gray);margin:0 0 12px;">
+        Re-sends the same email the scheduler sent (or would have sent) when
+        this transaction first completed. Renders the live template from the
+        DB — byte-identical to the original.
+      </p>
+      <label style="display:block;margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Template</div>
+        <select id="apResendTemplate"
+          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+          ${opts.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join('')}
+        </select>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:#fbbf24;padding:6px 8px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25);border-radius:5px;">
+        <input id="apResendDryRun" type="checkbox" style="width:auto;">
+        <span><strong>Dry run</strong> — validate the template wiring; don't actually send.</span>
+      </label>`;
+    window.showStyledModal(
+      '✉ Resend Email — Transaction #' + txnId,
+      formHtml,
+      [
+        { text: 'Cancel', style: 'ghost',   onClick: () => {} },
+        { text: 'Send',   style: 'primary', onClick: () => apSubmitResend(txnId) },
+      ],
+      { tone: 'info', size: 'md' }
+    );
+  };
+  async function apSubmitResend(txnId) {
+    const template = document.getElementById('apResendTemplate')?.value || '';
+    const dry_run  = !!document.getElementById('apResendDryRun')?.checked;
+    try {
+      const res = await fetch('/api/admin/payments/' + txnId + '/resend-email', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template, dry_run }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Resend failed', json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      const prefix = json.dry_run ? '[DRY RUN] ' : '';
+      const msg = json.dry_run
+        ? 'Endpoint validation passed. No email sent.'
+        : `Template "${json.template}" re-sent.`;
+      window.showSuccessModal && window.showSuccessModal(
+        prefix + 'Resend Email', msg,
+        () => { if (!json.dry_run) window.apShowDetail(txnId); }
+      );
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Resend failed', e.message || 'Network error');
+    }
+  }
 
   // ── Lazy-load when the tab is shown ──────────────────────────────────────
   // The existing switchTab() doesn't know about per-tab loaders, so we hook
