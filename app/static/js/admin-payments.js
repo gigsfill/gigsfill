@@ -244,18 +244,37 @@
   window.apFilterVenue  = function(id) { $('apSearch').value = ''; apPage = 1; apReload(); /* TODO: dedicated filter for venue_id */ };
   window.apFilterArtist = function(id) { $('apSearch').value = ''; apPage = 1; apReload(); /* TODO: dedicated filter for artist_id */ };
 
+  // Common helper for the action openers — make sure window._apLastDetail
+  // holds the detail for the *target* txn. When the user invokes an action
+  // from the Gig Actions panel of a different row (e.g. clicked an artist
+  // payout, then hit ↩ Refund Venue), the target txn is the parent
+  // venue_charge — different id from t.id in _apLastDetail. Re-fetch when
+  // they don't match. Returns the detail object.
+  async function apEnsureDetailFor(txnId) {
+    const cached = window._apLastDetail;
+    if (cached && cached.transaction && cached.transaction.id === txnId) {
+      return cached;
+    }
+    const res = await fetch('/api/admin/payments/' + txnId, { credentials: 'include' });
+    if (!res.ok) throw new Error('Could not load transaction #' + txnId);
+    const data = await res.json();
+    window._apLastDetail = data;
+    return data;
+  }
+
   // ── Tier 2: Refund ───────────────────────────────────────────────────────
   // Opens a themed prompt inside the existing gf-modals stack. The user can
   // edit the amount (default = full venue charge), pick a Stripe reason, and
   // add free-text notes. On submit, POSTs to /api/admin/payments/{id}/refund
   // and reloads both the detail view and the table.
-  window.apOpenRefund = function(txnId) {
-    const data = window._apLastDetail;
-    const t = data && data.transaction;
-    if (!t || t.id !== txnId) {
-      if (window.showErrorModal) window.showErrorModal('Refund', 'Reopen the transaction and try again.');
+  window.apOpenRefund = async function(txnId) {
+    let data;
+    try { data = await apEnsureDetailFor(txnId); }
+    catch (e) {
+      window.showErrorModal && window.showErrorModal('Refund', e.message || 'Failed to load.');
       return;
     }
+    const t = data.transaction;
     const chargeCents = t.venue_charge_cents || t.amount_cents || 0;
     const chargeDollars = (chargeCents / 100).toFixed(2);
 
@@ -492,8 +511,8 @@
           <td style="padding:5px;">${esc(TYPE_LABEL[s.transaction_type] || s.transaction_type)}</td>
           <td style="padding:5px;">${counterparty}</td>
           <td style="padding:5px;">${statusPill(s.status)}</td>
-          <td style="padding:5px;text-align:right;font-family:monospace;">${gigDollarsFor(s)}</td>
-          <td style="padding:5px;text-align:right;font-family:monospace;font-weight:600;">${paidFor(s)}</td>
+          <td style="padding:5px;font-family:monospace;">${gigDollarsFor(s)}</td>
+          <td style="padding:5px;font-family:monospace;font-weight:600;">${paidFor(s)}</td>
           <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(fmtDateTime(s.processed_at || s.scheduled_process_at))}</td>
         </tr>`;
       }
@@ -518,8 +537,8 @@
                  <th style="padding:5px;text-align:left;color:var(--text-gray);">Type</th>
                  <th style="padding:5px;text-align:left;color:var(--text-gray);">Artist</th>
                  <th style="padding:5px;text-align:left;color:var(--text-gray);">Status</th>
-                 <th style="padding:5px;text-align:right;color:var(--text-gray);">Gig $</th>
-                 <th style="padding:5px;text-align:right;color:var(--text-gray);">Paid</th>
+                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Gig $</th>
+                 <th style="padding:5px;text-align:left;color:var(--text-gray);">Paid</th>
                  <th style="padding:5px;text-align:left;color:var(--text-gray);">Processed</th>
                </tr></thead><tbody>
                ${orderedRows.map(rowMarkup).join('')}
@@ -587,36 +606,33 @@
            </div>` : '';
 
       // Tier 2 actions toolbar — show only the actions that make sense for
-      // Action eligibility — each button is shown ONLY when it actually
-      // applies to this row. We don't render disabled buttons with
-      // explainer tooltips anymore — the toolbar gets crowded and admins
-      // tried to click them. Clean rules below:
-      //
-      //   Refund          venue rows in {charged, paid, transferred} + PI
-      //   Reverse Transfer payout rows in {transferred, paid} + transfer_id
+      // Per-row "Row Actions" toolbar — only LESS-COMMON, row-specific
+      // operations. The big money moves (Refund / Reverse) live in the
+      // Gig Actions panel above so the same buttons don't show up twice.
+      // What stays here:
       //   Re-route Payout  payout rows in {scheduled}
+      //                    (artist's Connect closed; admin redirects)
       //   Re-fire         venue rows in {payment_failed, charge_retry},
-      //                   OR payout rows in {transfer_failed, pending_transfer}
-      //   Resend Email    venue rows in {charged, paid}  (template: venue_charged)
-      //                   OR payout rows in {transferred, paid} (template: artist_payout_sent)
-      //   Mark Resolved   always — admin override, last-resort.
+      //                    OR payout rows in {transfer_failed, pending_transfer}
+      //                    (scheduler gave up; admin nudges the queue)
+      //   Resend Email    venue rows in {charged, paid}  → venue_charged
+      //                    OR payout rows in {transferred, paid}
+      //                                     → artist_payout_sent
+      //                    (SMTP hiccup; replay the same email)
+      //   Mark Resolved   always — admin override for stuck rows.
       //
-      // Net effect: a "scheduled" venue row gets only Mark Resolved.
-      // A "scheduled" payout row gets Re-route + Mark Resolved.
-      // A "paid" venue row gets Refund + Resend + Mark Resolved.
-      // A "paid" payout row gets Reverse Transfer + Resend + Mark Resolved.
-      // A "payment_cancelled" row of either kind gets just Mark Resolved.
+      // Net effect for the common states:
+      //   scheduled payout         → Re-route + Mark Resolved
+      //   scheduled venue/single   → Mark Resolved
+      //   paid (either)            → Resend Email + Mark Resolved
+      //   payment_failed venue     → Re-fire + Mark Resolved
+      //   transfer_failed payout   → Re-fire + Mark Resolved
+      //   payment_cancelled (any)  → Mark Resolved
       const isChild     = t.parent_transaction_id != null;
       const isVenueRow  = (t.transaction_type_resolved === 'venue_charge'
                         || t.transaction_type_resolved === 'single') && !isChild;
       const isPayoutRow = t.transaction_type_resolved === 'artist_payout' || isChild;
 
-      const showRefund  = isVenueRow
-                       && ['charged','paid','transferred'].includes(t.status)
-                       && !!t.stripe_payment_intent_id;
-      const showReverse = isPayoutRow
-                       && ['transferred','paid'].includes(t.status)
-                       && !!t.stripe_transfer_id;
       const showReroute = isPayoutRow && t.status === 'scheduled';
       const showRefire  = (isVenueRow  && ['payment_failed','charge_retry'].includes(t.status))
                        || (isPayoutRow && ['transfer_failed','pending_transfer'].includes(t.status));
@@ -624,26 +640,25 @@
                        || (isPayoutRow && ['transferred','paid'].includes(t.status));
       const showMark    = true;  // always available
 
-      const btn = (label, color, onclick) => `
+      const btn = (label, color, onclick, sub) => `
         <button onclick="${onclick}"
-          style="padding:6px 14px;background:rgba(${color},0.15);border:1px solid rgba(${color},0.45);color:rgb(${color});border-radius:5px;font-size:0.75rem;font-weight:600;cursor:pointer;margin:0 6px 6px 0;">
-          ${label}
+          style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:7px 14px;background:rgba(${color},0.15);border:1px solid rgba(${color},0.45);color:rgb(${color});border-radius:5px;font-size:0.75rem;font-weight:600;cursor:pointer;margin:0 6px 6px 0;text-align:left;">
+          <span>${label}</span>
+          ${sub ? `<span style="font-size:0.62rem;font-weight:400;color:var(--text-gray);">${esc(sub)}</span>` : ''}
         </button>`;
 
       const buttons = [
-        showRefund  ? btn('↩ Refund',           '239,68,68',  `apOpenRefund(${txnId})`)         : '',
-        showReverse ? btn('⤺ Reverse Transfer', '239,68,68',  `apOpenReverseTransfer(${txnId})`) : '',
-        showReroute ? btn('↪ Re-route Payout',  '6,182,212',  `apOpenReroute(${txnId})`)        : '',
-        showRefire  ? btn('↻ Re-fire',          '245,158,11', `apOpenRefire(${txnId})`)         : '',
-        showResend  ? btn('✉ Resend Email',     '139,92,246', `apOpenResend(${txnId})`)         : '',
-        showMark    ? btn('✓ Mark Resolved',    '6,182,212',  `apOpenMarkResolved(${txnId})`)   : '',
+        showReroute ? btn('↪ Re-route Payout',  '6,182,212',  `apOpenReroute(${txnId})`,        'Send this payout to a different artist Connect account.') : '',
+        showRefire  ? btn('↻ Re-fire',          '245,158,11', `apOpenRefire(${txnId})`,         'Reset this failed row to scheduled; scheduler will retry.') : '',
+        showResend  ? btn('✉ Resend Email',     '139,92,246', `apOpenResend(${txnId})`,         'Re-send the payment-event email for this row.') : '',
+        showMark    ? btn('✓ Mark Resolved',    '6,182,212',  `apOpenMarkResolved(${txnId})`,   'Force a status with a reason (admin override, no Stripe call).') : '',
       ].filter(Boolean).join('');
 
       const actionsHtml = buttons
         ? `<div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
-             <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Selected Row Actions — #${t.id}</div>
-             <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:8px;">Surgical operations on the row admin clicked. For gig-wide actions (refund venue, reverse multiple artists), use the Gig Actions buttons above.</div>
-             <div style="display:flex;flex-wrap:wrap;align-items:center;">${buttons}</div>
+             <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Row Actions — #${t.id}</div>
+             <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:8px;">Less-common operations that affect only this specific row. Refund and Reverse live in <strong>Gig Actions</strong> above because they almost always need to be coordinated across the whole gig.</div>
+             <div style="display:flex;flex-wrap:wrap;align-items:flex-start;">${buttons}</div>
            </div>` : '';
 
       // Gig-level overview replaces the old 14-cell grid that mixed gig
@@ -915,10 +930,14 @@
   // Pulls a child artist_payout's funds from the artist's Connect balance
   // back to the platform. Doesn't refund the venue — that's a separate
   // Refund action on the parent.
-  window.apOpenReverseTransfer = function(txnId) {
-    const data = window._apLastDetail;
-    const t = data && data.transaction;
-    if (!t || t.id !== txnId) return;
+  window.apOpenReverseTransfer = async function(txnId) {
+    let data;
+    try { data = await apEnsureDetailFor(txnId); }
+    catch (e) {
+      window.showErrorModal && window.showErrorModal('Reverse Transfer', e.message || 'Failed to load.');
+      return;
+    }
+    const t = data.transaction;
 
     // ── Gather the parent + sibling payouts so admin can pick which slots
     // to reverse in one batch. siblings includes the parent row + all
