@@ -48,7 +48,7 @@
     const wrap = document.getElementById('uaArtistChecks');
     if (!wrap) return;
     if (!_uaMyArtists.length) {
-      wrap.innerHTML = '<p style="color:var(--text-gray);font-size:0.78rem;margin:0;">You\'re not a member of any artists yet. Add the blackout against "All my artists" and it will apply once you join an artist.</p>';
+      wrap.innerHTML = '<p style="color:var(--text-gray);font-size:0.78rem;margin:0;">You\'re not a member of any artists yet. Add the blackout against "All My Artists" and it will apply once you join an artist.</p>';
       return;
     }
     wrap.innerHTML = _uaMyArtists.map(a => `
@@ -81,7 +81,7 @@
               <div style="font-size:0.78rem;color:var(--text-gray);">
                 ${r.artist_id
                   ? '🎸 ' + _esc(r.artist_name || 'Artist #' + r.artist_id)
-                  : 'All my artists'}
+                  : 'All My Artists'}
                 ${r.reason ? ' · ' + _esc(r.reason) : ''}
               </div>
             </div>
@@ -116,10 +116,23 @@
     `;
   }
 
-  window.uaToggleScope = function () {
-    const scope = document.querySelector('input[name="uaScope"]:checked')?.value;
-    const div = document.getElementById('uaArtistChecks');
-    if (div) div.style.display = scope === 'specific' ? '' : 'none';
+  // Two checkboxes acting as mutually-exclusive options (styled as
+  // checkboxes per UI request — semantically a radio pair). Clicking
+  // either makes it the active one and unchecks the other; clicking
+  // the active one re-asserts it (can't leave both unchecked).
+  window.uaSetScope = function (which) {
+    const all  = document.getElementById('uaScopeAll');
+    const spec = document.getElementById('uaScopeSpecific');
+    const list = document.getElementById('uaArtistChecks');
+    if (!all || !spec) return;
+    if (which === 'all') {
+      all.checked = true;
+      spec.checked = false;
+    } else {
+      all.checked = false;
+      spec.checked = true;
+    }
+    if (list) list.style.display = spec.checked ? '' : 'none';
   };
 
   window.uaAddBlackout = async function () {
@@ -127,13 +140,13 @@
     const end   = document.getElementById('uaEndDate').value;
     const reason = (document.getElementById('uaReason').value || '').trim();
     const status = document.getElementById('uaAddStatus');
-    const scope = document.querySelector('input[name="uaScope"]:checked')?.value;
+    const scope = document.getElementById('uaScopeSpecific')?.checked ? 'specific' : 'all';
     let artistIds = null;
     if (scope === 'specific') {
       artistIds = Array.from(document.querySelectorAll('.ua-artist-cb:checked'))
         .map(cb => parseInt(cb.value, 10)).filter(Boolean);
       if (!artistIds.length) {
-        status.textContent = 'Pick at least one artist, or switch to "All my artists".';
+        status.textContent = 'Pick at least one artist, or switch to "All My Artists".';
         status.style.color = '#ef4444';
         return;
       }
@@ -166,8 +179,7 @@
       document.getElementById('uaStartDate').value = '';
       document.getElementById('uaEndDate').value = '';
       document.getElementById('uaReason').value = '';
-      document.querySelector('input[name="uaScope"][value="all"]').checked = true;
-      window.uaToggleScope();
+      window.uaSetScope('all');
       await uaLoad();
       setTimeout(() => { status.textContent = ''; }, 2500);
     } catch (e) {

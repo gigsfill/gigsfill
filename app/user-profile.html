@@ -474,50 +474,6 @@
   <!-- AFFILIATES TAB -->
   <div class="tab-content" id="affiliates-tab" style="display:none;">
 
-    <!-- Recommend button -->
-    <div class="content-card" style="margin-bottom:16px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <h3 style="margin:0;font-size:0.85rem;color:var(--text);">Recommend GigsFill to a Venue</h3>
-        <button onclick="toggleRecommendForm()" id="affRecommendToggle"
-          style="padding:6px 16px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.4);border-radius:6px;color:var(--cyan);font-size:0.78rem;cursor:pointer;font-weight:600;">
-          + Recommend
-        </button>
-      </div>
-
-      <!-- Recommend form (hidden by default) -->
-      <div id="affRecommendForm" style="display:none;margin-bottom:16px;padding:14px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;">
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <div style="flex:1;min-width:160px;">
-              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Recipient Name (optional)</label>
-              <input type="text" id="affRecipName" placeholder="John's Bar & Grill"
-                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
-            </div>
-            <div style="flex:1;min-width:180px;">
-              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Email Address <span style="color:#ef4444;">*</span></label>
-              <input type="email" id="affRecipEmail" placeholder="venue@example.com"
-                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
-            </div>
-          </div>
-          <div>
-            <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Personal Note (optional)</label>
-            <textarea id="affPersonalNote" rows="2" placeholder="Hey, I've been using GigsFill for booking gigs — you should check it out!"
-              style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);resize:vertical;box-sizing:border-box;"></textarea>
-          </div>
-          <div style="display:flex;align-items:center;gap:12px;">
-            <button onclick="sendAffRecommend()"
-              style="padding:7px 20px;background:rgba(6,182,212,0.2);border:1px solid rgba(6,182,212,0.5);border-radius:6px;color:var(--cyan);font-size:0.78rem;font-weight:600;cursor:pointer;">
-              Send Recommendation →
-            </button>
-            <span id="affSendResult" style="font-size:0.75rem;opacity:0;transition:opacity .3s;color:#10b981;"></span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Sent emails list -->
-      <div id="affEmailsList" style="min-height:40px;"></div>
-    </div>
-
     <!-- Header row: code + Stripe status -->
     <div class="content-card" style="margin-bottom:12px;">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
@@ -661,6 +617,50 @@
       </div>
     </div>
 
+    <!-- Recommend button -->
+    <div class="content-card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;font-size:0.85rem;color:var(--text);">Recommend GigsFill to a Venue</h3>
+        <button onclick="toggleRecommendForm()" id="affRecommendToggle"
+          style="padding:6px 16px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.4);border-radius:6px;color:var(--cyan);font-size:0.78rem;cursor:pointer;font-weight:600;">
+          + Recommend
+        </button>
+      </div>
+
+      <!-- Recommend form (hidden by default) -->
+      <div id="affRecommendForm" style="display:none;margin-bottom:16px;padding:14px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:160px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Recipient Name (optional)</label>
+              <input type="text" id="affRecipName" placeholder="John's Bar & Grill"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+            <div style="flex:1;min-width:180px;">
+              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Email Address <span style="color:#ef4444;">*</span></label>
+              <input type="email" id="affRecipEmail" placeholder="venue@example.com"
+                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
+            </div>
+          </div>
+          <div>
+            <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Personal Note (optional)</label>
+            <textarea id="affPersonalNote" rows="2" placeholder="Hey, I've been using GigsFill for booking gigs — you should check it out!"
+              style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);resize:vertical;box-sizing:border-box;"></textarea>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <button onclick="sendAffRecommend()"
+              style="padding:7px 20px;background:rgba(6,182,212,0.2);border:1px solid rgba(6,182,212,0.5);border-radius:6px;color:var(--cyan);font-size:0.78rem;font-weight:600;cursor:pointer;">
+              Send Recommendation →
+            </button>
+            <span id="affSendResult" style="font-size:0.75rem;opacity:0;transition:opacity .3s;color:#10b981;"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sent emails list -->
+      <div id="affEmailsList" style="min-height:40px;"></div>
+    </div>
+
     <!-- Stats row -->
     <div id="affMyStats" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;"></div>
 
@@ -722,15 +722,15 @@
         </label>
         <div style="margin-bottom:14px;">
           <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:6px;font-weight:600;">Applies to</span>
-          <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:0.85rem;color:var(--text);">
-            <input type="radio" name="uaScope" value="all" checked onchange="uaToggleScope()">
-            All my artists
+          <label style="display:flex;align-items:center;gap:10px;margin-bottom:6px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+            <input type="checkbox" id="uaScopeAll" checked onchange="uaSetScope('all')">
+            All My Artists
           </label>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;color:var(--text);">
-            <input type="radio" name="uaScope" value="specific" onchange="uaToggleScope()">
-            Specific artists only
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+            <input type="checkbox" id="uaScopeSpecific" onchange="uaSetScope('specific')">
+            Specific Artists Only
           </label>
-          <div id="uaArtistChecks" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+          <div id="uaArtistChecks" style="display:none;margin-top:8px;margin-left:28px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
             <div style="color:var(--text-gray);font-size:0.78rem;">Loading your artists…</div>
           </div>
         </div>
@@ -1064,7 +1064,7 @@
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/user-profile.js"></script>
   <script src="/app/static/js/user-affiliate.js"></script>
-  <script src="/app/static/js/user-availability.js?v=2"></script>
+  <script src="/app/static/js/user-availability.js?v=3"></script>
   
 
   <!-- Delete Account Modal -->
