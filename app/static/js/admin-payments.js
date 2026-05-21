@@ -28,12 +28,21 @@
     if (!m) return s;
     return `${m[2]}/${m[3]}/${m[1]}`;
   }
+  // Backend stores datetimes in UTC ('2026-05-22 00:00:00') without a TZ
+  // marker. Parsing those with `new Date()` is browser-dependent — Chrome
+  // assumes local, Safari assumes UTC. Explicitly append 'Z' so the result
+  // is unambiguously UTC, then format in the user's local TZ.
   function fmtDateTime(s) {
     if (!s) return '—';
-    // YYYY-MM-DD[T ]HH:MM:SS
-    const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
-    if (!m) return s;
-    return `${m[2]}/${m[3]}/${m[1]} ${m[4]}:${m[5]}`;
+    const str = String(s);
+    const m = str.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)/);
+    if (!m) return str;
+    const d = new Date(`${m[1]}T${m[2]}Z`);
+    if (isNaN(d.getTime())) return str;
+    return d.toLocaleString(undefined, {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
   }
 
   // ── Status styling ────────────────────────────────────────────────────────
@@ -399,8 +408,13 @@
         `<div><div style="font-size:0.65rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:.04em;">${esc(label)}</div>
          <div style="font-size:0.82rem;color:var(--text);margin-top:2px;">${val}</div></div>`;
       const stripeRef = t.stripe_payment_intent_id || t.stripe_transfer_id || '';
+      // Stripe IDs (pi_1T0WEf… ~27 chars, no break opportunities) overflow
+      // the narrow grid cell and visually crash into the next field. Truncate
+      // to ~14 chars in the visible link; full id stays in the title= tooltip
+      // and at the href.
+      const stripeShort = stripeRef ? (stripeRef.slice(0, 14) + (stripeRef.length > 14 ? '…' : '')) : '';
       const stripeLink = stripeRef
-        ? `<a href="https://dashboard.stripe.com/${stripeRef.startsWith('pi_') ? 'payments/' : 'connect/transfers/'}${esc(stripeRef)}" target="_blank" style="color:var(--cyan);">${esc(stripeRef)} ↗</a>`
+        ? `<a href="https://dashboard.stripe.com/${stripeRef.startsWith('pi_') ? 'payments/' : 'connect/transfers/'}${esc(stripeRef)}" target="_blank" title="${esc(stripeRef)}" style="color:var(--cyan);font-family:monospace;font-size:0.78rem;">${esc(stripeShort)} ↗</a>`
         : '<span style="color:var(--text-gray);">—</span>';
 
       const sibsHtml = (data.siblings && data.siblings.length)
@@ -543,8 +557,8 @@
           ${cell('Commission',      dollars(t.commission_cents))}
           ${cell('Scheduled',       fmtDateTime(t.scheduled_process_at))}
           ${cell('Processed',       fmtDateTime(t.processed_at))}
-          ${cell('Stripe ref',      stripeLink)}
           ${cell('Created',         fmtDateTime(t.created_at))}
+          ${cell('Stripe ref',      stripeLink)}
         </div>
         ${t.notes ? `<div style="margin-top:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border-left:3px solid var(--cyan);font-size:0.72rem;color:var(--text-gray);"><strong style="color:var(--text);">Notes:</strong> ${esc(t.notes)}</div>` : ''}
         ${sibsHtml}
@@ -1095,6 +1109,10 @@
     const today = new Date();
     const monthAgo = new Date(today); monthAgo.setDate(monthAgo.getDate() - 30);
     const fmt = d => d.toISOString().slice(0, 10);
+    // The Run button is rendered INLINE in the form (not as a gf-modals
+    // footer button) because gf-modals closes the modal when any footer
+    // button fires — that would tear down #apReconResults before
+    // apRunReconcile could write into it. The footer keeps only Close.
     const formHtml = `
       <p style="font-size:0.78rem;color:var(--text);margin:0 0 10px;">
         Compares our <code>transactions</code> table to Stripe (PaymentIntents + Transfers) for a gig-date window. Highlights status mismatches and amount divergences. Read-only — act on findings via the single-row actions on each row.
@@ -1115,27 +1133,32 @@
         <input id="apReconOnlyMismatches" type="checkbox" checked style="width:auto;">
         Only show mismatches (uncheck to see every scanned row)
       </label>
-      <div style="font-size:0.65rem;color:var(--text-gray);margin-top:6px;">
-        Capped at 200 txns per run — narrow the date range for larger windows. Each row calls Stripe, so this takes a few seconds.
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;">
+        <div style="font-size:0.65rem;color:var(--text-gray);">
+          Capped at 200 txns per run — narrow the date range for larger windows. Each row calls Stripe, so this takes a few seconds.
+        </div>
+        <button id="apReconRunBtn" onclick="apRunReconcile()"
+          style="padding:7px 18px;background:linear-gradient(135deg,var(--purple),var(--cyan));color:#fff;border:none;border-radius:6px;font-size:0.8rem;font-weight:700;cursor:pointer;white-space:nowrap;">
+          ▶ Run
+        </button>
       </div>
       <div id="apReconResults" style="margin-top:12px;"></div>`;
     window.showStyledModal(
       'Stripe ⇄ DB Reconciliation',
       formHtml,
-      [
-        { text: 'Close', style: 'ghost',   onClick: () => {} },
-        { text: 'Run',   style: 'primary', onClick: () => apRunReconcile() },
-      ],
+      [ { text: 'Close', style: 'ghost', onClick: () => {} } ],
       { tone: 'info', size: 'lg' }
     );
   };
 
-  async function apRunReconcile() {
+  window.apRunReconcile = async function() {
     const fd = document.getElementById('apReconFrom')?.value;
     const td = document.getElementById('apReconTo')?.value;
     const om = !!document.getElementById('apReconOnlyMismatches')?.checked;
     const wrap = document.getElementById('apReconResults');
-    if (!fd || !td) return;
+    const btn  = document.getElementById('apReconRunBtn');
+    if (!fd || !td) { if (wrap) wrap.innerHTML = '<div style="color:#ef4444;padding:8px;font-size:0.78rem;">Pick both dates.</div>'; return; }
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; btn.textContent = '⏳ Scanning…'; }
     if (wrap) wrap.innerHTML = '<div style="text-align:center;color:var(--text-gray);padding:16px;font-size:0.85rem;">Scanning… this may take a few seconds.</div>';
     try {
       const url = '/api/admin/payments/reconcile?from_date=' + encodeURIComponent(fd)
@@ -1184,8 +1207,10 @@
       wrap.innerHTML = header + table;
     } catch (e) {
       wrap.innerHTML = `<div style="color:#ef4444;padding:8px;">${esc(e.message || 'Network error')}</div>`;
+    } finally {
+      if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '▶ Run'; }
     }
-  }
+  };
 
   // ── Lazy-load when the tab is shown ──────────────────────────────────────
   // The existing switchTab() doesn't know about per-tab loaders, so we hook
