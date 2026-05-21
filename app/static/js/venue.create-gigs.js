@@ -400,6 +400,26 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
         return;
       }
+      // FIX (May 21 2026): when editing an EXISTING gig, removing a slot
+      // from the builder will delete it on Save. Confirm first — matches
+      // the Gig Details modal's slot ✕ behavior (which uses _showCancelOverlay
+      // for booked slots and a styled confirm for open slots). For NEW gig
+      // creation (no selectedGig.id), the ✕ is just form shaping — no
+      // confirmation needed.
+      if (selectedGig && selectedGig.id && typeof showConfirm === 'function') {
+        const isBookedRow = row.dataset.isBooked === 'true';
+        const slotNumLabel = row.querySelector('.slot-number')?.textContent || '';
+        const title = isBookedRow ? '⚠ Remove Booked Slot?' : 'Remove Slot?';
+        const msg = isBookedRow
+          ? `This slot has a booked artist. The booking will be preserved (you can only cancel a slot booking from the Gig Details modal). The slot will be hidden from this edit form only — Save Changes will not delete it.`
+          : `Remove this open slot from the gig? Your change will apply when you click Save Changes.`;
+        showConfirm(title, msg, () => {
+          row.remove();
+          renumberSlots();
+          clearSlotError();
+        }, null, { tone: isBookedRow ? 'warning' : undefined, confirmLabel: 'Remove Slot', confirmStyle: 'danger' });
+        return;
+      }
       row.remove();
       renumberSlots();
       clearSlotError();
@@ -4913,11 +4933,16 @@ async function updateBookedGigNotes(gigId) {
       throw new Error(`Failed: ${response.status} ${errBody}`);
     }
     
-    // Update local cache so reopening modal shows new notes immediately
-    if (typeof venueGigsCache !== 'undefined' && venueGigsCache) {
-      const cached = venueGigsCache.find(g => g.id === gigId);
-      if (cached) cached.notes = notes;
-    }
+    // FIX (May 21 2026): updateBookedGigNotes is defined at file top level
+    // OUTSIDE the closure that holds venueGigsCache, so the cache update
+    // here silently no-op'd (typeof check passed because of hoisting but
+    // the inner reference resolved to the outer-scope's undeclared name).
+    // Result: save hit the DB correctly but reopening the modal pulled
+    // from the stale cache and showed the OLD notes — looked like the
+    // save didn't work. Invalidate + reload the gigs feed so the next
+    // modal open sees the saved notes.
+    if (typeof window.invalidateGigs === 'function') window.invalidateGigs();
+    if (typeof window.renderCalendar === 'function') window.renderCalendar();
 
     // Show saved indicator
     if (status) {
