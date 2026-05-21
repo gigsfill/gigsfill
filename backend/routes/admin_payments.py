@@ -881,27 +881,46 @@ def reverse_transfer(
     admin=Depends(check_admin),
     db=Depends(get_db),
 ):
-    """Reverse an artist Connect transfer that has already gone out. Pulls
-    funds from the artist's Connect balance back to our platform balance.
-    The venue is NOT refunded by this action — issue a refund separately if
-    you want the venue made whole.
+    """Reverse an artist Connect transfer. Optionally refund the venue in
+    the same call.
+
+    Two-step flow when also_refund_venue=true:
+      1. Reverse the child transfer (pulls funds from artist Connect back
+         to platform balance).
+      2. If step 1 succeeds, refund the parent venue_charge (pushes funds
+         from platform balance back to the venue's card).
+    If step 2 fails after step 1 succeeded, the reverse stays applied and
+    the response carries `refund.error`. Admin then retries the refund via
+    the standard ↩ Refund action on the parent — no auto-rollback (a
+    failed Stripe refund on a reversed transfer means the venue is owed
+    money, which is the platform's debt, which is the safe place for the
+    money to sit while admin figures out what went wrong).
 
     Body:
-      amount_cents      (optional int) — partial reversal. Default = full.
-      refund_app_fee    (optional bool) — also refund the platform fee
-                                          captured at transfer time, if any.
-                                          Default false (we usually keep it).
-      notes             (optional str)
-      dry_run           (optional bool)
+      amount_cents          (optional int) — partial reversal. Default full.
+      refund_app_fee        (optional bool) — refund platform fee captured
+                                              at transfer time. Default false.
+      notes                 (optional str)
+      dry_run               (optional bool)
+
+      also_refund_venue     (optional bool) — also run a refund on the parent.
+      refund_amount_cents   (optional int)  — default = same as reverse amount.
+                                              Independent — admin can refund
+                                              more/less than the reverse.
+      refund_reason         (optional str)  — Stripe reason for the refund.
+      refund_cancel_kids    (optional bool) — when refund is full, cancel any
+                                              still-scheduled siblings. Default
+                                              true for full refunds.
 
     Hard refusals (400):
       • Not a child artist_payout row.
       • status not in {transferred, paid}.
       • No stripe_transfer_id on the row.
       • amount_cents > artist_payout_cents or <= 0.
+      • also_refund_venue with no parent venue_charge / not refundable / no PI.
 
-    Stripe Dashboard webhook (`transfer.reversed`) will also fire and sync the
-    DB — harmless, same status sink.
+    Stripe Dashboard webhooks (`transfer.reversed`, `charge.refunded`) will
+    also fire and sync the DB — harmless, same status sink.
     """
     dry_run = bool(payload.get("dry_run"))
 
@@ -1001,6 +1020,154 @@ def reverse_transfer(
         )
         db.commit()
 
+    # ── Optional combined venue refund ─────────────────────────────────────
+    refund_result = None
+    if payload.get("also_refund_venue"):
+        parent_id = row["parent_transaction_id"]
+        if not parent_id:
+            raise HTTPException(400,
+                "also_refund_venue=true but this row has no parent_transaction_id.")
+        parent = db.execute(text("""
+            SELECT id, transaction_type, status, venue_charge_cents,
+                   amount_cents, stripe_payment_intent_id, gig_id
+            FROM transactions WHERE id = :pid
+        """), {"pid": parent_id}).mappings().first()
+        if not parent:
+            raise HTTPException(400,
+                f"Parent transaction #{parent_id} not found.")
+        if (parent["transaction_type"] or "single") not in _REFUNDABLE_TXN_TYPES:
+            raise HTTPException(400,
+                f"Parent #{parent_id} is not a refundable type "
+                f"('{parent['transaction_type']}').")
+        if parent["status"] not in _REFUNDABLE_STATUSES:
+            raise HTTPException(400,
+                f"Parent #{parent_id} is in status '{parent['status']}' — not refundable.")
+        if not parent["stripe_payment_intent_id"]:
+            raise HTTPException(400,
+                f"Parent #{parent_id} has no stripe_payment_intent_id — cannot refund.")
+
+        parent_charge = int(parent["venue_charge_cents"] or 0)
+        refund_req = payload.get("refund_amount_cents")
+        if refund_req in (None, ""):
+            r_amount = amount_cents  # default: refund the same amount we just reversed
+        else:
+            try:
+                r_amount = int(refund_req)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "refund_amount_cents must be an integer")
+        if r_amount <= 0:
+            raise HTTPException(400, "refund_amount_cents must be > 0")
+        if r_amount > parent_charge:
+            raise HTTPException(400,
+                f"Refund amount (${r_amount/100:.2f}) exceeds parent charge "
+                f"(${parent_charge/100:.2f}).")
+        r_is_full = (r_amount == parent_charge)
+        r_reason = (payload.get("refund_reason") or "requested_by_customer").strip()
+        if r_reason not in _STRIPE_REFUND_REASONS:
+            r_reason = "requested_by_customer"
+        r_cancel_kids = payload.get("refund_cancel_kids")
+        if r_cancel_kids is None:
+            r_cancel_kids = r_is_full
+
+        if dry_run:
+            refund_result = {
+                "stripe_refund_id": "re_dryrun_" + str(int(time.time())),
+                "amount_cents": r_amount,
+                "is_full": r_is_full,
+                "parent_txn_id": parent_id,
+                "parent_new_status": ('payment_cancelled' if r_is_full else parent["status"]),
+                "reason": r_reason,
+                "error": None,
+            }
+        else:
+            try:
+                from backend.routes.stripe_connect import init_stripe as _is2
+                stripe2, _k2 = _is2(db)
+                idem_key = f"admin_reverse_refund_txn_{parent_id}_{int(time.time())}"
+                refund_obj = stripe2.Refund.create(
+                    payment_intent=parent["stripe_payment_intent_id"],
+                    amount=r_amount,
+                    reason=r_reason,
+                    idempotency_key=idem_key,
+                    metadata={
+                        "txn_id": str(parent_id),
+                        "child_txn_id": str(txn_id),
+                        "gig_id": str(parent["gig_id"]),
+                        "initiated_by": "admin_payments_console_reverse",
+                        "admin_user_id": str(getattr(admin, "id", "") or ""),
+                    },
+                )
+                # Update parent in same DB session
+                parent_new_status = 'payment_cancelled' if r_is_full else parent["status"]
+                refund_note = (f"Auto-refund alongside reverse-transfer "
+                               f"({'FULL' if r_is_full else 'PARTIAL'}) "
+                               f"${r_amount/100:.2f} of ${parent_charge/100:.2f} "
+                               f"(refund_id: {refund_obj.id})")
+                db.execute(text("""
+                    UPDATE transactions
+                       SET status = :s,
+                           notes  = COALESCE(notes || ' | ', '') || :n
+                     WHERE id = :pid
+                """), {"s": parent_new_status, "n": refund_note, "pid": parent_id})
+
+                cancelled = []
+                if r_is_full and r_cancel_kids:
+                    sched_kids = db.execute(text("""
+                        SELECT id FROM transactions
+                        WHERE parent_transaction_id = :pid AND status = 'scheduled'
+                    """), {"pid": parent_id}).mappings().all()
+                    for k in sched_kids:
+                        db.execute(text("""
+                            UPDATE transactions
+                               SET status = 'payment_cancelled',
+                                   notes  = COALESCE(notes || ' | ', '') || :n
+                             WHERE id = :cid
+                        """), {"cid": k["id"],
+                               "n": f"Cancelled by combined reverse+refund on parent #{parent_id}"})
+                        cancelled.append(k["id"])
+                db.commit()
+
+                log_admin_action(
+                    db, admin, "payments_refund_via_reverse",
+                    target_table="transactions", target_id=parent_id,
+                    before={"status": parent["status"]},
+                    after={"status": parent_new_status},
+                    metadata={
+                        "child_txn_id": txn_id,
+                        "gig_id": parent["gig_id"],
+                        "amount_cents": r_amount,
+                        "charge_cents": parent_charge,
+                        "is_full": r_is_full,
+                        "stripe_refund_id": refund_obj.id,
+                        "reason": r_reason,
+                        "cancelled_child_payouts": cancelled,
+                    },
+                    request=request,
+                )
+                db.commit()
+                refund_result = {
+                    "stripe_refund_id": refund_obj.id,
+                    "amount_cents": r_amount,
+                    "is_full": r_is_full,
+                    "parent_txn_id": parent_id,
+                    "parent_new_status": parent_new_status,
+                    "reason": r_reason,
+                    "cancelled_child_payouts": cancelled,
+                    "error": None,
+                }
+            except Exception as e:
+                # Reverse already landed. Surface the failure; admin retries
+                # the refund manually via ↩ Refund on the parent. We do NOT
+                # try to roll the reversal back.
+                msg = getattr(e, "user_message", None) or str(e)
+                refund_result = {
+                    "parent_txn_id": parent_id,
+                    "error": (
+                        f"Reverse succeeded but venue refund failed: {msg}. "
+                        f"Retry the refund manually on transaction #{parent_id}."
+                    ),
+                }
+
     return {
         "ok": True,
         "dry_run": dry_run,
@@ -1008,9 +1175,11 @@ def reverse_transfer(
         "amount_cents": amount_cents,
         "is_full": is_full,
         "new_status": new_status,
+        "refund": refund_result,
         "note": ("Reversal pulls funds from the artist's Connect balance back "
-                 "to the platform. Issue a separate Refund if you want the "
-                 "venue made whole."),
+                 "to the platform. Venue refund "
+                 + ("issued in the same call." if refund_result and not refund_result.get("error")
+                    else "NOT issued — admin must run it separately if desired.")),
     }
 
 

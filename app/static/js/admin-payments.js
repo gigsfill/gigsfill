@@ -800,37 +800,96 @@
     if (!t || t.id !== txnId) return;
     const payoutCents = t.artist_payout_cents || 0;
     const payoutDollars = (payoutCents / 100).toFixed(2);
+
+    // Look up the parent venue_charge so the optional refund section can
+    // default to the parent's full charge amount.
+    const siblings = data.siblings || [];
+    const parent = siblings.find(s => s.id === t.parent_transaction_id) || null;
+    const parentCharge = parent ? (parent.venue_charge_cents || parent.amount_cents || 0) : 0;
+    const parentDollars = (parentCharge / 100).toFixed(2);
+    const parentStatus = parent ? parent.status : null;
+    // Parent must be refundable; if not, hide the refund section entirely.
+    const parentRefundable = parent
+      && (parent.transaction_type === 'venue_charge' || parent.transaction_type === 'single')
+      && ['charged','paid','transferred'].includes(parentStatus);
+
     const formHtml = `
       <div style="margin-bottom:12px;padding:10px 12px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.25);border-radius:6px;">
         <div style="font-size:0.7rem;color:#fca5a5;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">⚠ Destructive — moves money</div>
         <div style="font-size:0.75rem;color:var(--text);line-height:1.5;">
-          Reversing pulls <strong>$${payoutDollars}</strong> from <strong>${esc(t.artist_name || 'the artist')}</strong>'s Stripe Connect balance back to our platform balance. The artist's bank account will show the reversal at next settlement. <br><br>
-          This action does <em>not</em> refund the venue — if you also want the venue made whole, issue a Refund on the parent venue_charge separately.
+          Reversing pulls funds from <strong>${esc(t.artist_name || 'the artist')}</strong>'s Stripe Connect balance back to the platform balance. The optional refund below pushes funds from the platform balance back to the venue's card. If you don't enable the refund, the money stays in the GigsFill Stripe account.
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-        <label>
-          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
-          <input id="apReverseAmount" type="number" step="0.01" min="0.01" max="${payoutDollars}" value="${payoutDollars}"
-            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Transfer total: $${payoutDollars}</div>
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;align-self:end;font-size:0.75rem;color:var(--text-gray);">
-          <input id="apReverseAppFee" type="checkbox" style="width:auto;">
-          Also refund the platform fee captured at transfer time (uncommon)
+
+      <div style="margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+        <div style="font-size:0.72rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Step 1 — Reverse transfer from artist</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+          <label>
+            <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
+            <input id="apReverseAmount" type="number" step="0.01" min="0.01" max="${payoutDollars}" value="${payoutDollars}"
+              oninput="apReverseSyncRefundAmount()"
+              style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+            <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Transfer total: $${payoutDollars}</div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;align-self:end;font-size:0.72rem;color:var(--text-gray);">
+            <input id="apReverseAppFee" type="checkbox" style="width:auto;">
+            Also refund the platform fee captured at transfer time (uncommon)
+          </label>
+        </div>
+        <label style="display:block;">
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
+          <textarea id="apReverseNotes" rows="2" maxlength="500" placeholder="e.g. Artist no-showed; venue wants payment back"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
         </label>
       </div>
-      <label style="display:block;margin-bottom:6px;">
-        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
-        <textarea id="apReverseNotes" rows="2" maxlength="500" placeholder="e.g. Artist no-showed; venue wants payment back"
-          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
-      </label>
-      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:10px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
+
+      ${parentRefundable ? `
+      <div style="margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+          <input id="apReverseAlsoRefund" type="checkbox" onchange="apReverseToggleRefundSection()" style="width:auto;">
+          <strong>Step 2 (optional) — Also refund the venue</strong>
+        </label>
+        <div style="font-size:0.7rem;color:var(--text-gray);margin-top:2px;margin-left:24px;">
+          When unchecked, reversed funds sit in the GigsFill Stripe balance and the venue is not made whole. Tick to push the money back to the venue's card in the same call. Parent venue charge: <strong>$${parentDollars}</strong> (#${parent.id}, ${esc(parentStatus)}).
+        </div>
+        <div id="apReverseRefundFields" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(6,182,212,0.04);border:1px solid rgba(6,182,212,0.25);border-radius:5px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+            <label>
+              <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Refund amount (USD)</div>
+              <input id="apReverseRefundAmount" type="number" step="0.01" min="0.01" max="${parentDollars}" value="${payoutDollars}"
+                style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+              <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Charge total: $${parentDollars} (default = same as Step 1 amount)</div>
+            </label>
+            <label>
+              <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason</div>
+              <select id="apReverseRefundReason"
+                style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+                <option value="requested_by_customer">Requested by customer</option>
+                <option value="duplicate">Duplicate</option>
+                <option value="fraudulent">Fraudulent</option>
+              </select>
+            </label>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text-gray);">
+            <input id="apReverseRefundCancelKids" type="checkbox" checked style="width:auto;">
+            Also cancel any still-scheduled child payouts (only applies when refund is full)
+          </label>
+        </div>
+      </div>` : `
+      <div style="margin-bottom:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;font-size:0.72rem;color:var(--text-gray);">
+        Combined venue refund unavailable: parent venue charge ${parent ? `#${parent.id} is in status '${esc(parent.status)}'` : 'not found'}. To refund the venue separately, open the parent venue_charge row and use ↩ Refund.
+      </div>`}
+
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:6px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
         <input id="apReverseDryRun" type="checkbox" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
         <span><strong>Dry run (safe test mode)</strong><br>
-          <span style="font-size:0.72rem;color:var(--text-gray);">Validates the wiring without calling Stripe or modifying the DB.</span>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Validates both steps end-to-end without calling Stripe or modifying the DB.</span>
         </span>
-      </label>`;
+      </label>
+      <div style="font-size:0.65rem;color:var(--text-gray);margin-top:8px;line-height:1.4;">
+        <strong>Stripe fees:</strong> the original processing fee is NOT returned on a refund. The venue receives the refund amount above; the platform absorbs the CC fee from the original charge.
+      </div>`;
+
     window.showStyledModal(
       '⤺ Reverse Transfer — Transaction #' + txnId,
       formHtml,
@@ -841,19 +900,63 @@
       { tone: 'warning', size: 'md' }
     );
   };
+
+  // When the Step-1 reverse amount changes, mirror it into Step-2 refund
+  // amount UNLESS the user has manually edited Step-2 already (we treat any
+  // value that differs from the current Step-1 as "manually set"). Quietly
+  // skips if the refund section isn't checked.
+  window.apReverseSyncRefundAmount = function() {
+    const rev = document.getElementById('apReverseAmount');
+    const ref = document.getElementById('apReverseRefundAmount');
+    const tracker = window._apReverseTrackingAmount;
+    if (!rev || !ref) return;
+    if (window._apReverseRefundManuallyEdited) return;
+    ref.value = rev.value;
+    window._apReverseTrackingAmount = rev.value;
+  };
+  window.apReverseToggleRefundSection = function() {
+    const cb = document.getElementById('apReverseAlsoRefund');
+    const fields = document.getElementById('apReverseRefundFields');
+    if (!cb || !fields) return;
+    fields.style.display = cb.checked ? '' : 'none';
+    // Reset manual-edit tracking when reopening so re-checking resyncs.
+    if (cb.checked) {
+      window._apReverseRefundManuallyEdited = false;
+      apReverseSyncRefundAmount();
+      const ref = document.getElementById('apReverseRefundAmount');
+      if (ref && !ref._apEditWatch) {
+        ref._apEditWatch = true;
+        ref.addEventListener('input', () => { window._apReverseRefundManuallyEdited = true; });
+      }
+    }
+  };
+
   async function apSubmitReverseTransfer(txnId) {
     const amountStr = (document.getElementById('apReverseAmount')?.value || '').trim();
     const amountDollars = parseFloat(amountStr);
     if (!Number.isFinite(amountDollars) || amountDollars <= 0) {
-      window.showErrorModal && window.showErrorModal('Reverse Transfer', 'Enter a valid amount.');
+      window.showErrorModal && window.showErrorModal('Reverse Transfer', 'Enter a valid reverse amount.');
       return;
     }
+    const alsoRefund = !!document.getElementById('apReverseAlsoRefund')?.checked;
     const body = {
       amount_cents: Math.round(amountDollars * 100),
       refund_app_fee: !!document.getElementById('apReverseAppFee')?.checked,
       notes: (document.getElementById('apReverseNotes')?.value || '').trim(),
       dry_run: !!document.getElementById('apReverseDryRun')?.checked,
+      also_refund_venue: alsoRefund,
     };
+    if (alsoRefund) {
+      const refundStr = (document.getElementById('apReverseRefundAmount')?.value || '').trim();
+      const refundDollars = parseFloat(refundStr);
+      if (!Number.isFinite(refundDollars) || refundDollars <= 0) {
+        window.showErrorModal && window.showErrorModal('Reverse Transfer', 'Enter a valid refund amount, or uncheck "Also refund the venue".');
+        return;
+      }
+      body.refund_amount_cents     = Math.round(refundDollars * 100);
+      body.refund_reason           = document.getElementById('apReverseRefundReason')?.value || 'requested_by_customer';
+      body.refund_cancel_kids      = !!document.getElementById('apReverseRefundCancelKids')?.checked;
+    }
     try {
       const res = await fetch('/api/admin/payments/' + txnId + '/reverse-transfer', {
         method: 'POST', credentials: 'include',
@@ -866,13 +969,23 @@
         return;
       }
       const prefix = json.dry_run ? '[DRY RUN] ' : '';
-      const msg = json.dry_run
-        ? `Validation passed for ${json.is_full ? 'full' : 'partial'} reversal of $${(json.amount_cents/100).toFixed(2)}.`
-        : `Reversal ${json.stripe_reversal_id || ''} for $${(json.amount_cents/100).toFixed(2)} processed.\n\n${json.note || ''}`;
-      window.showSuccessModal && window.showSuccessModal(
-        prefix + 'Reverse Transfer', msg,
-        () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } }
-      );
+      const lines = [];
+      lines.push(`Reversal ${json.stripe_reversal_id || ''} for $${(json.amount_cents/100).toFixed(2)} (${json.is_full ? 'full' : 'partial'}).`);
+      if (json.refund) {
+        if (json.refund.error) {
+          lines.push(`⚠ Refund step failed: ${json.refund.error}`);
+        } else {
+          lines.push(`Refund ${json.refund.stripe_refund_id || ''} for $${(json.refund.amount_cents/100).toFixed(2)} (${json.refund.is_full ? 'full' : 'partial'}) applied to parent #${json.refund.parent_txn_id}.`);
+        }
+      } else {
+        lines.push('No refund issued — reversed funds stay in the GigsFill Stripe balance.');
+      }
+      const msg = lines.join('\n\n');
+      const hasError = json.refund && json.refund.error;
+      const fn = hasError ? (window.showErrorModal || window.showStyledModal) : window.showSuccessModal;
+      fn(prefix + 'Reverse Transfer', msg, () => {
+        if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
+      });
     } catch (e) {
       window.showErrorModal && window.showErrorModal('Reverse failed', e.message || 'Network error');
     }
@@ -892,9 +1005,15 @@
       </div>
       <label style="display:block;margin-bottom:10px;">
         <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">New artist id</div>
-        <input id="apRerouteArtistId" type="number" min="1" placeholder="e.g. 42"
-          style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-        <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Find the id on the artist's edit page URL: <code>?artist_id=N</code>.</div>
+        <div style="display:flex;gap:6px;align-items:stretch;">
+          <input id="apRerouteArtistId" type="number" min="1" placeholder="e.g. 42"
+            style="flex:1;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+          <button type="button" onclick="apOpenFindArtist('apRerouteArtistId')"
+            style="padding:7px 14px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.45);border-radius:5px;color:#c4b5fd;font-size:0.75rem;font-weight:600;cursor:pointer;white-space:nowrap;">
+            🔍 Find Artist ID
+          </button>
+        </div>
+        <div id="apRerouteArtistPreview" style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;"></div>
       </label>
       <label style="display:block;margin-bottom:10px;">
         <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason (required, min 5 chars)</div>
@@ -951,6 +1070,159 @@
     } catch (e) {
       window.showErrorModal && window.showErrorModal('Re-route failed', e.message || 'Network error');
     }
+  }
+
+  // ── Find Artist ID (used by Re-route modal) ───────────────────────────────
+  // Stacked modal that opens over the Re-route prompt. Loads the full
+  // artist list once (cached on window for the page session), then filters
+  // client-side by letter or substring. Modeled on the Payment Settings tab's
+  // "Venue Free Trials" search but rendered inline in a gf-modal.
+  window._apArtistCache = window._apArtistCache || null;
+
+  window.apOpenFindArtist = function(targetInputId) {
+    const ensureList = window._apArtistCache
+      ? Promise.resolve(window._apArtistCache)
+      : fetch('/api/admin/artists', { credentials: 'include' })
+          .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+          .then(list => {
+            window._apArtistCache = list.sort((a, b) =>
+              String(a.name || '').localeCompare(String(b.name || ''))
+            );
+            return window._apArtistCache;
+          });
+
+    const formHtml = `
+      <p style="font-size:0.75rem;color:var(--text);margin:0 0 10px;">
+        Click an artist to autopopulate the id. Search by name or filter by first letter.
+      </p>
+      <input id="apFindArtistSearch" type="text" placeholder="🔍 Search artist by name, email, or id…"
+        oninput="apFindArtistRender()"
+        style="width:100%;padding:7px 10px;background:#151b28;border:1px solid #333;border-radius:5px;color:var(--text-white);font-size:0.8rem;box-sizing:border-box;margin-bottom:8px;">
+      <div id="apFindArtistLetters" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px;"></div>
+      <div id="apFindArtistResults" style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:5px;">
+        <div style="color:var(--text-gray);padding:14px;font-size:0.78rem;text-align:center;">Loading…</div>
+      </div>
+      <div id="apFindArtistInfo" style="font-size:0.65rem;color:var(--text-gray);margin-top:6px;text-align:center;"></div>`;
+
+    window.showStyledModal(
+      'Find Artist',
+      formHtml,
+      [ { text: 'Close', style: 'ghost', onClick: () => {} } ],
+      { tone: 'info', size: 'md' }
+    );
+
+    window._apFindArtistTargetId = targetInputId;
+    window._apFindArtistLetter = '';
+
+    ensureList.then(() => {
+      apFindArtistBuildLetters();
+      apFindArtistRender();
+    }).catch(e => {
+      const wrap = document.getElementById('apFindArtistResults');
+      if (wrap) wrap.innerHTML = `<div style="color:#ef4444;padding:10px;font-size:0.78rem;">Failed to load artists: ${esc(e.message)}</div>`;
+    });
+  };
+
+  function apFindArtistBuildLetters() {
+    const wrap = document.getElementById('apFindArtistLetters');
+    if (!wrap) return;
+    const present = new Set();
+    (window._apArtistCache || []).forEach(a => {
+      const c = (a.name || '').trim().charAt(0).toUpperCase();
+      if (c >= 'A' && c <= 'Z') present.add(c);
+      else if (c) present.add('#');
+    });
+    const letters = Array.from(present).sort();
+    const btn = (label, value, isActive) => `
+      <button onclick="apFindArtistSetLetter('${value}')"
+        style="padding:3px 9px;font-size:0.7rem;border-radius:4px;cursor:pointer;
+               ${isActive
+                 ? 'background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.6);color:#f59e0b;font-weight:700;'
+                 : 'background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text-gray);'}">${esc(label)}</button>`;
+    wrap.innerHTML = btn('All', '', window._apFindArtistLetter === '')
+                   + letters.map(l => btn(l, l, window._apFindArtistLetter === l)).join('');
+  }
+
+  window.apFindArtistSetLetter = function(letter) {
+    window._apFindArtistLetter = letter;
+    const search = document.getElementById('apFindArtistSearch');
+    if (search) search.value = '';
+    apFindArtistBuildLetters();
+    apFindArtistRender();
+  };
+
+  window.apFindArtistRender = function() {
+    const wrap = document.getElementById('apFindArtistResults');
+    const info = document.getElementById('apFindArtistInfo');
+    if (!wrap) return;
+    const q = (document.getElementById('apFindArtistSearch')?.value || '').trim().toLowerCase();
+    const letter = window._apFindArtistLetter || '';
+    if (q && letter) { window._apFindArtistLetter = ''; apFindArtistBuildLetters(); }
+
+    let list = window._apArtistCache || [];
+    if (q) {
+      list = list.filter(a =>
+        (a.name || '').toLowerCase().includes(q) ||
+        (a.owner_email || '').toLowerCase().includes(q) ||
+        String(a.id) === q
+      );
+    } else if (letter) {
+      list = list.filter(a => {
+        const c = (a.name || '').trim().charAt(0).toUpperCase();
+        if (letter === '#') return !(c >= 'A' && c <= 'Z') && !!c;
+        return c === letter;
+      });
+    }
+
+    if (info) info.textContent = `${list.length} artist${list.length === 1 ? '' : 's'}` + (list.length > 200 ? ' (showing first 200)' : '');
+    list = list.slice(0, 200);
+
+    if (!list.length) {
+      wrap.innerHTML = '<div style="color:var(--text-gray);padding:10px;font-size:0.78rem;text-align:center;">No artists match.</div>';
+      return;
+    }
+
+    wrap.innerHTML = list.map(a => {
+      const sub = [a.artist_type, a.city, a.state].filter(Boolean).join(' · ');
+      return `
+        <div onclick="apFindArtistPick(${a.id})"
+          style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;"
+          onmouseover="this.style.background='rgba(6,182,212,0.06)'"
+          onmouseout="this.style.background=''">
+          <span style="display:inline-block;min-width:56px;padding:2px 6px;font-family:monospace;font-size:0.72rem;font-weight:700;color:#c4b5fd;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.3);border-radius:4px;text-align:center;">#${a.id}</span>
+          <span style="flex:1;min-width:0;">
+            <span style="font-size:0.82rem;color:var(--text);font-weight:500;">${esc(a.name || '(unnamed)')}</span>
+            ${sub ? `<span style="display:block;font-size:0.66rem;color:var(--text-gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(sub)}</span>` : ''}
+            ${a.owner_email ? `<span style="display:block;font-size:0.62rem;color:var(--text-gray);">${esc(a.owner_email)}</span>` : ''}
+          </span>
+        </div>`;
+    }).join('');
+  };
+
+  window.apFindArtistPick = function(artistId) {
+    const targetId = window._apFindArtistTargetId;
+    const input = targetId && document.getElementById(targetId);
+    if (input) {
+      input.value = String(artistId);
+      const a = (window._apArtistCache || []).find(x => x.id === artistId);
+      const preview = document.getElementById('apRerouteArtistPreview');
+      if (preview && a) {
+        preview.innerHTML = `Selected: <strong style="color:var(--text);">${esc(a.name || '(unnamed)')}</strong> · #${a.id}`;
+      }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    // Close just the Find Artist modal; the Re-route modal beneath stays open.
+    apCloseTopModal();
+  };
+
+  // Close the top-most gf-modal overlay so stacked modals work.
+  // Prefer the close-X button so any teardown logic fires; otherwise remove.
+  function apCloseTopModal() {
+    const overlays = document.querySelectorAll('.gfm-modal-overlay');
+    if (!overlays.length) return;
+    const top = overlays[overlays.length - 1];
+    const x = top.querySelector('.gfm-modal-close');
+    if (x) x.click(); else top.remove();
   }
 
   // ── Tier 4: Bulk actions + Reconciliation ────────────────────────────────
