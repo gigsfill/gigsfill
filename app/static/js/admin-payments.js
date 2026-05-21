@@ -540,13 +540,17 @@
           ${label}
         </button>`;
 
+      // Hide Reverse Transfer / Re-route entirely on non-payout rows — they
+      // can never apply to a venue_charge row, so showing them disabled just
+      // adds visual noise. Refund stays visible-but-disabled on payout rows
+      // because its tooltip points the admin to the parent venue charge.
       const actionsHtml = `
         <div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
           <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Actions</div>
           <div style="display:flex;flex-wrap:wrap;align-items:center;">
             ${btn('refund',  '↩ Refund',           '239,68,68',  canRefund,          reasons.refund,  `apOpenRefund(${txnId})`)}
-            ${btn('reverse', '⤺ Reverse Transfer', '239,68,68',  canReverseTransfer, reasons.reverse, `apOpenReverseTransfer(${txnId})`)}
-            ${btn('reroute', '↪ Re-route Payout',  '6,182,212',  canReroute,         reasons.reroute, `apOpenReroute(${txnId})`)}
+            ${isPayoutChild ? btn('reverse', '⤺ Reverse Transfer', '239,68,68',  canReverseTransfer, reasons.reverse, `apOpenReverseTransfer(${txnId})`) : ''}
+            ${isPayoutChild ? btn('reroute', '↪ Re-route Payout',  '6,182,212',  canReroute,         reasons.reroute, `apOpenReroute(${txnId})`) : ''}
             ${btn('refire',  '↻ Re-fire',          '245,158,11', canRefire,          reasons.refire,  `apOpenRefire(${txnId})`)}
             ${btn('mark',    '✓ Mark Resolved',   '6,182,212',  canMark,            '',              `apOpenMarkResolved(${txnId})`)}
             ${btn('resend',  '✉ Resend Email',    '139,92,246', canResend,          reasons.resend,  `apOpenResend(${txnId})`)}
@@ -824,8 +828,7 @@
     const platformFeeCents = t.commission_cents || 0;
     const platformFeeDollars = (platformFeeCents / 100).toFixed(2);
 
-    // Look up the parent venue_charge so the optional refund section can
-    // default to the parent's full charge amount.
+    // Look up the parent venue_charge for the optional refund section.
     const siblings = data.siblings || [];
     const parent = siblings.find(s => s.id === t.parent_transaction_id) || null;
     const parentCharge = parent ? (parent.venue_charge_cents || parent.amount_cents || 0) : 0;
@@ -835,39 +838,65 @@
       && (parent.transaction_type === 'venue_charge' || parent.transaction_type === 'single')
       && ['charged','paid','transferred'].includes(parentStatus);
 
-    // Shared style for the cyan uppercase section header so Step 1 and Step 2
-    // line up identically.
+    // Count sibling payouts that are still 'scheduled' — those are the rows
+    // the optional "cancel pending payouts" checkbox would touch. If there
+    // are none, hide the checkbox entirely so admins don't wonder what it
+    // would do.
+    const scheduledSiblings = siblings.filter(s =>
+      s.id !== t.id
+      && s.parent_transaction_id === t.parent_transaction_id
+      && s.status === 'scheduled'
+    );
+    const schedSibCount = scheduledSiblings.length;
+
+    const gigTime = t.gig_start_time ? ' ' + fmtTime12(t.gig_start_time) : '';
+    const gigLine = `#${t.gig_id}` + (t.gig_title ? ' — ' + t.gig_title : '')
+                  + ' (' + fmtDate(t.gig_date) + gigTime + ')';
+
     const stepLabelCss = 'font-size:0.72rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;';
     const stepCardCss  = 'margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;';
+
+    // Compact key/value table used by the Transaction Details summary block.
+    const sumRow = (label, val, color) => `
+      <tr>
+        <td style="padding:3px 8px 3px 0;color:var(--text-gray);font-size:0.72rem;white-space:nowrap;">${esc(label)}</td>
+        <td style="padding:3px 0;font-size:0.78rem;color:${color || 'var(--text)'};">${val}</td>
+      </tr>`;
 
     const formHtml = `
       <div style="margin-bottom:12px;padding:10px 12px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.25);border-radius:6px;">
         <div style="font-size:0.7rem;color:#fca5a5;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">⚠ Destructive — moves money</div>
         <div style="font-size:0.75rem;color:var(--text);line-height:1.5;">
-          Reversing pulls funds from <strong>${esc(t.artist_name || 'the artist')}</strong>'s Stripe Connect balance back to the platform balance. The optional refund below pushes funds from the platform balance back to the venue's card. If you don't enable the refund, the money stays in the GigsFill Stripe account.
+          Reversing pulls funds from <strong>${esc(t.artist_name || 'the artist')}</strong>'s Stripe Connect balance back to the platform balance. The optional refund below sends funds from the platform balance back to the venue's card. If you skip the refund, the money stays in the GigsFill Stripe account.
         </div>
+      </div>
+
+      <!-- Transaction Details — single source of truth for the figures
+           involved. The editable fields below reference these numbers
+           without restating them, so the admin has one place to look. -->
+      <div style="${stepCardCss}">
+        <div style="${stepLabelCss}">Transaction Details</div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${sumRow('Gig',              esc(gigLine))}
+          ${sumRow('Venue',            esc(t.venue_name || '—'))}
+          ${sumRow('Artist',           esc(t.artist_name || '—'))}
+          ${sumRow('Artist payout (this row)', `<strong style="font-family:monospace;">$${payoutDollars}</strong>`)}
+          ${sumRow('Platform fee (commission)', `<span style="font-family:monospace;">$${platformFeeDollars}</span>`,
+                   'var(--text-gray)')}
+          ${parent ? sumRow('Parent venue charge',
+                            `<strong style="font-family:monospace;">$${parentDollars}</strong> · #${parent.id} (${esc(parentStatus)})`)
+                   : sumRow('Parent venue charge', '<span style="color:var(--text-gray);">not linked</span>')}
+        </table>
       </div>
 
       <div style="${stepCardCss}">
         <div style="${stepLabelCss}">Step 1 — Reverse transfer from artist</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
-          <label>
-            <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
-            <input id="apReverseAmount" type="number" step="0.01" min="0.01" max="${payoutDollars}" value="${payoutDollars}"
-              oninput="apReverseSyncRefundAmount()"
-              style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-            <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Transfer total: $${payoutDollars}</div>
-          </label>
-          <label>
-            <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Platform fee on this transfer</div>
-            <input type="text" readonly value="$${platformFeeDollars}"
-              style="width:100%;padding:7px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:5px;color:var(--text-gray);font-size:0.85rem;box-sizing:border-box;font-family:monospace;">
-            <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Commission captured at venue-charge time. Refunding this requires the Step 2 venue refund below — it can't be returned via the Stripe transfer reversal alone.</div>
-          </label>
-        </div>
-        <label style="display:flex;align-items:flex-start;gap:8px;font-size:0.72rem;color:var(--text-gray);margin-bottom:8px;line-height:1.5;">
-          <input id="apReverseAppFee" type="checkbox" style="width:auto;flex-shrink:0;margin-top:2px;">
-          <span>Also refund the Stripe <em>application fee</em> on the transfer (advanced — only matters if the transfer was created with <code>application_fee_amount</code>; ours aren't, so this is usually a no-op)</span>
+        <label style="display:block;margin-bottom:8px;">
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
+          <input id="apReverseAmount" type="number" step="0.01" min="0.01" max="${payoutDollars}" value="${payoutDollars}"
+            oninput="apReverseSyncRefundAmount()"
+            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Can't exceed the artist payout amount above ($${payoutDollars}).</div>
         </label>
         <label style="display:block;">
           <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
@@ -881,21 +910,17 @@
         <div style="${stepLabelCss}">Step 2 (optional) — Also refund the venue</div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.78rem;color:var(--text);">
           <input id="apReverseAlsoRefund" type="checkbox" onchange="apReverseToggleRefundSection()" style="width:auto;flex-shrink:0;">
-          <span>Push reversed funds back to the venue's card in the same call</span>
+          <span>Send funds back to the venue's card in the same call</span>
         </label>
         <div style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;margin-left:24px;line-height:1.5;">
           When unchecked, reversed funds sit in the GigsFill Stripe balance.
         </div>
-        <div style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;margin-left:24px;line-height:1.5;">
-          Parent venue charge: <strong>$${parentDollars}</strong> (#${parent.id}, ${esc(parentStatus)}).
-        </div>
         <div id="apReverseRefundFields" style="display:none;margin-top:10px;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
             <label>
-              <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Refund amount (USD)</div>
+              <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Venue Refund Amount (USD)</div>
               <input id="apReverseRefundAmount" type="number" step="0.01" min="0.01" max="${parentDollars}" value="${payoutDollars}"
                 style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-              <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Charge total: $${parentDollars} · auto-filled with Step 1 amount; edit to refund a different portion.</div>
             </label>
             <label>
               <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason</div>
@@ -907,10 +932,14 @@
               </select>
             </label>
           </div>
-          <label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text-gray);">
-            <input id="apReverseRefundCancelKids" type="checkbox" checked style="width:auto;">
-            Also cancel any still-scheduled child payouts (only applies when refund is full)
-          </label>
+          ${schedSibCount > 0 ? `
+          <label style="display:flex;align-items:flex-start;gap:8px;font-size:0.72rem;color:var(--text-gray);line-height:1.5;">
+            <input id="apReverseRefundCancelKids" type="checkbox" checked style="width:auto;flex-shrink:0;margin-top:2px;">
+            <span>Also cancel <strong>${schedSibCount}</strong> other scheduled payout${schedSibCount === 1 ? '' : 's'} on this gig.<br>
+              <span style="color:var(--text-gray);">(Only takes effect if the refund is for the full charge. Prevents the scheduler from sending those payouts later for a gig that's being refunded.)</span>
+            </span>
+          </label>` : `
+          <input type="hidden" id="apReverseRefundCancelKids" value="off">`}
         </div>
       </div>` : `
       <div style="${stepCardCss}">
