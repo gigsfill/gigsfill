@@ -63,6 +63,7 @@ def get_availability(artist_id: int, user=Depends(get_current_user), db=Depends(
             SELECT id, blackout_start, blackout_end, reason, created_at
             FROM artist_availability
             WHERE artist_id = :aid
+              AND date(blackout_end) >= date('now', '-1 day')
             ORDER BY blackout_start ASC
         """),
         {"aid": artist_id}
@@ -371,6 +372,7 @@ def me_get_availability(user=Depends(get_current_user), db=Depends(get_db)):
         FROM user_availability ua
         LEFT JOIN artists a ON a.id = ua.artist_id
         WHERE ua.user_id = :uid
+          AND date(ua.blackout_end) >= date('now', '-1 day')
         ORDER BY ua.blackout_start ASC
     """), {"uid": user.id}).mappings().all()
 
@@ -390,6 +392,7 @@ def me_get_availability(user=Depends(get_current_user), db=Depends(get_db)):
             FROM artist_availability ab
             JOIN artists a ON a.id = ab.artist_id
             WHERE ab.artist_id IN ({ph})
+              AND date(ab.blackout_end) >= date('now', '-1 day')
             ORDER BY ab.blackout_start ASC
         """), params).mappings().all()]
 

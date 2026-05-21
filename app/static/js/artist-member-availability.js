@@ -47,31 +47,38 @@
       section.style.display = '';
       const members = data.members || [];
 
-      if (!members.length) {
-        wrap.innerHTML = '<p style="color:var(--text-gray);">No member blackouts in the next few months. (Anything members add in their profile will show up here.)</p>';
+      // Flatten grouped-by-member response into a single chronological list.
+      // Scope (this artist only vs all their artists) is intentionally not
+      // displayed — that's private to the member.
+      const flat = [];
+      members.forEach(m => {
+        (m.blackouts || []).forEach(b => {
+          flat.push({
+            name: m.name,
+            blackout_start: b.blackout_start,
+            blackout_end: b.blackout_end,
+          });
+        });
+      });
+      flat.sort((a, b) => String(a.blackout_start).localeCompare(String(b.blackout_start)));
+
+      if (!flat.length) {
+        wrap.innerHTML = '<p style="color:var(--text-gray);">No upcoming member blackouts. (Anything members add in their profile will show up here.)</p>';
         return;
       }
 
-      wrap.innerHTML = members.map(m => `
-        <div style="margin-bottom:14px;padding:12px 14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;">
-          <div style="font-weight:700;color:var(--text);font-size:0.9rem;margin-bottom:8px;">
-            👤 ${_esc(m.name)}
-          </div>
-          <div style="display:flex;flex-direction:column;gap:5px;">
-            ${m.blackouts.map(b => `
-              <div style="display:flex;align-items:center;gap:10px;font-size:0.82rem;color:var(--text-gray);">
-                <span style="color:var(--text);font-weight:500;min-width:160px;">
-                  ${_esc(_rangeLabel(b.blackout_start, b.blackout_end))}
-                </span>
-                <span style="font-size:0.72rem;color:#f59e0b;background:rgba(245,158,11,0.1);padding:1px 7px;border-radius:4px;border:1px solid rgba(245,158,11,0.25);">
-                  ${b.artist_id ? 'This artist only' : 'All their artists'}
-                </span>
-                ${b.reason ? '<span style="font-style:italic;">' + _esc(b.reason) + '</span>' : ''}
-              </div>
-            `).join('')}
-          </div>
+      wrap.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:0.85rem;">
+          ${flat.map(b => `
+            <div style="display:flex;align-items:center;gap:18px;padding:6px 10px;background:rgba(255,255,255,0.02);border-radius:6px;">
+              <span style="color:var(--text);font-weight:500;min-width:210px;">
+                ${_esc(_rangeLabel(b.blackout_start, b.blackout_end))}
+              </span>
+              <span style="color:var(--text);">${_esc(b.name)}</span>
+            </div>
+          `).join('')}
         </div>
-      `).join('');
+      `;
     } catch (e) {
       console.error('loadMemberAvailability:', e);
       section.style.display = '';
