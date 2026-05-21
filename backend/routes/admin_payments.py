@@ -311,21 +311,29 @@ def payment_detail(
         sibs = db.execute(text("""
             SELECT id, COALESCE(transaction_type,'single') as transaction_type,
                    status, amount_cents, venue_charge_cents, artist_payout_cents,
-                   artist_id, parent_transaction_id, processed_at, stripe_transfer_id
+                   commission_cents,
+                   artist_id, parent_transaction_id, scheduled_process_at,
+                   processed_at, created_at,
+                   stripe_transfer_id, stripe_payment_intent_id
             FROM transactions
             WHERE id = :pid OR parent_transaction_id = :pid
             ORDER BY (id = :pid) DESC, id ASC
         """), {"pid": result["parent_transaction_id"]}).mappings().all()
         siblings = [dict(s) for s in sibs]
     else:
-        # Look for children whose parent_transaction_id = this row
+        # Look for children whose parent_transaction_id = this row, plus self
+        # so the frontend always has the full gig view (parent + all children)
+        # regardless of which row admin clicked first.
         sibs = db.execute(text("""
             SELECT id, COALESCE(transaction_type,'single') as transaction_type,
                    status, amount_cents, venue_charge_cents, artist_payout_cents,
-                   artist_id, parent_transaction_id, processed_at, stripe_transfer_id
+                   commission_cents,
+                   artist_id, parent_transaction_id, scheduled_process_at,
+                   processed_at, created_at,
+                   stripe_transfer_id, stripe_payment_intent_id
             FROM transactions
-            WHERE parent_transaction_id = :pid
-            ORDER BY id ASC
+            WHERE id = :pid OR parent_transaction_id = :pid
+            ORDER BY (id = :pid) DESC, id ASC
         """), {"pid": txn_id}).mappings().all()
         siblings = [dict(s) for s in sibs]
 

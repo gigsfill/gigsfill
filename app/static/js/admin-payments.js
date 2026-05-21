@@ -411,7 +411,7 @@
     }
     window.showStyledModal('Transaction #' + txnId,
       '<p style="color:var(--text-gray);text-align:center;">Loading…</p>',
-      [{ text: 'Close', style: 'ghost' }], { size: 'lg' });
+      [{ text: 'Close', style: 'ghost' }], { size: 'xl' });
     try {
       const res = await fetch('/api/admin/payments/' + txnId, { credentials: 'include' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -473,17 +473,24 @@
         const time  = (sl && sl.start_time && sl.end_time)
           ? `${esc(fmtTime12(sl.start_time))}–${esc(fmtTime12(sl.end_time))}`
           : '—';
-        let artist = '—';
+        // "Artist" column doubles as the counterparty column: venue's name
+        // on the venue_charge row (the venue is the payer), artist's name
+        // on artist_payout rows (the artist is the payee). The clicked row
+        // falls back to t.venue_name / t.artist_name if the sibling rows
+        // don't carry the name lookup.
+        let counterparty;
         if (s.transaction_type === 'artist_payout') {
-          artist = sl && sl.artist_name ? esc(sl.artist_name)
-                 : (isThis ? esc(t.artist_name || '—') : '—');
+          counterparty = sl && sl.artist_name ? esc(sl.artist_name)
+                       : (isThis ? esc(t.artist_name || '—') : '—');
+        } else {
+          counterparty = esc(t.venue_name || '—');
         }
         return `<tr style="border-bottom:1px solid var(--border);${isThis ? 'background:rgba(6,182,212,0.07);' : ''}">
           <td style="padding:5px;">#${s.id}${isThis ? ' (this)' : ''}</td>
           <td style="padding:5px;">${slotN}</td>
           <td style="padding:5px;">${time}</td>
           <td style="padding:5px;">${esc(TYPE_LABEL[s.transaction_type] || s.transaction_type)}</td>
-          <td style="padding:5px;">${artist}</td>
+          <td style="padding:5px;">${counterparty}</td>
           <td style="padding:5px;">${statusPill(s.status)}</td>
           <td style="padding:5px;text-align:right;font-family:monospace;">${gigDollarsFor(s)}</td>
           <td style="padding:5px;text-align:right;font-family:monospace;font-weight:600;">${paidFor(s)}</td>
@@ -521,6 +528,53 @@
 
       // Old separate "Gig slots" section is now merged into the table above.
       const slotsHtml = '';
+
+      // ── Gig-level action shortcuts ──────────────────────────────────────
+      // Always-present buttons that operate on the gig as a whole, no matter
+      // which row admin clicked to open this modal. Per-row Actions toolbar
+      // (further down) handles surgical operations on the clicked row only.
+      const parentTxn = orderedRows.find(s =>
+        s.transaction_type === 'venue_charge' || s.transaction_type === 'single'
+      ) || null;
+      const gigCanRefundVenue = parentTxn
+        && ['charged','paid','transferred'].includes(parentTxn.status)
+        && !!parentTxn.stripe_payment_intent_id;
+      const firstReversibleChild = orderedRows.find(s =>
+        s.transaction_type === 'artist_payout'
+        && ['transferred','paid'].includes(s.status)
+        && !!s.stripe_transfer_id
+      );
+      const gigCanReverseTransfers = !!firstReversibleChild;
+
+      const gigBtn = (label, color, onclick, sub) => `
+        <button onclick="${onclick}"
+          style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 16px;background:rgba(${color},0.15);border:1px solid rgba(${color},0.45);color:rgb(${color});border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;margin:0 8px 8px 0;text-align:left;min-width:200px;">
+          <span>${label}</span>
+          <span style="font-size:0.65rem;font-weight:400;color:var(--text-gray);">${esc(sub || '')}</span>
+        </button>`;
+
+      const gigActionsButtons = [
+        gigCanRefundVenue ? gigBtn(
+          '↩ Refund Venue',
+          '239,68,68',
+          `apOpenRefund(${parentTxn.id})`,
+          'Refund the parent venue charge (#' + parentTxn.id + '). Cancels any still-scheduled artist payouts when full.'
+        ) : '',
+        gigCanReverseTransfers ? gigBtn(
+          '⤺ Reverse Artist Transfers',
+          '239,68,68',
+          `apOpenReverseTransfer(${firstReversibleChild.id})`,
+          'Pick one or more paid artist transfers to reverse. Step 2 can also refund the venue.'
+        ) : '',
+      ].filter(Boolean).join('');
+
+      const gigActionsHtml = gigActionsButtons
+        ? `<div style="margin-top:14px;padding:10px 12px;background:rgba(139,92,246,0.05);border:1px solid rgba(139,92,246,0.25);border-radius:6px;">
+             <div style="font-size:0.7rem;color:#c4b5fd;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Gig Actions</div>
+             <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:8px;">Operate on the gig as a whole — same end result whether admin clicked the venue charge row or an artist payout row.</div>
+             <div style="display:flex;flex-wrap:wrap;align-items:flex-start;">${gigActionsButtons}</div>
+           </div>`
+        : '';
 
       const auditHtml = (data.audit && data.audit.length)
         ? `<div style="margin-top:14px;">
@@ -585,11 +639,12 @@
         showMark    ? btn('✓ Mark Resolved',    '6,182,212',  `apOpenMarkResolved(${txnId})`)   : '',
       ].filter(Boolean).join('');
 
-      const actionsHtml = `
-        <div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
-          <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Actions</div>
-          <div style="display:flex;flex-wrap:wrap;align-items:center;">${buttons}</div>
-        </div>`;
+      const actionsHtml = buttons
+        ? `<div style="margin-top:14px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
+             <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Selected Row Actions — #${t.id}</div>
+             <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:8px;">Surgical operations on the row admin clicked. For gig-wide actions (refund venue, reverse multiple artists), use the Gig Actions buttons above.</div>
+             <div style="display:flex;flex-wrap:wrap;align-items:center;">${buttons}</div>
+           </div>` : '';
 
       // Gig-level overview replaces the old 14-cell grid that mixed gig
       // info with single-txn info. Per-txn detail lives in the table below;
@@ -618,6 +673,7 @@
           </table>
         </div>
         ${t.notes ? `<div style="margin-top:12px;padding:8px 10px;background:rgba(255,255,255,0.02);border-left:3px solid var(--cyan);font-size:0.72rem;color:var(--text-gray);"><strong style="color:var(--text);">Notes (selected row):</strong> ${esc(t.notes)}</div>` : ''}
+        ${gigActionsHtml}
         ${sibsHtml}
         ${slotsHtml}
         ${actionsHtml}
