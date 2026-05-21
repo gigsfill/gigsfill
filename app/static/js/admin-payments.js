@@ -823,31 +823,76 @@
     const data = window._apLastDetail;
     const t = data && data.transaction;
     if (!t || t.id !== txnId) return;
-    const payoutCents = t.artist_payout_cents || 0;
-    const payoutDollars = (payoutCents / 100).toFixed(2);
-    const platformFeeCents = t.commission_cents || 0;
-    const platformFeeDollars = (platformFeeCents / 100).toFixed(2);
 
-    // Look up the parent venue_charge for the optional refund section.
+    // ── Gather the parent + sibling payouts so admin can pick which slots
+    // to reverse in one batch. siblings includes the parent row + all
+    // children of the same parent_transaction_id.
     const siblings = data.siblings || [];
     const parent = siblings.find(s => s.id === t.parent_transaction_id) || null;
-    const parentCharge = parent ? (parent.venue_charge_cents || parent.amount_cents || 0) : 0;
+    if (!parent) {
+      window.showErrorModal && window.showErrorModal('Reverse Transfer',
+        'Parent venue charge not found in the loaded data. Reopen the transaction and try again.');
+      return;
+    }
+    const parentCharge = parent.venue_charge_cents || parent.amount_cents || 0;
     const parentDollars = (parentCharge / 100).toFixed(2);
-    const parentStatus = parent ? parent.status : null;
-    const parentRefundable = parent
-      && (parent.transaction_type === 'venue_charge' || parent.transaction_type === 'single')
+    const parentStatus = parent.status;
+    const parentRefundable = (parent.transaction_type === 'venue_charge' || parent.transaction_type === 'single')
       && ['charged','paid','transferred'].includes(parentStatus);
 
-    // Count sibling payouts that are still 'scheduled' — those are the rows
-    // the optional "cancel pending payouts" checkbox would touch. If there
-    // are none, hide the checkbox entirely so admins don't wonder what it
-    // would do.
-    const scheduledSiblings = siblings.filter(s =>
-      s.id !== t.id
-      && s.parent_transaction_id === t.parent_transaction_id
-      && s.status === 'scheduled'
-    );
-    const schedSibCount = scheduledSiblings.length;
+    // All artist_payout children of this parent (ordered by id ASC so the
+    // slot ↔ child pairing below is stable). Includes the current row.
+    const allChildren = siblings
+      .filter(s => s.parent_transaction_id === parent.id
+                && (s.transaction_type === 'artist_payout' || s.transaction_type === 'single'))
+      .sort((a, b) => a.id - b.id);
+
+    // Pair each child with its corresponding gig_slot. Strategy: if slot
+    // count matches child count, zip by slot_number ASC ↔ id ASC. Otherwise
+    // (unusual — single artist on multiple slots, etc.) fall back to
+    // matching by artist_id.
+    const slots = (data.slots || []).slice().sort((a, b) => (a.slot_number || 0) - (b.slot_number || 0));
+    const sameCount = slots.length === allChildren.length && allChildren.length > 0;
+    function slotFor(child, idx) {
+      if (sameCount) return slots[idx];
+      return slots.find(s => s.artist_id === child.artist_id);
+    }
+
+    const REVERSIBLE = new Set(['transferred', 'paid']);
+    const ALREADY_REVERSED = new Set(['payment_cancelled']);
+
+    // Build a render-ready list with per-row reversibility flag.
+    const rows = allChildren.map((c, i) => {
+      const slot = slotFor(c, i) || null;
+      const reversible = REVERSIBLE.has(c.status) && !!c.stripe_transfer_id;
+      const alreadyReversed = ALREADY_REVERSED.has(c.status);
+      const status = c.status;
+      let reasonNotEnabled = '';
+      if (!reversible) {
+        if (alreadyReversed)               reasonNotEnabled = 'already reversed';
+        else if (!c.stripe_transfer_id)    reasonNotEnabled = 'no transfer to reverse (scheduler hasn\'t fired yet)';
+        else                                reasonNotEnabled = `status "${status}" can't be reversed`;
+      }
+      return {
+        child_id: c.id,
+        artist_id: c.artist_id,
+        artist_name: (slot && slot.artist_name) || (c.id === t.id ? t.artist_name : null) || 'Artist',
+        slot_number: slot ? slot.slot_number : (i + 1),
+        start_time: slot ? slot.start_time : null,
+        end_time: slot ? slot.end_time : null,
+        payout_cents: c.artist_payout_cents || 0,
+        status,
+        reversible,
+        reasonNotEnabled,
+        is_current: c.id === t.id,    // the row admin clicked to open this
+      };
+    });
+
+    const reversibleCount = rows.filter(r => r.reversible).length;
+
+    // Scheduled siblings that the "cancel pending payouts" checkbox in
+    // Step 2 would clean up if the venue refund is full.
+    const schedSibCount = allChildren.filter(s => s.status === 'scheduled').length;
 
     const gigTime = t.gig_start_time ? ' ' + fmtTime12(t.gig_start_time) : '';
     const gigLine = `#${t.gig_id}` + (t.gig_title ? ' — ' + t.gig_title : '')
@@ -856,50 +901,85 @@
     const stepLabelCss = 'font-size:0.72rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;';
     const stepCardCss  = 'margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;';
 
-    // Compact key/value table used by the Transaction Details summary block.
     const sumRow = (label, val, color) => `
       <tr>
         <td style="padding:3px 8px 3px 0;color:var(--text-gray);font-size:0.72rem;white-space:nowrap;">${esc(label)}</td>
         <td style="padding:3px 0;font-size:0.78rem;color:${color || 'var(--text)'};">${val}</td>
       </tr>`;
 
+    // Build the per-slot row markup.
+    function rowHtml(r) {
+      const payoutDollars = (r.payout_cents / 100).toFixed(2);
+      const time = (r.start_time && r.end_time)
+        ? `${fmtTime12(r.start_time)} – ${fmtTime12(r.end_time)}`
+        : (r.start_time ? fmtTime12(r.start_time) : '');
+      const checked = r.reversible && r.is_current ? 'checked' : '';
+      const disabled = r.reversible ? '' : 'disabled';
+      const greyed = r.reversible
+        ? `id="apRevRow_${r.child_id}" data-cid="${r.child_id}" data-max="${payoutDollars}"`
+        : `data-disabled="1" style="opacity:0.45;"`;
+      const statusBadge = r.reversible ? '' :
+        `<span style="font-size:0.65rem;color:var(--text-gray);background:rgba(255,255,255,0.04);padding:2px 7px;border-radius:4px;border:1px solid var(--border);white-space:nowrap;">${esc(r.reasonNotEnabled)}</span>`;
+      return `
+        <div ${greyed} style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);${r.reversible ? '' : 'opacity:0.45;'}">
+          <input type="checkbox" class="apRevRowCb" data-cid="${r.child_id}"
+            ${checked} ${disabled}
+            onchange="apReverseRowToggle(${r.child_id}, this.checked)"
+            style="width:auto;flex-shrink:0;cursor:${disabled ? 'not-allowed' : 'pointer'};">
+          <span style="flex:0 0 56px;font-size:0.72rem;color:var(--text-gray);font-weight:600;">Slot ${esc(r.slot_number)}</span>
+          <span style="flex:1;min-width:0;font-size:0.78rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            <span style="color:var(--text-gray);">${esc(time)}</span>
+            <span style="margin-left:8px;font-weight:500;">${esc(r.artist_name)}</span>
+            <span style="color:var(--text-gray);margin-left:8px;font-size:0.7rem;">(payout #${r.child_id})</span>
+          </span>
+          ${r.reversible ? `
+          <span style="font-size:0.72rem;color:var(--text-gray);">$${payoutDollars} →</span>
+          <input type="number" class="apRevRowAmount" data-cid="${r.child_id}"
+            step="0.01" min="0.01" max="${payoutDollars}" value="${payoutDollars}"
+            ${checked ? '' : 'disabled'}
+            oninput="apReverseRecomputeTotal()"
+            style="width:90px;padding:5px 8px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.78rem;box-sizing:border-box;text-align:right;font-family:monospace;">`
+          : statusBadge}
+        </div>`;
+    }
+
+    const stepOneHasAny = rows.length > 0;
+    const noReversibleMsg = (stepOneHasAny && reversibleCount === 0)
+      ? `<div style="padding:10px;font-size:0.74rem;color:#fbbf24;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:5px;margin-bottom:10px;">
+           None of these payouts are in a reversible state (need <code>transferred</code> or <code>paid</code> with a Stripe transfer id). If admin needs to back out the gig anyway, use ↩ Refund on the parent venue charge instead.
+         </div>` : '';
+
     const formHtml = `
       <div style="margin-bottom:12px;padding:10px 12px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.25);border-radius:6px;">
         <div style="font-size:0.7rem;color:#fca5a5;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">⚠ Destructive — moves money</div>
         <div style="font-size:0.75rem;color:var(--text);line-height:1.5;">
-          Reversing pulls funds from <strong>${esc(t.artist_name || 'the artist')}</strong>'s Stripe Connect balance back to the platform balance. The optional refund below sends funds from the platform balance back to the venue's card. If you skip the refund, the money stays in the GigsFill Stripe account.
+          Reversing pulls funds from selected artists' Stripe Connect balances back to the platform balance. The optional refund below sends funds from the platform back to the venue's card. If you skip the refund, the money stays in the GigsFill Stripe account.
         </div>
       </div>
 
-      <!-- Transaction Details — single source of truth for the figures
-           involved. The editable fields below reference these numbers
-           without restating them, so the admin has one place to look. -->
       <div style="${stepCardCss}">
         <div style="${stepLabelCss}">Transaction Details</div>
         <table style="width:100%;border-collapse:collapse;">
           ${sumRow('Gig',              esc(gigLine))}
           ${sumRow('Venue',            esc(t.venue_name || '—'))}
-          ${sumRow('Artist',           esc(t.artist_name || '—'))}
-          ${sumRow('Artist payout (this row)', `<strong style="font-family:monospace;">$${payoutDollars}</strong>`)}
-          ${sumRow('Platform fee (commission)', `<span style="font-family:monospace;">$${platformFeeDollars}</span>`,
-                   'var(--text-gray)')}
-          ${parent ? sumRow('Parent venue charge',
-                            `<strong style="font-family:monospace;">$${parentDollars}</strong> · #${parent.id} (${esc(parentStatus)})`)
-                   : sumRow('Parent venue charge', '<span style="color:var(--text-gray);">not linked</span>')}
+          ${sumRow('Parent venue charge',
+                   `<strong style="font-family:monospace;">$${parentDollars}</strong> · #${parent.id} (${esc(parentStatus)})`)}
+          ${sumRow('Artist payouts on this gig', `${rows.length} (of which ${reversibleCount} reversible)`)}
         </table>
       </div>
 
       <div style="${stepCardCss}">
-        <div style="${stepLabelCss}">Step 1 — Reverse transfer from artist</div>
-        <label style="display:block;margin-bottom:8px;">
-          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
-          <input id="apReverseAmount" type="number" step="0.01" min="0.01" max="${payoutDollars}" value="${payoutDollars}"
-            oninput="apReverseSyncRefundAmount()"
-            style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-          <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Can't exceed the artist payout amount above ($${payoutDollars}).</div>
-        </label>
-        <label style="display:block;">
-          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional)</div>
+        <div style="${stepLabelCss}">Step 1 — Select payouts to reverse</div>
+        ${noReversibleMsg}
+        <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;background:rgba(0,0,0,0.15);">
+          ${rows.map(rowHtml).join('')}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:0.8rem;color:var(--text);">
+          <span style="color:var(--text-gray);font-size:0.72rem;">Tick the checkbox to include a slot; edit the amount to partial-reverse.</span>
+          <span><strong>Total reverse amount:</strong> <span id="apReverseTotal" style="font-family:monospace;font-weight:700;">$0.00</span></span>
+        </div>
+        <label style="display:block;margin-top:10px;">
+          <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Notes (optional, applied to every reversal)</div>
           <textarea id="apReverseNotes" rows="2" maxlength="500" placeholder="e.g. Artist no-showed; venue wants payment back"
             style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.82rem;box-sizing:border-box;resize:vertical;"></textarea>
         </label>
@@ -919,8 +999,9 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
             <label>
               <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Venue Refund Amount (USD)</div>
-              <input id="apReverseRefundAmount" type="number" step="0.01" min="0.01" max="${parentDollars}" value="${payoutDollars}"
+              <input id="apReverseRefundAmount" type="number" step="0.01" min="0.01" max="${parentDollars}" value="0.00"
                 style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+              <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Auto-fills with the Step 1 total. Editable.</div>
             </label>
             <label>
               <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason</div>
@@ -945,7 +1026,7 @@
       <div style="${stepCardCss}">
         <div style="${stepLabelCss}">Step 2 (optional) — Also refund the venue</div>
         <div style="font-size:0.72rem;color:var(--text-gray);">
-          Combined venue refund unavailable: parent venue charge ${parent ? `#${parent.id} is in status '${esc(parent.status)}'` : 'not found'}. To refund the venue separately, open the parent venue_charge row and use ↩ Refund.
+          Combined venue refund unavailable: parent venue charge #${parent.id} is in status '${esc(parent.status)}'. To refund the venue separately, open the parent venue_charge row and use ↩ Refund.
         </div>
       </div>`}
 
@@ -959,58 +1040,101 @@
         <strong>Stripe fees:</strong> the original processing fee is NOT returned on a refund. The venue receives the refund amount above; the platform absorbs the CC fee from the original charge.
       </div>`;
 
+    // Stash for the submit handler — needs to know parent_id + which child
+    // IDs map to which inputs.
+    window._apReverseCtx = {
+      parent_id: parent.id,
+      child_ids: rows.filter(r => r.reversible).map(r => r.child_id),
+      // Track whether admin manually edited Step 2 amount so auto-sync stops.
+      refundManuallyEdited: false,
+    };
+
     window.showStyledModal(
-      '⤺ Reverse Transfer — Transaction #' + txnId,
+      '⤺ Reverse Transfer — Gig #' + t.gig_id,
       formHtml,
       [
         { text: 'Cancel',  style: 'ghost',  onClick: () => {} },
         { text: 'Reverse', style: 'danger', onClick: () => apSubmitReverseTransfer(txnId) },
       ],
-      { tone: 'warning', size: 'md' }
+      { tone: 'warning', size: 'lg' }
     );
+
+    // Initial total based on default-checked rows.
+    setTimeout(apReverseRecomputeTotal, 0);
   };
 
-  // When the Step-1 reverse amount changes, mirror it into Step-2 refund
-  // amount UNLESS the user has manually edited Step-2 already (we treat any
-  // value that differs from the current Step-1 as "manually set"). Quietly
-  // skips if the refund section isn't checked.
-  window.apReverseSyncRefundAmount = function() {
-    const rev = document.getElementById('apReverseAmount');
-    const ref = document.getElementById('apReverseRefundAmount');
-    const tracker = window._apReverseTrackingAmount;
-    if (!rev || !ref) return;
-    if (window._apReverseRefundManuallyEdited) return;
-    ref.value = rev.value;
-    window._apReverseTrackingAmount = rev.value;
+  // Toggle a per-row checkbox: disable/enable that row's amount input and
+  // recompute totals + grey-out styling.
+  window.apReverseRowToggle = function(childId, checked) {
+    const wrap  = document.getElementById('apRevRow_' + childId);
+    const input = document.querySelector('.apRevRowAmount[data-cid="' + childId + '"]');
+    if (input) input.disabled = !checked;
+    if (wrap) wrap.style.opacity = checked ? '1' : '0.55';
+    apReverseRecomputeTotal();
   };
+
+  // Recompute Step 1 total and (if not manually edited) mirror it into the
+  // Step 2 refund amount.
+  window.apReverseRecomputeTotal = function() {
+    let total = 0;
+    document.querySelectorAll('.apRevRowCb').forEach(cb => {
+      if (!cb.checked) return;
+      const input = document.querySelector('.apRevRowAmount[data-cid="' + cb.dataset.cid + '"]');
+      const v = input ? parseFloat(input.value || '0') : 0;
+      if (Number.isFinite(v)) total += Math.round(v * 100);
+    });
+    const totalEl = document.getElementById('apReverseTotal');
+    if (totalEl) totalEl.textContent = '$' + (total / 100).toFixed(2);
+    const refund = document.getElementById('apReverseRefundAmount');
+    if (refund && !window._apReverseCtx?.refundManuallyEdited) {
+      refund.value = (total / 100).toFixed(2);
+    }
+  };
+
   window.apReverseToggleRefundSection = function() {
     const cb = document.getElementById('apReverseAlsoRefund');
     const fields = document.getElementById('apReverseRefundFields');
     if (!cb || !fields) return;
     fields.style.display = cb.checked ? '' : 'none';
-    // Reset manual-edit tracking when reopening so re-checking resyncs.
-    if (cb.checked) {
-      window._apReverseRefundManuallyEdited = false;
-      apReverseSyncRefundAmount();
+    if (cb.checked && window._apReverseCtx) {
+      window._apReverseCtx.refundManuallyEdited = false;
+      apReverseRecomputeTotal();
       const ref = document.getElementById('apReverseRefundAmount');
       if (ref && !ref._apEditWatch) {
         ref._apEditWatch = true;
-        ref.addEventListener('input', () => { window._apReverseRefundManuallyEdited = true; });
+        ref.addEventListener('input', () => {
+          if (window._apReverseCtx) window._apReverseCtx.refundManuallyEdited = true;
+        });
       }
     }
   };
 
   async function apSubmitReverseTransfer(txnId) {
-    const amountStr = (document.getElementById('apReverseAmount')?.value || '').trim();
-    const amountDollars = parseFloat(amountStr);
-    if (!Number.isFinite(amountDollars) || amountDollars <= 0) {
-      window.showErrorModal && window.showErrorModal('Reverse Transfer', 'Enter a valid reverse amount.');
+    const ctx = window._apReverseCtx;
+    if (!ctx || !ctx.parent_id) {
+      window.showErrorModal && window.showErrorModal('Reverse', 'Modal state lost — reopen the transaction.');
       return;
     }
+
+    // Gather every ticked row + its current amount.
+    const reversals = [];
+    document.querySelectorAll('.apRevRowCb').forEach(cb => {
+      if (!cb.checked) return;
+      const cid = parseInt(cb.dataset.cid, 10);
+      const input = document.querySelector('.apRevRowAmount[data-cid="' + cid + '"]');
+      const amt = input ? parseFloat(input.value || '0') : 0;
+      if (!Number.isFinite(amt) || amt <= 0) return;
+      reversals.push({ child_id: cid, amount_cents: Math.round(amt * 100) });
+    });
+    if (!reversals.length) {
+      window.showErrorModal && window.showErrorModal('Reverse',
+        'Tick at least one payout to reverse, or close this modal.');
+      return;
+    }
+
     const alsoRefund = !!document.getElementById('apReverseAlsoRefund')?.checked;
     const body = {
-      amount_cents: Math.round(amountDollars * 100),
-      refund_app_fee: !!document.getElementById('apReverseAppFee')?.checked,
+      reversals,
       notes: (document.getElementById('apReverseNotes')?.value || '').trim(),
       dry_run: !!document.getElementById('apReverseDryRun')?.checked,
       also_refund_venue: alsoRefund,
@@ -1019,39 +1143,48 @@
       const refundStr = (document.getElementById('apReverseRefundAmount')?.value || '').trim();
       const refundDollars = parseFloat(refundStr);
       if (!Number.isFinite(refundDollars) || refundDollars <= 0) {
-        window.showErrorModal && window.showErrorModal('Reverse Transfer', 'Enter a valid refund amount, or uncheck "Also refund the venue".');
+        window.showErrorModal && window.showErrorModal('Reverse',
+          'Enter a valid venue refund amount, or uncheck "Send funds back to the venue".');
         return;
       }
-      body.refund_amount_cents     = Math.round(refundDollars * 100);
-      body.refund_reason           = document.getElementById('apReverseRefundReason')?.value || 'requested_by_customer';
-      body.refund_cancel_kids      = !!document.getElementById('apReverseRefundCancelKids')?.checked;
+      body.refund_amount_cents = Math.round(refundDollars * 100);
+      body.refund_reason       = document.getElementById('apReverseRefundReason')?.value || 'requested_by_customer';
+      body.refund_cancel_kids  = !!document.getElementById('apReverseRefundCancelKids')?.checked;
     }
+
     try {
-      const res = await fetch('/api/admin/payments/' + txnId + '/reverse-transfer', {
+      const res = await fetch('/api/admin/payments/' + ctx.parent_id + '/reverse-batch', {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        window.showErrorModal && window.showErrorModal('Reverse failed', json.detail || ('HTTP ' + res.status));
+        window.showErrorModal && window.showErrorModal('Reverse failed',
+          json.detail || ('HTTP ' + res.status));
         return;
       }
       const prefix = json.dry_run ? '[DRY RUN] ' : '';
       const lines = [];
-      lines.push(`Reversal ${json.stripe_reversal_id || ''} for $${(json.amount_cents/100).toFixed(2)} (${json.is_full ? 'full' : 'partial'}).`);
+      lines.push(`${json.ok_count} reversal${json.ok_count === 1 ? '' : 's'} processed, ${json.fail_count} failed.`);
+      const failRows = (json.reversals || []).filter(r => !r.ok);
+      if (failRows.length) {
+        lines.push('Failures:\n' + failRows.slice(0, 5).map(r => `  • payout #${r.child_id}: ${r.error}`).join('\n'));
+      }
       if (json.refund) {
         if (json.refund.error) {
-          lines.push(`⚠ Refund step failed: ${json.refund.error}`);
+          lines.push(`⚠ Refund step: ${json.refund.error}`);
         } else {
-          lines.push(`Refund ${json.refund.stripe_refund_id || ''} for $${(json.refund.amount_cents/100).toFixed(2)} (${json.refund.is_full ? 'full' : 'partial'}) applied to parent #${json.refund.parent_txn_id}.`);
+          lines.push(`Venue refund ${json.refund.stripe_refund_id || ''} for $${(json.refund.amount_cents/100).toFixed(2)} (${json.refund.is_full ? 'full' : 'partial'}) applied to parent #${json.refund.parent_txn_id}.`);
         }
-      } else {
-        lines.push('No refund issued — reversed funds stay in the GigsFill Stripe balance.');
+      } else if (json.ok_count > 0) {
+        lines.push('No venue refund issued — reversed funds stay in the GigsFill Stripe balance.');
       }
       const msg = lines.join('\n\n');
-      const hasError = json.refund && json.refund.error;
-      const fn = hasError ? (window.showErrorModal || window.showStyledModal) : window.showSuccessModal;
+      const hasError = failRows.length > 0 || (json.refund && json.refund.error);
+      const fn = hasError
+        ? (window.showErrorModal || window.showStyledModal)
+        : window.showSuccessModal;
       fn(prefix + 'Reverse Transfer', msg, () => {
         if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
       });

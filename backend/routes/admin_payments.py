@@ -1183,6 +1183,314 @@ def reverse_transfer(
     }
 
 
+# ─── Tier 3: REVERSE TRANSFER — BATCH (multi-slot) ──────────────────────────
+
+# Multi-slot gigs end up as one venue_charge parent + N artist_payout children.
+# Admin commonly wants to claw back several (or all) payouts at once when an
+# entire gig went wrong — this endpoint reverses a caller-specified subset in
+# one call, then optionally refunds the venue. Each reversal is processed
+# independently (one Stripe API call per row) so a single Stripe failure on
+# one child doesn't roll back the others — the response carries per-row
+# success/error and the optional refund still runs as long as the caller
+# requested it.
+@router.post("/api/admin/payments/{parent_id}/reverse-batch")
+def reverse_batch(
+    parent_id: int,
+    payload: dict,
+    request: Request,
+    admin=Depends(check_admin),
+    db=Depends(get_db),
+):
+    """Reverse N artist_payout children of a venue_charge parent in one call.
+
+    Body:
+      reversals  (required list) — [{child_id, amount_cents}, ...].
+                                    Each child must be a child of `parent_id`
+                                    with status in {transferred, paid} and a
+                                    stripe_transfer_id. amount_cents must be
+                                    1..artist_payout_cents.
+      notes      (optional str)
+      dry_run    (optional bool)
+
+      also_refund_venue   (optional bool)  — fire a refund on parent_id after
+                                              the reversals, in the same call.
+      refund_amount_cents (optional int)   — default = sum of reversal amounts.
+      refund_reason       (optional str)   — Stripe reason. Default
+                                              'requested_by_customer'.
+      refund_cancel_kids  (optional bool)  — also cancel any still-scheduled
+                                              child payouts on this parent.
+                                              Default true when refund is full.
+
+    Returns:
+      { ok, dry_run, parent_id,
+        reversals: [{child_id, ok, stripe_reversal_id?, amount_cents?, error?}, ...],
+        ok_count, fail_count,
+        refund: {stripe_refund_id?, amount_cents?, is_full?, error?} | null
+      }
+    """
+    dry_run = bool(payload.get("dry_run"))
+    notes_in = (payload.get("notes") or "").strip()[:500]
+    reversals = payload.get("reversals") or []
+    if not isinstance(reversals, list) or not reversals:
+        raise HTTPException(400, "reversals must be a non-empty list of {child_id, amount_cents}")
+    if len(reversals) > 50:
+        raise HTTPException(400, "Max 50 reversals per batch")
+
+    # Validate the parent up front.
+    parent = db.execute(text("""
+        SELECT id, transaction_type, status, venue_charge_cents, amount_cents,
+               stripe_payment_intent_id, gig_id
+        FROM transactions WHERE id = :pid
+    """), {"pid": parent_id}).mappings().first()
+    if not parent:
+        raise HTTPException(404, f"Parent transaction #{parent_id} not found")
+    p_type = parent["transaction_type"] or "single"
+    if p_type not in _REFUNDABLE_TXN_TYPES:
+        raise HTTPException(400,
+            f"Parent #{parent_id} type '{p_type}' is not a venue charge")
+
+    # Process each reversal independently — Stripe call + DB update + audit.
+    if not dry_run:
+        from backend.routes.stripe_connect import init_stripe
+        stripe, _keys = init_stripe(db)
+
+    results = []
+    ok_count = 0
+    fail_count = 0
+    total_amount = 0
+
+    for entry in reversals:
+        if not isinstance(entry, dict):
+            results.append({"child_id": entry, "ok": False, "error": "entry not a dict"})
+            fail_count += 1
+            continue
+        try:
+            child_id = int(entry.get("child_id"))
+            amt = int(entry.get("amount_cents"))
+        except (TypeError, ValueError):
+            results.append({"child_id": entry.get("child_id"),
+                            "ok": False, "error": "child_id and amount_cents must be ints"})
+            fail_count += 1
+            continue
+
+        try:
+            row = db.execute(text("""
+                SELECT id, gig_id, parent_transaction_id, transaction_type,
+                       status, artist_id, artist_payout_cents, stripe_transfer_id
+                FROM transactions WHERE id = :cid
+            """), {"cid": child_id}).mappings().first()
+            if not row:
+                raise HTTPException(404, f"Child #{child_id} not found")
+            if row["parent_transaction_id"] != parent_id:
+                raise HTTPException(400,
+                    f"Child #{child_id} is not a child of parent #{parent_id}")
+            if row["status"] not in _REVERSIBLE_TRANSFER_STATUSES:
+                raise HTTPException(400,
+                    f"Child #{child_id} status '{row['status']}' is not reversible")
+            if not row["stripe_transfer_id"]:
+                raise HTTPException(400, f"Child #{child_id} has no stripe_transfer_id")
+
+            payout_cents = int(row["artist_payout_cents"] or 0)
+            if amt <= 0 or amt > payout_cents:
+                raise HTTPException(400,
+                    f"Child #{child_id} amount ${amt/100:.2f} out of range "
+                    f"(1..${payout_cents/100:.2f})")
+            is_full = (amt == payout_cents)
+
+            if dry_run:
+                rev_id = "trr_dryrun_" + str(int(time.time())) + "_" + str(child_id)
+            else:
+                idem_key = f"admin_reverse_batch_{child_id}_{int(time.time())}"
+                rev = stripe.Transfer.create_reversal(
+                    row["stripe_transfer_id"],
+                    amount=amt,
+                    idempotency_key=idem_key,
+                    metadata={
+                        "txn_id": str(child_id),
+                        "parent_id": str(parent_id),
+                        "gig_id": str(row["gig_id"]),
+                        "initiated_by": "admin_payments_console_batch",
+                        "admin_user_id": str(getattr(admin, "id", "") or ""),
+                    },
+                )
+                rev_id = rev.id
+
+                new_status = 'payment_cancelled' if is_full else row["status"]
+                note = (f"Admin reverse-batch ({'FULL' if is_full else 'PARTIAL'}) "
+                        f"${amt/100:.2f} of ${payout_cents/100:.2f} "
+                        f"(reversal: {rev_id})"
+                        + (f" — {notes_in}" if notes_in else ""))
+                db.execute(text("""
+                    UPDATE transactions
+                       SET status = :s,
+                           notes  = COALESCE(notes || ' | ', '') || :n
+                     WHERE id = :tid
+                """), {"s": new_status, "n": note, "tid": child_id})
+                db.commit()
+
+                log_admin_action(
+                    db, admin, "payments_reverse_transfer",
+                    target_table="transactions", target_id=child_id,
+                    before={"status": row["status"]},
+                    after={"status": new_status},
+                    metadata={
+                        "gig_id": row["gig_id"],
+                        "parent_id": parent_id,
+                        "amount_cents": amt,
+                        "transfer_cents": payout_cents,
+                        "is_full": is_full,
+                        "stripe_reversal_id": rev_id,
+                        "batch": True,
+                    },
+                    request=request,
+                )
+                db.commit()
+
+            results.append({
+                "child_id": child_id,
+                "ok": True,
+                "stripe_reversal_id": rev_id,
+                "amount_cents": amt,
+                "is_full": is_full,
+            })
+            ok_count += 1
+            total_amount += amt
+        except HTTPException as e:
+            results.append({"child_id": child_id, "ok": False, "error": str(e.detail)})
+            fail_count += 1
+        except Exception as e:
+            msg = getattr(e, "user_message", None) or str(e)
+            results.append({"child_id": child_id, "ok": False, "error": msg})
+            fail_count += 1
+
+    # ── Optional combined venue refund (same logic as the single-row endpoint
+    # but driven by the batch's total amount as the default) ───────────────
+    refund_result = None
+    if payload.get("also_refund_venue"):
+        if parent["status"] not in _REFUNDABLE_STATUSES:
+            refund_result = {"error":
+                f"Parent #{parent_id} is in status '{parent['status']}' — not refundable."}
+        elif not parent["stripe_payment_intent_id"]:
+            refund_result = {"error": f"Parent #{parent_id} has no stripe_payment_intent_id."}
+        else:
+            parent_charge = int(parent["venue_charge_cents"] or 0)
+            r_req = payload.get("refund_amount_cents")
+            r_amount = int(r_req) if r_req not in (None, "") else total_amount
+            if r_amount <= 0 or r_amount > parent_charge:
+                refund_result = {"error":
+                    f"Refund amount ${r_amount/100:.2f} out of range "
+                    f"(1..${parent_charge/100:.2f})."}
+            else:
+                r_is_full = (r_amount == parent_charge)
+                r_reason = (payload.get("refund_reason") or "requested_by_customer").strip()
+                if r_reason not in _STRIPE_REFUND_REASONS:
+                    r_reason = "requested_by_customer"
+                r_cancel_kids = payload.get("refund_cancel_kids")
+                if r_cancel_kids is None:
+                    r_cancel_kids = r_is_full
+
+                if dry_run:
+                    refund_result = {
+                        "stripe_refund_id": "re_dryrun_" + str(int(time.time())),
+                        "amount_cents": r_amount,
+                        "is_full": r_is_full,
+                        "parent_txn_id": parent_id,
+                        "parent_new_status": ('payment_cancelled' if r_is_full else parent["status"]),
+                        "reason": r_reason,
+                        "error": None,
+                    }
+                else:
+                    try:
+                        from backend.routes.stripe_connect import init_stripe as _is2
+                        stripe2, _k2 = _is2(db)
+                        ref_idem = f"admin_reverse_batch_refund_{parent_id}_{int(time.time())}"
+                        ref_obj = stripe2.Refund.create(
+                            payment_intent=parent["stripe_payment_intent_id"],
+                            amount=r_amount,
+                            reason=r_reason,
+                            idempotency_key=ref_idem,
+                            metadata={
+                                "txn_id": str(parent_id),
+                                "gig_id": str(parent["gig_id"]),
+                                "initiated_by": "admin_payments_console_batch",
+                                "admin_user_id": str(getattr(admin, "id", "") or ""),
+                            },
+                        )
+                        parent_new_status = 'payment_cancelled' if r_is_full else parent["status"]
+                        ref_note = (f"Auto-refund alongside reverse-batch "
+                                    f"({'FULL' if r_is_full else 'PARTIAL'}) "
+                                    f"${r_amount/100:.2f} of ${parent_charge/100:.2f} "
+                                    f"(refund: {ref_obj.id})")
+                        db.execute(text("""
+                            UPDATE transactions
+                               SET status = :s,
+                                   notes  = COALESCE(notes || ' | ', '') || :n
+                             WHERE id = :pid
+                        """), {"s": parent_new_status, "n": ref_note, "pid": parent_id})
+
+                        cancelled = []
+                        if r_is_full and r_cancel_kids:
+                            sched_kids = db.execute(text("""
+                                SELECT id FROM transactions
+                                WHERE parent_transaction_id = :pid AND status = 'scheduled'
+                            """), {"pid": parent_id}).mappings().all()
+                            for k in sched_kids:
+                                db.execute(text("""
+                                    UPDATE transactions
+                                       SET status = 'payment_cancelled',
+                                           notes  = COALESCE(notes || ' | ', '') || :n
+                                     WHERE id = :cid
+                                """), {"cid": k["id"],
+                                       "n": f"Cancelled by reverse-batch+refund on parent #{parent_id}"})
+                                cancelled.append(k["id"])
+                        db.commit()
+
+                        log_admin_action(
+                            db, admin, "payments_refund_via_reverse_batch",
+                            target_table="transactions", target_id=parent_id,
+                            before={"status": parent["status"]},
+                            after={"status": parent_new_status},
+                            metadata={
+                                "gig_id": parent["gig_id"],
+                                "amount_cents": r_amount,
+                                "charge_cents": parent_charge,
+                                "is_full": r_is_full,
+                                "stripe_refund_id": ref_obj.id,
+                                "reason": r_reason,
+                                "cancelled_child_payouts": cancelled,
+                                "batch_size": len(reversals),
+                            },
+                            request=request,
+                        )
+                        db.commit()
+                        refund_result = {
+                            "stripe_refund_id": ref_obj.id,
+                            "amount_cents": r_amount,
+                            "is_full": r_is_full,
+                            "parent_txn_id": parent_id,
+                            "parent_new_status": parent_new_status,
+                            "reason": r_reason,
+                            "cancelled_child_payouts": cancelled,
+                            "error": None,
+                        }
+                    except Exception as e:
+                        msg = getattr(e, "user_message", None) or str(e)
+                        refund_result = {
+                            "parent_txn_id": parent_id,
+                            "error": f"Reversals applied but venue refund failed: {msg}. Retry via ↩ Refund on the parent.",
+                        }
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "parent_id": parent_id,
+        "reversals": results,
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "refund": refund_result,
+    }
+
+
 # ─── Tier 3: RE-ROUTE PAYOUT ────────────────────────────────────────────────
 
 @router.post("/api/admin/payments/{txn_id}/reroute-payout")
