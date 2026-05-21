@@ -31,7 +31,8 @@
   // Backend stores datetimes in UTC ('2026-05-22 00:00:00') without a TZ
   // marker. Parsing those with `new Date()` is browser-dependent — Chrome
   // assumes local, Safari assumes UTC. Explicitly append 'Z' so the result
-  // is unambiguously UTC, then format in the user's local TZ.
+  // is unambiguously UTC, then format in the user's local TZ using 12-hour
+  // clock (h:mm AM/PM) since that's what the rest of the app uses.
   function fmtDateTime(s) {
     if (!s) return '—';
     const str = String(s);
@@ -41,8 +42,20 @@
     if (isNaN(d.getTime())) return str;
     return d.toLocaleString(undefined, {
       year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', hour12: false,
+      hour: 'numeric', minute: '2-digit', hour12: true,
     });
+  }
+  // HH:MM (24h, stored as venue-local) → "h:MM AM/PM". Used for plain time
+  // strings (gig_start_time, slot start/end) where there's no date attached.
+  function fmtTime12(s) {
+    if (!s) return '';
+    const m = String(s).match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return String(s);
+    let h = parseInt(m[1], 10);
+    const min = m[2];
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${min} ${ampm}`;
   }
 
   // ── Status styling ────────────────────────────────────────────────────────
@@ -455,7 +468,7 @@
                </tr></thead><tbody>
                ${data.slots.map(sl => `<tr style="border-bottom:1px solid var(--border);">
                  <td style="padding:5px;">${esc(sl.slot_number)}</td>
-                 <td style="padding:5px;">${esc(sl.start_time || '—')}–${esc(sl.end_time || '—')}</td>
+                 <td style="padding:5px;">${esc(fmtTime12(sl.start_time) || '—')}–${esc(fmtTime12(sl.end_time) || '—')}</td>
                  <td style="padding:5px;text-align:right;">$${Number(sl.pay || 0).toFixed(2)}</td>
                  <td style="padding:5px;">${esc(sl.status)}</td>
                  <td style="padding:5px;">${esc(sl.artist_name || '—')}</td>
@@ -550,7 +563,7 @@
           ${cell('Venue',           esc(t.venue_name || '—'))}
           ${cell('Artist',          esc(t.artist_name || '—'))}
           ${cell('Gig',             '#' + t.gig_id + (t.gig_title ? ' — ' + esc(t.gig_title) : ''))}
-          ${cell('Gig date',        fmtDate(t.gig_date) + (t.gig_start_time ? ' ' + esc(t.gig_start_time) : ''))}
+          ${cell('Gig date',        fmtDate(t.gig_date) + (t.gig_start_time ? ' ' + esc(fmtTime12(t.gig_start_time)) : ''))}
           ${cell('Amount (gross)',  dollars(t.amount_cents))}
           ${cell('Venue charge',    dollars(t.venue_charge_cents))}
           ${cell('Artist payout',   dollars(t.artist_payout_cents))}
@@ -569,12 +582,20 @@
       // Stash the loaded txn so the refund modal can read amounts off it.
       window._apLastDetail = data;
 
-      // Re-render body by querying the open modal's body element directly
-      const overlay = document.querySelector('.gfm-modal-overlay');
+      // Re-render body by querying the open modal's body element. When this
+      // is opened from inside another modal (e.g. clicking a txn id in the
+      // Reconcile results), gf-modals stacks the new overlay on top —
+      // querySelector('.gfm-modal-overlay') would return the OLDEST overlay
+      // (Reconcile) and we'd write the detail body into that, leaving the
+      // top "Loading…" modal forever stuck. Pick the LAST overlay so we
+      // always update the topmost modal.
+      const overlays = document.querySelectorAll('.gfm-modal-overlay');
+      const overlay = overlays.length ? overlays[overlays.length - 1] : null;
       const bodyEl  = overlay && overlay.querySelector('.gfm-modal-body');
       if (bodyEl) bodyEl.innerHTML = body;
     } catch (e) {
-      const overlay = document.querySelector('.gfm-modal-overlay');
+      const overlays = document.querySelectorAll('.gfm-modal-overlay');
+      const overlay = overlays.length ? overlays[overlays.length - 1] : null;
       const bodyEl  = overlay && overlay.querySelector('.gfm-modal-body');
       if (bodyEl) bodyEl.innerHTML = `<p style="color:#ef4444;text-align:center;padding:24px;">Failed to load: ${esc(e.message)}</p>`;
     }
