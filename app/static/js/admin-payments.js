@@ -227,15 +227,48 @@
     }
     const chargeCents = t.venue_charge_cents || t.amount_cents || 0;
     const chargeDollars = (chargeCents / 100).toFixed(2);
-    const transferredChildren = (data.siblings || []).filter(
+
+    // Roll up the per-child payouts so the summary reflects total artist take
+    // on a multi-slot gig (parent.artist_payout_cents is 0 in that shape).
+    const siblings = data.siblings || [];
+    const childPayouts = siblings
+      .filter(s => s.parent_transaction_id === t.id)
+      .reduce((sum, s) => sum + (s.artist_payout_cents || 0), 0);
+    const payoutTotal = childPayouts || t.artist_payout_cents || 0;
+    const commission  = t.commission_cents || 0;
+    const ccFee       = t.credit_card_fee_cents || 0;
+    const platformNet = Math.max(commission - ccFee, 0);
+
+    const transferredChildren = siblings.filter(
       s => s.id !== t.id && (s.status === 'transferred' || s.status === 'paid')
     );
     const warning = transferredChildren.length
       ? `<div style="padding:8px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.35);border-radius:5px;font-size:0.72rem;color:#fca5a5;margin-bottom:10px;">
            ⚠ Child payout(s) ${transferredChildren.map(c => '#' + c.id).join(', ')} have already transferred to artists. A <strong>full</strong> refund will be blocked until those are reversed (Tier 3). A partial refund up to $${chargeDollars} is OK.
          </div>` : '';
+
+    // Transaction Summary — what the venue actually paid and how it broke
+    // out across artist payouts, Stripe fee, and the platform's net cut.
+    const summaryRow = (label, val, opts = {}) => `
+      <tr>
+        <td style="padding:4px 8px;color:var(--text-gray);font-size:0.78rem;">${esc(label)}</td>
+        <td style="padding:4px 8px;text-align:right;font-size:0.82rem;color:${opts.color || 'var(--text)'};font-weight:${opts.bold ? '700' : '500'};font-family:monospace;">${val}</td>
+      </tr>`;
+    const summaryHtml = `
+      <div style="margin-bottom:12px;padding:10px 12px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.18);border-radius:6px;">
+        <div style="font-size:0.7rem;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Transaction summary</div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${summaryRow('Venue paid (total)',    dollars(chargeCents), { bold: true })}
+          ${summaryRow('  Artist payout total', dollars(payoutTotal))}
+          ${summaryRow('  Stripe processing fee (kept by Stripe)', dollars(ccFee), { color: 'var(--text-gray)' })}
+          ${summaryRow('  GigsFill fee (commission)', dollars(commission), { color: '#a78bfa', bold: true })}
+          ${ccFee ? summaryRow('     ↳ platform net after Stripe fee', dollars(platformNet), { color: 'var(--text-gray)' }) : ''}
+        </table>
+      </div>`;
+
     const formHtml =
       warning +
+      summaryHtml +
       `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
         <label>
           <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Amount (USD)</div>
@@ -262,12 +295,14 @@
         <input id="apRefundCancelKids" type="checkbox" checked style="width:auto;">
         Also cancel any still-scheduled child artist payouts (full refunds only)
       </label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:#fbbf24;margin-top:6px;padding:6px 8px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25);border-radius:5px;">
-        <input id="apRefundDryRun" type="checkbox" style="width:auto;">
-        <span><strong>Dry run</strong> — validate only; don't call Stripe or modify the DB.</span>
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:0.85rem;color:#fbbf24;margin-top:10px;padding:10px 12px;background:rgba(245,158,11,0.12);border:2px solid rgba(245,158,11,0.5);border-radius:6px;cursor:pointer;">
+        <input id="apRefundDryRun" type="checkbox" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
+        <span><strong>Dry run (safe test mode)</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-gray);">Validates everything end-to-end (auth, status, amounts, Stripe credentials) but skips both <code>stripe.Refund.create</code> AND the DB write. Use this to verify the wiring before issuing a real refund.</span>
+        </span>
       </label>
       <div style="font-size:0.65rem;color:var(--text-gray);margin-top:8px;line-height:1.4;">
-        <strong>Stripe fees:</strong> the original processing fee is NOT returned. The venue is refunded the amount above; the platform absorbs the credit-card fee from the original charge.
+        <strong>Stripe fees:</strong> the original processing fee is NOT returned by Stripe. The venue is refunded the amount above; the platform absorbs the credit-card fee from the original charge.
       </div>`;
 
     window.showStyledModal(
