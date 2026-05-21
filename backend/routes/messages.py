@@ -257,19 +257,41 @@ def get_messages(gig_id: int, artist_id: int = None, user=Depends(get_current_us
         {"gid": gig_id, "uid": user.id, "filter_eid": filter_entity_id}
     ).mappings().all()
 
-    # Gig summary for context header
-    gig = db.execute(
-        text("""
-            SELECT g.title, g.date, v.venue_name as venue_name, a.name as artist_name
-            FROM gigs g
-            JOIN venues v ON v.id = g.venue_id
-            LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status = 'booked'
-            LEFT JOIN artists a ON a.id = gs.artist_id
-            WHERE g.id = :gid
-            LIMIT 1
-        """),
-        {"gid": gig_id}
-    ).mappings().first()
+    # Gig summary for context header.
+    # FIX (May 21 2026): the previous query joined gig_slots with status='booked'
+    # LIMIT 1, returning whichever booked artist came first in the DB — wrong
+    # for multi-slot gigs where the thread is scoped to a specific artist.
+    # Now: if filter_entity_id is set (artist_id param OR artist viewing their
+    # own thread), look up THAT artist by id. Otherwise fall back to whichever
+    # artist is on the gig (single-slot or multi-slot summary view).
+    if filter_entity_id:
+        gig = db.execute(
+            text("""
+                SELECT g.title, g.date, v.venue_name as venue_name,
+                       a.name as artist_name
+                FROM gigs g
+                JOIN venues v ON v.id = g.venue_id
+                LEFT JOIN artists a ON a.id = :aid
+                WHERE g.id = :gid
+                LIMIT 1
+            """),
+            {"gid": gig_id, "aid": filter_entity_id}
+        ).mappings().first()
+    else:
+        gig = db.execute(
+            text("""
+                SELECT g.title, g.date, v.venue_name as venue_name,
+                       a.name as artist_name
+                FROM gigs g
+                JOIN venues v ON v.id = g.venue_id
+                LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status IN ('booked','pending_contract')
+                LEFT JOIN artists a ON a.id = gs.artist_id
+                WHERE g.id = :gid
+                ORDER BY gs.slot_number ASC
+                LIMIT 1
+            """),
+            {"gid": gig_id}
+        ).mappings().first()
 
     return {
         "gid": gig_id,
