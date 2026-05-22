@@ -96,6 +96,8 @@ def _send_admin_email(db, recipients, template_name, variables):
             return
         subj = email_service.render_template(tpl['subject'], variables)
         body = email_service.render_template(tpl['body'], variables)
+        import logging
+        log = logging.getLogger("gigsfill.admin_payments")
         sent_to = set()
         for r in recipients:
             email = r.get('email') if isinstance(r, dict) else None
@@ -112,13 +114,17 @@ def _send_admin_email(db, recipients, template_name, variables):
                 msg.attach(MIMEText(body, 'html'))
                 _smtp_send(email_service.smtp_server, email_service.smtp_port,
                            email_service.smtp_username, email_service.smtp_password, msg)
+                # Confirmation line — without it, the success path is silent
+                # and admin can't tell from logs whether the auto-notify went
+                # out. Same one-liner pattern as email_dispatch.py.
+                log.info(f"[ADMIN ACTION EMAIL] {template_name} sent to {email}")
             except Exception:
                 # One bad recipient shouldn't block the others. The endpoint's
                 # own success doesn't depend on this — admin already saw the
                 # Stripe receipt in the modal.
-                import logging
-                logging.getLogger("gigsfill.admin_payments").warning(
-                    f"admin-action email to {email} failed (best-effort)", exc_info=True)
+                log.warning(
+                    f"[ADMIN ACTION EMAIL] {template_name} to {email} FAILED (best-effort)",
+                    exc_info=True)
     except Exception:
         import logging
         logging.getLogger("gigsfill.admin_payments").warning(

@@ -19,48 +19,57 @@
       .replace(/"/g, '&quot;');
   }
 
-  // Non-blocking toast for "action completed" feedback. Use instead of
-  // showSuccessModal when admin doesn't need to read/click — the table +
-  // detail-modal reload anyway, so a passing confirmation is enough.
-  // Stacks at top-right; auto-dismisses after 4s.
+  // Non-blocking confirmation banner shown center-screen after admin
+  // actions complete. The detail modal + table reload underneath, so the
+  // toast is purely visual confirmation — auto-dismisses after 5s, or
+  // click to dismiss early. Centered + bigger so admin can't miss it.
   window.apToast = function(message, type) {
     type = type || 'success';
-    const colors = {
-      success: '34,197,94',
-      error:   '239,68,68',
-      info:    '6,182,212',
-      warning: '245,158,11',
+    const palette = {
+      success: { rgb: '34,197,94',  icon: '✓' },
+      error:   { rgb: '239,68,68',  icon: '✕' },
+      info:    { rgb: '6,182,212',  icon: 'ⓘ' },
+      warning: { rgb: '245,158,11', icon: '⚠' },
     };
-    const color = colors[type] || colors.info;
-    const stackHost = (() => {
-      let host = document.getElementById('apToastHost');
-      if (!host) {
-        host = document.createElement('div');
-        host.id = 'apToastHost';
-        host.style.cssText = 'position:fixed;top:80px;right:20px;z-index:99999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
-        document.body.appendChild(host);
+    const cfg = palette[type] || palette.info;
+    const host = (() => {
+      let h = document.getElementById('apToastHost');
+      if (!h) {
+        h = document.createElement('div');
+        h.id = 'apToastHost';
+        // Center-of-viewport stack: each toast is its own card; multiple
+        // toasts stack vertically inside this centered host.
+        h.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);'
+                       + 'z-index:99999;display:flex;flex-direction:column;gap:10px;'
+                       + 'align-items:center;pointer-events:none;';
+        document.body.appendChild(h);
       }
-      return host;
+      return h;
     })();
     const toast = document.createElement('div');
-    toast.style.cssText = `pointer-events:auto;padding:10px 16px;background:rgba(0,0,0,0.92);
-      border:1px solid rgba(${color},0.6);border-radius:8px;color:rgb(${color});
-      font-size:0.82rem;font-weight:600;max-width:380px;
-      box-shadow:0 8px 24px rgba(0,0,0,0.5);
-      opacity:0;transform:translateY(-8px);
-      transition:opacity 0.2s,transform 0.2s;cursor:pointer;`;
-    toast.textContent = message;
+    toast.style.cssText = `pointer-events:auto;padding:18px 28px;
+      background:rgba(15,23,42,0.97);
+      border:2px solid rgba(${cfg.rgb},0.7);border-radius:10px;color:rgb(${cfg.rgb});
+      font-size:1rem;font-weight:600;line-height:1.4;
+      max-width:520px;min-width:280px;text-align:center;
+      box-shadow:0 12px 40px rgba(0,0,0,0.6),0 0 0 4px rgba(${cfg.rgb},0.08);
+      opacity:0;transform:scale(0.92);
+      transition:opacity 0.18s,transform 0.18s;cursor:pointer;
+      display:flex;align-items:center;gap:12px;`;
+    toast.innerHTML = `<span style="font-size:1.5rem;line-height:1;flex-shrink:0;">${cfg.icon}</span>
+      <span style="flex:1;color:var(--text);">${esc(message)}</span>
+      <span style="font-size:0.65rem;color:var(--text-gray);font-weight:400;flex-shrink:0;">click to dismiss</span>`;
     toast.addEventListener('click', () => toast.remove());
-    stackHost.appendChild(toast);
+    host.appendChild(toast);
     requestAnimationFrame(() => {
       toast.style.opacity = '1';
-      toast.style.transform = 'translateY(0)';
+      toast.style.transform = 'scale(1)';
     });
     setTimeout(() => {
       toast.style.opacity = '0';
-      toast.style.transform = 'translateY(-8px)';
-      setTimeout(() => toast.remove(), 250);
-    }, 4000);
+      toast.style.transform = 'scale(0.96)';
+      setTimeout(() => toast.remove(), 200);
+    }, 5000);
   };
   function dollars(cents) {
     if (cents == null) return '—';
