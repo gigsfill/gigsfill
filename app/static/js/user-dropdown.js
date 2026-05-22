@@ -153,6 +153,7 @@ async function initUserDropdown() {
         <a href="/app/user-profile.html">Profile</a>
         <div class="divider"></div>
         <a href="#" onclick="openHelpModal(event)">Help</a>
+        <a href="#" onclick="openFeedbackModal(event)">Feedback</a>
         <a href="#" onclick="openRecommendModal(event)">Recommend GigsFill</a>
         ${inviteLink}
         <div class="divider"></div>
@@ -392,6 +393,31 @@ function injectGlobalModals() {
       </div>
     </div>
 
+    <!-- FEEDBACK MODAL -->
+    <div class="gf-modal-overlay" id="feedbackModal" onclick="if(event.target===this)closeFeedbackModal()">
+      <div class="gf-modal">
+        <div class="gf-modal-header">
+          <h2>Share Feedback</h2>
+          <button class="gf-modal-close" onclick="closeFeedbackModal()">&times;</button>
+        </div>
+        <div class="gf-modal-body">
+          <p style="color:#9ca3af;font-size:0.85rem;margin:0 0 20px;line-height:1.5;">GigsFill is new and growing — your suggestions shape what gets built next. Let us know what's working, what's confusing, or what you wish the site did.</p>
+
+          <label for="feedbackSubject">Subject</label>
+          <input type="text" id="feedbackSubject" placeholder="Brief headline for your feedback" maxlength="200">
+
+          <label for="feedbackDescription">Description</label>
+          <textarea id="feedbackDescription" rows="6" placeholder="Tell us what's on your mind. Suggestions, frustrations, what's working well — all useful." maxlength="5000"></textarea>
+
+          <div class="gf-modal-actions">
+            <button class="gf-btn gf-btn-ghost" onclick="closeFeedbackModal()">Cancel</button>
+            <button class="gf-btn gf-btn-primary" id="feedbackSubmitBtn" onclick="submitFeedback()">Send Feedback</button>
+          </div>
+          <div class="gf-modal-status" id="feedbackStatus"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- RECOMMEND GIGSFILL MODAL -->
     <div class="gf-modal-overlay" id="recommendModal" onclick="if(event.target===this)closeRecommendModal()">
       <div class="gf-modal">
@@ -530,6 +556,74 @@ async function submitHelpTicket() {
     status.style.color = '#ef4444';
     btn.disabled = false;
     btn.textContent = 'Submit';
+  }
+}
+
+// ===== FEEDBACK MODAL =====
+// Same backend as Help (POST /api/support/ticket) but with category
+// hardcoded to "Feedback" so the existing admin Support tab + email
+// routing + ticket lifecycle just work — no backend or DB changes.
+function openFeedbackModal(event) {
+  if (event) event.preventDefault();
+  document.querySelector('.user-dropdown')?.classList.remove('open');
+  document.getElementById('feedbackModal').classList.add('open');
+  document.getElementById('feedbackSubject').value = '';
+  document.getElementById('feedbackDescription').value = '';
+  document.getElementById('feedbackStatus').textContent = '';
+  document.getElementById('feedbackSubmitBtn').disabled = false;
+  document.getElementById('feedbackSubmitBtn').textContent = 'Send Feedback';
+}
+
+function closeFeedbackModal() {
+  document.getElementById('feedbackModal').classList.remove('open');
+}
+
+async function submitFeedback() {
+  const subject = document.getElementById('feedbackSubject').value.trim();
+  const description = document.getElementById('feedbackDescription').value.trim();
+  const status = document.getElementById('feedbackStatus');
+  const btn = document.getElementById('feedbackSubmitBtn');
+
+  if (!subject || !description) {
+    status.textContent = 'Please fill in both fields.';
+    status.style.color = '#ef4444';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  status.textContent = '';
+
+  const userInfo = window._currentUserInfo || {};
+
+  try {
+    const response = await fetch('/api/support/ticket', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        category: 'Feedback',
+        subject,
+        description,
+        user_id: userInfo.id,
+        user_email: userInfo.email,
+        user_name: userInfo.name
+      })
+    });
+
+    if (!response.ok) throw new Error('Failed to submit');
+
+    status.textContent = '✓ Thanks! Your feedback is in front of us.';
+    status.style.color = '#22c55e';
+    btn.textContent = 'OK';
+    btn.disabled = false;
+    btn.onclick = () => closeFeedbackModal();
+  } catch (error) {
+    console.error('Error submitting feedback:', error);
+    status.textContent = 'Failed to send. Please try again.';
+    status.style.color = '#ef4444';
+    btn.disabled = false;
+    btn.textContent = 'Send Feedback';
   }
 }
 
