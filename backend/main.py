@@ -151,7 +151,7 @@ from backend.routes import (
     preferred_artists, notifications,
     cities, admin, admin_payments, emails, venue_emails, entity_users,
     analytics, tax, contracts, stripe_connect, flyers, onboarding,
-    reviews, messages, availability, waitlist, affiliate
+    reviews, messages, availability, waitlist, affiliate, vanity
 )
 
 def ensure_database():
@@ -178,6 +178,30 @@ ensure_database()
 
 # Populate email templates on startup
 ensure_email_templates()
+
+
+def ensure_vanity_backfill():
+    """Generate a vanity slug for every artist/venue that doesn't have one
+    yet. Idempotent — safe to run on every startup. Cheap query when the
+    backfill is already done."""
+    try:
+        from backend.db import SessionLocal
+        from backend.routes.vanity import backfill_existing_entities
+        db = SessionLocal()
+        try:
+            inserted = backfill_existing_entities(db)
+            if inserted["artists"] or inserted["venues"]:
+                logger.info(
+                    f"✅ Vanity URLs backfilled: "
+                    f"{inserted['artists']} artists, {inserted['venues']} venues"
+                )
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Vanity backfill skipped: {e}", exc_info=True)
+
+
+ensure_vanity_backfill()
 
 # Create FastAPI app
 app = FastAPI(title="GigsFill API", version="1.0.0")
@@ -238,6 +262,10 @@ app.include_router(availability.router)
 app.include_router(waitlist.router)
 app.include_router(gig_modal_router)
 app.include_router(affiliate.router)
+
+# Vanity URL management endpoints (/api/vanity/...) — the resolver catch-all
+# `GET /{slug}` is registered AFTER all other @app.* decorators below so it
+# doesn't shadow /health, /robots.txt, /sitemap.xml, etc. See bottom of file.
 
 # CORS: from env in production (e.g. CORS_ORIGINS=https://gigsfill.com)
 _cors_origins = os.environ.get("CORS_ORIGINS", "http://127.0.0.1:8001").strip()
@@ -1424,3 +1452,12 @@ def request_access(request: Request, data: dict):
         return {"ok": True, "message": "Access request sent to the profile owner."}
     finally:
         conn.close()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Vanity URL resolver — registered LAST so the catch-all `GET /{slug}` route
+# doesn't shadow any other top-level path defined above (/health, /, /api/...,
+# /robots.txt, /sitemap.xml, /sw.js, etc). The resolver's own reserved-words
+# denylist is a defense-in-depth backup; this ordering is the primary guard.
+# ────────────────────────────────────────────────────────────────────────────
+app.include_router(vanity.router)

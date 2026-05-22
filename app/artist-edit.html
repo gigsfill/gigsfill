@@ -517,6 +517,9 @@
 
   <main class="profile-container">
 
+    <!-- Public share URL — populated by vanity-url-editor.js on load -->
+    <div id="vanityUrlSection"></div>
+
     <!-- SECTION 1: PROFILE PICTURE -->
     <div class="content-card">
       <div class="profile-pic-wrapper">
@@ -705,5 +708,15 @@
 <script src="/app/static/js/onboarding-checklist.js" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
+<!-- Vanity URL editor: shows + lets admin edit the public share URL. -->
+<script src="/app/static/js/vanity-url-editor.js?v=1"></script>
+<script>
+  (function () {
+    const aid = parseInt(new URLSearchParams(window.location.search).get('artist_id') || '0', 10);
+    if (aid && typeof window.initVanityUrlEditor === 'function') {
+      window.initVanityUrlEditor('artist', aid);
+    }
+  })();
+</script>
 </body>
 </html>

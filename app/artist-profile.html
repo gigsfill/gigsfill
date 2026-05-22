@@ -319,7 +319,8 @@
       // Lazy-load reviews tab
       if (name === 'reviews' && typeof renderRatingSummary !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
-        const aid = params.get('artist_id');
+        const aid = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
+                  || params.get('artist_id');
         if (aid) {
           renderRatingSummary('ratingSummaryContainer', parseInt(aid));
           renderReviews('reviewsListContainer', parseInt(aid));
@@ -329,7 +330,10 @@
 
     let artist = null, artistGigs = [], calYear, calMonth;
     const params = new URLSearchParams(window.location.search);
-    let artistId = params.get("artist_id");
+    // window._VANITY is injected by the slug resolver (gigsfill.com/fridayspast)
+    // and takes precedence over the legacy ?artist_id=N query param.
+    let artistId = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
+                || params.get("artist_id");
 
     (async function loadArtist() {
       if (!artistId) {

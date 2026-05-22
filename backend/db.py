@@ -639,6 +639,26 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_used_reset_tokens_used_at ON used_reset_tokens(used_at)")
 
     # ==========================================
+    # VANITY URLS (slug → entity) — May 2026
+    # ==========================================
+    # Public profile share URLs: gigsfill.com/fridayspast resolves to either
+    # an artist or venue. One table holds both so the slug namespace is
+    # shared (only one entity can own a given slug). Slugs are lowercased
+    # at insertion. Lookup is by primary key for resolver-route latency.
+    # See backend/routes/vanity.py for slug generation rules, reserved
+    # words, and the resolver route.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS vanity_urls (
+            slug         TEXT PRIMARY KEY,
+            entity_type  TEXT NOT NULL CHECK(entity_type IN ('artist','venue')),
+            entity_id    INTEGER NOT NULL,
+            created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vanity_entity ON vanity_urls(entity_type, entity_id)")
+
+    # ==========================================
     # NOTIFICATIONS
     # ==========================================
     cursor.execute("""

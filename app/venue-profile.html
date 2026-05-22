@@ -332,7 +332,10 @@
     }
 
     let venueData = null, venueGigs = [], calYear, calMonth;
-    let venueId = new URLSearchParams(window.location.search).get("venue_id");
+    // window._VANITY is injected by the slug resolver (gigsfill.com/14cannons)
+    // and takes precedence over the legacy ?venue_id=N query param.
+    let venueId = (window._VANITY && window._VANITY.type === 'venue' ? window._VANITY.id : null)
+                || new URLSearchParams(window.location.search).get("venue_id");
 
     (async function loadVenue() {
       if (!venueId) { document.querySelector('.profile-container').innerHTML = '<p style="text-align:center;color:var(--text-gray);padding:40px;">Missing venue_id parameter.</p>'; return; }
