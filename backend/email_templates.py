@@ -1559,6 +1559,158 @@ TEMPLATES = {
 </table>'''
     },
 
+    # ── Admin-initiated payment actions (refund / reverse-transfer) ────────
+    # These fire automatically after a successful Stripe call from the Admin
+    # Payments Console. They are NOT opt-out — affected venues / artists
+    # are always notified when admin moves money.
+    "payment_refunded_venue": {
+        "subject": 'Refund issued — {{artist_name}} gig on {{date}}',
+        "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tbody>
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tbody>
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;"><img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height: 40px; width: 160px; max-width: 160px; display: block; border: 0; outline: none;"></td>
+</tr>
+<tr>
+<td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #059669;">Refund Issued</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{venue_name}}, we&#39;ve issued a {{refund_type}} refund of <strong>${{refund_amount}}</strong> to your card on file for the gig at your venue with <strong>{{artist_name}}</strong>. Here are the details:</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
+<tbody>
+<tr>
+<td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tbody>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 150px;">Venue</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Artist</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artist_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Gig date</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Original charge</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{original_charge}}</td>
+</tr>
+<tr>
+<td colspan="2" style="padding: 8px 0 0 0; border-top: 1px solid #e5e7eb;"></td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; font-weight: 600;">Refunded</td>
+<td style="padding: 6px 0; font-size: 16px; color: #059669; font-weight: bold;">${{refund_amount}} ({{refund_type}})</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Reason</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{refund_reason}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Stripe refund ID</td>
+<td style="padding: 6px 0; font-size: 13px; color: #4b5563; font-family: monospace;">{{stripe_refund_id}}</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>
+<p style="margin: 0 0 16px 0; font-size: 14px; line-height: 1.6; color: #4b5563;">Refunds typically clear back to your card within <strong>5&ndash;10 business days</strong>, depending on your card issuer.</p>
+<p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #4b5563;">Questions? Reply to this email or reach out at <a href="mailto:support@gigsfill.com" style="color: #1a1a2e;">support@gigsfill.com</a>.</p>
+<a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Calendar</a>
+</td>
+</tr>
+<tr>
+<td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>'''
+    },
+
+    "payment_transfer_reversed_artist": {
+        "subject": 'Payout reversed — {{venue_name}} gig on {{date}}',
+        "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tbody>
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tbody>
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;"><img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height: 40px; width: 160px; max-width: 160px; display: block; border: 0; outline: none;"></td>
+</tr>
+<tr>
+<td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #dc2626;">Payout Reversed</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, GigsFill has reversed a {{reverse_type}} payout of <strong>${{reverse_amount}}</strong> previously sent to your Stripe Connect account for your gig at <strong>{{venue_name}}</strong>. Here are the details:</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
+<tbody>
+<tr>
+<td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tbody>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 150px;">Artist</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artist_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Venue</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Gig date</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Original payout</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{original_payout}}</td>
+</tr>
+<tr>
+<td colspan="2" style="padding: 8px 0 0 0; border-top: 1px solid #e5e7eb;"></td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; font-weight: 600;">Reversed</td>
+<td style="padding: 6px 0; font-size: 16px; color: #dc2626; font-weight: bold;">${{reverse_amount}} ({{reverse_type}})</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Stripe reversal ID</td>
+<td style="padding: 6px 0; font-size: 13px; color: #4b5563; font-family: monospace;">{{stripe_reversal_id}}</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>
+<p style="margin: 0 0 16px 0; font-size: 14px; line-height: 1.6; color: #4b5563;">The reversal pulls funds back from your Stripe Connect account to the GigsFill platform. Your next bank-account settlement from Stripe will reflect this adjustment.</p>
+<p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #4b5563;">Questions about this reversal? Reply to this email or reach out at <a href="mailto:support@gigsfill.com" style="color: #1a1a2e;">support@gigsfill.com</a>.</p>
+<a href="https://gigsfill.com/app/artist-book-gigs.html?artist_id={{artist_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">Open Dashboard</a>
+</td>
+</tr>
+<tr>
+<td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>'''
+    },
+
     "artist_venue_payment_issue": {
         "subject": 'Payment issue with {{venue_name}} - your gig on {{date}}',
         "body": '''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f8f9fa;">

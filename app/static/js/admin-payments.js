@@ -18,6 +18,50 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
+
+  // Non-blocking toast for "action completed" feedback. Use instead of
+  // showSuccessModal when admin doesn't need to read/click — the table +
+  // detail-modal reload anyway, so a passing confirmation is enough.
+  // Stacks at top-right; auto-dismisses after 4s.
+  window.apToast = function(message, type) {
+    type = type || 'success';
+    const colors = {
+      success: '34,197,94',
+      error:   '239,68,68',
+      info:    '6,182,212',
+      warning: '245,158,11',
+    };
+    const color = colors[type] || colors.info;
+    const stackHost = (() => {
+      let host = document.getElementById('apToastHost');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'apToastHost';
+        host.style.cssText = 'position:fixed;top:80px;right:20px;z-index:99999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+        document.body.appendChild(host);
+      }
+      return host;
+    })();
+    const toast = document.createElement('div');
+    toast.style.cssText = `pointer-events:auto;padding:10px 16px;background:rgba(0,0,0,0.92);
+      border:1px solid rgba(${color},0.6);border-radius:8px;color:rgb(${color});
+      font-size:0.82rem;font-weight:600;max-width:380px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.5);
+      opacity:0;transform:translateY(-8px);
+      transition:opacity 0.2s,transform 0.2s;cursor:pointer;`;
+    toast.textContent = message;
+    toast.addEventListener('click', () => toast.remove());
+    stackHost.appendChild(toast);
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateY(0)';
+    });
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(-8px)';
+      setTimeout(() => toast.remove(), 250);
+    }, 4000);
+  };
   function dollars(cents) {
     if (cents == null) return '—';
     return '$' + (Number(cents) / 100).toFixed(2);
@@ -397,25 +441,13 @@
         else alert(msg);
         return;
       }
-      // Success — surface a small confirm, then reload table + reopen detail
+      // Success — toast + immediate reload. No blocking modal so admin
+      // can confirm at-a-glance and the table state updates underneath.
       const prefix = json.dry_run ? '[DRY RUN] ' : '';
-      const msg = json.dry_run
-        ? `Validation passed for ${json.is_full ? 'full' : 'partial'} refund of $${(json.amount_cents/100).toFixed(2)}. No Stripe call made; DB untouched.`
-        : `Stripe refund ${json.stripe_refund_id || ''} for $${(json.amount_cents/100).toFixed(2)} processed.`;
-      if (window.showSuccessModal) {
-        window.showSuccessModal(
-          prefix + (json.is_full ? 'Refund completed' : 'Partial refund completed'),
-          msg,
-          () => {
-            if (!json.dry_run) {
-              apReload();
-              window.apShowDetail(txnId);
-            }
-          }
-        );
-      } else {
-        if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
-      }
+      const amt = '$' + (json.amount_cents / 100).toFixed(2);
+      const word = json.is_full ? 'Refund' : 'Partial refund';
+      window.apToast(prefix + word + ' completed — ' + amt, 'success');
+      if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
     } catch (e) {
       const msg = (e && e.message) || 'Network error';
       if (window.showErrorModal) window.showErrorModal('Refund failed', msg);
@@ -858,15 +890,18 @@
       }
       const prefix = json.dry_run ? '[DRY RUN] ' : '';
       const failRows = (json.results || []).filter(r => !r.ok);
-      let lines = [`${json.ok_count} row${json.ok_count===1?'':'s'} updated, ${json.fail_count} failed.`];
       if (failRows.length) {
+        // Failures still block — admin needs to see per-row errors.
+        const lines = [`${json.ok_count} row${json.ok_count===1?'':'s'} updated, ${json.fail_count} failed.`];
         lines.push('Failures:\n' + failRows.slice(0, 10).map(r => `  • #${r.txn_id}: ${r.error}`).join('\n'));
+        (window.showErrorModal || window.showStyledModal)(
+          prefix + 'Mark Resolved', lines.join('\n\n'),
+          () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } }
+        );
+      } else {
+        window.apToast(`${prefix}Mark Resolved — ${json.ok_count} row${json.ok_count===1?'':'s'} updated`, 'success');
+        if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
       }
-      const fn = failRows.length
-        ? (window.showErrorModal || window.showStyledModal)
-        : window.showSuccessModal;
-      fn(prefix + 'Mark Resolved', lines.join('\n\n'),
-        () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } });
     } catch (e) {
       window.showErrorModal && window.showErrorModal('Mark Resolved failed', e.message || 'Network error');
     }
@@ -976,15 +1011,17 @@
       }
       const prefix = json.dry_run ? '[DRY RUN] ' : '';
       const failRows = (json.results || []).filter(r => !r.ok);
-      let lines = [`${json.ok_count} email${json.ok_count===1?'':'s'} sent, ${json.fail_count} failed.`];
       if (failRows.length) {
+        const lines = [`${json.ok_count} email${json.ok_count===1?'':'s'} sent, ${json.fail_count} failed.`];
         lines.push('Failures:\n' + failRows.slice(0, 10).map(r => `  • #${r.txn_id}: ${r.error}`).join('\n'));
+        (window.showErrorModal || window.showStyledModal)(
+          prefix + 'Resend Emails', lines.join('\n\n'),
+          () => { if (!json.dry_run) window.apShowDetail(txnId); }
+        );
+      } else {
+        window.apToast(`${prefix}Resend Emails — ${json.ok_count} sent`, 'success');
+        if (!json.dry_run) window.apShowDetail(txnId);
       }
-      const fn = failRows.length
-        ? (window.showErrorModal || window.showStyledModal)
-        : window.showSuccessModal;
-      fn(prefix + 'Resend Emails', lines.join('\n\n'),
-        () => { if (!json.dry_run) window.apShowDetail(txnId); });
     } catch (e) {
       window.showErrorModal && window.showErrorModal('Resend failed', e.message || 'Network error');
     }
@@ -1435,6 +1472,11 @@
             </span>
           </label>` : `
           <input type="hidden" id="apReverseRefundCancelKids" value="off">`}
+          ${(parent.credit_card_fee_cents || 0) > 0 ? `
+          <div style="margin-top:10px;padding:8px 10px;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:5px;font-size:0.7rem;color:#fbbf24;line-height:1.5;">
+            <strong>Stripe fee absorbed:</strong> $${((parent.credit_card_fee_cents || 0) / 100).toFixed(2)}
+            — Stripe keeps the original processing fee on any refund regardless of partial/full. The platform paid this on the original charge and does not recover it.
+          </div>` : ''}
         </div>
       </div>` : `
       <div style="${stepCardCss}">
@@ -1588,29 +1630,32 @@
         return;
       }
       const prefix = json.dry_run ? '[DRY RUN] ' : '';
-      const lines = [];
-      lines.push(`${json.ok_count} reversal${json.ok_count === 1 ? '' : 's'} processed, ${json.fail_count} failed.`);
       const failRows = (json.reversals || []).filter(r => !r.ok);
-      if (failRows.length) {
-        lines.push('Failures:\n' + failRows.slice(0, 5).map(r => `  • payout #${r.child_id}: ${r.error}`).join('\n'));
-      }
-      if (json.refund) {
-        if (json.refund.error) {
-          lines.push(`⚠ Refund step: ${json.refund.error}`);
-        } else {
-          lines.push(`Venue refund ${json.refund.stripe_refund_id || ''} for $${(json.refund.amount_cents/100).toFixed(2)} (${json.refund.is_full ? 'full' : 'partial'}) applied to parent #${json.refund.parent_txn_id}.`);
+      const refundErr = json.refund && json.refund.error;
+      const hasError = failRows.length > 0 || refundErr;
+      if (hasError) {
+        // Failures need admin attention — keep blocking modal with details.
+        const lines = [`${json.ok_count} reversal${json.ok_count === 1 ? '' : 's'} processed, ${json.fail_count} failed.`];
+        if (failRows.length) {
+          lines.push('Failures:\n' + failRows.slice(0, 5).map(r => `  • payout #${r.child_id}: ${r.error}`).join('\n'));
         }
-      } else if (json.ok_count > 0) {
-        lines.push('No venue refund issued — reversed funds stay in the GigsFill Stripe balance.');
-      }
-      const msg = lines.join('\n\n');
-      const hasError = failRows.length > 0 || (json.refund && json.refund.error);
-      const fn = hasError
-        ? (window.showErrorModal || window.showStyledModal)
-        : window.showSuccessModal;
-      fn(prefix + 'Reverse Transfer', msg, () => {
+        if (json.refund) {
+          if (refundErr) lines.push(`⚠ Refund step: ${refundErr}`);
+          else lines.push(`Venue refund ${json.refund.stripe_refund_id || ''} for $${(json.refund.amount_cents/100).toFixed(2)} (${json.refund.is_full ? 'full' : 'partial'}) applied to parent #${json.refund.parent_txn_id}.`);
+        }
+        (window.showErrorModal || window.showStyledModal)(
+          prefix + 'Refund / Reverse', lines.join('\n\n'),
+          () => { if (!json.dry_run) { apReload(); window.apShowDetail(txnId); } }
+        );
+      } else {
+        // Clean success → toast + reload.
+        const parts = [];
+        if (json.ok_count > 0) parts.push(`${json.ok_count} reversal${json.ok_count === 1 ? '' : 's'}`);
+        if (json.refund && !refundErr) parts.push(`venue refund $${(json.refund.amount_cents/100).toFixed(2)}`);
+        const summary = parts.length ? parts.join(' + ') : 'No-op';
+        window.apToast(`${prefix}Refund / Reverse — ${summary}`, 'success');
         if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
-      });
+      }
     } catch (e) {
       window.showErrorModal && window.showErrorModal('Reverse failed', e.message || 'Network error');
     }
@@ -2002,6 +2047,33 @@
   }
 
   // ── Tier 4: Reconciliation report ────────────────────────────────────────
+  // One-click "sync DB to Stripe" from a reconcile row. Hits the
+  // single-row mark-resolved endpoint with the inferred target status
+  // and a fixed reason so the audit trail is clear about where the
+  // change came from.
+  window.apReconSync = async function(txnId, newStatus, stripeState) {
+    const reason = `Reconcile: Stripe state '${stripeState}' — syncing our DB to match.`;
+    try {
+      const res = await fetch('/api/admin/payments/' + txnId + '/mark-resolved', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_status: newStatus, reason }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.showErrorModal && window.showErrorModal('Sync failed',
+          json.detail || ('HTTP ' + res.status));
+        return;
+      }
+      window.apToast(`#${txnId} synced — ${json.from} → ${json.to}`, 'success');
+      apReload();
+      // Re-run the reconcile so the row drops off (or shows match).
+      if (typeof window.apRunReconcile === 'function') window.apRunReconcile();
+    } catch (e) {
+      window.showErrorModal && window.showErrorModal('Sync failed', e.message || 'Network error');
+    }
+  };
+
   window.apOpenReconcile = function() {
     const today = new Date();
     const monthAgo = new Date(today); monthAgo.setDate(monthAgo.getDate() - 30);
@@ -2076,8 +2148,26 @@
           <span style="padding:4px 10px;border-radius:4px;background:rgba(148,163,184,0.10);color:var(--text-gray);border:1px solid var(--border);">scanned ${json.scanned}</span>
           ${json.truncated ? '<span style="padding:4px 10px;border-radius:4px;background:rgba(245,158,11,0.10);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);">⚠ truncated at ' + json.max_per_call + '</span>' : ''}
         </div>`;
-      const rows = m.map(x => `
-        <tr style="border-bottom:1px solid var(--border);${x.match ? '' : 'background:rgba(239,68,68,0.04);'}">
+      // Map Stripe's lifecycle state to our internal status when admin
+      // wants to "sync with Stripe" in one click. Only set when we have an
+      // unambiguous mapping; otherwise the row gets a — and admin uses
+      // detail-modal Mark Resolved.
+      function syncTarget(stripeState) {
+        switch (stripeState) {
+          case 'reversed':              return 'payment_cancelled';
+          case 'canceled_or_refunded':  return 'payment_cancelled';
+          case 'succeeded':             return null;  // ambiguous: paid OR transferred — admin picks
+          default:                      return null;
+        }
+      }
+      const rows = m.map(x => {
+        const tgt = !x.match ? syncTarget(x.stripe_state) : null;
+        const syncBtn = tgt
+          ? `<button onclick="apReconSync(${x.txn_id}, '${tgt}', '${esc(x.stripe_state)}')"
+               style="padding:3px 9px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.4);color:#22c55e;border-radius:4px;font-size:0.68rem;font-weight:600;cursor:pointer;white-space:nowrap;"
+               title="Set status to '${esc(tgt)}' to match Stripe.">↺ Sync</button>`
+          : '';
+        return `<tr style="border-bottom:1px solid var(--border);${x.match ? '' : 'background:rgba(239,68,68,0.04);'}">
           <td style="padding:5px;"><a href="javascript:void(0)" onclick="window.apShowDetail(${x.txn_id})" style="color:var(--cyan);">#${x.txn_id}</a></td>
           <td style="padding:5px;">${esc(fmtDate(x.gig_date))}</td>
           <td style="padding:5px;">${esc(x.venue_name || '—')}</td>
@@ -2086,7 +2176,9 @@
           <td style="padding:5px;">${statusPill(x.our_status)}</td>
           <td style="padding:5px;color:${x.match ? '#22c55e' : '#ef4444'};">${esc(x.stripe_state || '—')}</td>
           <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(x.summary || (x.match ? '✓' : ''))}</td>
-        </tr>`).join('');
+          <td style="padding:5px;">${syncBtn}</td>
+        </tr>`;
+      }).join('');
       const table = `
         <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
           <thead><tr style="background:rgba(255,255,255,0.03);">
@@ -2098,8 +2190,9 @@
             <th style="padding:5px;text-align:left;color:var(--text-gray);">Our status</th>
             <th style="padding:5px;text-align:left;color:var(--text-gray);">Stripe</th>
             <th style="padding:5px;text-align:left;color:var(--text-gray);">Notes</th>
+            <th style="padding:5px;text-align:left;color:var(--text-gray);"></th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text-gray);">No rows to show.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text-gray);">No rows to show.</td></tr>'}</tbody>
         </table>`;
       wrap.innerHTML = header + table;
     } catch (e) {

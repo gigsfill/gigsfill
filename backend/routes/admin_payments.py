@@ -48,7 +48,140 @@ from sqlalchemy import text
 
 from backend.db import get_db
 from backend.routes.admin import check_admin
-from backend.utils import log_admin_action
+from backend.utils import log_admin_action, get_all_entity_users
+
+
+# ─── Admin-action email helpers ─────────────────────────────────────────────
+# Refund / reverse-transfer always notify the affected venue/artist — these
+# bypass user notification preferences (admin moving money is consequential).
+# Best-effort: never raise if email fails.
+
+def _format_amount(cents):
+    try:
+        return f"{int(cents) / 100:.2f}"
+    except Exception:
+        return "0.00"
+
+
+def _send_admin_email(_db, recipients, template_name, variables):
+    """Send a template email to a list of {email, user_id} recipients,
+    bypassing the per-user notification-preference check. Used for admin-
+    initiated payment actions where opt-out doesn't make sense.
+    `_db` reserved for future per-recipient lookups (template overrides,
+    deliverability throttling). Underscored to flag unused-for-now."""
+    if not recipients:
+        return
+    try:
+        from backend.email_service import email_service
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.utils import formataddr
+        from backend.email_service import _smtp_send
+        tpl = email_service.get_template(template_name)
+        if not tpl or not email_service.enabled:
+            return
+        subj = email_service.render_template(tpl['subject'], variables)
+        body = email_service.render_template(tpl['body'], variables)
+        sent_to = set()
+        for r in recipients:
+            email = r.get('email') if isinstance(r, dict) else None
+            if not email or email in sent_to:
+                continue
+            sent_to.add(email)
+            try:
+                msg = MIMEMultipart("alternative")
+                msg['Subject'] = subj
+                msg['From'] = (formataddr((email_service.from_name, email_service.from_email))
+                               if email_service.from_name else email_service.from_email)
+                msg['To'] = email
+                msg['X-Mailer'] = 'GigsFill'
+                msg.attach(MIMEText(body, 'html'))
+                _smtp_send(email_service.smtp_server, email_service.smtp_port,
+                           email_service.smtp_username, email_service.smtp_password, msg)
+            except Exception:
+                # One bad recipient shouldn't block the others. The endpoint's
+                # own success doesn't depend on this — admin already saw the
+                # Stripe receipt in the modal.
+                import logging
+                logging.getLogger("gigsfill.admin_payments").warning(
+                    f"admin-action email to {email} failed (best-effort)", exc_info=True)
+    except Exception:
+        import logging
+        logging.getLogger("gigsfill.admin_payments").warning(
+            f"admin-action email batch failed (best-effort)", exc_info=True)
+
+
+def _send_venue_refund_email(db, parent_txn_id, refund_amount_cents, is_full,
+                             reason, stripe_refund_id):
+    """Look up venue + gig context for parent_txn_id and email all venue
+    users that a refund just landed. Best-effort."""
+    try:
+        info = db.execute(text("""
+            SELECT v.id as venue_id, v.venue_name,
+                   COALESCE(a.name, a2.name) as artist_name,
+                   g.date, t.venue_charge_cents
+            FROM transactions t
+            JOIN gigs g ON g.id = t.gig_id
+            LEFT JOIN venues v ON v.id = g.venue_id
+            LEFT JOIN artists a ON a.id = t.artist_id
+            LEFT JOIN artists a2 ON a2.id = g.artist_id
+            WHERE t.id = :tid
+        """), {"tid": parent_txn_id}).mappings().first()
+        if not info or not info.get("venue_id"):
+            return
+        recipients = get_all_entity_users(db, 'venue', info['venue_id'])
+        variables = {
+            'venue_name':       info.get('venue_name') or 'Venue',
+            'venue_id':         str(info['venue_id']),
+            'artist_name':      info.get('artist_name') or 'Artist',
+            'date':             str(info.get('date') or ''),
+            'original_charge':  _format_amount(info.get('venue_charge_cents')),
+            'refund_amount':    _format_amount(refund_amount_cents),
+            'refund_type':      'full' if is_full else 'partial',
+            'refund_reason':    reason or 'requested_by_customer',
+            'stripe_refund_id': stripe_refund_id or '',
+        }
+        _send_admin_email(db, recipients, 'payment_refunded_venue', variables)
+    except Exception:
+        import logging
+        logging.getLogger("gigsfill.admin_payments").warning(
+            "_send_venue_refund_email failed (best-effort)", exc_info=True)
+
+
+def _send_artist_reversal_email(db, child_txn_id, reverse_amount_cents, is_full,
+                                stripe_reversal_id):
+    """Look up artist + gig context for child_txn_id and email all artist
+    users that a transfer just got reversed. Best-effort."""
+    try:
+        info = db.execute(text("""
+            SELECT t.artist_id, t.artist_payout_cents,
+                   g.date, v.venue_name,
+                   COALESCE(a.name, a2.name) as artist_name
+            FROM transactions t
+            JOIN gigs g ON g.id = t.gig_id
+            LEFT JOIN venues v ON v.id = g.venue_id
+            LEFT JOIN artists a ON a.id = t.artist_id
+            LEFT JOIN artists a2 ON a2.id = g.artist_id
+            WHERE t.id = :tid
+        """), {"tid": child_txn_id}).mappings().first()
+        if not info or not info.get("artist_id"):
+            return
+        recipients = get_all_entity_users(db, 'artist', info['artist_id'])
+        variables = {
+            'artist_name':        info.get('artist_name') or 'Artist',
+            'artist_id':          str(info['artist_id']),
+            'venue_name':         info.get('venue_name') or 'Venue',
+            'date':               str(info.get('date') or ''),
+            'original_payout':    _format_amount(info.get('artist_payout_cents')),
+            'reverse_amount':     _format_amount(reverse_amount_cents),
+            'reverse_type':       'full' if is_full else 'partial',
+            'stripe_reversal_id': stripe_reversal_id or '',
+        }
+        _send_admin_email(db, recipients, 'payment_transfer_reversed_artist', variables)
+    except Exception:
+        import logging
+        logging.getLogger("gigsfill.admin_payments").warning(
+            "_send_artist_reversal_email failed (best-effort)", exc_info=True)
 
 router = APIRouter()
 
@@ -311,7 +444,7 @@ def payment_detail(
         sibs = db.execute(text("""
             SELECT id, COALESCE(transaction_type,'single') as transaction_type,
                    status, amount_cents, venue_charge_cents, artist_payout_cents,
-                   commission_cents,
+                   commission_cents, credit_card_fee_cents,
                    artist_id, parent_transaction_id, scheduled_process_at,
                    processed_at, created_at,
                    stripe_transfer_id, stripe_payment_intent_id
@@ -327,7 +460,7 @@ def payment_detail(
         sibs = db.execute(text("""
             SELECT id, COALESCE(transaction_type,'single') as transaction_type,
                    status, amount_cents, venue_charge_cents, artist_payout_cents,
-                   commission_cents,
+                   commission_cents, credit_card_fee_cents,
                    artist_id, parent_transaction_id, scheduled_process_at,
                    processed_at, created_at,
                    stripe_transfer_id, stripe_payment_intent_id
@@ -592,6 +725,10 @@ def refund_payment(
             request=request,
         )
         db.commit()
+
+        # 8. Notify the venue — always-on, bypasses prefs.
+        _send_venue_refund_email(db, txn_id, amount_cents, is_full,
+                                 reason, getattr(refund, "id", None))
 
     return {
         "ok": True,
@@ -1028,6 +1165,10 @@ def reverse_transfer(
         )
         db.commit()
 
+        # Notify the affected artist — always-on, bypasses prefs.
+        _send_artist_reversal_email(db, txn_id, amount_cents, is_full,
+                                    getattr(reversal, "id", None))
+
     # ── Optional combined venue refund ─────────────────────────────────────
     refund_result = None
     if payload.get("also_refund_venue"):
@@ -1153,6 +1294,11 @@ def reverse_transfer(
                     request=request,
                 )
                 db.commit()
+
+                # Notify the venue about the refund (artist reversal email
+                # already sent above).
+                _send_venue_refund_email(db, parent_id, r_amount, r_is_full,
+                                         r_reason, refund_obj.id)
                 refund_result = {
                     "stripe_refund_id": refund_obj.id,
                     "amount_cents": r_amount,
@@ -1363,6 +1509,9 @@ def reverse_batch(
                 )
                 db.commit()
 
+                # Notify the affected artist for this reversed payout.
+                _send_artist_reversal_email(db, child_id, amt, is_full, rev_id)
+
             results.append({
                 "child_id": child_id,
                 "ok": True,
@@ -1480,6 +1629,13 @@ def reverse_batch(
                             request=request,
                         )
                         db.commit()
+
+                        # Notify the venue about the refund. (Artist reversal
+                        # emails already fired per-row inside the reversal
+                        # loop above.)
+                        _send_venue_refund_email(db, parent_id, r_amount, r_is_full,
+                                                  r_reason, ref_obj.id)
+
                         refund_result = {
                             "stripe_refund_id": ref_obj.id,
                             "amount_cents": r_amount,
