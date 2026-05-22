@@ -138,22 +138,40 @@ def _send_venue_refund_email(db, parent_txn_id, refund_amount_cents, is_full,
     try:
         info = db.execute(text("""
             SELECT v.id as venue_id, v.venue_name,
-                   COALESCE(a.name, a2.name) as artist_name,
                    g.date, t.venue_charge_cents
             FROM transactions t
             JOIN gigs g ON g.id = t.gig_id
             LEFT JOIN venues v ON v.id = g.venue_id
-            LEFT JOIN artists a ON a.id = t.artist_id
-            LEFT JOIN artists a2 ON a2.id = g.artist_id
             WHERE t.id = :tid
         """), {"tid": parent_txn_id}).mappings().first()
         if not info or not info.get("venue_id"):
             return
+
+        # Collect every distinct artist on this gig — for multi-slot gigs the
+        # parent venue_charge has artist_id=NULL, so we have to walk the
+        # children's artist_id columns. (Previously we joined t.artist_id and
+        # g.artist_id, which were both NULL on a multi-slot gig, so the
+        # venue's refund email rendered "your gig with Artist" instead of
+        # listing the actual artists.)
+        artist_rows = db.execute(text("""
+            SELECT DISTINCT a.name
+            FROM artists a
+            WHERE a.id IN (
+                SELECT artist_id FROM transactions
+                WHERE (id = :tid OR parent_transaction_id = :tid)
+                  AND artist_id IS NOT NULL
+            )
+              AND a.name IS NOT NULL AND a.name <> ''
+            ORDER BY a.name
+        """), {"tid": parent_txn_id}).fetchall()
+        artist_names = [r[0] for r in artist_rows]
+        artist_display = ', '.join(artist_names) if artist_names else 'the artist'
+
         recipients = get_all_entity_users(db, 'venue', info['venue_id'])
         variables = {
             'venue_name':       info.get('venue_name') or 'Venue',
             'venue_id':         str(info['venue_id']),
-            'artist_name':      info.get('artist_name') or 'Artist',
+            'artist_name':      artist_display,
             'date':             str(info.get('date') or ''),
             'original_charge':  _format_amount(info.get('venue_charge_cents')),
             'refund_amount':    _format_amount(refund_amount_cents),

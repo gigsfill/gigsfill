@@ -2148,68 +2148,123 @@
         wrap.innerHTML = `<div style="color:#ef4444;padding:8px;">${esc(json.detail || ('HTTP ' + res.status))}</div>`;
         return;
       }
-      const m = json.mismatches || [];
-      const header = `
-        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-size:0.75rem;">
-          <span style="padding:4px 10px;border-radius:4px;background:rgba(34,197,94,0.10);color:#22c55e;border:1px solid rgba(34,197,94,0.3);"><strong>${json.ok_count}</strong> match</span>
-          <span style="padding:4px 10px;border-radius:4px;background:rgba(239,68,68,0.10);color:#ef4444;border:1px solid rgba(239,68,68,0.3);"><strong>${json.mismatch_count}</strong> mismatch</span>
-          <span style="padding:4px 10px;border-radius:4px;background:rgba(148,163,184,0.10);color:var(--text-gray);border:1px solid var(--border);"><strong>${json.no_stripe_id}</strong> no Stripe id</span>
-          <span style="padding:4px 10px;border-radius:4px;background:rgba(148,163,184,0.10);color:var(--text-gray);border:1px solid var(--border);">scanned ${json.scanned}</span>
-          ${json.truncated ? '<span style="padding:4px 10px;border-radius:4px;background:rgba(245,158,11,0.10);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);">⚠ truncated at ' + json.max_per_call + '</span>' : ''}
-        </div>`;
-      // Map Stripe's lifecycle state to our internal status when admin
-      // wants to "sync with Stripe" in one click. Only set when we have an
-      // unambiguous mapping; otherwise the row gets a — and admin uses
-      // detail-modal Mark Resolved.
-      function syncTarget(stripeState) {
-        switch (stripeState) {
-          case 'reversed':              return 'payment_cancelled';
-          case 'canceled_or_refunded':  return 'payment_cancelled';
-          case 'succeeded':             return null;  // ambiguous: paid OR transferred — admin picks
-          default:                      return null;
-        }
-      }
-      const rows = m.map(x => {
-        const tgt = !x.match ? syncTarget(x.stripe_state) : null;
-        const syncBtn = tgt
-          ? `<button onclick="apReconSync(${x.txn_id}, '${tgt}', '${esc(x.stripe_state)}')"
-               style="padding:3px 9px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.4);color:#22c55e;border-radius:4px;font-size:0.68rem;font-weight:600;cursor:pointer;white-space:nowrap;"
-               title="Set status to '${esc(tgt)}' to match Stripe.">↺ Sync</button>`
-          : '';
-        return `<tr style="border-bottom:1px solid var(--border);${x.match ? '' : 'background:rgba(239,68,68,0.04);'}">
-          <td style="padding:5px;"><a href="javascript:void(0)" onclick="window.apShowDetail(${x.txn_id})" style="color:var(--cyan);">#${x.txn_id}</a></td>
-          <td style="padding:5px;">${esc(fmtDate(x.gig_date))}</td>
-          <td style="padding:5px;">${esc(x.venue_name || '—')}</td>
-          <td style="padding:5px;">${esc(x.artist_name || '—')}</td>
-          <td style="padding:5px;">${esc(TYPE_LABEL[x.transaction_type] || x.transaction_type)}</td>
-          <td style="padding:5px;">${statusPill(x.our_status)}</td>
-          <td style="padding:5px;color:${x.match ? '#22c55e' : '#ef4444'};">${esc(x.stripe_state || '—')}</td>
-          <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(x.summary || (x.match ? '✓' : ''))}</td>
-          <td style="padding:5px;">${syncBtn}</td>
-        </tr>`;
-      }).join('');
-      const table = `
-        <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
-          <thead><tr style="background:rgba(255,255,255,0.03);">
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Txn</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Gig date</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Venue</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Artist</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Type</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Our status</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Stripe</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);">Notes</th>
-            <th style="padding:5px;text-align:left;color:var(--text-gray);"></th>
-          </tr></thead>
-          <tbody>${rows || '<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text-gray);">No rows to show.</td></tr>'}</tbody>
-        </table>`;
-      wrap.innerHTML = header + table;
+      // Stash the full payload so column-header clicks can re-sort without
+      // re-fetching. Default sort: gig_date DESC (most-recent first) since
+      // that's what admin reaches for after running reconcile.
+      window._apReconData = json;
+      window._apReconSort = { by: 'gig_date', dir: 'desc' };
+      apReconRenderResults();
     } catch (e) {
       wrap.innerHTML = `<div style="color:#ef4444;padding:8px;">${esc(e.message || 'Network error')}</div>`;
     } finally {
       if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '▶ Run'; }
     }
   };
+
+  // Click a column header to sort by that field; click again to toggle
+  // direction. Re-renders from the cached payload.
+  window.apReconSort = function(field) {
+    const s = window._apReconSort || { by: 'gig_date', dir: 'desc' };
+    if (s.by === field) {
+      s.dir = s.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      s.by = field;
+      // Sensible default direction per column: text cols start asc, date/id
+      // cols start desc.
+      s.dir = (field === 'gig_date' || field === 'txn_id') ? 'desc' : 'asc';
+    }
+    window._apReconSort = s;
+    apReconRenderResults();
+  };
+
+  // Render the reconcile result table from window._apReconData honoring
+  // window._apReconSort. Re-runs when the admin clicks a column header.
+  function apReconRenderResults() {
+    const wrap = document.getElementById('apReconResults');
+    const json = window._apReconData;
+    if (!wrap || !json) return;
+    const sort = window._apReconSort || { by: 'gig_date', dir: 'desc' };
+
+    // Map Stripe's lifecycle state to our internal status when admin
+    // wants to "sync with Stripe" in one click. Only set when we have an
+    // unambiguous mapping; otherwise the row gets a — and admin uses
+    // detail-modal Mark Resolved.
+    function syncTarget(stripeState) {
+      switch (stripeState) {
+        case 'reversed':              return 'payment_cancelled';
+        case 'canceled_or_refunded':  return 'payment_cancelled';
+        case 'succeeded':             return null;
+        default:                      return null;
+      }
+    }
+
+    const rows = (json.mismatches || []).slice();
+    rows.sort((a, b) => {
+      let av = a[sort.by];
+      let bv = b[sort.by];
+      // Resolved sentinels so blanks always sort to the end.
+      if (av === null || av === undefined) av = '';
+      if (bv === null || bv === undefined) bv = '';
+      let cmp;
+      if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+      else cmp = String(av).localeCompare(String(bv));
+      return sort.dir === 'asc' ? cmp : -cmp;
+    });
+
+    const header = `
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-size:0.75rem;">
+        <span style="padding:4px 10px;border-radius:4px;background:rgba(34,197,94,0.10);color:#22c55e;border:1px solid rgba(34,197,94,0.3);"><strong>${json.ok_count}</strong> match</span>
+        <span style="padding:4px 10px;border-radius:4px;background:rgba(239,68,68,0.10);color:#ef4444;border:1px solid rgba(239,68,68,0.3);"><strong>${json.mismatch_count}</strong> mismatch</span>
+        <span style="padding:4px 10px;border-radius:4px;background:rgba(148,163,184,0.10);color:var(--text-gray);border:1px solid var(--border);"><strong>${json.no_stripe_id}</strong> no Stripe id</span>
+        <span style="padding:4px 10px;border-radius:4px;background:rgba(148,163,184,0.10);color:var(--text-gray);border:1px solid var(--border);">scanned ${json.scanned}</span>
+        ${json.truncated ? '<span style="padding:4px 10px;border-radius:4px;background:rgba(245,158,11,0.10);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);">⚠ truncated at ' + json.max_per_call + '</span>' : ''}
+      </div>`;
+
+    const sortIcon = (field) => {
+      if (sort.by !== field) return ' <span style="color:#444;">↕</span>';
+      return sort.dir === 'asc' ? ' <span style="color:var(--cyan);">▲</span>'
+                                 : ' <span style="color:var(--cyan);">▼</span>';
+    };
+    const th = (field, label) =>
+      `<th onclick="apReconSort('${field}')" style="padding:5px;text-align:left;color:var(--text-gray);cursor:pointer;user-select:none;" title="Click to sort">${esc(label)}${sortIcon(field)}</th>`;
+
+    const rowsHtml = rows.map(x => {
+      const tgt = !x.match ? syncTarget(x.stripe_state) : null;
+      const syncBtn = tgt
+        ? `<button onclick="apReconSync(${x.txn_id}, '${tgt}', '${esc(x.stripe_state)}')"
+             style="padding:3px 9px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.4);color:#22c55e;border-radius:4px;font-size:0.68rem;font-weight:600;cursor:pointer;white-space:nowrap;"
+             title="Set status to '${esc(tgt)}' to match Stripe.">↺ Sync</button>`
+        : '';
+      return `<tr style="border-bottom:1px solid var(--border);${x.match ? '' : 'background:rgba(239,68,68,0.04);'}">
+        <td style="padding:5px;"><a href="javascript:void(0)" onclick="window.apShowDetail(${x.txn_id})" style="color:var(--cyan);">#${x.txn_id}</a></td>
+        <td style="padding:5px;">${esc(fmtDate(x.gig_date))}</td>
+        <td style="padding:5px;">${esc(x.venue_name || '—')}</td>
+        <td style="padding:5px;">${esc(x.artist_name || '—')}</td>
+        <td style="padding:5px;">${esc(TYPE_LABEL[x.transaction_type] || x.transaction_type)}</td>
+        <td style="padding:5px;">${statusPill(x.our_status)}</td>
+        <td style="padding:5px;color:${x.match ? '#22c55e' : '#ef4444'};">${esc(x.stripe_state || '—')}</td>
+        <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(x.summary || (x.match ? '✓' : ''))}</td>
+        <td style="padding:5px;">${syncBtn}</td>
+      </tr>`;
+    }).join('');
+
+    const table = `
+      <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+        <thead><tr style="background:rgba(255,255,255,0.03);">
+          ${th('txn_id',           'Txn')}
+          ${th('gig_date',         'Gig date')}
+          ${th('venue_name',       'Venue')}
+          ${th('artist_name',      'Artist')}
+          ${th('transaction_type', 'Type')}
+          ${th('our_status',       'Our status')}
+          ${th('stripe_state',     'Stripe')}
+          ${th('summary',          'Notes')}
+          <th style="padding:5px;text-align:left;color:var(--text-gray);"></th>
+        </tr></thead>
+        <tbody>${rowsHtml || '<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text-gray);">No rows to show.</td></tr>'}</tbody>
+      </table>`;
+    wrap.innerHTML = header + table;
+  }
 
   // ── Lazy-load when the tab is shown ──────────────────────────────────────
   // The existing switchTab() doesn't know about per-tab loaders, so we hook
