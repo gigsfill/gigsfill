@@ -1262,6 +1262,15 @@
 <script src="/app/static/js/security.js"></script>
 <script src="/app/static/js/event-delegate.js"></script>
 <script src="/app/static/js/timezone-utils.js"></script>
+<!-- Stylesheets load BEFORE scripts so modals + tables render styled on
+     first paint. Previously the links were below the scripts inside <head>,
+     causing a brief FOUC on slow connections — especially noticeable on
+     gf-modals dialogs that build their DOM before modals.css arrived. -->
+<link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
+<link href="/app/static/css/mobile.css" rel="stylesheet"/>
+<link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
+<link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet"/>
+
 <script src="/app/static/js/auth.guard.js"></script>
 <script src="/app/static/js/api-globals.js"></script>
 <script src="/app/static/js/time-format.js"></script>
@@ -1280,11 +1289,6 @@
   })();
 </script>
     <script src="/app/static/js/artist.book-gigs.js?v=146" type="module"></script>
-
-<link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
-  <link href="/app/static/css/mobile.css" rel="stylesheet"/>
-  <link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
-  <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet"/>
 </head>
 <body class="dark-ui artist-book-gigs-page artist-edit-page">
 

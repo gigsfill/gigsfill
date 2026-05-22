@@ -1148,6 +1148,9 @@
         </div>
         <div id="apStats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px;"></div>
 
+        <!-- Pinned-entity filter chips (shown when admin clicks a venue/artist name in the table) -->
+        <div id="apPinnedFilters" style="display:none;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;"></div>
+
         <!-- Filter bar -->
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;padding:10px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;">
           <input type="text" id="apSearch" placeholder="🔍 Search venue, artist, gig, Stripe ID…" oninput="apDebouncedReload()"
@@ -1945,7 +1948,7 @@ function switchDbLogsTab(tab) {
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
 <script src="/app/static/js/admin-platform.js"></script>
-<script src="/app/static/js/admin-payments.js?v=22"></script>
+<script src="/app/static/js/admin-payments.js?v=23"></script>
 <script src="/app/static/js/admin-templates.js"></script>
 <script src="/app/static/js/admin-affiliate.js"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>

@@ -2063,14 +2063,28 @@ def book_gig(
     except Exception as e:
         logger.error(f"[BOOK_GIG] email error: {e}")
 
-    # Create transaction
+    # Create transaction. A failure here is dangerous: the slot is already
+    # booked (atomic UPDATE above) and the artist's confirmation email has
+    # fired, but no transaction row → scheduler will never charge the venue
+    # or transfer the artist. We swallow rather than re-raise because
+    # rolling back the booking would create more confusion (artist already
+    # got their confirmation email). Instead: log with FULL context at
+    # ERROR level + exc_info so an admin can grep + fix manually via the
+    # Payments console (Mark Resolved or manual transaction insert).
     try:
         slot_pay = db.execute(
             text("SELECT pay FROM gig_slots WHERE id = :sid"), {"sid": open_slot["id"]}
         ).scalar()
         _create_booking_transaction(db, gig_id, gig["venue_id"], artist_id, slot_pay, gig["date"], slot_id=open_slot["id"])
     except Exception as e:
-        logger.error(f"[BOOK_GIG] transaction error: {e}")
+        logger.error(
+            f"[BOOK_GIG][TXN_MISSING] _create_booking_transaction FAILED — "
+            f"gig_id={gig_id} venue_id={gig['venue_id']} artist_id={artist_id} "
+            f"slot_id={open_slot['id']} pay={slot_pay if 'slot_pay' in dir() else '?'} "
+            f"date={gig.get('date')}. Booking + email already landed; admin must "
+            f"create the missing transaction row manually. Error: {e}",
+            exc_info=True,
+        )
 
     # Auto-update flyer
     try:
@@ -3893,7 +3907,10 @@ def book_slot(
     except Exception as e:
         logger.error(f"BookSlot email error: {e}")
     
-    # Create transaction record for payment tracking
+    # Create transaction record for payment tracking. See [BOOK_GIG][TXN_MISSING]
+    # comment above — same swallow-and-log pattern. The slot is already booked,
+    # confirmation email already sent, so re-raising would surprise the artist.
+    # Loud ERROR log with full context lets admin spot + fix via Payments console.
     try:
         slot_pay_txn = db.execute(
             text("SELECT pay FROM gig_slots WHERE id = :sid"), {"sid": slot_id}
@@ -3904,7 +3921,14 @@ def book_slot(
         )
         db.commit()
     except Exception as e:
-        logger.error(f"BookSlot transaction error: {e}")
+        logger.error(
+            f"[BOOK_SLOT][TXN_MISSING] _create_booking_transaction FAILED — "
+            f"gig_id={gig_id} venue_id={gig['venue_id']} artist_id={artist_id} "
+            f"slot_id={slot_id} pay={(slot_pay_txn or {}).get('pay') if 'slot_pay_txn' in dir() else '?'} "
+            f"date={gig.get('date')}. Booking + email already landed; admin must "
+            f"create the missing transaction row manually. Error: {e}",
+            exc_info=True,
+        )
     
     return {"ok": True, "all_booked": open_slots == 0}
 

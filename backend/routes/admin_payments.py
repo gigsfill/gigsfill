@@ -60,6 +60,15 @@ from sqlalchemy import text
 from backend.db import get_db
 from backend.routes.admin import check_admin
 from backend.utils import log_admin_action, get_all_entity_users
+from backend.rate_limiter import limiter
+
+# Admin payment endpoints get a rate limit as defense-in-depth. The auth
+# gate (check_admin) is the primary protection — compromised admin cookies
+# are unlikely, but the limit caps abuse from a misbehaving UI loop or a
+# rogue admin. 30/min = 1 every 2s, generous for legitimate use including
+# batch operations. Anything that calls Stripe or sends email is decorated;
+# read-only endpoints (search, stats, detail, reconcile) are not.
+_RATE_ADMIN_ACTION = "30/minute"
 
 
 # ─── Admin-action email helpers ─────────────────────────────────────────────
@@ -532,7 +541,10 @@ def payment_detail(
             ORDER BY id DESC
             LIMIT 20
         """), {"tid_str": str(txn_id),
-               "gid_like": f'%"gig_id": {result["gig_id"]}%'}).mappings().all()
+               # Force-cast gig_id to int (it already is, from the DB) so the
+               # LIKE pattern can't contain LIKE-wildcards (%, _) from any
+               # future code path that lets a string land in this slot.
+               "gid_like": '%"gig_id": ' + str(int(result["gig_id"])) + '%'}).mappings().all()
         audit = [dict(a) for a in audit_rows]
     except Exception:
         audit = []
@@ -563,6 +575,7 @@ _REFUNDABLE_TXN_TYPES = {'venue_charge', 'single'}
 
 
 @router.post("/api/admin/payments/{txn_id}/refund")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def refund_payment(
     txn_id: int,
     payload: dict,
@@ -800,6 +813,7 @@ _MARK_RESOLVED_TARGETS = {
 
 
 @router.post("/api/admin/payments/{txn_id}/mark-resolved")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def mark_resolved(
     txn_id: int,
     payload: dict,
@@ -864,6 +878,7 @@ _REFIRABLE_STATUSES = {
 
 
 @router.post("/api/admin/payments/{txn_id}/refire")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def refire_payment(
     txn_id: int,
     payload: dict,
@@ -951,6 +966,7 @@ _RESEND_TEMPLATES = {
 
 
 @router.post("/api/admin/payments/{txn_id}/resend-email")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def resend_email(
     txn_id: int,
     payload: dict,
@@ -1057,6 +1073,7 @@ _REVERSIBLE_TRANSFER_STATUSES = {'transferred', 'paid'}
 
 
 @router.post("/api/admin/payments/{txn_id}/reverse-transfer")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def reverse_transfer(
     txn_id: int,
     payload: dict,
@@ -1386,6 +1403,7 @@ def reverse_transfer(
 # success/error and the optional refund still runs as long as the caller
 # requested it.
 @router.post("/api/admin/payments/{parent_id}/reverse-batch")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def reverse_batch(
     parent_id: int,
     payload: dict,
@@ -1723,6 +1741,7 @@ def reverse_batch(
 
 
 @router.post("/api/admin/payments/mark-resolved-batch")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def mark_resolved_batch(
     payload: dict,
     request: Request,
@@ -1808,6 +1827,7 @@ def mark_resolved_batch(
 
 
 @router.post("/api/admin/payments/resend-email-batch")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def resend_email_batch(
     payload: dict,
     request: Request,
@@ -1916,6 +1936,7 @@ def resend_email_batch(
 # ─── Tier 3: RE-ROUTE PAYOUT ────────────────────────────────────────────────
 
 @router.post("/api/admin/payments/{txn_id}/reroute-payout")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def reroute_payout(
     txn_id: int,
     payload: dict,
@@ -2033,6 +2054,7 @@ _BULK_MAX = 100
 
 
 @router.post("/api/admin/payments/bulk")
+@limiter.limit(_RATE_ADMIN_ACTION)
 def bulk_action(
     payload: dict,
     request: Request,

@@ -168,6 +168,14 @@
   }
 
   // ── Filters → query params ───────────────────────────────────────────────
+  // Pinned-entity filters: clicking a venue/artist name in the table sets
+  // these and we surface a chip above the table to clear them. Backend
+  // already supports the venue_id / artist_id query params on /search.
+  let apPinnedVenueId  = null;
+  let apPinnedVenueName  = '';
+  let apPinnedArtistId = null;
+  let apPinnedArtistName = '';
+
   function buildParams() {
     const p = new URLSearchParams();
     const q = ($('apSearch').value || '').trim();
@@ -184,10 +192,34 @@
     if (!isNaN(min) && min >= 0) p.set('min_amount_cents', Math.round(min * 100));
     const max = parseFloat($('apMaxAmount').value);
     if (!isNaN(max) && max >= 0) p.set('max_amount_cents', Math.round(max * 100));
+    if (apPinnedVenueId)  p.set('venue_id',  apPinnedVenueId);
+    if (apPinnedArtistId) p.set('artist_id', apPinnedArtistId);
     p.set('page', apPage);
     p.set('per_page', apPerPage);
     return p;
   }
+
+  function apRenderPinnedFilters() {
+    const host = $('apPinnedFilters');
+    if (!host) return;
+    const chips = [];
+    if (apPinnedVenueId) {
+      chips.push(`<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.4);border-radius:14px;font-size:0.72rem;color:var(--cyan);">
+        Venue: ${esc(apPinnedVenueName || '#' + apPinnedVenueId)}
+        <button onclick="apClearVenueFilter()" style="background:none;border:none;color:var(--cyan);cursor:pointer;font-size:0.85rem;line-height:1;padding:0;">×</button>
+      </span>`);
+    }
+    if (apPinnedArtistId) {
+      chips.push(`<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.4);border-radius:14px;font-size:0.72rem;color:#c4b5fd;">
+        Artist: ${esc(apPinnedArtistName || '#' + apPinnedArtistId)}
+        <button onclick="apClearArtistFilter()" style="background:none;border:none;color:#c4b5fd;cursor:pointer;font-size:0.85rem;line-height:1;padding:0;">×</button>
+      </span>`);
+    }
+    host.innerHTML = chips.join(' ');
+    host.style.display = chips.length ? '' : 'none';
+  }
+  window.apClearVenueFilter  = function () { apPinnedVenueId = null; apPinnedVenueName = ''; apPage = 1; apRenderPinnedFilters(); apReload(); };
+  window.apClearArtistFilter = function () { apPinnedArtistId = null; apPinnedArtistName = ''; apPage = 1; apRenderPinnedFilters(); apReload(); };
 
   // ── Main load ────────────────────────────────────────────────────────────
   async function apReload() {
@@ -232,8 +264,10 @@
       const amount = r.venue_charge_cents || r.amount_cents || 0;
       const isChild = r.parent_transaction_id != null;
       const indent = isChild ? '↳&nbsp;' : '';
-      const venue  = r.venue_name  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterVenue(${r.venue_id})" style="color:var(--cyan);text-decoration:none;">${esc(r.venue_name)}</a>` : '—';
-      const artist = r.artist_name ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterArtist(${r.artist_id || ''})" style="color:#a78bfa;text-decoration:none;">${esc(r.artist_name)}</a>` : '—';
+      const venueSafe  = r.venue_name  ? r.venue_name.replace(/'/g, "\\'") : '';
+      const artistSafe = r.artist_name ? r.artist_name.replace(/'/g, "\\'") : '';
+      const venue  = r.venue_name  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterVenue(${r.venue_id}, '${esc(venueSafe)}')" style="color:var(--cyan);text-decoration:none;">${esc(r.venue_name)}</a>` : '—';
+      const artist = r.artist_name ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterArtist(${r.artist_id || 'null'}, '${esc(artistSafe)}')" style="color:#a78bfa;text-decoration:none;">${esc(r.artist_name)}</a>` : '—';
       const stripeRef = r.stripe_payment_intent_id || r.stripe_transfer_id || '';
       const stripeBadge = stripeRef
         ? `<a href="https://dashboard.stripe.com/${stripeRef.startsWith('pi_') ? 'payments/' : 'connect/transfers/'}${esc(stripeRef)}" target="_blank" onclick="event.stopPropagation()" style="font-family:monospace;font-size:0.65rem;color:#94a3b8;text-decoration:none;border-bottom:1px dashed rgba(148,163,184,0.4);" title="Open in Stripe Dashboard">${esc(stripeRef.slice(0,16))}…</a>`
@@ -294,8 +328,26 @@
   }
   window.apGoPage = function(p) { apPage = Math.max(1, p); apReload(); };
 
-  window.apFilterVenue  = function(id) { $('apSearch').value = ''; apPage = 1; apReload(); /* TODO: dedicated filter for venue_id */ };
-  window.apFilterArtist = function(id) { $('apSearch').value = ''; apPage = 1; apReload(); /* TODO: dedicated filter for artist_id */ };
+  // Pin a venue/artist filter when admin clicks the name in the table. The
+  // backend already accepts venue_id / artist_id query params; the chip
+  // above the table shows the active pin and lets admin clear it.
+  window.apFilterVenue = function(id, name) {
+    apPinnedVenueId = id;
+    apPinnedVenueName = name || '';
+    $('apSearch').value = '';
+    apPage = 1;
+    apRenderPinnedFilters();
+    apReload();
+  };
+  window.apFilterArtist = function(id, name) {
+    if (!id) return;
+    apPinnedArtistId = id;
+    apPinnedArtistName = name || '';
+    $('apSearch').value = '';
+    apPage = 1;
+    apRenderPinnedFilters();
+    apReload();
+  };
 
   // Common helper for the action openers — make sure window._apLastDetail
   // holds the detail for the *target* txn. When the user invokes an action
