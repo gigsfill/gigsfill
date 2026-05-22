@@ -1374,7 +1374,7 @@
 
       ${stepOneHasAny ? `
       <div style="${stepCardCss}">
-        <div style="${stepLabelCss}">Step 1 — Select payouts to reverse</div>
+        <div style="${stepLabelCss}">Step 1 — Select artist payouts to reverse</div>
         ${noReversibleMsg}
         <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;background:rgba(0,0,0,0.15);">
           ${rows.map(rowHtml).join('')}
@@ -1398,33 +1398,34 @@
 
       ${parentRefundable ? `
       <div style="${stepCardCss}">
-        <div style="${stepLabelCss}">Step 2${stepOneHasAny && reversibleCount > 0 ? ' (optional)' : ''} — Refund the venue</div>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.78rem;color:var(--text);">
-          <input id="apReverseAlsoRefund" type="checkbox"
-            ${(!stepOneHasAny || reversibleCount === 0) ? 'checked' : ''}
-            onchange="apReverseToggleRefundSection()" style="width:auto;flex-shrink:0;">
-          <span>Send funds back to the venue's card in the same call</span>
-        </label>
-        <div style="font-size:0.7rem;color:var(--text-gray);margin-top:4px;margin-left:24px;line-height:1.5;">
-          When unchecked, reversed funds sit in the GigsFill Stripe balance.
+        <div style="${stepLabelCss}">Step 2 — Refund the venue</div>
+        <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;background:rgba(0,0,0,0.15);">
+          <div id="apReverseVenueRow" style="display:flex;align-items:center;gap:10px;padding:7px 10px;${(!stepOneHasAny || reversibleCount === 0) ? '' : 'opacity:0.55;'}">
+            <input id="apReverseAlsoRefund" type="checkbox"
+              ${(!stepOneHasAny || reversibleCount === 0) ? 'checked' : ''}
+              onchange="apReverseToggleRefundSection()"
+              style="width:auto;flex-shrink:0;cursor:pointer;">
+            <span style="flex:0 0 56px;font-size:0.72rem;color:var(--text-gray);font-weight:600;">Venue</span>
+            <span style="flex:1;min-width:0;font-size:0.78rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${esc(t.venue_name || 'Venue')}
+              <span style="color:var(--text-gray);margin-left:8px;font-size:0.7rem;">(charge #${parent.id})</span>
+            </span>
+            <span style="font-size:0.72rem;color:var(--text-gray);">$${parentDollars} →</span>
+            <input id="apReverseRefundAmount" type="number"
+              step="0.01" min="0.01" max="${parentDollars}" value="${parentDollars}"
+              ${(!stepOneHasAny || reversibleCount === 0) ? '' : 'disabled'}
+              style="width:90px;padding:5px 8px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.78rem;box-sizing:border-box;text-align:right;font-family:monospace;">
+          </div>
         </div>
         <div id="apReverseRefundFields" style="display:${(!stepOneHasAny || reversibleCount === 0) ? '' : 'none'};margin-top:10px;">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
-            <label>
-              <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Venue Refund Amount (USD)</div>
-              <input id="apReverseRefundAmount" type="number" step="0.01" min="0.01" max="${parentDollars}" value="0.00"
-                style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-              <div style="font-size:0.65rem;color:var(--text-gray);margin-top:3px;">Auto-fills with the Step 1 total. Editable.</div>
-            </label>
-            <label>
-              <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:3px;">Reason</div>
-              <select id="apReverseRefundReason"
-                style="width:100%;padding:7px 10px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-                <option value="requested_by_customer">Requested by customer</option>
-                <option value="duplicate">Duplicate</option>
-                <option value="fraudulent">Fraudulent</option>
-              </select>
-            </label>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+            <label style="font-size:0.7rem;color:var(--text-gray);white-space:nowrap;">Refund reason:</label>
+            <select id="apReverseRefundReason"
+              style="flex:0 0 220px;padding:5px 8px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.78rem;box-sizing:border-box;">
+              <option value="requested_by_customer">Requested by customer</option>
+              <option value="duplicate">Duplicate</option>
+              <option value="fraudulent">Fraudulent</option>
+            </select>
           </div>
           ${schedSibCount > 0 ? `
           <label style="display:flex;align-items:flex-start;gap:8px;font-size:0.72rem;color:var(--text-gray);line-height:1.5;">
@@ -1512,15 +1513,18 @@
   window.apReverseToggleRefundSection = function() {
     const cb = document.getElementById('apReverseAlsoRefund');
     const fields = document.getElementById('apReverseRefundFields');
-    if (!cb || !fields) return;
-    fields.style.display = cb.checked ? '' : 'none';
+    const row = document.getElementById('apReverseVenueRow');
+    const amt = document.getElementById('apReverseRefundAmount');
+    if (!cb) return;
+    if (fields) fields.style.display = cb.checked ? '' : 'none';
+    if (amt) amt.disabled = !cb.checked;
+    if (row) row.style.opacity = cb.checked ? '1' : '0.55';
     if (cb.checked && window._apReverseCtx) {
       window._apReverseCtx.refundManuallyEdited = false;
       apReverseRecomputeTotal();
-      const ref = document.getElementById('apReverseRefundAmount');
-      if (ref && !ref._apEditWatch) {
-        ref._apEditWatch = true;
-        ref.addEventListener('input', () => {
+      if (amt && !amt._apEditWatch) {
+        amt._apEditWatch = true;
+        amt.addEventListener('input', () => {
           if (window._apReverseCtx) window._apReverseCtx.refundManuallyEdited = true;
         });
       }
