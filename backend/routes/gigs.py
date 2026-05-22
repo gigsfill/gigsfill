@@ -3643,6 +3643,65 @@ def book_slot(
             reason = blackout.get("reason", "") or "marked as unavailable"
             raise HTTPException(403, f"You have a blackout on this date: {reason}")
 
+    # ── Frequency check (FIX 2026-05-22 audit): venue's policy on how many
+    # days between performances by the same artist. Was previously enforced
+    # in book_gig + book_with_contract via _run_prebooking_checks, but the
+    # multi-slot path here skipped it entirely — `pref.frequency_days_override`
+    # was fetched at line ~3590 and then never used. So a venue saying "1 gig
+    # per artist every 30 days" was a polite suggestion to multi-slot artists.
+    # Same waiver rules as _run_prebooking_checks: blast-token or in-blast-window
+    # bypasses the limit (blast = "venue is desperate to fill this gig").
+    _freq_blast_waives = slot_token_valid
+    if not _freq_blast_waives and gig_date_str:
+        try:
+            from datetime import date as _dc, datetime as _dt
+            from backend.utils import get_venue_timezone as _gvt
+            _today = _dt.now(_gvt(db, gig["venue_id"])).date()
+            _gig_d = _dc.fromisoformat(str(gig_date_str)[:10])
+            _days = (_gig_d - _today).days
+            if _days >= 0:
+                _brows = db.execute(text("""SELECT time_value, time_unit FROM venue_email_notifications
+                                            WHERE venue_id=:vid AND notification_key IN ('open_gig_36h','open_gig_1w') AND enabled=1"""),
+                                    {"vid": gig["venue_id"]}).mappings().all()
+                for _br in _brows:
+                    _tv, _tu = _br["time_value"], _br["time_unit"]
+                    _w = _tv/24 if _tu == "hours" else (_tv if _tu == "days" else _tv*7)
+                    if _days <= _w:
+                        _freq_blast_waives = True
+                        break
+        except Exception:
+            pass
+    if not _freq_blast_waives and gig_date_str:
+        freq = db.execute(text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) as freq_days
+                                  FROM preferred_artists pa JOIN venues v ON v.id=pa.venue_id
+                                  WHERE pa.venue_id=:vid AND pa.artist_id=:aid"""),
+                          {"vid": gig["venue_id"], "aid": artist_id}).mappings().first()
+        if not freq:
+            # No preferred_artists row — fall back to venue default.
+            _vf = db.execute(text("SELECT artist_frequency_days FROM venues WHERE id=:vid"),
+                             {"vid": gig["venue_id"]}).mappings().first()
+            freq = {"freq_days": (_vf or {}).get("artist_frequency_days")}
+        if freq and (freq["freq_days"] or 0) > 0:
+            close = db.execute(text("""SELECT g.date FROM gigs g
+                                       WHERE g.venue_id=:vid AND g.id!=:gid
+                                         AND g.status='booked'
+                                         AND (g.artist_id=:aid OR EXISTS(
+                                             SELECT 1 FROM gig_slots gs
+                                             WHERE gs.gig_id=g.id AND gs.artist_id=:aid AND gs.status='booked'))
+                                       ORDER BY ABS(JULIANDAY(g.date)-JULIANDAY(:d)) LIMIT 1"""),
+                              {"vid": gig["venue_id"], "aid": artist_id, "gid": gig_id, "d": gig_date_str}).mappings().first()
+            if close:
+                from datetime import datetime as _dt2
+                d1 = _dt2.strptime(str(gig_date_str)[:10], "%Y-%m-%d")
+                d2 = _dt2.strptime(str(close["date"])[:10], "%Y-%m-%d")
+                apart = abs((d1 - d2).days)
+                if apart <= freq["freq_days"]:
+                    needed = freq["freq_days"] + 1 - apart
+                    dir_msg = f"You have a gig {'before' if d2 > d1 else 'after'} this one on {d2.strftime('%b %d, %Y')}."
+                    raise HTTPException(403,
+                        f"This venue requires more than {freq['freq_days']} days between performances. "
+                        f"{dir_msg} Gigs must be at least {needed} more day{'s' if needed != 1 else ''} apart.")
+
     # Audit fix (May 2026): Stripe Connect onboarding gate (same as book_gig).
     try:
         _pay_on = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='payments_enabled'")).scalar()
