@@ -41,7 +41,18 @@ stripe_connect.py (`charge.refunded`, `transfer.reversed`, etc.) also sync
 the DB, so manual Stripe Dashboard actions and actions initiated here both
 converge to the same state.
 """
-import time
+import uuid
+
+
+# Idempotency keys for admin-initiated Stripe writes. We used to suffix the
+# key with `int(time.time())` (second-resolution), which collides on the
+# common "admin double-clicks Refund" pattern — Stripe returns the first
+# refund and silently no-ops the second, leaving admin thinking they double-
+# refunded when only one landed. UUID4 hex gives us a fresh key per call
+# while keeping the prefix readable in the Stripe Dashboard logs.
+def _idem(prefix: str) -> str:
+    """Build a unique idempotency key with a descriptive prefix."""
+    return f"{prefix}_{uuid.uuid4().hex}"
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
@@ -63,20 +74,23 @@ def _format_amount(cents):
         return "0.00"
 
 
-def _send_admin_email(_db, recipients, template_name, variables):
+def _send_admin_email(db, recipients, template_name, variables):
     """Send a template email to a list of {email, user_id} recipients,
     bypassing the per-user notification-preference check. Used for admin-
-    initiated payment actions where opt-out doesn't make sense.
-    `_db` reserved for future per-recipient lookups (template overrides,
-    deliverability throttling). Underscored to flag unused-for-now."""
+    initiated payment actions where opt-out doesn't make sense."""
     if not recipients:
         return
     try:
-        from backend.email_service import email_service
+        # NOTE: email_service.py exposes the EmailService *class* (not a
+        # module-level singleton). Instantiate it here, same pattern as
+        # services/email_dispatch.py uses. Earlier code tried to import a
+        # non-existent `email_service` symbol and crashed in the best-effort
+        # try/except — meaning these admin-action emails never actually sent.
+        from backend.email_service import EmailService, _smtp_send
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
         from email.utils import formataddr
-        from backend.email_service import _smtp_send
+        email_service = EmailService(db)
         tpl = email_service.get_template(template_name)
         if not tpl or not email_service.enabled:
             return
@@ -641,12 +655,12 @@ def refund_payment(
 
     # 5. Fire the Stripe refund (or skip on dry_run) ──────────────────────
     if dry_run:
-        refund = type("_DryRefund", (), {"id": "re_dryrun_" + str(int(time.time()))})()
+        refund = type("_DryRefund", (), {"id": "re_dryrun_" + uuid.uuid4().hex[:12]})()
     else:
         from backend.routes.stripe_connect import init_stripe
         stripe, _keys = init_stripe(db)
 
-        idem_key = f"admin_refund_txn_{txn_id}_{int(time.time())}"
+        idem_key = _idem(f"admin_refund_txn_{txn_id}")
         try:
             refund = stripe.Refund.create(
                 payment_intent=pi_id,
@@ -1108,11 +1122,11 @@ def reverse_transfer(
     notes_in = (payload.get("notes") or "").strip()[:500]
 
     if dry_run:
-        reversal = type("_DryReversal", (), {"id": "trr_dryrun_" + str(int(time.time()))})()
+        reversal = type("_DryReversal", (), {"id": "trr_dryrun_" + uuid.uuid4().hex[:12]})()
     else:
         from backend.routes.stripe_connect import init_stripe
         stripe, _keys = init_stripe(db)
-        idem_key = f"admin_reverse_txn_{txn_id}_{int(time.time())}"
+        idem_key = _idem(f"admin_reverse_txn_{txn_id}")
         try:
             reversal = stripe.Transfer.create_reversal(
                 row["stripe_transfer_id"],
@@ -1220,7 +1234,7 @@ def reverse_transfer(
 
         if dry_run:
             refund_result = {
-                "stripe_refund_id": "re_dryrun_" + str(int(time.time())),
+                "stripe_refund_id": "re_dryrun_" + uuid.uuid4().hex[:12],
                 "amount_cents": r_amount,
                 "is_full": r_is_full,
                 "parent_txn_id": parent_id,
@@ -1232,7 +1246,7 @@ def reverse_transfer(
             try:
                 from backend.routes.stripe_connect import init_stripe as _is2
                 stripe2, _k2 = _is2(db)
-                idem_key = f"admin_reverse_refund_txn_{parent_id}_{int(time.time())}"
+                idem_key = _idem(f"admin_reverse_refund_txn_{parent_id}")
                 refund_obj = stripe2.Refund.create(
                     payment_intent=parent["stripe_payment_intent_id"],
                     amount=r_amount,
@@ -1461,9 +1475,9 @@ def reverse_batch(
             is_full = (amt == payout_cents)
 
             if dry_run:
-                rev_id = "trr_dryrun_" + str(int(time.time())) + "_" + str(child_id)
+                rev_id = "trr_dryrun_" + uuid.uuid4().hex[:12] + "_" + str(child_id)
             else:
-                idem_key = f"admin_reverse_batch_{child_id}_{int(time.time())}"
+                idem_key = _idem(f"admin_reverse_batch_{child_id}")
                 rev = stripe.Transfer.create_reversal(
                     row["stripe_transfer_id"],
                     amount=amt,
@@ -1531,9 +1545,19 @@ def reverse_batch(
 
     # ── Optional combined venue refund (same logic as the single-row endpoint
     # but driven by the batch's total amount as the default) ───────────────
+    # Safety gate: if ANY reversal in the batch failed (and we're not dry-run),
+    # block the refund so the venue isn't refunded for funds the platform
+    # hasn't actually clawed back from artists. Admin sees the per-row errors
+    # in the response and can either retry the failed reversals first or
+    # issue the venue refund manually with full context.
     refund_result = None
     if payload.get("also_refund_venue"):
-        if parent["status"] not in _REFUNDABLE_STATUSES:
+        if fail_count > 0 and not dry_run:
+            refund_result = {"error":
+                f"Refund skipped: {fail_count} reversal{'s' if fail_count != 1 else ''} "
+                f"failed in this batch. Resolve those first, then issue the venue refund "
+                f"separately via ↩ Refund on the parent."}
+        elif parent["status"] not in _REFUNDABLE_STATUSES:
             refund_result = {"error":
                 f"Parent #{parent_id} is in status '{parent['status']}' — not refundable."}
         elif not parent["stripe_payment_intent_id"]:
@@ -1557,7 +1581,7 @@ def reverse_batch(
 
                 if dry_run:
                     refund_result = {
-                        "stripe_refund_id": "re_dryrun_" + str(int(time.time())),
+                        "stripe_refund_id": "re_dryrun_" + uuid.uuid4().hex[:12],
                         "amount_cents": r_amount,
                         "is_full": r_is_full,
                         "parent_txn_id": parent_id,
@@ -1569,7 +1593,7 @@ def reverse_batch(
                     try:
                         from backend.routes.stripe_connect import init_stripe as _is2
                         stripe2, _k2 = _is2(db)
-                        ref_idem = f"admin_reverse_batch_refund_{parent_id}_{int(time.time())}"
+                        ref_idem = _idem(f"admin_reverse_batch_refund_{parent_id}")
                         ref_obj = stripe2.Refund.create(
                             payment_intent=parent["stripe_payment_intent_id"],
                             amount=r_amount,
