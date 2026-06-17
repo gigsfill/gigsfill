@@ -12,6 +12,53 @@ from backend.services.notification_service import format_time_12hr
 logger = logging.getLogger("gigsfill.services.email_dispatch")
 
 
+def format_slot_pay_summary(slot_or_gig, fallback_pay=None):
+    """Render a pay description suitable for an email or contract line.
+
+    For flat-pay slots (the default): "$60.00".
+    For door-split slots (deal_type='door'): "$50 guarantee + 20% of door".
+
+    `slot_or_gig` is a dict-like (sqlalchemy mappings row or plain dict).
+    `fallback_pay` is used when the slot has no pay column (e.g. some
+    legacy rows pre-date the gig_slots table). All values are coerced
+    safely so a missing column doesn't blow up the email send.
+    """
+    def _get(k, default=None):
+        if slot_or_gig is None:
+            return default
+        try:
+            v = slot_or_gig.get(k) if hasattr(slot_or_gig, 'get') else slot_or_gig[k]
+        except (KeyError, IndexError, TypeError):
+            return default
+        return v if v is not None else default
+
+    deal_type = (_get('deal_type', 'flat') or 'flat').lower()
+    pay_raw = _get('pay')
+    if pay_raw is None:
+        pay_raw = fallback_pay
+    try:
+        pay_f = float(pay_raw or 0)
+    except (TypeError, ValueError):
+        pay_f = 0.0
+
+    # IMPORTANT: do NOT include the leading "$" — every gig-related email
+    # template already prepends a literal "$" before the {pay} placeholder
+    # (see email_templates.py — "${{pay}}" is the convention). Adding "$"
+    # here would produce "$$60.00" in the rendered email.
+    if deal_type == 'door':
+        gua_cents = int(_get('guarantee_cents', 0) or 0)
+        pct = int(_get('door_pct', 0) or 0)
+        gua_dollars = gua_cents / 100.0
+        # If neither guarantee nor pct is set, fall back to flat formatting
+        # so emails don't say "$0 guarantee + 0% of door" — that's worse
+        # than just hiding the deal terms.
+        if gua_cents > 0 or pct > 0:
+            # Returns e.g. "50.00 guarantee + 20% of door" → template adds
+            # the "$": "$50.00 guarantee + 20% of door"
+            return f"{gua_dollars:,.2f} guarantee + {pct}% of door"
+    return f"{pay_f:,.2f}"
+
+
 def compute_slot_times(db, gig_id: int, artist_id=None) -> str:
     """Return a human-readable time string for a gig's slot(s).
 
@@ -54,11 +101,15 @@ def compute_slot_times(db, gig_id: int, artist_id=None) -> str:
 
 
 def _get_effective_pay_for_slot(db, venue_id: int, artist_id: int, base_pay: float) -> float:
-    """Return max(base_pay, artist pay override) for email display."""
+    """Return max(base_pay, artist pay override) for email display.
+
+    Override only applies when status='approved' — a pending/denied/revoked row still
+    carries the override columns from before, but should not affect emails.
+    """
     try:
         row = db.execute(
             text("""SELECT COALESCE(pay_dollars_override,0) + COALESCE(pay_cents_override,0)/100.0 as op
-                    FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid"""),
+                    FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid AND status='approved'"""),
             {"vid": venue_id, "aid": artist_id}
         ).mappings().first()
         if row and row["op"] and float(row["op"]) > base_pay:
@@ -211,10 +262,12 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
         booked_slots = db.execute(text(f"""
             SELECT gs.id, gs.artist_id, gs.start_time, gs.end_time, gs.pay,
                    gs.artist_type, gs.band_formats, gs.styles,
+                   gs.deal_type, gs.door_pct, gs.guarantee_cents,
                    a.name as artist_name
             FROM gig_slots gs
             JOIN artists a ON a.id = gs.artist_id
-            WHERE gs.gig_id = :gid AND gs.status IN ('booked', 'pending_contract')
+            -- Audit fix (May 2026 part 6): include awaiting_venue_contract + pending_venue_approval
+            WHERE gs.gig_id = :gid AND gs.status IN ('booked', 'pending_contract', 'awaiting_venue_contract', 'pending_venue_approval')
             {_slot_filter}
         """), _slot_params).mappings().all()
 
@@ -234,6 +287,34 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
         email_service = EmailService(db)
         venue_vars = _fetch_venue_detail_vars(db, gig["venue_id"], gig_notes=gig.get("notes", ""))
 
+        # Far-away-booking detection (May 2026 part 10h). The blast email
+        # radius (20mi default) only limits who gets NOTIFIED — any artist on
+        # the platform can book during an open-blast window. So a touring band
+        # from out of state can legitimately grab an opening. We don't block
+        # that, but we (a) flag it to the venue so they're not surprised, and
+        # (b) drop a soft notice on the artist's confirmation so they're sure
+        # the venue is far. Threshold is admin-configurable.
+        try:
+            _far_miles = float(db.execute(text(
+                "SELECT COALESCE(setting_value, '50') FROM platform_settings WHERE setting_key='far_booking_alert_miles'"
+            )).scalar() or 50)
+        except Exception:
+            _far_miles = 50.0
+        _venue_geo = db.execute(text(
+            "SELECT latitude, longitude, city, state FROM venues WHERE id = :vid"
+        ), {"vid": gig["venue_id"]}).mappings().first()
+
+        def _miles_between(lat1, lon1, lat2, lon2):
+            import math
+            if None in (lat1, lon1, lat2, lon2):
+                return None
+            R = 3959.0  # Earth radius miles
+            p1, p2 = math.radians(lat1), math.radians(lat2)
+            dphi = math.radians(lat2 - lat1)
+            dlmb = math.radians(lon2 - lon1)
+            a = math.sin(dphi/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dlmb/2)**2
+            return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
         # Send one email per booked artist using THEIR specific slot's details.
         # The venue also gets one email per booking event — using that artist's slot data
         # so the venue sees exactly which slot was just filled.
@@ -250,17 +331,71 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
                 'date':         format_email_date(gig["date"]),
                 'start_time':   format_time_12hr(slot["start_time"]),
                 'end_time':     format_time_12hr(slot["end_time"]),
-                'pay':          f"{_get_effective_pay_for_slot(db, gig['venue_id'], aid, float(slot['pay'] or gig.get('pay') or 0)):,.2f}",
+                # Door-deal aware. format_slot_pay_summary returns
+                # "60.00" for flat or "50.00 guarantee + 20% of door"
+                # when this slot is a door split (no leading "$" — the
+                # template prepends one). For flat we keep the existing
+                # preferred-artist override via _get_effective_pay_for_slot.
+                'pay':          format_slot_pay_summary(slot) if (slot.get('deal_type') == 'door')
+                                else f"{_get_effective_pay_for_slot(db, gig['venue_id'], aid, float(slot['pay'] or gig.get('pay') or 0)):,.2f}",
                 'title':        gig.get("title") or "",
                 'artist_type':  slot.get("artist_type") or gig.get("artist_type") or "",
                 'band_formats': ", ".join(x.strip() for x in (slot.get("band_formats") or gig.get("band_formats") or "").split(",") if x.strip()),
                 'styles':       ", ".join(x.strip() for x in (slot.get("styles") or gig.get("styles") or "").split(",") if x.strip()),
+                'far_notice_artist': '',
+                'far_notice_venue': '',
                 **venue_vars,
             }
 
-            # Artist email — each booked artist gets their own slot-specific confirmation
+            # Compute artist↔venue distance and, if beyond the threshold, build
+            # the two notice blocks (HTML — added to _HTML_SAFE_KEYS so they
+            # render as markup, not escaped text).
+            try:
+                _art_geo = db.execute(text(
+                    "SELECT latitude, longitude, city, state FROM artists WHERE id = :aid"
+                ), {"aid": aid}).mappings().first()
+                if _venue_geo and _art_geo:
+                    _dist = _miles_between(
+                        _art_geo["latitude"], _art_geo["longitude"],
+                        _venue_geo["latitude"], _venue_geo["longitude"]
+                    )
+                    if _dist is not None and _dist > _far_miles:
+                        _mi = int(round(_dist))
+                        _v_loc = ", ".join([p for p in [_venue_geo.get("city"), _venue_geo.get("state")] if p]) or "the venue's area"
+                        _a_loc = ", ".join([p for p in [_art_geo.get("city"), _art_geo.get("state")] if p]) or "out of the area"
+                        email_vars['far_notice_artist'] = (
+                            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                            f'style="margin:16px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;'
+                            f'border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#92400e;">'
+                            f'📍 Heads up: this venue is in <strong>{_v_loc}</strong>, about '
+                            f'<strong>{_mi} miles</strong> from your listed location. Just making sure '
+                            f'you can perform in person — if you booked this by mistake, please cancel so '
+                            f'the venue can re-open the slot.</td></tr></table>'
+                        )
+                        email_vars['far_notice_venue'] = (
+                            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                            f'style="margin:16px 0;"><tr><td style="background:#eff6ff;border:1px solid #bfdbfe;'
+                            f'border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#1e40af;">'
+                            f'📍 Heads up: <strong>{slot.get("artist_name") or "this artist"}</strong> is based in '
+                            f'<strong>{_a_loc}</strong>, about <strong>{_mi} miles</strong> away. They booked through '
+                            f'your open-gig window. If this looks like a mistake, you can cancel the booking from the '
+                            f'gig details.</td></tr></table>'
+                        )
+            except Exception as _de:
+                logger.warning(f"[BOOKING EMAIL] far-distance notice failed for gig {gig_id} artist {aid}: {_de}")
+
+            # Artist email — each booked artist gets their own slot-specific confirmation.
+            # Audit fix (May 2026 part 4): track which emails we sent on
+            # the artist side so the venue loop below can skip the same
+            # email if the same user owns both sides. Previously a user
+            # who owned both the artist and the venue got two emails for
+            # the same booking.
             artist_users = get_all_entity_users(db, 'artist', aid)
+            _booked_sent_artists = set()
             for au in artist_users:
+                if au["email"] in _booked_sent_artists:
+                    continue
+                _booked_sent_artists.add(au["email"])
                 result = email_service.send_notification_email(
                     user_email=au["email"], user_id=au["user_id"],
                     notification_type='artist_gig_booked', variables=email_vars
@@ -271,6 +406,10 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
             _booked_sent_venues = set()
             for vu in venue_users:
                 if vu["email"] in _booked_sent_venues:
+                    continue
+                # Skip if the same user already got the artist-side email above.
+                if vu["email"] in _booked_sent_artists:
+                    logger.info(f"[BOOKING EMAIL] skipping venue email to {vu['email']} — already got artist-side email (shared user)")
                     continue
                 _booked_sent_venues.add(vu["email"])
                 try:
@@ -488,9 +627,15 @@ def send_cancellation_emails(db, gig_details: dict, cancellation_reason: str = "
         def _cancel_send(to_email, notification_type, subject_override=None):
             """Send cancellation email bypassing preference check.
 
+            Audit fix (May 2026 part 3): use the pre-opened pooled ``_smtp``
+            connection from the enclosing scope so the entire batch goes
+            through one SMTP session. Previously this called ``_smtp_send``
+            which opens a fresh connection per recipient — the optimization
+            comment above the pool setup ("Send to ALL artist + venue users
+            in ONE SMTP session") was a lie. Falls back to per-call open
+            when the pool isn't available (SMTP login earlier failed).
+
             subject_override: if set, use this string instead of the template subject.
-            (Used by venue path when cancelled_by='venue' so the subject reflects who
-            actually cancelled — see Issue 1 fix May 2026.)
             """
             from backend.email_service import _smtp_send as _do_send
             from email.mime.multipart import MIMEMultipart as _MM
@@ -515,6 +660,14 @@ def send_cancellation_emails(db, gig_details: dict, cancellation_reason: str = "
             msg['To'] = to_email
             msg['X-Mailer'] = 'GigsFill'
             msg.attach(_MT(body, 'html'))
+            # Use pooled connection when available, fall back to per-call open.
+            if _smtp is not None:
+                try:
+                    _smtp.send_message(msg)
+                    logger.info(f"[CANCEL EMAIL] _cancel_send SUCCESS (pooled) to {to_email}")
+                    return True
+                except Exception as _pe:
+                    logger.warning(f"[CANCEL EMAIL] pooled send failed, falling back to per-call: {_pe}")
             _do_send(email_service.smtp_server, email_service.smtp_port,
                      email_service.smtp_username, email_service.smtp_password, msg)
             logger.info(f"[CANCEL EMAIL] _cancel_send SUCCESS to {to_email}")
@@ -566,6 +719,16 @@ def send_cancellation_emails(db, gig_details: dict, cancellation_reason: str = "
 
     except Exception as e:
         logger.error(f"[CANCEL EMAIL] send_cancellation_emails outer error: {e}", exc_info=True)
+    finally:
+        # Close the pooled SMTP connection if we opened one. Use
+        # locals().get to handle the case where execution bailed before
+        # _smtp was assigned.
+        _smtp_local = locals().get('_smtp')
+        if _smtp_local is not None:
+            try:
+                _smtp_local.quit()
+            except Exception:
+                pass
 
 
 def send_contract_sign_email(db, venue_id: int, artist_id: int, gig_id: int, gig_date: str):
@@ -876,14 +1039,41 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
         effective_pay = _get_effective_pay_for_slot(db, venue_id, artist_id, base_pay)
         pay_display = f"{effective_pay:,.2f}"
 
-        # Generate a one-time approval token stored on the gig
+        # Generate a one-time approval token. Audit fix (May 2026 part 5):
+        # previously this overwrote a single `gigs.approval_token` column —
+        # two artists requesting same-day on the same multi-slot gig would
+        # invalidate each other's email links. Now we store per-(gig, artist)
+        # tokens in pending_approval_tokens. The legacy gigs.approval_token
+        # is still updated as a fallback for handlers that haven't migrated
+        # to the new lookup yet (compat during rollout).
         from sqlalchemy import text as _text
+        from backend.utils import utcnow_naive as _utcnow_naive
         approval_token = secrets.token_urlsafe(32)
+        try:
+            # Replace any prior pending row for this (gig, artist) — a fresh
+            # request supersedes its predecessor.
+            db.execute(_text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid"),
+                       {"gid": gig_id, "aid": artist_id})
+            db.execute(_text("INSERT INTO pending_approval_tokens (token, gig_id, artist_id, created_at) VALUES (:tok, :gid, :aid, :now)"),
+                       {"tok": approval_token, "gid": gig_id, "aid": artist_id, "now": _utcnow_naive()})
+        except Exception as _pe:
+            logger.warning(f"[APPROVAL_EMAIL] pending_approval_tokens write failed: {_pe}")
         db.execute(_text("UPDATE gigs SET approval_token = :tok WHERE id = :gid"),
                    {"tok": approval_token, "gid": gig_id})
         db.flush()
 
+        # Audit fix (May 2026 part 4): read site_url from platform_settings
+        # so staging / test envs aren't hardcoded to production. Falls back
+        # to gigsfill.com if the setting is missing.
         base_url = "https://gigsfill.com"
+        try:
+            _row = db.execute(_text(
+                "SELECT setting_value FROM platform_settings WHERE setting_key = 'site_url'"
+            )).scalar()
+            if _row:
+                base_url = _row.rstrip("/")
+        except Exception:
+            pass
         approve_url = f"{base_url}/api/gigs/{gig_id}/approve-booking?token={approval_token}&artist_id={artist_id}"
         deny_url    = f"{base_url}/api/gigs/{gig_id}/deny-booking?token={approval_token}&artist_id={artist_id}"
 

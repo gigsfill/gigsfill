@@ -531,7 +531,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     row.style.cssText = '';
 
     row.innerHTML = `
-      <div style="display:flex; align-items:center; gap:6px; flex-wrap:nowrap;">
+      <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
         <span style="font-weight:700; min-width:44px; color:#a855f7; letter-spacing:0.3px; font-size:0.78rem;">Slot ${slotNum}</span>
         <input type="time" class="slot-start" value="${useStart}" style="flex:0 0 auto; width:96px; min-width:0; font-size:0.75rem; padding:2px 5px;">
         <span style="color:var(--text-muted); font-size:0.68rem;">to</span>
@@ -545,6 +545,40 @@ document.addEventListener("DOMContentLoaded", async () => {
         <span class="slot-pay-pill" title="Slot pay (click and type)">
           <span class="slot-pay-symbol">$</span>
           <input type="text" class="slot-pay-amount" value="${useAmount}" inputmode="decimal" maxlength="12" placeholder="0.00">
+        </span>
+        <!-- — OR — divider + Door Split bubble. Clicking the bubble greys out
+             the pay pill (deal_type='door' means door terms drive everything
+             — booking emails, contract pay line, transaction amount).
+             Clicking it again returns to flat pay. -->
+        <span class="slot-deal-sep" style="font-size:0.7rem;color:var(--text-muted);letter-spacing:0.08em;opacity:0.7;user-select:none;white-space:nowrap;">— OR —</span>
+        <label class="slot-door-toggle" style="
+          display:inline-flex; align-items:center; gap:5px;
+          padding:2px 10px; height:22px;
+          border-radius:999px;
+          border:1px solid rgba(34, 197, 94, 0.32);
+          background: rgba(34, 197, 94, 0.06);
+          color: rgba(134, 239, 172, 0.85);
+          font-size:0.72rem; font-weight:600;
+          cursor:pointer; user-select:none; white-space:nowrap;
+          transition: background 0.12s, border-color 0.12s, color 0.12s;
+        " title="Pay artist a guarantee + share of door receipts instead of flat pay">
+          <input type="checkbox" class="slot-door-checkbox" hidden ${dealType === 'door' ? 'checked' : ''}>
+          <span style="line-height:1;">🎯 Door Split</span>
+        </label>
+        <!-- Inline door terms — guarantee + % of door receipts. Shown only
+             when door split is enabled. Persists with the gig save via
+             getSlotData() / backend INSERT INTO gig_slots. -->
+        <span class="slot-door-inputs" style="
+          display:${dealType === 'door' ? 'inline-flex' : 'none'};
+          align-items:center; gap:4px;
+          font-size:0.72rem; color:var(--text-muted);
+        ">
+          <span>Guarantee</span>
+          <span style="color:#22c55e;font-weight:700;">$</span>
+          <input type="number" min="0" step="0.01" class="slot-door-guarantee" value="${(guaranteeCents / 100).toFixed(2)}" style="width:60px;padding:2px 4px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.32);color:#22c55e;border-radius:3px;font-size:0.72rem;font-weight:700;text-align:right;">
+          <span>+</span>
+          <input type="number" min="0" max="100" class="slot-door-pct" value="${doorPct}" style="width:42px;padding:2px 4px;background:rgba(124,107,255,0.08);border:1px solid rgba(124,107,255,0.32);color:#c4b5fd;border-radius:3px;font-size:0.72rem;font-weight:700;text-align:right;">
+          <span>% of door</span>
         </span>
         <button type="button" class="remove-slot-btn" style="
           background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#ef4444;
@@ -575,32 +609,9 @@ document.addEventListener("DOMContentLoaded", async () => {
           <div class="slot-pill-error" style="display:none;"></div>
         </div>
       </div>
-      <!-- Per-slot deal terms (Jun 2026 feature).
-           Default = flat (the pay pill above is the final amount).
-           Switching to "Door" reveals two compact inputs: guarantee + %.
-           Values are read by getSlotData() and persisted when the gig is
-           saved — no separate "Configure Door Deals" step required. -->
-      <div class="slot-deal-row" style="display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:7px; padding-top:7px; border-top:1px dashed rgba(124,107,255,0.18); font-size:0.74rem;">
-        <span style="color:var(--text-muted); font-weight:600; min-width:44px;">Deal</span>
-        <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
-          <input type="radio" name="slot-deal-${slotCounter}" class="slot-deal-flat" value="flat" ${dealType !== 'door' ? 'checked' : ''}> <span>Flat (use pay above)</span>
-        </label>
-        <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
-          <input type="radio" name="slot-deal-${slotCounter}" class="slot-deal-door" value="door" ${dealType === 'door' ? 'checked' : ''}> <span>🎯 Door split</span>
-        </label>
-        <span class="slot-door-inputs" style="display:${dealType === 'door' ? 'inline-flex' : 'none'}; align-items:center; gap:6px; color:var(--text-muted);">
-          <label style="display:inline-flex; align-items:center; gap:3px;">
-            Guarantee
-            <span style="color:#22c55e; font-weight:700;">$</span>
-            <input type="number" min="0" step="0.01" class="slot-door-guarantee" value="${(guaranteeCents / 100).toFixed(2)}" style="width:62px; padding:2px 4px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); color:#22c55e; border-radius:3px; font-size:0.74rem; font-weight:700; text-align:right;">
-          </label>
-          <span>+</span>
-          <label style="display:inline-flex; align-items:center; gap:3px;">
-            <input type="number" min="0" max="100" class="slot-door-pct" value="${doorPct}" style="width:42px; padding:2px 4px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); color:var(--text); border-radius:3px; font-size:0.74rem; text-align:right;">
-            % of door
-          </label>
-        </span>
-      </div>
+      <!-- (Jun 2026) Per-slot deal terms moved into the header row above
+           — see the .slot-deal-sep "— OR —" divider + the .slot-door-toggle
+           bubble between the pay pill and the X remove button. -->
     `;
     
     // Artist type change handler per slot
@@ -608,13 +619,41 @@ document.addEventListener("DOMContentLoaded", async () => {
     const stylesRow = row.querySelector('.slot-styles-row');
     const lineupRow = row.querySelector('.slot-lineup-row');
 
-    // Deal-type radio → show/hide the guarantee + pct inputs.
+    // Door Split bubble → grey out the pay pill + reveal guarantee/% inputs.
+    // The pay pill stays in the DOM (so getSlotData can still read a value
+    // even for door deals, where we use guarantee as the "floor" pay).
     const doorInputs = row.querySelector('.slot-door-inputs');
-    row.querySelectorAll(`input[name="slot-deal-${slotCounter}"]`).forEach(r => {
-      r.addEventListener('change', () => {
-        if (doorInputs) doorInputs.style.display = r.value === 'door' && r.checked ? 'inline-flex' : 'none';
-      });
-    });
+    const doorToggle = row.querySelector('.slot-door-checkbox');
+    const doorToggleLabel = row.querySelector('.slot-door-toggle');
+    const payPill = row.querySelector('.slot-pay-pill');
+    const dealSep = row.querySelector('.slot-deal-sep');
+    function _applyDoorState() {
+      const on = doorToggle && doorToggle.checked;
+      if (doorInputs) doorInputs.style.display = on ? 'inline-flex' : 'none';
+      // Grey out the pay pill when door is on — visually communicates that
+      // the deal terms (not the pay pill) drive what the artist actually gets.
+      if (payPill) {
+        payPill.style.opacity = on ? '0.35' : '';
+        payPill.style.pointerEvents = on ? 'none' : '';
+        payPill.title = on ? 'Pay is driven by Door Split terms below — disable the bubble to use flat pay.' : 'Slot pay (click and type)';
+      }
+      // Brighten the bubble when active so it reads as "this is on".
+      if (doorToggleLabel) {
+        if (on) {
+          doorToggleLabel.style.background = 'rgba(34, 197, 94, 0.18)';
+          doorToggleLabel.style.borderColor = 'rgba(34, 197, 94, 0.55)';
+          doorToggleLabel.style.color = '#86efac';
+        } else {
+          doorToggleLabel.style.background = 'rgba(34, 197, 94, 0.06)';
+          doorToggleLabel.style.borderColor = 'rgba(34, 197, 94, 0.32)';
+          doorToggleLabel.style.color = 'rgba(134, 239, 172, 0.85)';
+        }
+      }
+    }
+    if (doorToggle) {
+      doorToggle.addEventListener('change', _applyDoorState);
+      _applyDoorState();
+    }
     typeSelect.addEventListener('change', () => {
       const isLB = typeSelect.value === 'Live Band';
       stylesRow.style.display = isLB ? 'flex' : 'none';
@@ -844,16 +883,19 @@ document.addEventListener("DOMContentLoaded", async () => {
         const checkedLineup = row.querySelectorAll('.slot-lineup-cb:checked');
         bandFormats = Array.from(checkedLineup).map(cb => cb.value).join(',') || null;
       }
-      // Per-slot deal terms (Jun 2026). dealType='flat' → pay above is final.
-      // dealType='door' → guarantee_cents + door_pct used at settlement to
-      // compute final pay. Backend persists these via gig_slots columns.
-      const dealCheckedEl = row.querySelector(`input[name^="slot-deal-"][value="door"]`);
-      const dealType = dealCheckedEl && dealCheckedEl.checked ? 'door' : 'flat';
+      // Per-slot deal terms (Jun 2026). dealType='flat' → the pay pill is
+      // the final amount. dealType='door' → the guarantee is the floor pay,
+      // door_pct is settled later. When door is selected, we OVERRIDE pay
+      // with the guarantee so the booking transaction has a sensible amount
+      // until POST /settle bumps it up with door receipts.
+      const doorOn = !!row.querySelector('.slot-door-checkbox')?.checked;
+      const dealType = doorOn ? 'door' : 'flat';
       const guaranteeDollars = parseFloat(row.querySelector('.slot-door-guarantee')?.value || '0') || 0;
       const doorPct = parseInt(row.querySelector('.slot-door-pct')?.value || '0', 10) || 0;
-      const guaranteeCents = dealType === 'door' ? Math.round(guaranteeDollars * 100) : 0;
-      slots.push({ slot_number: i + 1, start_time: start, end_time: end, pay: pay,
-                    deal_type: dealType, door_pct: dealType === 'door' ? doorPct : 0,
+      const guaranteeCents = doorOn ? Math.round(guaranteeDollars * 100) : 0;
+      const effectivePay = doorOn ? guaranteeDollars : pay;
+      slots.push({ slot_number: i + 1, start_time: start, end_time: end, pay: effectivePay,
+                    deal_type: dealType, door_pct: doorOn ? doorPct : 0,
                     guarantee_cents: guaranteeCents,
                     artist_type: artistType, band_formats: bandFormats, styles: styles });
     });

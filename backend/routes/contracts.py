@@ -169,7 +169,38 @@ AUTO_CONTRACT_DISCLAIMER = """DISCLAIMER: This contract template is provided by 
 
 
 def _get_effective_pay_str(db, gig, venue_id, artist_id):
-    """Get the effective pay for a gig considering pay overrides from preferred_artists"""
+    """Get the effective pay for a gig considering pay overrides from preferred_artists.
+
+    Door-split aware (Jun 2026): when the gig (or the booked slot) has
+    deal_type='door', the contract pay line shows
+    "$<guarantee> guarantee + <pct>% of door receipts" instead of the
+    flat pay amount, so the artist sees the same terms in the contract
+    as they did when booking.
+    """
+    # Door-split path — check the slot table first (multi-slot gigs)
+    # then fall back to the gig itself (single-slot legacy).
+    deal_type = None
+    door_pct = 0
+    guarantee_cents = 0
+    try:
+        slot_row = db.execute(
+            text("""SELECT deal_type, door_pct, guarantee_cents
+                    FROM gig_slots
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND status IN ('booked','pending_contract','awaiting_venue_contract')
+                    ORDER BY slot_number ASC LIMIT 1"""),
+            {"gid": gig.get("id"), "aid": artist_id}
+        ).mappings().first()
+        if slot_row:
+            deal_type = (slot_row.get("deal_type") or "").lower() or None
+            door_pct = int(slot_row.get("door_pct") or 0)
+            guarantee_cents = int(slot_row.get("guarantee_cents") or 0)
+    except Exception:
+        pass
+    if deal_type == "door" and (guarantee_cents > 0 or door_pct > 0):
+        gua_dollars = guarantee_cents / 100.0
+        return f"${gua_dollars:,.2f} guarantee + {door_pct}% of door receipts"
+
     pay = float(gig.get("pay", 0) or 0)
     pay_override = db.execute(
         text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid AND status = 'approved'"),
