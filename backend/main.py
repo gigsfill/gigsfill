@@ -139,7 +139,7 @@ _error_alert_handler = _ErrorEmailHandler()
 logging.getLogger("gigsfill").addHandler(_error_alert_handler)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -258,6 +258,12 @@ from backend.routes import review_links
 from backend.routes.gig_modal import router as gig_modal_router
 app.include_router(review_links.router)
 app.include_router(messages.router)
+from backend.routes import calendar_feed
+app.include_router(calendar_feed.router)
+from backend.routes import gig_templates
+app.include_router(gig_templates.router)
+from backend.routes import door_settle
+app.include_router(door_settle.router)
 app.include_router(availability.router)
 app.include_router(waitlist.router)
 app.include_router(gig_modal_router)
@@ -432,14 +438,25 @@ logger = logging.getLogger("gigsfill.main")
 def robots_txt():
     return _FileResponse("app/static/robots.txt", media_type="text/plain")
 
-@app.get("/sitemap.xml", include_in_schema=False)
-def sitemap_xml():
-    return _FileResponse("app/static/sitemap.xml", media_type="application/xml")
+# /sitemap.xml is served dynamically by backend/routes/vanity.py so it
+# always includes the current set of artist/venue/city vanity URLs.
 
 @app.get("/sw.js", include_in_schema=False)
 def service_worker():
     return _FileResponse("app/static/js/sw.js", media_type="application/javascript",
                          headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+# Audit fix (May 2026 part 10): block direct browser access to legal-contract
+# PDFs. They live under app/static/uploads/contracts/ which would otherwise be
+# served by the StaticFiles mount below. The auth-gated download endpoint
+# (contracts.download_contract_pdf) is the ONLY supported way to fetch them.
+# Filenames are guessable (venue_name + artist_name + gig_date) so leaving the
+# directory open was a real legal/privacy risk. Registered BEFORE the mount so
+# the route match wins.
+@app.get("/app/static/uploads/contracts/{rest:path}", include_in_schema=False)
+def _block_direct_contract_pdf_access(rest: str):
+    from fastapi import HTTPException as _HE
+    raise _HE(403, "Contract PDFs must be downloaded via the authenticated download endpoint.")
 
 # Mount static files
 app.mount("/app", StaticFiles(directory="app", html=True), name="app")
@@ -541,27 +558,33 @@ def update_gig_notes(gig_id: int, data: dict, user=Depends(get_current_user), db
 
 @app.post("/api/support/ticket")
 @limiter.limit("2/minute")
-def submit_support_ticket(request: Request, data: dict):
-    """Submit a support/help ticket"""
-    from fastapi import Cookie, HTTPException
+def submit_support_ticket(request: Request, data: dict, user=Depends(get_current_user)):
+    """Submit a support/help ticket.
+
+    Audit fix (May 2026 part 5): now requires authentication and derives the
+    submitter identity from the session — previously the endpoint was anonymous
+    and read `user_id`/`user_email`/`user_name` from the request body, allowing
+    an unauthenticated caller to file tickets attributed to any user and pivot
+    admin replies to any email address.
+    """
+    from fastapi import HTTPException
     from backend.db import get_db_connection
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-    
+    from backend.utils import utcnow_naive as _utcnow_naive
+
     category = data.get("category", "").strip()
     subject = data.get("subject", "").strip()
     description = data.get("description", "").strip()
-    user_id = data.get("user_id")
-    user_email = data.get("user_email", "")
-    user_name = data.get("user_name", "")
-    
+    # Audit fix (May 2026 part 5): derive identity from the session, ignore body.
+    user_id = user.id
+    user_email = (getattr(user, "email", "") or "").strip()
+    user_name = (f"{getattr(user, 'first_name', '') or ''} {getattr(user, 'last_name', '') or ''}").strip() or user_email
+
     if not category or not subject or not description:
         raise HTTPException(400, "Category, subject, and description are required")
-    
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         # Save ticket to DB
         cursor.execute("""
@@ -570,7 +593,7 @@ def submit_support_ticket(request: Request, data: dict):
         """, (user_id, user_email, user_name, category, subject, description))
         ticket_id = cursor.lastrowid
         conn.commit()
-        
+
         # Send emails using templates
         try:
             from backend.email_service import EmailService
@@ -583,7 +606,12 @@ def submit_support_ticket(request: Request, data: dict):
                 )).scalar() or "https://gigsfill.com"
                 admin_url = f"{base_url}/app/admin.html"
                 reply_url = f"{base_url}/api/support/ticket/{ticket_id}"
-                submitted_at = __import__('datetime').utcnow_naive().strftime("%B %d, %Y at %I:%M %p UTC")
+                # Audit fix (May 2026 part 5): use the canonical utils.utcnow_naive
+                # — the previous `__import__('datetime').utcnow_naive()` raised
+                # AttributeError (datetime module has no utcnow_naive), the
+                # exception was swallowed by the surrounding try/except, and
+                # every ticket-confirmation email silently never sent.
+                submitted_at = _utcnow_naive().strftime("%B %d, %Y at %I:%M %p UTC")
                 ticket_vars = {
                     "ticket_id": str(ticket_id),
                     "user_name": user_name or "User",
@@ -792,7 +820,7 @@ def user_reply_to_ticket(ticket_id: int, request: Request, data: dict, token: st
 </td></tr></table>
 </body></html>"""
                 
-                msg = MIMEMultipart()
+                msg = MIMEMultipart('alternative')
                 msg['From'] = smtp_email
                 msg['To'] = admin_email
                 msg['Subject'] = f"Re: [GigsFill Support #{ticket_id}] {ticket_subject}"
@@ -856,7 +884,7 @@ def recommend_gigsfill(data: dict):
             smtp_port = int(settings.get('platform_smtp_port', '587'))
             
             if smtp_email and smtp_password:
-                msg = MIMEMultipart()
+                msg = MIMEMultipart('alternative')
                 msg['From'] = smtp_email
                 msg['To'] = recipient_email
                 msg['Subject'] = f"{user_name} thinks you should check out GigsFill!"
@@ -918,177 +946,33 @@ def recommend_gigsfill(data: dict):
 # ============================
 # ARTIST INVITATIONS (Venue invites artists to join GigsFill)
 # ============================
+#
+# The legacy single-venue POST /api/venues/{venue_id}/invite-artists was
+# removed in part 10p (2026-06-14). The canonical path is now
+# POST /api/me/invite-artists in routes/me.py, which writes one row per
+# (email, venue) pair sharing a token+invite_group_id, supports any number
+# of venues per invite, captures synchronous SMTP bounces, and ties signup
+# back via the token. The GET / resend / delete endpoints below remain —
+# they back the per-venue tracker UI inside Email Center which works for
+# both legacy (single-venue, no token) and current (multi-venue, tokened) rows.
 
 @app.post("/api/venues/{venue_id}/invite-artists")
-def invite_artists(venue_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
-    """Bulk invite artists to join GigsFill on behalf of a venue. Requires auth and venue access."""
-    from fastapi import HTTPException
-    from backend.db import get_db_connection
-    from backend.utils import check_venue_access
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-    check_venue_access(db, venue_id, user.id)
-    emails_raw = data.get("emails", "").strip()
-    message = data.get("message", "").strip()
-    user_id = user.id
-    inviter_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email or "A venue"
-    send_as = data.get("send_as", "venue")  # "venue" or "personal"
-    if not emails_raw:
-        raise HTTPException(400, "At least one email address is required")
-    
-    # Parse emails — support comma, semicolon, newline, space separated
-    import re
-    raw_list = re.split(r'[,;\s\n]+', emails_raw)
-    email_list = []
-    for e in raw_list:
-        e = e.strip().lower()
-        if e and '@' in e and '.' in e.split('@')[-1]:
-            email_list.append(e)
-    
-    if not email_list:
-        raise HTTPException(400, "No valid email addresses found")
-    if len(email_list) > 50:
-        raise HTTPException(400, "Maximum 50 invitations at a time")
-    
-    # De-duplicate
-    email_list = list(dict.fromkeys(email_list))
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Get venue info
-        cursor.execute("SELECT venue_name, city, state FROM venues WHERE id = ?", (venue_id,))
-        venue = cursor.fetchone()
-        if not venue:
-            raise HTTPException(404, "Venue not found")
-        venue_name = venue[0]
-        venue_city = venue[1] or ""
-        venue_state = venue[2] or ""
-        venue_location = f"{venue_city}, {venue_state}" if venue_city else ""
-        
-        # Get SMTP settings
-        cursor.execute("SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('platform_email', 'platform_email_password', 'platform_smtp_server', 'platform_smtp_port')")
-        settings = {row[0]: row[1] for row in cursor.fetchall()}
-        smtp_email = settings.get('platform_email', '')
-        smtp_password = settings.get('platform_email_password', '')
-        smtp_server = settings.get('platform_smtp_server', 'smtp.gmail.com')
-        smtp_port = int(settings.get('platform_smtp_port', '587'))
-        
-        sent_count = 0
-        skipped = []
-        already_invited = []
-        
-        sender_display = venue_name if send_as == "venue" else inviter_name
-        
-        for email in email_list:
-            # Check if already invited by this venue and still pending
-            cursor.execute(
-                "SELECT id, status FROM artist_invitations WHERE venue_id = ? AND invited_email = ? ORDER BY sent_at DESC LIMIT 1",
-                (venue_id, email)
-            )
-            existing = cursor.fetchone()
-            if existing and existing[1] == 'pending':
-                already_invited.append(email)
-                continue
-            
-            # Check if already a GigsFill user
-            cursor.execute("SELECT id FROM users WHERE LOWER(email) = ?", (email,))
-            existing_user = cursor.fetchone()
-            
-            status = 'signed_up' if existing_user else 'pending'
-            signed_up_user_id = existing_user[0] if existing_user else None
-            
-            # Insert invitation record
-            cursor.execute("""
-                INSERT INTO artist_invitations (venue_id, venue_name, invited_email, invited_by_user_id, inviter_name, message, status, signed_up_user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (venue_id, venue_name, email, user_id, inviter_name, message, status, signed_up_user_id))
-            
-            # Send invitation email (even to existing users — they get a different message)
-            if smtp_email and smtp_password:
-                try:
-                    msg = MIMEMultipart()
-                    msg['From'] = smtp_email
-                    msg['To'] = email
-                    
-                    if existing_user:
-                        msg['Subject'] = f"{sender_display} wants to connect on GigsFill!"
-                    else:
-                        msg['Subject'] = f"{sender_display} invited you to join GigsFill!"
-                    
-                    personal_note = ""
-                    if message:
-                        personal_note = f'''<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:16px;margin-bottom:24px;font-size:14px;line-height:1.6;color:#374151;font-style:italic;">
-"{message}"
-<div style="margin-top:8px;font-style:normal;font-weight:500;color:#0369a1;">— {sender_display}</div>
-</div>'''
-                    
-                    location_line = f' in {venue_location}' if venue_location else ''
-                    
-                    if existing_user:
-                        main_text = f'''<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#4b5563;"><strong>{venue_name}</strong>{location_line} is using GigsFill for booking and wants to connect with you! Log in to request preferred artist status and start booking gigs.</p>'''
-                        cta_text = "Log In to GigsFill"
-                        cta_url = "https://gigsfill.com"
-                    else:
-                        main_text = f'''<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#4b5563;"><strong>{venue_name}</strong>{location_line} is now using <strong>GigsFill</strong> for all their gig booking. Create your free artist account to get booked, request preferred artist status, and manage your gigs — all in one place.</p>'''
-                        cta_text = "Create Your Free Artist Account"
-                        cta_url = "https://gigsfill.com/app/signup-new.html"
-                    
-                    body_html = f'''<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
-<table role="presentation" width="100%" style="background:#f8f9fa;padding:40px 20px;">
-<tr><td>
-<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-<tr><td style="padding:32px 40px 24px;border-bottom:1px solid #eee;">
-<span style="font-size:18px;font-weight:700;letter-spacing:0.15em;color:#1a1a2e;">GIGSFILL</span>
-</td></tr>
-<tr><td style="padding:32px 40px;">
-<h1 style="margin:0 0 16px;font-size:22px;font-weight:600;color:#1a1a2e;">You're Invited! 🎶</h1>
-{main_text}
-{personal_note}
-<div style="text-align:center;margin:32px 0;">
-<a href="{cta_url}" style="display:inline-block;background:#06b6d4;color:#ffffff;padding:14px 32px;text-decoration:none;border-radius:6px;font-size:15px;font-weight:600;">{cta_text}</a>
-</div>
-<p style="margin:0;font-size:13px;color:#9ca3af;text-align:center;">Free to sign up &middot; No commitment required</p>
-</td></tr>
-<tr><td style="padding:24px 40px;background:#f8f9fa;border-top:1px solid #eee;">
-<p style="margin:0;color:#6b7280;font-size:12px;text-align:center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color:#1a1a2e;text-decoration:none;">gigsfill.com</a></p>
-</td></tr>
-</table>
-</td></tr></table>
-</body></html>'''
-                    
-                    msg.attach(MIMEText(body_html, 'html'))
-                    
-                    if smtp_port == 465:
-                        with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-                            server.login(smtp_email, smtp_password)
-                            server.send_message(msg)
-                    else:
-                        with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as server:
-                            server.starttls()
-                            server.login(smtp_email, smtp_password)
-                            server.send_message(msg)
-                    
-                    sent_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to send to {email}: {e}")
-                    sent_count += 1  # Still count — record was saved
-            else:
-                sent_count += 1  # Record saved even without SMTP
-        
-        conn.commit()
-        
-        result_msg = f"{sent_count} invitation(s) sent"
-        if already_invited:
-            result_msg += f", {len(already_invited)} already invited"
-        
-        return {"ok": True, "message": result_msg, "sent": sent_count, "already_invited": already_invited}
-    finally:
-        conn.close()
+def invite_artists_legacy_removed(venue_id: int):
+    """REMOVED in part 10p (2026-06-14). Use POST /api/me/invite-artists instead.
+
+    Returns 410 Gone so any old client tooling or scripts get a clear signal to
+    migrate. The new canonical endpoint accepts {emails, venue_ids, message?}
+    and supports multi-venue invitations with token-based signup tracking,
+    bounce capture, and the post-signup preferred-status popup.
+    """
+    raise HTTPException(410, "This endpoint was replaced by POST /api/me/invite-artists. See gigsfill-claude-doc.md changelog part 10p.")
+
+
+def _UNUSED_legacy_invite_artists(venue_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
+    """REMOVED — body deleted; kept as a private stub so any python import that
+    referenced the symbol won't ImportError. No callers exist."""
+    raise NotImplementedError("Removed in part 10p — use POST /api/me/invite-artists")
+    # Original body (~170 lines) removed; see git history before part 10p.
 
 
 @app.get("/api/venues/{venue_id}/invitations")
@@ -1196,7 +1080,7 @@ def resend_invitation(venue_id: int, invitation_id: int):
         smtp_port = int(settings.get('platform_smtp_port', '587'))
         
         if smtp_email and smtp_password:
-            msg = MIMEMultipart()
+            msg = MIMEMultipart('alternative')
             msg['From'] = smtp_email
             msg['To'] = email
             msg['Subject'] = f"Reminder: {sender_display} invited you to join GigsFill!"
@@ -1402,7 +1286,7 @@ def request_access(request: Request, data: dict):
             smtp_port = int(settings.get('platform_smtp_port', '587'))
             
             if smtp_email and smtp_password:
-                msg = MIMEMultipart()
+                msg = MIMEMultipart('alternative')
                 msg['From'] = smtp_email
                 msg['To'] = owner_email
                 msg['Subject'] = f"Access Request for {entity_name} on GigsFill"

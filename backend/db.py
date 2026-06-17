@@ -39,6 +39,12 @@ if _IS_POSTGRES:
     )
     import logging as _lg
     _lg.getLogger("gigsfill.db").info("✅ Database: PostgreSQL with connection pooling")
+
+    # Audit fix (May 2026 part 10c): translate SQLite-flavored SQL on the
+    # fly for every text() query the ORM issues. The _sqlite_to_pg function
+    # is defined below this engine-creation block; we attach the listener
+    # lazily after class definition (see _attach_pg_translation_listener
+    # at the end of this module).
 else:
     # SQLite: single-writer with WAL mode for concurrent reads
     engine = create_engine(
@@ -96,10 +102,126 @@ def get_db_connection():
         return conn
 
 
+def _sqlite_to_pg(sql: str) -> str:
+    """Translate SQLite-flavored SQL to PostgreSQL.
+
+    Audit fix (May 2026 part 10c): the codebase has ~190 SQLite-specific
+    patterns spread across raw `conn.execute(...)` calls AND SQLAlchemy
+    `db.execute(text(...))` calls. Rather than rewriting each one (high
+    risk of breaking SQLite + huge surface area), we translate at the
+    boundary. This function is called from BOTH:
+      - _PgCompatConn._translate() — covers raw-conn callers
+      - sqlalchemy.event.listen 'before_cursor_execute' — covers ORM text() callers
+
+    Pattern coverage (best-effort, not 100% — see the doc string at the
+    bottom of this file for what's NOT translated):
+      * `?` placeholders → `%s`
+      * `INSERT OR IGNORE INTO` → `INSERT INTO ... ON CONFLICT DO NOTHING`
+      * `INSERT OR REPLACE INTO` → flagged (caller must use ON CONFLICT DO UPDATE)
+      * `datetime('now', '-N days|hours|minutes|seconds')` → `(CURRENT_TIMESTAMP - INTERVAL 'N <unit>')`
+      * `datetime('now', '+N days|hours|...')` → `(CURRENT_TIMESTAMP + INTERVAL '...')`
+      * `datetime('now')` → `CURRENT_TIMESTAMP`
+      * `date('now')` → `CURRENT_DATE`
+      * `date('now', '+N days')` → `(CURRENT_DATE + INTERVAL 'N days')`
+      * `julianday(a) - julianday(b)` → `EXTRACT(EPOCH FROM (a::timestamp - b::timestamp))/86400.0`
+      * `last_insert_rowid()` → `lastval()`
+      * `strftime('%Y', x)` → `to_char(x::timestamp, 'YYYY')`
+      * `strftime('%Y-%m', x)` → `to_char(x::timestamp, 'YYYY-MM')`
+      * `strftime('%Y-%m-%d', x)` → `to_char(x::timestamp, 'YYYY-MM-DD')`
+      * `INTEGER PRIMARY KEY AUTOINCREMENT` → `SERIAL PRIMARY KEY`
+
+    Patterns NOT translated (run a manual audit if migrating):
+      * `INSERT OR REPLACE` (requires column-list awareness)
+      * Complex `strftime` formats outside the ones above
+      * `PRAGMA` statements (no-ops on PG; setup code already branches)
+      * SQLite-specific `||` string-concat patterns work natively on PG — no-op
+      * `JSON_*` functions (not used in this codebase)
+    """
+    if not sql:
+        return sql
+    import re as _re
+    s = sql
+    # Placeholder translation
+    s = s.replace("?", "%s")
+    # INTEGER PRIMARY KEY AUTOINCREMENT (mainly in CREATE TABLE)
+    s = _re.sub(
+        r'\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b',
+        'SERIAL PRIMARY KEY', s, flags=_re.IGNORECASE
+    )
+    # INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING (append at end before any RETURNING)
+    if _re.search(r'\bINSERT\s+OR\s+IGNORE\b', s, _re.IGNORECASE):
+        s = _re.sub(r'\bINSERT\s+OR\s+IGNORE\b', 'INSERT', s, flags=_re.IGNORECASE)
+        # Append ON CONFLICT DO NOTHING before the terminator (handles trailing ; or RETURNING)
+        if not _re.search(r'\bON\s+CONFLICT\b', s, _re.IGNORECASE):
+            # Insert before optional trailing semicolon
+            s = s.rstrip(' ;\n\r\t')
+            s = s + " ON CONFLICT DO NOTHING"
+    # INSERT OR REPLACE: too complex to autotranslate (needs column list).
+    # Log a warning so admin can find the call site during migration.
+    if _re.search(r'\bINSERT\s+OR\s+REPLACE\b', s, _re.IGNORECASE):
+        # Strip the SQLite-only keyword so PG at least parses; the semantic
+        # is wrong (will fail on conflict) but the error will be loud.
+        s = _re.sub(r'\bINSERT\s+OR\s+REPLACE\b', 'INSERT', s, flags=_re.IGNORECASE)
+        import logging as _l
+        _l.getLogger('gigsfill.db').warning(
+            "SQL contains INSERT OR REPLACE which needs manual ON CONFLICT DO UPDATE for PG: %s",
+            sql[:200]
+        )
+    # date/datetime arithmetic
+    # datetime('now', '-N <unit>') / datetime('now', '+N <unit>')
+    def _dt_interval(m):
+        sign, n, unit = m.group(1), m.group(2), m.group(3).lower()
+        # Normalize unit
+        unit_map = {'day': 'days', 'days': 'days', 'hour': 'hours', 'hours': 'hours',
+                    'minute': 'minutes', 'minutes': 'minutes',
+                    'second': 'seconds', 'seconds': 'seconds',
+                    'month': 'months', 'months': 'months', 'year': 'years', 'years': 'years'}
+        unit = unit_map.get(unit, unit)
+        return f"(CURRENT_TIMESTAMP {sign} INTERVAL '{n} {unit}')"
+    s = _re.sub(
+        r"datetime\(\s*'now'\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+        _dt_interval, s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(
+        r"date\(\s*'now'\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+        lambda m: f"(CURRENT_DATE {m.group(1)} INTERVAL '{m.group(2)} {m.group(3)}')",
+        s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(r"datetime\(\s*'now'\s*\)", 'CURRENT_TIMESTAMP', s, flags=_re.IGNORECASE)
+    s = _re.sub(r"date\(\s*'now'\s*\)", 'CURRENT_DATE', s, flags=_re.IGNORECASE)
+    # julianday subtraction. Special-case 'now' since the inner-arg rewrite
+    # needs to apply before the subtraction pattern matches.
+    s = _re.sub(
+        r"julianday\(\s*'now'\s*\)",
+        "julianday(CURRENT_TIMESTAMP)", s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(
+        r"julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)",
+        r"EXTRACT(EPOCH FROM ((\1)::timestamp - (\2)::timestamp))/86400.0",
+        s, flags=_re.IGNORECASE
+    )
+    # last_insert_rowid()
+    s = _re.sub(r'\blast_insert_rowid\(\s*\)', 'lastval()', s, flags=_re.IGNORECASE)
+    # strftime('%Y', x), strftime('%Y-%m', x), strftime('%Y-%m-%d', x)
+    s = _re.sub(
+        r"strftime\(\s*'%Y'\s*,\s*([^)]+)\)",
+        r"to_char((\1)::timestamp, 'YYYY')", s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(
+        r"strftime\(\s*'%Y-%m'\s*,\s*([^)]+)\)",
+        r"to_char((\1)::timestamp, 'YYYY-MM')", s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(
+        r"strftime\(\s*'%Y-%m-%d'\s*,\s*([^)]+)\)",
+        r"to_char((\1)::timestamp, 'YYYY-MM-DD')", s, flags=_re.IGNORECASE
+    )
+    return s
+
+
 class _PgCompatConn:
     """
-    Thin wrapper around psycopg2 connection that translates sqlite3-style ? 
-    placeholders to PostgreSQL %s — lets all existing raw-SQL callers work 
+    Thin wrapper around psycopg2 connection that translates sqlite3-style ?
+    placeholders to PostgreSQL %s — lets all existing raw-SQL callers work
     unchanged when we switch DATABASE_URL to postgresql://.
     """
     def __init__(self, conn):
@@ -108,8 +230,8 @@ class _PgCompatConn:
 
     @staticmethod
     def _translate(sql):
-        """Replace ? with %s for PostgreSQL."""
-        return sql.replace("?", "%s")
+        """Translate SQLite → PG using the central rewriter."""
+        return _sqlite_to_pg(sql)
 
     def execute(self, sql, params=None):
         cur = self._conn.cursor()
@@ -140,16 +262,16 @@ class _PgCompatConn:
 
 
 class _PgCompatCursor:
-    """Wraps psycopg2 cursor to translate ? -> %s placeholders."""
+    """Wraps psycopg2 cursor to translate SQLite SQL → PostgreSQL."""
     def __init__(self, cur):
         self._cur = cur
 
     def execute(self, sql, params=None):
-        self._cur.execute(sql.replace("?", "%s"), params or ())
+        self._cur.execute(_sqlite_to_pg(sql), params or ())
         return self
 
     def executemany(self, sql, seq):
-        self._cur.executemany(sql.replace("?", "%s"), seq)
+        self._cur.executemany(_sqlite_to_pg(sql), seq)
 
     def fetchone(self):
         return self._cur.fetchone()
@@ -183,11 +305,9 @@ def _setup_conn():
 
 
 def _setup_placeholder(sql):
-    """Translate ? -> %s for PostgreSQL DDL/DML in setup routines."""
+    """Translate SQLite SQL → PostgreSQL for setup-time DDL/DML."""
     if _IS_POSTGRES:
-        return sql.replace("?", "%s").replace(
-            "INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY"
-        ).replace(
+        return _sqlite_to_pg(sql).replace(
             "INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY"
         )
     return sql
@@ -218,7 +338,26 @@ def setup_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
+    # Audit fix (May 2026 part 6): declare columns here so Postgres deploys
+    # have them at startup. Previously these were added lazily via SQLite-only
+    # PRAGMA paths inside auth.py / me.py which silently no-op on Postgres,
+    # so email-change, verify-email, signup-collision throttle, and
+    # delete-preview all 500'd on PG.
+    _add_columns(cursor, "users", [
+        "email_verified INTEGER DEFAULT 0",
+        "signup_collision_last_at TIMESTAMP",
+        # iCal calendar feed token — random UUID. Surfaced via
+        # /api/calendar/{token}.ics so users can subscribe in Google
+        # Calendar / Apple Calendar / Outlook without needing auth on
+        # every fetch (the token IS the auth).
+        "calendar_token TEXT",
+        # SMS opt-in. Users with a phone + carrier can elect to receive
+        # urgent (1-week, 36-hour, cancellation) notifications via SMS
+        # in addition to email. Sent via the carrier's email-to-SMS
+        # gateway — no Twilio account required.
+        "sms_notifications_enabled INTEGER DEFAULT 0",
+    ])
+
     # ==========================================
     # ARTISTS
     # ==========================================
@@ -262,6 +401,11 @@ def setup_database():
         "styles VARCHAR",
         "avg_rating REAL DEFAULT NULL",
         "review_count INTEGER DEFAULT 0",
+        # Comma-separated list of brand keys in the order the user wants them
+        # displayed on the public profile's Social Media tab. NULL means use
+        # the natural fallback order from artist-profile.html. Example:
+        # "instagram,spotify,website,facebook,youtube,twitter,tiktok"
+        "social_order TEXT",
     ])
     
     # ==========================================
@@ -340,6 +484,9 @@ def setup_database():
         "yelp_url TEXT",
         "google_maps_url TEXT",
         "display_order INTEGER DEFAULT 0",
+        # Comma-separated brand keys for the order of social tiles on the
+        # public venue profile. NULL = fallback to natural order.
+        "social_order TEXT",
     ])
     
     # ==========================================
@@ -396,6 +543,14 @@ def setup_database():
     ])
 
     # Add PRO certification columns to venues
+    # Venue rating aggregates — mirror artists.avg_rating /
+    # artists.review_count. Maintained by the bidirectional-review
+    # writer in routes/reviews.py whenever an artist submits a venue
+    # review (POST /api/artists/{id}/venues/{vid}/review).
+    _add_columns(cursor, "venues", [
+        "avg_rating REAL DEFAULT NULL",
+        "review_count INTEGER DEFAULT 0",
+    ])
     _add_columns(cursor, "venues", [
         "pro_certified INTEGER DEFAULT 0",
         "pro_certified_at TIMESTAMP",
@@ -440,6 +595,28 @@ def setup_database():
         "artist_type VARCHAR",
         "band_formats VARCHAR",
         "styles VARCHAR",
+    ])
+    # ── Door deal / split-pay (Jun 2026) ─────────────────────────────────
+    # `pay` on a slot is the venue-promised guarantee. For door deals,
+    # the venue may also commit a percentage of door receipts on top of
+    # (or in lieu of) the guarantee. After the show the venue files
+    # door_receipts_cents via POST /api/gigs/{id}/slots/{sid}/settle;
+    # backend computes final_pay = guarantee + (receipts * door_pct/100)
+    # and updates the existing payout transaction.
+    #   deal_type: 'flat' (default — only `pay` matters) | 'door'
+    #              (compute settled_pay from inputs below)
+    #   door_pct: int 0-100 — share of receipts paid to the artist
+    #   guarantee_cents: floor pay regardless of receipts (can be 0)
+    #   door_receipts_cents: total door collected (entered post-show)
+    #   settled_pay_cents: the computed final pay (set on settle)
+    #   settled_at: timestamp of settlement
+    _add_columns(cursor, "gig_slots", [
+        "deal_type VARCHAR DEFAULT 'flat'",
+        "door_pct INTEGER DEFAULT 0",
+        "guarantee_cents INTEGER DEFAULT 0",
+        "door_receipts_cents INTEGER",
+        "settled_pay_cents INTEGER",
+        "settled_at TIMESTAMP",
     ])
     
     # ==========================================
@@ -548,6 +725,10 @@ def setup_database():
             file_path VARCHAR,
             video_url VARCHAR,
             display_order INTEGER DEFAULT 0,
+            -- Per-item caption / notes (audio rows on artist-edit show this above
+            -- the audio player). Title is short (max ~65 chars); caption is for
+            -- longer context / description.
+            caption TEXT,
             FOREIGN KEY (artist_id) REFERENCES artists(id)
         )
     """)
@@ -564,6 +745,9 @@ def setup_database():
             file_path VARCHAR,
             video_url VARCHAR,
             display_order INTEGER DEFAULT 0,
+            -- Mirror of artist_media.caption; symmetrical because the same
+            -- /api/media/{id} PUT updates either table by id.
+            caption TEXT,
             FOREIGN KEY (venue_id) REFERENCES venues(id)
         )
     """)
@@ -657,6 +841,58 @@ def setup_database():
         )
     """)
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vanity_entity ON vanity_urls(entity_type, entity_id)")
+
+    # Vanity slug redirect log (May 2026 part 10): when a user renames their
+    # vanity URL, the OLD slug is kept here as a redirect record for 90 days
+    # so previously-shared links still work, AND so the slug can't be
+    # immediately re-claimed by someone else (reputation-hijack defense).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS vanity_url_redirects (
+            old_slug      TEXT PRIMARY KEY,
+            new_slug      TEXT NOT NULL,
+            entity_type   TEXT NOT NULL,
+            entity_id     INTEGER NOT NULL,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            expires_at    DATETIME NOT NULL,
+            -- After expires_at + a cooldown (default 30d), the slug is fully
+            -- released and can be claimed by anyone.
+            reclaim_after DATETIME NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_vanity_redirects_new_slug ON vanity_url_redirects(new_slug)")
+
+    # Venue private notes per (venue, gig, artist) — May 2026 part 10i.
+    # Powers the My Artists → Past Gigs modal's editable Notes column. These
+    # are the VENUE's private notes about a specific past gig with an artist
+    # (e.g. "great crowd response", "showed up late"), distinct from the
+    # public gigs.notes field.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS venue_gig_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            venue_id  INTEGER NOT NULL,
+            gig_id    INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
+            notes     TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(venue_id, gig_id, artist_id)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_venue_gig_notes ON venue_gig_notes(venue_id, artist_id)")
+
+    # Artist private notes per (artist, gig, venue) — May 2026 part 10j.
+    # Mirror of venue_gig_notes for the artist-side My Venues → Past Gigs modal.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS artist_gig_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_id INTEGER NOT NULL,
+            gig_id    INTEGER NOT NULL,
+            venue_id  INTEGER NOT NULL,
+            notes     TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(artist_id, gig_id, venue_id)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_artist_gig_notes ON artist_gig_notes(artist_id, venue_id)")
 
     # ==========================================
     # NOTIFICATIONS
@@ -999,8 +1235,31 @@ def setup_database():
         ("admin_zelle_email", "", "Zelle email"),
         ("admin_zelle_phone", "", "Zelle phone"),
         ("admin_cashapp_cashtag", "", "Cash App $cashtag"),
+        ("far_booking_alert_miles", "50", "Distance (mi) beyond which a booking flags a far-away-artist alert to the venue + soft notice to the artist"),
+        # Rate limits — integer "requests per minute" per source IP. Read live by
+        # backend/rate_limiter.py via callable getters; admin can edit from
+        # Platform Settings UI without a restart. Keep in sync with rate_limiter.py:_DEFAULTS.
+        ("rate_login",          "5",  "Login attempts per minute per IP"),
+        ("rate_signup",         "3",  "Account creations per minute per IP"),
+        ("rate_password_reset", "3",  "Password reset requests per minute per IP"),
+        ("rate_support",        "2",  "Support tickets per minute per IP"),
+        ("rate_email_send",     "10", "Email-sending actions (invites, messages, recommendations) per minute per IP"),
+        ("rate_aff_track",      "30", "Affiliate click tracking pings per minute per IP"),
+        # Part 10p (Phase 3): async bounce detection via IMAP polling of the
+        # platform email inbox. When enabled, the scheduler reads UNSEEN DSN
+        # messages every 30 minutes, parses the failed recipient, and marks
+        # any matching artist_invitations row status='bounced' with the SMTP
+        # diagnostic in bounce_reason. Off by default — admin must explicitly
+        # configure IMAP server + opt in.
+        ("bounce_check_enabled",       "false", "Enable async bounce polling via IMAP (off by default)"),
+        ("bounce_check_imap_server",   "",      "IMAP server hostname for bounce inbox (e.g. imap.gmail.com)"),
+        ("bounce_check_imap_port",     "993",   "IMAP SSL port (typically 993)"),
+        ("bounce_check_imap_username", "",      "IMAP username (defaults to platform_email if blank)"),
+        ("bounce_check_imap_password", "",      "IMAP password / app password (defaults to platform_email_password if blank)"),
+        ("bounce_check_last_run_at",   "",      "Timestamp the scheduler last polled the bounce inbox (set by scheduler)"),
+        ("bounce_check_last_result",   "",      "Summary of last poll: '<scanned> scanned, <bounced> bounced' or error reason"),
     ]
-    
+
     for setting_key, setting_value, description in default_settings:
         try:
             cursor.execute(
@@ -1145,17 +1404,47 @@ def setup_database():
             invited_by_user_id INTEGER NOT NULL,
             inviter_name TEXT,
             message TEXT,
+            -- Status state machine:
+            --   pending          → email sent, no action yet
+            --   bounced          → SMTP returned 5xx (write bounce_reason)
+            --   signed_up        → invitee created a GigsFill account via the token link
+            --   preferred_requested → invitee requested preferred status after signup
+            --   preferred_approved  → venue approved their preferred request
+            --   preferred_denied    → venue denied
+            --   declined         → invitee clicked the decline link in the email
+            --   expired          → token_expires_at passed
             status TEXT DEFAULT 'pending',
             sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             signed_up_at TIMESTAMP,
             signed_up_user_id INTEGER,
             resent_count INTEGER DEFAULT 0,
             last_resent_at TIMESTAMP,
+            -- Part 10p: token-based multi-venue invite tracking. One click in the
+            -- modal writes N×M rows (N emails × M venues); all rows for one
+            -- (email, click) share the same token AND invite_group_id. The token
+            -- consumes once (any signup or accept-preferred via that token
+            -- updates all sibling rows together). invite_group_id is also kept
+            -- on rows where the email was already a GigsFill user — even though
+            -- there's no signup link to click, the popup flow still uses it to
+            -- group "which venues did Janelle invite Jenny for".
+            token TEXT,
+            token_expires_at TIMESTAMP,
+            invite_group_id TEXT,
+            bounce_reason TEXT,
+            declined_at TIMESTAMP,
+            preferred_requested_at TIMESTAMP,
             FOREIGN KEY (venue_id) REFERENCES venues(id),
             FOREIGN KEY (invited_by_user_id) REFERENCES users(id)
         )
     """)
-    
+    # Part 10p audit fix: indexes for the token-based lookups + per-email queries.
+    # The live DB was migrated via ALTER+CREATE INDEX; fresh installs need these
+    # at table-creation time. Without them, by-token lookups and the 24h dedup
+    # check degrade to full table scans as the table grows.
+    c2.execute("CREATE INDEX IF NOT EXISTS idx_artist_invitations_token ON artist_invitations(token)")
+    c2.execute("CREATE INDEX IF NOT EXISTS idx_artist_invitations_invite_group ON artist_invitations(invite_group_id)")
+    c2.execute("CREATE INDEX IF NOT EXISTS idx_artist_invitations_email ON artist_invitations(LOWER(invited_email))")
+
     conn2.commit()
     conn2.close()
     
@@ -1289,12 +1578,20 @@ def setup_database():
     # calendar turning all gigs amber. Clear the token from any open gig that was NOT
     # explicitly blasted via the radius_blast process (i.e. last_notification_key is NOT
     # 'radius_blast' or 'cancelled_blast').
+    # Audit fix (May 2026 part 10g): ALSO clear frequency_exempt in the same
+    # sweep. frequency_exempt=1 is only ever set together with radius_blast_token
+    # (see gigs.py:5496/5954/6045). The earlier version of this cleanup nulled
+    # the token but left frequency_exempt=1 — an impossible state that made the
+    # gig modal treat the gig as bookable by non-preferred artists (the modal's
+    # not_preferred check was gated on `not gig_freq_exempt`). Keep the two
+    # columns consistent: no token → no exemption.
     try:
         c3.execute("""
             UPDATE gigs
-            SET radius_blast_token = NULL
+            SET radius_blast_token = NULL,
+                frequency_exempt = 0
             WHERE status = 'open'
-              AND radius_blast_token IS NOT NULL
+              AND (radius_blast_token IS NOT NULL OR COALESCE(frequency_exempt, 0) = 1)
               AND id NOT IN (
                   SELECT gig_id FROM gig_email_log
                   WHERE notification_key IN ('radius_blast', 'cancelled_blast')
@@ -1303,13 +1600,44 @@ def setup_database():
         cleared = c3.rowcount
         if cleared:
             import logging as _log
-            _log.getLogger("gigsfill.db").info(f"DB fix: cleared radius_blast_token from {cleared} non-blast open gigs")
+            _log.getLogger("gigsfill.db").info(f"DB fix: cleared radius_blast_token + frequency_exempt from {cleared} non-blast open gigs")
     except Exception as _e:
         pass
     c3.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id)")
     c3.execute("CREATE INDEX IF NOT EXISTS idx_w9_forms_entity ON w9_forms(entity_type, entity_id)")
     c3.execute("CREATE INDEX IF NOT EXISTS idx_tax_1099s_venue_year ON tax_1099s(venue_id, tax_year)")
     c3.execute("CREATE INDEX IF NOT EXISTS idx_tax_1099s_artist_year ON tax_1099s(artist_id, tax_year)")
+
+    # Affiliate 1099s — separate table because the issuer is the platform
+    # (not a venue), payee is a USER (not an artist), and amounts come from
+    # affiliate_payouts.status='paid' rather than transactions. Mirrors the
+    # tax_1099s shape so the same admin "Send 1099" / status-tracking flow
+    # can be reused.
+    # Added: May 2026 part 9c — admin-side affiliate 1099 generator
+    # previously built an in-memory list and returned JSON without persisting
+    # anything; no proof of issuance for IRS audit, no idempotency, no PDF.
+    c3.execute("""
+        CREATE TABLE IF NOT EXISTS affiliate_tax_1099s (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            affiliate_user_id INTEGER NOT NULL,
+            tax_year INTEGER NOT NULL,
+            total_earnings_cents INTEGER NOT NULL DEFAULT 0,
+            payout_count INTEGER DEFAULT 0,
+            recipient_name TEXT,
+            recipient_tin_last4 TEXT,
+            recipient_address TEXT,
+            payer_name TEXT,
+            payer_tin_last4 TEXT,
+            payer_address TEXT,
+            status TEXT DEFAULT 'generated',
+            sent_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(affiliate_user_id, tax_year),
+            FOREIGN KEY (affiliate_user_id) REFERENCES users(id)
+        )
+    """)
+    c3.execute("CREATE INDEX IF NOT EXISTS idx_aff_1099s_year ON affiliate_tax_1099s(tax_year)")
+    c3.execute("CREATE INDEX IF NOT EXISTS idx_aff_1099s_user ON affiliate_tax_1099s(affiliate_user_id, tax_year)")
     c3.execute("CREATE INDEX IF NOT EXISTS idx_pro_licenses_venue ON pro_licenses(venue_id)")
     
     conn3.commit()
@@ -1416,6 +1744,30 @@ def setup_database():
         )
     """)
 
+    # ==========================================
+    # GIG TEMPLATES — Reusable slot config per venue.
+    # ==========================================
+    # Venues often program the same shape every week (Friday: 7-9pm Live
+    # Band, 9pm-12am DJ). A template stores the slot definitions as JSON
+    # so the venue can apply it to any new gig with one click. Field is
+    # opaque to the backend — the FE serializes the same shape it sends
+    # into POST /api/venues/{id}/gigs (start_time/end_time/pay/
+    # artist_type/band_formats/styles per slot).
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS gig_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            venue_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            slots_json TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            created_by_user_id INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (venue_id) REFERENCES venues(id)
+        )
+    """)
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_gig_templates_venue ON gig_templates(venue_id)")
+
     c4.execute("""
         CREATE TABLE IF NOT EXISTS gig_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1519,6 +1871,25 @@ def setup_database():
         "offer_token TEXT",
         "offer_declined INTEGER DEFAULT 0",
     ])
+
+    # gig_cancelled_artists (May 2026 part 9):
+    # Track every artist who has cancelled a slot on a gig, so the blast
+    # filter can exclude ALL of them — not just the most recent. The legacy
+    # `gigs.last_cancelled_artist_id` single-int column overwrites itself on
+    # successive cancellations and silently re-includes earlier cancellers
+    # in blasts (multi-slot gigs hit this constantly).
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS gig_cancelled_artists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gig_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
+            cancelled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(gig_id, artist_id),
+            FOREIGN KEY (gig_id) REFERENCES gigs(id) ON DELETE CASCADE,
+            FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE
+        )
+    """)
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_cancelled_artists_gig ON gig_cancelled_artists(gig_id)")
 
     # waitlist_offered: persists token after artist is removed from gig_waitlist
     # so respond_to_offer still works after the row is deleted
@@ -1670,6 +2041,10 @@ def setup_database():
     # Ensure recipient_name column exists in existing DBs
     _add_columns(c_aff, "affiliate_recommend_emails", [
         "recipient_name TEXT",
+        # Audit fix (May 2026 part 9c): cap resends per recipient row
+        # so an affiliate can't spam the same person every 6 seconds.
+        "resend_count INTEGER DEFAULT 0",
+        "last_resent_at DATETIME",
     ])
     _add_columns(c_aff, "entity_payment_settings", [
         "affiliate_stripe_connect_account_id TEXT",
@@ -1684,6 +2059,7 @@ def setup_database():
         ("affiliate_min_payout_cents",      "5000",  "Minimum quarterly payout threshold (cents)"),
         ("affiliate_1099_threshold_cents",  "60000", "Annual earnings threshold for 1099 (cents)"),
         ("affiliate_enabled",               "true",  "Enable affiliate program"),
+        ("affiliate_daily_send_cap",        "50",    "Max recommend-emails per affiliate per 24h (0=unlimited)"),
     ]
     for key, val, desc in aff_defaults:
         try:
@@ -1697,13 +2073,57 @@ def setup_database():
     conn_aff.commit()
     conn_aff.close()
 
+    # ==========================================
+    # AUDIT FIX (May 2026 part 6): Idempotency / per-artist approval tables
+    # These were created lazily by their callers (gigs.py:_ensure_approval_columns,
+    # stripe_connect.py:stripe_webhook); both used SQLite-only PRAGMA
+    # introspection that silently failed on Postgres. Declaring here so the
+    # tables exist at process start regardless of which codepath runs first.
+    # ==========================================
+    conn_idem = get_db_connection()
+    c_idem = conn_idem.cursor()
+    try:
+        c_idem.execute("""
+            CREATE TABLE IF NOT EXISTS pending_approval_tokens (
+                token TEXT PRIMARY KEY,
+                gig_id INTEGER NOT NULL,
+                artist_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        c_idem.execute("CREATE INDEX IF NOT EXISTS idx_pending_approval_gig_artist ON pending_approval_tokens(gig_id, artist_id)")
+        c_idem.execute("""
+            CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT,
+                received_at TEXT
+            )
+        """)
+        conn_idem.commit()
+    finally:
+        conn_idem.close()
+
 def _add_columns(cursor, table, columns):
-    """Add columns if they don't exist (ignores duplicate column name)"""
+    """Add columns if they don't exist (ignores duplicate column name).
+
+    Audit fix (May 2026 part 7): catch a broader Exception so Postgres
+    `psycopg2.errors.DuplicateColumn` ALSO gets swallowed. Previously only
+    `sqlite3.OperationalError` was caught — on PG, every restart after the
+    columns existed crashed `setup_database()` and the service refused to
+    start. Also issue a rollback after the failed ALTER so the surrounding
+    connection isn't left in an aborted-transaction state.
+    """
     for col in columns:
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
+        except Exception:
+            # Column already exists OR ALTER not supported in this context.
+            # Roll back the cursor's transaction (PG poisons subsequent
+            # statements until rollback after a failed DDL).
+            try:
+                cursor.connection.rollback()
+            except Exception:
+                pass
 
 def _populate_email_templates(db_path):
     """Populate email templates - upsert to add any missing templates"""
@@ -1733,6 +2153,80 @@ def _populate_email_templates(db_path):
         pass
     finally:
         conn.close()
+
+# Audit fix (May 2026 part 10c): SQLAlchemy event listener that translates
+# every text() query from SQLite syntax to PostgreSQL syntax when running
+# on PG. Attached AFTER all helper definitions to avoid forward-ref issues.
+# No-op on SQLite (the function is never registered).
+if _IS_POSTGRES:
+    @event.listens_for(engine, "before_cursor_execute")
+    def _pg_translate_text_sql(conn_ev, cursor, statement, parameters, context, executemany):
+        # SQLAlchemy already converts our `?` to `%s` for psycopg2 because we
+        # built the engine from a postgresql:// URL; what we need to add are
+        # the SQLite-specific function patterns (datetime(), strftime(),
+        # julianday(), last_insert_rowid(), INSERT OR IGNORE).
+        # Avoid double-translating `?` (SQLAlchemy already did it) by only
+        # rewriting the function patterns.
+        new_statement = _sqlite_to_pg_funcs_only(statement)
+        return new_statement, parameters
+
+    def _sqlite_to_pg_funcs_only(sql: str) -> str:
+        """Same as _sqlite_to_pg but skips the `?` → `%s` step since
+        SQLAlchemy handled that for ORM-issued queries already."""
+        if not sql:
+            return sql
+        import re as _re
+        s = sql
+        s = _re.sub(
+            r'\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b',
+            'SERIAL PRIMARY KEY', s, flags=_re.IGNORECASE
+        )
+        if _re.search(r'\bINSERT\s+OR\s+IGNORE\b', s, _re.IGNORECASE):
+            s = _re.sub(r'\bINSERT\s+OR\s+IGNORE\b', 'INSERT', s, flags=_re.IGNORECASE)
+            if not _re.search(r'\bON\s+CONFLICT\b', s, _re.IGNORECASE):
+                s = s.rstrip(' ;\n\r\t') + " ON CONFLICT DO NOTHING"
+        if _re.search(r'\bINSERT\s+OR\s+REPLACE\b', s, _re.IGNORECASE):
+            s = _re.sub(r'\bINSERT\s+OR\s+REPLACE\b', 'INSERT', s, flags=_re.IGNORECASE)
+        def _dt_interval(m):
+            sign, n, unit = m.group(1), m.group(2), m.group(3).lower()
+            unit_map = {'day': 'days', 'days': 'days', 'hour': 'hours', 'hours': 'hours',
+                        'minute': 'minutes', 'minutes': 'minutes',
+                        'second': 'seconds', 'seconds': 'seconds',
+                        'month': 'months', 'months': 'months',
+                        'year': 'years', 'years': 'years'}
+            unit = unit_map.get(unit, unit)
+            return f"(CURRENT_TIMESTAMP {sign} INTERVAL '{n} {unit}')"
+        s = _re.sub(
+            r"datetime\(\s*'now'\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+            _dt_interval, s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(
+            r"date\(\s*'now'\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+            lambda m: f"(CURRENT_DATE {m.group(1)} INTERVAL '{m.group(2)} {m.group(3)}')",
+            s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(r"datetime\(\s*'now'\s*\)", 'CURRENT_TIMESTAMP', s, flags=_re.IGNORECASE)
+        s = _re.sub(r"date\(\s*'now'\s*\)", 'CURRENT_DATE', s, flags=_re.IGNORECASE)
+        s = _re.sub(
+            r"julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)",
+            r"EXTRACT(EPOCH FROM ((\1)::timestamp - (\2)::timestamp))/86400.0",
+            s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(r'\blast_insert_rowid\(\s*\)', 'lastval()', s, flags=_re.IGNORECASE)
+        s = _re.sub(
+            r"strftime\(\s*'%Y'\s*,\s*([^)]+)\)",
+            r"to_char((\1)::timestamp, 'YYYY')", s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(
+            r"strftime\(\s*'%Y-%m'\s*,\s*([^)]+)\)",
+            r"to_char((\1)::timestamp, 'YYYY-MM')", s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(
+            r"strftime\(\s*'%Y-%m-%d'\s*,\s*([^)]+)\)",
+            r"to_char((\1)::timestamp, 'YYYY-MM-DD')", s, flags=_re.IGNORECASE
+        )
+        return s
+
 
 # Run setup if this module is executed directly
 if __name__ == "__main__":

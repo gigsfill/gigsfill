@@ -363,6 +363,230 @@ def admin_list_reviews(page: int = 1, limit: int = 50,
     return {"reviews": [dict(r) for r in reviews], "total": total}
 
 
+# =============================================================================
+# BIDIRECTIONAL REVIEWS — Artists reviewing Venues
+#
+# Mirrors the artist_reviews shape (gig-pinned or general) but writes to
+# venue_reviews. Surfaced on the venue public profile and used to compute
+# a venues.avg_rating + venues.review_count aggregate, matching how
+# artists.avg_rating works. Schema lives in db.py:1703.
+# =============================================================================
+
+def _recompute_venue_rating(db, venue_id):
+    """After any venue_reviews write, refresh the venue's aggregate."""
+    try:
+        avg = db.execute(
+            text("SELECT ROUND(AVG(rating),1) as avg, COUNT(*) as cnt "
+                 "FROM venue_reviews WHERE venue_id = :vid AND is_visible = 1"),
+            {"vid": venue_id}
+        ).mappings().first()
+        if avg:
+            db.execute(
+                text("UPDATE venues SET avg_rating = :avg, review_count = :cnt WHERE id = :vid"),
+                {"avg": avg["avg"], "cnt": avg["cnt"], "vid": venue_id}
+            )
+            db.commit()
+    except Exception as e:
+        logger.warning(f"Venue rating recompute failed for venue {venue_id}: {e}")
+
+
+@router.post("/api/artists/{artist_id}/gigs/{gig_id}/review")
+def submit_venue_review_for_gig(artist_id: int, gig_id: int, data: dict,
+                                 user=Depends(get_current_user), db=Depends(get_db)):
+    """Artist submits a review of the venue for a specific past gig."""
+    check_artist_access(db, artist_id, user.id)
+
+    rating = data.get("rating")
+    review_text = str(data.get("review_text", "")).strip()[:2000]
+    if not isinstance(rating, int) or rating < 1 or rating > 5:
+        raise HTTPException(400, "Rating must be between 1 and 5")
+
+    # Verify gig exists and this artist was booked on it.
+    gig = db.execute(
+        text("""
+            SELECT g.id, g.venue_id
+            FROM gigs g
+            WHERE g.id = :gid
+              AND (g.artist_id = :aid
+                   OR EXISTS (SELECT 1 FROM gig_slots gs
+                              WHERE gs.gig_id = g.id AND gs.artist_id = :aid))
+        """),
+        {"gid": gig_id, "aid": artist_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found or you weren't booked on it")
+    venue_id = gig["venue_id"]
+
+    try:
+        db.rollback()
+        # One review per (gig, venue, artist) — UNIQUE constraint enforces;
+        # do an upsert so artists can update their own review.
+        db.execute(
+            text("DELETE FROM venue_reviews WHERE gig_id = :gid AND venue_id = :vid AND artist_id = :aid"),
+            {"gid": gig_id, "vid": venue_id, "aid": artist_id}
+        )
+        db.execute(
+            text("""
+                INSERT INTO venue_reviews (gig_id, venue_id, artist_id, reviewer_user_id, rating, review_text)
+                VALUES (:gid, :vid, :aid, :uid, :rating, :text)
+            """),
+            {"gid": gig_id, "vid": venue_id, "aid": artist_id, "uid": user.id,
+             "rating": rating, "text": review_text}
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Venue review submit error: {type(e).__name__}: {e}")
+        raise HTTPException(500, f"Failed to save review: {type(e).__name__}")
+
+    _recompute_venue_rating(db, venue_id)
+    return {"ok": True, "message": "Review submitted"}
+
+
+@router.post("/api/artists/{artist_id}/venues/{venue_id}/review")
+def submit_venue_review_general(artist_id: int, venue_id: int, data: dict,
+                                 user=Depends(get_current_user), db=Depends(get_db)):
+    """Artist submits a general (not gig-tied) venue review."""
+    check_artist_access(db, artist_id, user.id)
+
+    rating = data.get("rating")
+    review_text = str(data.get("review_text", "")).strip()[:2000]
+    if not isinstance(rating, int) or rating < 1 or rating > 5:
+        raise HTTPException(400, "Rating must be between 1 and 5")
+
+    venue = db.execute(text("SELECT id FROM venues WHERE id = :vid"),
+                       {"vid": venue_id}).mappings().first()
+    if not venue:
+        raise HTTPException(404, "Venue not found")
+
+    try:
+        db.rollback()
+        db.execute(
+            text("DELETE FROM venue_reviews WHERE gig_id IS NULL AND venue_id = :vid AND artist_id = :aid"),
+            {"vid": venue_id, "aid": artist_id}
+        )
+        db.execute(
+            text("""
+                INSERT INTO venue_reviews (gig_id, venue_id, artist_id, reviewer_user_id, rating, review_text)
+                VALUES (NULL, :vid, :aid, :uid, :rating, :text)
+            """),
+            {"vid": venue_id, "aid": artist_id, "uid": user.id,
+             "rating": rating, "text": review_text}
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Venue general-review submit error: {type(e).__name__}: {e}")
+        raise HTTPException(500, f"Failed to save review: {type(e).__name__}")
+
+    _recompute_venue_rating(db, venue_id)
+    return {"ok": True, "message": "Review submitted"}
+
+
+@router.get("/api/venues/{venue_id}/reviews")
+def list_venue_reviews(venue_id: int, db=Depends(get_db)):
+    """Public list of visible reviews for a venue."""
+    rows = db.execute(
+        text("""
+            SELECT r.id, r.gig_id, r.rating, r.review_text, r.created_at,
+                   a.name as artist_name, a.id as artist_id
+            FROM venue_reviews r
+            JOIN artists a ON a.id = r.artist_id
+            WHERE r.venue_id = :vid AND r.is_visible = 1
+            ORDER BY r.created_at DESC
+        """),
+        {"vid": venue_id}
+    ).mappings().all()
+    return {"reviews": [dict(r) for r in rows]}
+
+
+@router.get("/api/venues/{venue_id}/reviews/summary")
+def venue_review_summary(venue_id: int, db=Depends(get_db)):
+    """Star-distribution + average + count, for the rating widget."""
+    summary = db.execute(
+        text("""
+            SELECT
+                ROUND(AVG(rating), 1) as avg_rating,
+                COUNT(*) as review_count,
+                SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END) as five_star,
+                SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END) as four_star,
+                SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) as three_star,
+                SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END) as two_star,
+                SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) as one_star
+            FROM venue_reviews
+            WHERE venue_id = :vid AND is_visible = 1
+        """),
+        {"vid": venue_id}
+    ).mappings().first()
+    return dict(summary) if summary else {
+        "avg_rating": None, "review_count": 0,
+        "five_star": 0, "four_star": 0, "three_star": 0,
+        "two_star": 0, "one_star": 0,
+    }
+
+
+@router.get("/api/artists/{artist_id}/venues/{venue_id}/review")
+def get_my_general_venue_review(artist_id: int, venue_id: int,
+                                 user=Depends(get_current_user), db=Depends(get_db)):
+    """Has this artist already left a general (non-gig) review of this
+    venue? Returns the existing rating/text so the FE can pre-fill
+    edit-mode. Used by the venue-rate button on artist-book-gigs."""
+    check_artist_access(db, artist_id, user.id)
+    row = db.execute(
+        text("""SELECT rating, review_text FROM venue_reviews
+                WHERE artist_id = :aid AND venue_id = :vid AND gig_id IS NULL
+                LIMIT 1"""),
+        {"aid": artist_id, "vid": venue_id}
+    ).mappings().first()
+    if not row:
+        return {"reviewed": False}
+    return {"reviewed": True, "rating": row["rating"], "review_text": row["review_text"] or ""}
+
+
+@router.delete("/api/artists/{artist_id}/venues/{venue_id}/review")
+def delete_my_general_venue_review(artist_id: int, venue_id: int,
+                                    user=Depends(get_current_user), db=Depends(get_db)):
+    """Artist removes their own general (non-gig) venue review."""
+    check_artist_access(db, artist_id, user.id)
+    db.execute(
+        text("""DELETE FROM venue_reviews
+                WHERE artist_id = :aid AND venue_id = :vid AND gig_id IS NULL"""),
+        {"aid": artist_id, "vid": venue_id}
+    )
+    db.commit()
+    _recompute_venue_rating(db, venue_id)
+    return {"ok": True}
+
+
+@router.get("/api/artists/{artist_id}/reviews/pending-venues")
+def get_pending_venue_reviews(artist_id: int,
+                              user=Depends(get_current_user), db=Depends(get_db)):
+    """Past gigs the artist hasn't reviewed the venue for yet."""
+    check_artist_access(db, artist_id, user.id)
+    pending = db.execute(
+        text("""
+            SELECT g.id as gig_id, g.title, g.date,
+                   v.id as venue_id, v.venue_name
+            FROM gigs g
+            JOIN venues v ON v.id = g.venue_id
+            WHERE (
+                g.artist_id = :aid
+                OR EXISTS (SELECT 1 FROM gig_slots gs
+                           WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
+              )
+              AND g.status IN ('completed', 'closed')
+              AND NOT EXISTS (
+                SELECT 1 FROM venue_reviews r
+                WHERE r.gig_id = g.id AND r.artist_id = :aid
+              )
+            ORDER BY g.date DESC
+            LIMIT 20
+        """),
+        {"aid": artist_id}
+    ).mappings().all()
+    return {"pending": [dict(p) for p in pending]}
+
+
 # ── ADMIN: TOGGLE REVIEW VISIBILITY ──────────────────────────────────────────
 @router.put("/api/admin/reviews/{review_id}/visibility")
 def toggle_review_visibility(review_id: int, data: dict,

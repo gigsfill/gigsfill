@@ -173,10 +173,51 @@ class EmailService:
 
         return None
     
+    # Audit fix (May 2026 part 5): centralized HTML-escape on template
+    # substitution. Keys that legitimately contain trusted HTML markup
+    # (links, line-break re-introduction, etc.) are listed here as the
+    # explicit allowlist. Everything else — including venue_name,
+    # artist_name, gig notes, cancellation_reason, inviter_name — gets
+    # `html.escape()` before substitution, closing the class of
+    # XSS-shape / layout-breakage bugs that previously let venue or
+    # artist self-set text inject raw HTML into every email.
+    _HTML_SAFE_KEYS = frozenset({
+        # Pre-built HTML the dispatch layer assembles (links, formatted lists).
+        "body",  # Email Center body — pre-sanitized by venue_emails.py
+        "approve_url", "deny_url", "reset_url", "verify_url", "accept_url",
+        "decline_url", "manage_url", "calendar_url", "profile_url",
+        "stripe_url", "support_url",
+        "waitlist_message", "blast_message", "slot_times_html",
+        "open_slots_html", "artist_list_html", "gig_summary_html",
+        "venue_logo_html", "artist_logo_html",
+        # Audit fix (May 2026 part 7): contract-sign dispatch uses `slots_html`
+        # (vs the older `slot_times_html`); without this on the allowlist
+        # render_template HTML-escapes it and recipients see literal markup.
+        "slots_html",
+        # Audit fix (May 2026 part 8): email_dispatch builds `venue_address_link`
+        # as <a href="...">address</a>. ~8 templates use it. Without this on
+        # the allowlist render_template escaped the markup and recipients saw
+        # literal `&lt;a href=...&gt;789 Main St&lt;/a&gt;` text instead of a clickable link.
+        "venue_address_link",
+        # Audit fix (May 2026 part 9d): affiliate "recommend" email builds
+        # personal_note as a pre-wrapped <p style="..."> block AND the
+        # recipient_greeting as a leading ", Name" fragment. Both are
+        # composed in affiliate.py with the inner user-controlled text
+        # already passed through html.escape() — so the outer wrapper must
+        # NOT be re-escaped at template-render time, or recipients see
+        # literal `<p style=...>` markup in their inbox.
+        "personal_note", "recipient_greeting",
+        # Audit fix (May 2026 part 10h): far-away-booking notice blocks built
+        # in email_dispatch.send_booking_emails as pre-styled HTML tables.
+        "far_notice_artist", "far_notice_venue",
+    })
+
     def render_template(self, template: str, variables: Dict[str, str]) -> str:
         """Replace {{variable}} placeholders with actual values.
-        Supports {{#var}}...{{/var}} conditional blocks (rendered only when var is truthy)."""
+        Supports {{#var}}...{{/var}} conditional blocks (rendered only when var is truthy).
+        HTML-escapes every value EXCEPT keys in _HTML_SAFE_KEYS."""
         import re
+        import html as _html
         result = template
         # Process {{#var}}...{{/var}} blocks first
         def _replace_block(m):
@@ -188,7 +229,12 @@ class EmailService:
         # Then replace plain {{variable}} placeholders
         for key, value in variables.items():
             placeholder = f"{{{{{key}}}}}"
-            result = result.replace(placeholder, str(value or ''))
+            raw = str(value or '')
+            if key in self._HTML_SAFE_KEYS:
+                rendered = raw
+            else:
+                rendered = _html.escape(raw, quote=False)
+            result = result.replace(placeholder, rendered)
         return result
     
     def user_has_email_enabled(self, user_id: int, notification_type: str) -> bool:
@@ -213,7 +259,13 @@ class EmailService:
     
     def _alert_admin_smtp_failure(self, failed_to: str, notification_type: str, error: str):
         """Send an alert to admin when SMTP fails — uses a separate direct SMTP call
-        so the alert itself doesn't recurse. Throttled to once per 15 minutes."""
+        so the alert itself doesn't recurse. Throttled to once per 15 minutes.
+
+        Audit fix (May 2026 part 4): also send to the `admin_alert_email`
+        platform setting if configured (an out-of-band address). If the
+        SMTP outage is Gmail-side, the alert to self.smtp_username can
+        never reach the operator — an alternate Inbox is the safety net.
+        """
         import time
         now = time.time()
         # Class-level throttle so we don't spam admin with every failed email
@@ -222,25 +274,50 @@ class EmailService:
             return
         EmailService._last_smtp_alert = now
         try:
-            import smtplib
             from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
             if not self.smtp_username or not self.smtp_password:
                 return
+            recipients = [self.smtp_username]
+            try:
+                from sqlalchemy import text as _t
+                row = self.db.execute(_t(
+                    "SELECT setting_value FROM platform_settings "
+                    "WHERE setting_key = 'admin_alert_email'"
+                )).scalar()
+                if row and row.strip() and row.strip() != self.smtp_username:
+                    recipients.append(row.strip())
+            except Exception:
+                pass
             msg = MIMEMultipart("alternative")
             msg['From'] = self.from_email or self.smtp_username
-            msg['To']   = self.smtp_username  # alert goes to the platform email itself
+            msg['To']   = ", ".join(recipients)
             msg['Subject'] = '⚠️ GigsFill SMTP Failure Alert'
+            # Audit fix (May 2026 part 5): escape the failed-recipient, type and
+            # error text. A maliciously crafted email address (or a downstream
+            # SMTP error containing raw HTML) would otherwise render as live
+            # markup in the admin's inbox.
+            import html as _html
+            _to_esc = _html.escape(failed_to or "")
+            _type_esc = _html.escape(notification_type or "")
+            _err_esc = _html.escape(str(error) if error else "")
             body = f"""<p>An email failed to send on GigsFill.</p>
 <ul>
-  <li><b>To:</b> {failed_to}</li>
-  <li><b>Type:</b> {notification_type}</li>
-  <li><b>Error:</b> {error}</li>
+  <li><b>To:</b> {_to_esc}</li>
+  <li><b>Type:</b> {_type_esc}</li>
+  <li><b>Error:</b> {_err_esc}</li>
 </ul>
 <p>Check Admin → Logs for details. If Gmail is blocking sends, check account security alerts.</p>"""
             msg.attach(MIMEText(body, 'html'))
-            _smtp_send(self.smtp_server, self.smtp_port, self.smtp_username, self.smtp_password, msg)
-            logger.info("Admin SMTP failure alert sent")
+            # send to each recipient (one connection per recipient is fine here
+            # given the 15-min throttle and ≤2 recipients).
+            for rcpt in recipients:
+                try:
+                    msg.replace_header('To', rcpt)
+                    _smtp_send(self.smtp_server, self.smtp_port, self.smtp_username, self.smtp_password, msg)
+                except Exception:
+                    continue
+            logger.info(f"Admin SMTP failure alert sent to {len(recipients)} recipient(s)")
         except Exception:
             pass  # Don't recurse or crash on alert failure
 
@@ -315,29 +392,33 @@ class EmailService:
             return False
     
     def _dispatch_sms(self, user_id: int, notification_type: str, variables: dict):
-        """SMS via carrier gateways disabled - carriers block automated emails.
-        Re-enable with Twilio integration later."""
-        return
-        # --- Carrier gateway code (kept for reference) ---
-        # try:
-        #     from sqlalchemy import text as sa_text
-        #     user_row = self.db.execute(
-        #         sa_text("SELECT phone, sms_carrier FROM users WHERE id = :uid"),
-        #         {"uid": user_id}
-        #     ).mappings().first()
-        #     if not user_row or not user_row.get("phone") or not user_row.get("sms_carrier"):
-        #         return
-        #     from backend.sms_service import SmsService
-        #     sms = SmsService(self.db)
-        #     sms.send_sms(
-        #         user_id=user_id,
-        #         phone=user_row["phone"],
-        #         carrier=user_row["sms_carrier"],
-        #         notification_type=notification_type,
-        #         variables=variables
-        #     )
-        # except Exception as e:
-        #     print(f"[EmailService] SMS dispatch error: {e}", flush=True)
+        """Send a parallel SMS via the user's carrier email-to-SMS gateway,
+        gated by sms_preferences. Re-enabled Jun 2026 — labelled
+        experimental in the UI because carrier gateway deliverability is
+        inconsistent (AT&T, Verizon have started filtering automated
+        relays). Twilio is the planned long-term replacement; until that
+        ships this provides best-effort SMS for users who opt in. Each
+        send failure is logged but never bubbles up — SMS is strictly an
+        add-on to email, never the primary channel."""
+        try:
+            from sqlalchemy import text as sa_text
+            user_row = self.db.execute(
+                sa_text("SELECT phone, sms_carrier FROM users WHERE id = :uid"),
+                {"uid": user_id}
+            ).mappings().first()
+            if not user_row or not user_row.get("phone") or not user_row.get("sms_carrier"):
+                return
+            from backend.sms_service import SmsService
+            sms = SmsService(self.db)
+            sms.send_sms(
+                user_id=user_id,
+                phone=user_row["phone"],
+                carrier=user_row["sms_carrier"],
+                notification_type=notification_type,
+                variables=variables
+            )
+        except Exception as e:
+            logger.error(f"[EmailService] SMS dispatch error for user={user_id} type={notification_type}: {e}")
 
     def _render_template_key(self, template_key: str, variables: dict) -> str:
         """Render a template by key with variables, returning HTML body."""

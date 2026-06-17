@@ -445,13 +445,20 @@
       <div class="content-card">
         <h2 class="section-header">Notification Preferences</h2>
         
-        <!-- SMS Setup Section (hidden - carrier gateways unreliable, re-enable with Twilio later) -->
-        <div id="smsSetupSection" style="display:none; background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 8px; padding: 16px 20px; margin-bottom: 28px;">
+        <!-- SMS Setup — re-enabled Jun 2026. Backed by carrier email-to-SMS
+             gateways (free, no Twilio account required). Deliverability is
+             best-effort: T-Mobile and Google Fi are reliable; AT&T and
+             Verizon filter automated messages more aggressively. Clear
+             "experimental" framing in the UI so users have realistic
+             expectations. Twilio integration is on the roadmap. -->
+        <div id="smsSetupSection" style="background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 8px; padding: 16px 20px; margin-bottom: 28px;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
             <span style="font-size: 1.1rem;">📱</span>
             <strong style="color: var(--cyan); font-size: 0.9rem;">Text Message Setup</strong>
+            <span style="font-size:0.7rem;padding:2px 8px;background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.4);border-radius:10px;font-weight:600;">EXPERIMENTAL</span>
           </div>
-          <p style="color: var(--text-gray); font-size: 0.82rem; margin-bottom: 14px;">Select your carrier to enable SMS notifications via your phone number on file. Texts are sent through your carrier's email-to-SMS gateway — no extra services needed.</p>
+          <p style="color: var(--text-gray); font-size: 0.82rem; margin-bottom: 8px;">Select your carrier to enable SMS notifications via your phone number on file. Texts are sent through your carrier's email-to-SMS gateway — no extra services needed.</p>
+          <p style="color: var(--text-gray); font-size: 0.75rem; margin: 0 0 14px; font-style: italic; opacity: 0.85;">Heads up: delivery isn't guaranteed on every carrier (AT&amp;T and Verizon filter automated SMS more aggressively than T-Mobile or Google Fi). If your texts stop arriving, we'd recommend keeping email alerts on too.</p>
           <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
             <div style="flex: 1; min-width: 200px;">
               <label style="font-size: 0.78rem; color: var(--text-gray); display: block; margin-bottom: 4px;">Mobile Carrier</label>
@@ -469,6 +476,54 @@
         
         <div id="artistEmailPreferences"></div>
         <div id="venueEmailPreferences"></div>
+      </div>
+
+      <!-- ── Calendar Sync card ─────────────────────────────────────────
+           Subscribable iCal feed (read-only) covering every booked /
+           awaiting-venue-contract gig the user touches across all of
+           their artists and venues. Paste the URL into Google Calendar /
+           Apple Calendar / Outlook → the calendar app re-polls hourly
+           and pulls new bookings + drops cancelled ones automatically.
+           Backend route: GET /api/calendar/{token}.ics (token = auth) -->
+      <div class="content-card" style="margin-top:14px;">
+        <h2 class="section-header" style="display:flex;align-items:center;gap:10px;">
+          <span>📅</span> Calendar Sync
+        </h2>
+        <p style="color:var(--text-gray);font-size:0.82rem;margin:0 0 16px;">
+          Subscribe to a live read-only feed of all your booked gigs.
+          New bookings appear automatically; cancellations remove the event.
+          The token in the URL is your private key — anyone with the URL can
+          see your gigs. If you've shared it publicly, you can mint a fresh
+          one below.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input
+            id="calendarFeedUrl"
+            type="text"
+            readonly
+            value="(loading…)"
+            style="flex:1;min-width:280px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.78rem;padding:8px 12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;color:var(--text);"
+          >
+          <button id="calendarFeedCopyBtn" type="button"
+            onclick="copyCalendarFeed()"
+            style="padding:8px 16px;background:rgba(139,92,246,0.18);border:1px solid rgba(139,92,246,0.45);border-radius:6px;color:#c4b5fd;font-size:0.78rem;font-weight:600;cursor:pointer;">
+            Copy URL
+          </button>
+          <button id="calendarFeedRotateBtn" type="button"
+            onclick="rotateCalendarFeed()"
+            data-tooltip="Generate a fresh URL and invalidate the old one. Use if you accidentally shared your feed URL."
+            style="padding:8px 14px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);border-radius:6px;color:#fbbf24;font-size:0.78rem;font-weight:600;cursor:pointer;">
+            Rotate
+          </button>
+        </div>
+        <details style="margin-top:12px;font-size:0.78rem;color:var(--text-gray);">
+          <summary style="cursor:pointer;color:#c4b5fd;font-weight:600;">How to subscribe</summary>
+          <ul style="margin:8px 0 0 18px;padding:0;line-height:1.7;">
+            <li><strong>Google Calendar</strong> → Settings → Add calendar → From URL → paste the URL above.</li>
+            <li><strong>Apple Calendar</strong> → File → New Calendar Subscription → paste the URL.</li>
+            <li><strong>Outlook</strong> → Add calendar → Subscribe from web → paste the URL.</li>
+          </ul>
+        </details>
       </div>
     </div>
 

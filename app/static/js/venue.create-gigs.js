@@ -975,6 +975,300 @@ document.addEventListener("DOMContentLoaded", async () => {
     addSlotBtn.addEventListener('click', () => addSlotRow());
   }
 
+  // ── GIG TEMPLATES (Jun 2026) ──────────────────────────────────────────
+  // Save / load reusable slot configurations. Backend at
+  //   GET / POST / PUT / DELETE /api/venues/{vid}/gig-templates
+  // Templates store the JSON shape that getSlotData() produces, so
+  // applying one is just `rebuildSlotsFromTemplate(slots)`.
+  const saveTemplateBtn = document.getElementById('saveTemplateBtn');
+  const loadTemplateSelect = document.getElementById('loadTemplateSelect');
+  const deleteTemplateBtn = document.getElementById('deleteTemplateBtn');
+  let _gigTemplates = []; // populated on first openGigModal
+
+  async function refreshGigTemplates() {
+    if (!loadTemplateSelect || !window.venueId) return;
+    try {
+      const data = (window.apiGetSafe
+        ? await window.apiGetSafe(`/api/venues/${window.venueId}/gig-templates`)
+        : await (await fetch(`/api/venues/${window.venueId}/gig-templates`, { credentials: 'include' })).json());
+      _gigTemplates = (data && data.templates) || [];
+    } catch (e) { _gigTemplates = []; }
+    // Repaint the dropdown
+    loadTemplateSelect.innerHTML = '<option value="">📋 Use a saved template…</option>';
+    _gigTemplates.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = `${t.name} (${(t.slots || []).length} slot${(t.slots || []).length === 1 ? '' : 's'})`;
+      loadTemplateSelect.appendChild(opt);
+    });
+  }
+
+  function applyTemplate(tpl) {
+    if (!tpl || !Array.isArray(tpl.slots) || !tpl.slots.length) {
+      showSlotError('Template has no slots to apply.');
+      return;
+    }
+    if (typeof resetSlotBuilder === 'function') resetSlotBuilder();
+    tpl.slots.forEach(s => {
+      const d = String(s.pay != null ? Math.floor(parseFloat(s.pay)) : 0);
+      const c = String(s.pay != null ? Math.round((parseFloat(s.pay) * 100) % 100) : 0).padStart(2, '0');
+      addSlotRow(s.start_time || '', s.end_time || '', d, c,
+                 s.artist_type || '', s.band_formats || '', s.styles || '');
+    });
+    clearSlotError();
+  }
+
+  if (saveTemplateBtn) {
+    saveTemplateBtn.addEventListener('click', async () => {
+      const slots = getSlotData();
+      if (!slots.length) { showSlotError('Add at least one slot before saving.'); return; }
+      if (!validateSlots()) return;
+      const name = prompt('Template name (e.g. "Friday Night Live", "Brunch Acoustic"):');
+      if (!name || !name.trim()) return;
+      // Strip per-gig junk (slot_number is recomputed on apply, pay → in payload).
+      const payload = {
+        name: name.trim(),
+        slots: slots.map(s => ({
+          start_time: s.start_time, end_time: s.end_time, pay: s.pay,
+          artist_type: s.artist_type, band_formats: s.band_formats, styles: s.styles
+        }))
+      };
+      try {
+        if (window.apiPostSafe) {
+          await window.apiPostSafe(`/api/venues/${window.venueId}/gig-templates`, payload);
+        } else {
+          await fetch(`/api/venues/${window.venueId}/gig-templates`, {
+            method: 'POST', credentials: 'include',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+          });
+        }
+        await refreshGigTemplates();
+        (typeof showAlert === 'function' ? showAlert : alert)(`Template "${name.trim()}" saved.`);
+      } catch (e) {
+        (typeof showAlert === 'function' ? showAlert : alert)((e && e.message) || 'Failed to save template');
+      }
+    });
+  }
+
+  if (loadTemplateSelect) {
+    loadTemplateSelect.addEventListener('change', () => {
+      const id = loadTemplateSelect.value;
+      if (!id) { if (deleteTemplateBtn) deleteTemplateBtn.style.display = 'none'; return; }
+      const tpl = _gigTemplates.find(t => String(t.id) === String(id));
+      if (!tpl) return;
+      if (!confirm(`Replace the current slot configuration with template "${tpl.name}"?`)) {
+        loadTemplateSelect.value = '';
+        return;
+      }
+      applyTemplate(tpl);
+      if (deleteTemplateBtn) deleteTemplateBtn.style.display = 'inline-flex';
+    });
+  }
+
+  if (deleteTemplateBtn) {
+    deleteTemplateBtn.addEventListener('click', async () => {
+      const id = loadTemplateSelect.value;
+      const tpl = _gigTemplates.find(t => String(t.id) === String(id));
+      if (!tpl) return;
+      if (!confirm(`Delete template "${tpl.name}"? This can't be undone.`)) return;
+      try {
+        const url = `/api/venues/${window.venueId}/gig-templates/${id}`;
+        if (window.apiDeleteSafe) await window.apiDeleteSafe(url);
+        else await fetch(url, { method: 'DELETE', credentials: 'include' });
+        await refreshGigTemplates();
+        deleteTemplateBtn.style.display = 'none';
+      } catch (e) {
+        (typeof showAlert === 'function' ? showAlert : alert)((e && e.message) || 'Failed to delete template');
+      }
+    });
+  }
+
+  // Expose for index-init to call when the gig modal opens
+  window._refreshGigTemplates = refreshGigTemplates;
+
+  // ── DOOR DEAL MVP (Jun 2026) ────────────────────────────────────────────
+  // Pragmatic MVP: a single "Configure Door Deals" button that opens a
+  // popover listing each slot with deal-type toggle + percentage + guarantee
+  // inputs. Calls PUT /api/gigs/{gid}/slots/{sid}/deal per slot.
+  // For settlement (past gigs), a "File Door Receipts" button that loops
+  // door-deal slots, prompts for receipts each, POSTs to /settle.
+  const configureDealsBtn = document.getElementById('configureDealsBtn');
+  const settleDealsBtn = document.getElementById('settleDealsBtn');
+
+  function _showDealConfigPopover(gigId, slots) {
+    if (!slots || !slots.length) {
+      (typeof showAlert === 'function' ? showAlert : alert)('Add slots first.');
+      return;
+    }
+    // Build a small inline modal — same styling family as the gig modal.
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:10010;';
+    overlay.innerHTML = `
+      <div style="background:#1a1a2e;border:1px solid rgba(124,107,255,0.4);border-radius:10px;padding:20px 22px;max-width:560px;width:92%;max-height:80vh;overflow-y:auto;color:var(--text);">
+        <h3 style="margin:0 0 6px;font-size:1.05rem;color:#c4b5fd;">🎯 Configure Door Deals</h3>
+        <p style="margin:0 0 14px;font-size:0.75rem;color:rgba(255,255,255,0.55);line-height:1.45;">
+          Switch any slot to a <strong>door deal</strong> to pay a guarantee plus a percentage of door receipts.
+          Final pay = <code>max(guarantee, guarantee + receipts × pct ÷ 100)</code>.
+        </p>
+        <div id="_dealRows" style="display:flex;flex-direction:column;gap:10px;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+          <button type="button" id="_dealCancel" style="padding:6px 14px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--text);font-size:0.8rem;cursor:pointer;">Cancel</button>
+          <button type="button" id="_dealSave" style="padding:6px 14px;background:linear-gradient(135deg,#a855f7,#7c3aed);border:0;border-radius:5px;color:white;font-weight:600;font-size:0.8rem;cursor:pointer;">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const rowsEl = overlay.querySelector('#_dealRows');
+    slots.forEach((s, idx) => {
+      const dt = s.deal_type || 'flat';
+      const pct = s.door_pct || 0;
+      const gua = (s.guarantee_cents || 0) / 100;
+      const row = document.createElement('div');
+      row.dataset.slotId = s.slot_id || s.id;
+      row.style.cssText = 'background:rgba(124,107,255,0.06);border:1px solid rgba(124,107,255,0.18);border-left:3px solid #a855f7;border-radius:6px;padding:9px 12px;';
+      row.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <strong style="font-size:0.78rem;color:#a855f7;min-width:50px;">Slot ${idx + 1}</strong>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;">
+            <input type="radio" name="_deal_${idx}" value="flat" ${dt === 'flat' ? 'checked' : ''}> Flat
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;">
+            <input type="radio" name="_deal_${idx}" value="door" ${dt === 'door' ? 'checked' : ''}> Door
+          </label>
+          <span class="_doorInputs" style="display:${dt === 'door' ? 'inline-flex' : 'none'};align-items:center;gap:6px;font-size:0.78rem;">
+            <label>Guarantee $<input type="number" min="0" step="0.01" class="_doorGua" value="${gua}" style="width:75px;padding:2px 5px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);color:var(--text);border-radius:3px;font-size:0.78rem;"></label>
+            <label>+ <input type="number" min="0" max="100" class="_doorPct" value="${pct}" style="width:50px;padding:2px 5px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);color:var(--text);border-radius:3px;font-size:0.78rem;">% of door</label>
+          </span>
+        </div>`;
+      rowsEl.appendChild(row);
+      // Toggle inputs based on radio change
+      row.querySelectorAll(`input[name="_deal_${idx}"]`).forEach(r => {
+        r.addEventListener('change', () => {
+          row.querySelector('._doorInputs').style.display = r.value === 'door' && r.checked ? 'inline-flex' : 'none';
+        });
+      });
+    });
+
+    overlay.querySelector('#_dealCancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#_dealSave').addEventListener('click', async () => {
+      const rows = rowsEl.querySelectorAll('[data-slot-id]');
+      let errors = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const sid = row.dataset.slotId;
+        if (!sid) continue;
+        const dealType = row.querySelector(`input[name="_deal_${i}"]:checked`).value;
+        const guaDollars = parseFloat(row.querySelector('._doorGua')?.value || '0') || 0;
+        const pct = parseInt(row.querySelector('._doorPct')?.value || '0', 10) || 0;
+        const payload = {
+          deal_type: dealType,
+          door_pct: dealType === 'door' ? pct : 0,
+          guarantee_cents: dealType === 'door' ? Math.round(guaDollars * 100) : 0
+        };
+        try {
+          if (window.apiPutSafe) {
+            await window.apiPutSafe(`/api/gigs/${gigId}/slots/${sid}/deal`, payload);
+          } else {
+            const res = await fetch(`/api/gigs/${gigId}/slots/${sid}/deal`, {
+              method: 'PUT', credentials: 'include',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error(`Slot ${i + 1}: failed`);
+          }
+        } catch (e) {
+          console.error(e);
+          errors++;
+        }
+      }
+      overlay.remove();
+      if (errors) (typeof showAlert === 'function' ? showAlert : alert)(`Saved with ${errors} error(s) — check the console.`);
+      else (typeof showAlert === 'function' ? showAlert : alert)('Door deals saved.');
+    });
+  }
+
+  async function _openDealConfig() {
+    if (!selectedGig || !selectedGig.id) {
+      (typeof showAlert === 'function' ? showAlert : alert)('Save the gig first, then configure deals.');
+      return;
+    }
+    // Read current slots from the gig modal so the venue sees what they're editing.
+    const rows = document.querySelectorAll('#slotList .slot-row');
+    if (!rows.length) { (typeof showAlert === 'function' ? showAlert : alert)('No slots to configure.'); return; }
+    // Fetch the current gig slots from backend to get slot_id + deal state.
+    let backendSlots = [];
+    try {
+      const data = window.apiGetSafe
+        ? await window.apiGetSafe(`/api/gigs/${selectedGig.id}`)
+        : await (await fetch(`/api/gigs/${selectedGig.id}`, { credentials: 'include' })).json();
+      backendSlots = (data && (data.slots || data.gig_slots)) || [];
+    } catch (_) {}
+    if (!backendSlots.length) {
+      (typeof showAlert === 'function' ? showAlert : alert)('Could not load slot details. Try saving the gig first.');
+      return;
+    }
+    _showDealConfigPopover(selectedGig.id, backendSlots);
+  }
+
+  async function _openDealSettle() {
+    if (!selectedGig || !selectedGig.id) return;
+    let pending = [];
+    try {
+      const data = window.apiGetSafe
+        ? await window.apiGetSafe(`/api/gigs/${selectedGig.id}/slots/pending-settlement`)
+        : await (await fetch(`/api/gigs/${selectedGig.id}/slots/pending-settlement`, { credentials: 'include' })).json();
+      pending = (data && data.pending) || [];
+    } catch (_) {}
+    if (!pending.length) {
+      (typeof showAlert === 'function' ? showAlert : alert)('No door-deal slots to settle.');
+      return;
+    }
+    for (const p of pending) {
+      const raw = prompt(
+        `Slot ${p.slot_number} — door receipts (dollars)?\n` +
+        `Artist: ${p.artist_name || '(none)'}\n` +
+        `Guarantee: $${((p.guarantee_cents || 0) / 100).toFixed(2)}\n` +
+        `Pays artist: ${p.door_pct || 0}% of receipts (over guarantee)`,
+        ''
+      );
+      if (raw === null) continue; // cancelled this slot
+      const dollars = parseFloat(raw);
+      if (isNaN(dollars) || dollars < 0) { alert(`Invalid amount on slot ${p.slot_number} — skipping`); continue; }
+      const cents = Math.round(dollars * 100);
+      try {
+        const payload = { door_receipts_cents: cents };
+        const res = window.apiPostSafe
+          ? await window.apiPostSafe(`/api/gigs/${selectedGig.id}/slots/${p.slot_id}/settle`, payload)
+          : await (await fetch(`/api/gigs/${selectedGig.id}/slots/${p.slot_id}/settle`, {
+              method: 'POST', credentials: 'include',
+              headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+            })).json();
+        if (res && res.settled_pay_dollars != null) {
+          (typeof showAlert === 'function' ? showAlert : alert)(`Slot ${p.slot_number} settled: artist pay $${res.settled_pay_dollars}`);
+        }
+      } catch (e) {
+        alert(`Failed to settle slot ${p.slot_number}: ${(e && e.message) || 'error'}`);
+      }
+    }
+  }
+
+  if (configureDealsBtn) configureDealsBtn.addEventListener('click', _openDealConfig);
+  if (settleDealsBtn) settleDealsBtn.addEventListener('click', _openDealSettle);
+
+  // Reveal Settle button when viewing a past gig with door-deal slots.
+  // Light heuristic: show it whenever selectedGig.id exists and the gig
+  // date is in the past. (The settle endpoint will 400 if nothing
+  // pending, which is fine — no harm shown.)
+  window._maybeShowSettleBtn = function(gig) {
+    if (!settleDealsBtn) return;
+    settleDealsBtn.style.display = 'none';
+    if (!gig || !gig.id || !gig.date) return;
+    try {
+      const gd = new Date(gig.date + 'T23:59:59');
+      if (gd < new Date()) settleDealsBtn.style.display = 'inline-flex';
+    } catch (_) {}
+  };
+
 
   let currentDate = new Date();
   let selectedGig = null;
@@ -1766,6 +2060,14 @@ async function renderCalendar() {
     async function openGigModal(gig) {
     selectedGig = gig;
     selectedDate = gig.date;
+    // Refresh gig templates dropdown (Jun 2026 feature) — quietly best-effort.
+    if (typeof window._refreshGigTemplates === 'function') {
+      try { window._refreshGigTemplates(); } catch (_) {}
+    }
+    // Maybe surface the settle-deals button for past gigs.
+    if (typeof window._maybeShowSettleBtn === 'function') {
+      try { window._maybeShowSettleBtn(gig); } catch (_) {}
+    }
     // Clean up any previously injected action buttons
     ['_msgArtistBtn','_rateArtistBtn','_venueGigBtnRow','_approveBtn','_denyBtn','editGigBtn'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     // Restore any hidden permanent modal action buttons

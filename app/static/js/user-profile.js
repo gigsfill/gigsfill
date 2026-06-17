@@ -80,8 +80,56 @@ function switchTab(tab) {
   // Load content based on tab
   if (tab === 'my-artists') loadArtists();
   if (tab === 'my-venues') loadVenues();
-  if (tab === 'email') loadEmailPreferences();
+  if (tab === 'email') { loadEmailPreferences(); loadCalendarFeedUrl(); }
   if (tab === 'affiliates') loadAffiliatesPage();
+}
+
+// ── Calendar Sync — fetches the iCal feed URL (mints token on first call) ──
+async function loadCalendarFeedUrl() {
+  const input = document.getElementById('calendarFeedUrl');
+  if (!input || input.dataset.loaded === '1') return;
+  try {
+    const data = (typeof window.apiGetSafe === 'function')
+      ? await window.apiGetSafe('/api/me/calendar-feed-url')
+      : await (await fetch('/api/me/calendar-feed-url', { credentials: 'include' })).json();
+    if (data && data.url) {
+      input.value = data.url;
+      input.dataset.loaded = '1';
+    }
+  } catch (e) {
+    input.value = 'Could not load calendar URL — try again later';
+  }
+}
+
+async function copyCalendarFeed() {
+  const input = document.getElementById('calendarFeedUrl');
+  const btn = document.getElementById('calendarFeedCopyBtn');
+  if (!input || !btn) return;
+  try {
+    await navigator.clipboard.writeText(input.value);
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  } catch (_) {
+    // Fallback: select the text for manual copy
+    input.select();
+  }
+}
+
+async function rotateCalendarFeed() {
+  if (!confirm('Generate a fresh URL? Anyone using the current URL will stop receiving updates and will need the new one.')) return;
+  const input = document.getElementById('calendarFeedUrl');
+  try {
+    if (typeof window.apiPostSafe === 'function') {
+      await window.apiPostSafe('/api/me/calendar-feed-url/rotate', {});
+    } else {
+      await fetch('/api/me/calendar-feed-url/rotate', { method: 'POST', credentials: 'include' });
+    }
+    input.dataset.loaded = '0';
+    await loadCalendarFeedUrl();
+  } catch (e) {
+    alert((e && e.message) || 'Could not rotate token');
+  }
 }
 
 // Show save indicator (inline)
