@@ -575,6 +575,18 @@
       document.getElementById("venueLogo").src = "/app/static/img/profile-placeholder.svg";
       loadMedia();
       loadGigs();
+
+      // Populate the Reviews tab badge ("Reviews (N)") on first load —
+      // without this, the badge stays blank until the user actually clicks
+      // the Reviews tab. Cheap one-shot fetch; failure is silent.
+      try {
+        const _rsRes = await fetch(`/api/venues/${venueId}/reviews/summary`, { credentials: "include" });
+        if (_rsRes.ok) {
+          const _rs = await _rsRes.json();
+          const _b = document.getElementById("reviewsBadge");
+          if (_b && _rs.review_count > 0) _b.textContent = `(${_rs.review_count})`;
+        }
+      } catch (_) { /* non-fatal */ }
     })();
 
     // ========== CALENDAR ==========

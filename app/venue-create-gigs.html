@@ -2792,12 +2792,13 @@
         <!-- Door deal config — opens a popover listing slots with per-slot
              flat / door deal config. Visible on existing/new gigs.
              Backend: PUT /api/gigs/{gid}/slots/{sid}/deal (Jun 2026 feature). -->
-        <button type="button" id="configureDealsBtn"
-          data-tooltip="Configure door deals — set guarantee + percentage of door receipts for any slot"
-          style="margin-top:8px;padding:6px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.28);border-radius:5px;color:#86efac;font-size:0.75rem;cursor:pointer;font-weight:600;">
-          🎯 Configure Door Deals
-        </button>
-        <!-- Settle door receipts — appears on past gigs only. Posts to
+        <!-- Door-deal CONFIG is now INLINE per slot — every slot card has
+             a Deal radio (Flat / Door split) + guarantee + % of door
+             inputs. Values are read in getSlotData() and persist with
+             the gig save. The "Configure Door Deals" popover button is
+             gone — no separate "save first then configure" step.
+             Settle door receipts (post-show) still lives as a button
+             below; appears on past gigs only. Posts to
              /api/gigs/{gid}/slots/{sid}/settle for each door-deal slot. -->
         <button type="button" id="settleDealsBtn" style="display:none;
           margin-top:8px;padding:6px 14px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:5px;color:#fbbf24;font-size:0.75rem;cursor:pointer;font-weight:600;">
@@ -2962,7 +2963,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=13"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=137"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=138"></script>
 <script src="/app/static/js/gf-tooltip.js?v=1"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>

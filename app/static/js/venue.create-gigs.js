@@ -488,7 +488,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
   }
 
-  function addSlotRow(startTime = '', endTime = '', payDollars = '', payCents = '', slotArtistType = '', slotBandFormats = '', slotStyles = '') {
+  function addSlotRow(startTime = '', endTime = '', payDollars = '', payCents = '', slotArtistType = '', slotBandFormats = '', slotStyles = '',
+                      dealType = 'flat', doorPct = 0, guaranteeCents = 0) {
     slotCounter++;
     const slotList = document.getElementById('slotList');
     const slotNum = slotList.children.length + 1;
@@ -574,12 +575,46 @@ document.addEventListener("DOMContentLoaded", async () => {
           <div class="slot-pill-error" style="display:none;"></div>
         </div>
       </div>
+      <!-- Per-slot deal terms (Jun 2026 feature).
+           Default = flat (the pay pill above is the final amount).
+           Switching to "Door" reveals two compact inputs: guarantee + %.
+           Values are read by getSlotData() and persisted when the gig is
+           saved — no separate "Configure Door Deals" step required. -->
+      <div class="slot-deal-row" style="display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:7px; padding-top:7px; border-top:1px dashed rgba(124,107,255,0.18); font-size:0.74rem;">
+        <span style="color:var(--text-muted); font-weight:600; min-width:44px;">Deal</span>
+        <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+          <input type="radio" name="slot-deal-${slotCounter}" class="slot-deal-flat" value="flat" ${dealType !== 'door' ? 'checked' : ''}> <span>Flat (use pay above)</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+          <input type="radio" name="slot-deal-${slotCounter}" class="slot-deal-door" value="door" ${dealType === 'door' ? 'checked' : ''}> <span>🎯 Door split</span>
+        </label>
+        <span class="slot-door-inputs" style="display:${dealType === 'door' ? 'inline-flex' : 'none'}; align-items:center; gap:6px; color:var(--text-muted);">
+          <label style="display:inline-flex; align-items:center; gap:3px;">
+            Guarantee
+            <span style="color:#22c55e; font-weight:700;">$</span>
+            <input type="number" min="0" step="0.01" class="slot-door-guarantee" value="${(guaranteeCents / 100).toFixed(2)}" style="width:62px; padding:2px 4px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); color:#22c55e; border-radius:3px; font-size:0.74rem; font-weight:700; text-align:right;">
+          </label>
+          <span>+</span>
+          <label style="display:inline-flex; align-items:center; gap:3px;">
+            <input type="number" min="0" max="100" class="slot-door-pct" value="${doorPct}" style="width:42px; padding:2px 4px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); color:var(--text); border-radius:3px; font-size:0.74rem; text-align:right;">
+            % of door
+          </label>
+        </span>
+      </div>
     `;
     
     // Artist type change handler per slot
     const typeSelect = row.querySelector('.slot-artist-type');
     const stylesRow = row.querySelector('.slot-styles-row');
     const lineupRow = row.querySelector('.slot-lineup-row');
+
+    // Deal-type radio → show/hide the guarantee + pct inputs.
+    const doorInputs = row.querySelector('.slot-door-inputs');
+    row.querySelectorAll(`input[name="slot-deal-${slotCounter}"]`).forEach(r => {
+      r.addEventListener('change', () => {
+        if (doorInputs) doorInputs.style.display = r.value === 'door' && r.checked ? 'inline-flex' : 'none';
+      });
+    });
     typeSelect.addEventListener('change', () => {
       const isLB = typeSelect.value === 'Live Band';
       stylesRow.style.display = isLB ? 'flex' : 'none';
@@ -809,7 +844,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         const checkedLineup = row.querySelectorAll('.slot-lineup-cb:checked');
         bandFormats = Array.from(checkedLineup).map(cb => cb.value).join(',') || null;
       }
+      // Per-slot deal terms (Jun 2026). dealType='flat' → pay above is final.
+      // dealType='door' → guarantee_cents + door_pct used at settlement to
+      // compute final pay. Backend persists these via gig_slots columns.
+      const dealCheckedEl = row.querySelector(`input[name^="slot-deal-"][value="door"]`);
+      const dealType = dealCheckedEl && dealCheckedEl.checked ? 'door' : 'flat';
+      const guaranteeDollars = parseFloat(row.querySelector('.slot-door-guarantee')?.value || '0') || 0;
+      const doorPct = parseInt(row.querySelector('.slot-door-pct')?.value || '0', 10) || 0;
+      const guaranteeCents = dealType === 'door' ? Math.round(guaranteeDollars * 100) : 0;
       slots.push({ slot_number: i + 1, start_time: start, end_time: end, pay: pay,
+                    deal_type: dealType, door_pct: dealType === 'door' ? doorPct : 0,
+                    guarantee_cents: guaranteeCents,
                     artist_type: artistType, band_formats: bandFormats, styles: styles });
     });
     return slots;
@@ -1086,129 +1131,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Expose for index-init to call when the gig modal opens
   window._refreshGigTemplates = refreshGigTemplates;
 
-  // ── DOOR DEAL MVP (Jun 2026) ────────────────────────────────────────────
-  // Pragmatic MVP: a single "Configure Door Deals" button that opens a
-  // popover listing each slot with deal-type toggle + percentage + guarantee
-  // inputs. Calls PUT /api/gigs/{gid}/slots/{sid}/deal per slot.
-  // For settlement (past gigs), a "File Door Receipts" button that loops
-  // door-deal slots, prompts for receipts each, POSTs to /settle.
-  const configureDealsBtn = document.getElementById('configureDealsBtn');
+  // ── DOOR DEAL (Jun 2026) ────────────────────────────────────────────────
+  // Deal CONFIG is now inline per slot (see .slot-deal-row inside each
+  // slot card in addSlotRow). Values flow through getSlotData() and
+  // persist with the gig save — no separate "Configure Door Deals"
+  // popover, no "save gig first" gate.
+  //
+  // Settlement (post-show) keeps its dedicated button — `settleDealsBtn`
+  // appears on past gigs only, walks each door-deal slot, prompts for
+  // door receipts, POSTs to /api/gigs/{gid}/slots/{sid}/settle.
   const settleDealsBtn = document.getElementById('settleDealsBtn');
 
-  function _showDealConfigPopover(gigId, slots) {
-    if (!slots || !slots.length) {
-      (typeof showAlert === 'function' ? showAlert : alert)('Add slots first.');
-      return;
-    }
-    // Build a small inline modal — same styling family as the gig modal.
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:10010;';
-    overlay.innerHTML = `
-      <div style="background:#1a1a2e;border:1px solid rgba(124,107,255,0.4);border-radius:10px;padding:20px 22px;max-width:560px;width:92%;max-height:80vh;overflow-y:auto;color:var(--text);">
-        <h3 style="margin:0 0 6px;font-size:1.05rem;color:#c4b5fd;">🎯 Configure Door Deals</h3>
-        <p style="margin:0 0 14px;font-size:0.75rem;color:rgba(255,255,255,0.55);line-height:1.45;">
-          Switch any slot to a <strong>door deal</strong> to pay a guarantee plus a percentage of door receipts.
-          Final pay = <code>max(guarantee, guarantee + receipts × pct ÷ 100)</code>.
-        </p>
-        <div id="_dealRows" style="display:flex;flex-direction:column;gap:10px;"></div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
-          <button type="button" id="_dealCancel" style="padding:6px 14px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--text);font-size:0.8rem;cursor:pointer;">Cancel</button>
-          <button type="button" id="_dealSave" style="padding:6px 14px;background:linear-gradient(135deg,#a855f7,#7c3aed);border:0;border-radius:5px;color:white;font-weight:600;font-size:0.8rem;cursor:pointer;">Save</button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
 
-    const rowsEl = overlay.querySelector('#_dealRows');
-    slots.forEach((s, idx) => {
-      const dt = s.deal_type || 'flat';
-      const pct = s.door_pct || 0;
-      const gua = (s.guarantee_cents || 0) / 100;
-      const row = document.createElement('div');
-      row.dataset.slotId = s.slot_id || s.id;
-      row.style.cssText = 'background:rgba(124,107,255,0.06);border:1px solid rgba(124,107,255,0.18);border-left:3px solid #a855f7;border-radius:6px;padding:9px 12px;';
-      row.innerHTML = `
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <strong style="font-size:0.78rem;color:#a855f7;min-width:50px;">Slot ${idx + 1}</strong>
-          <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;">
-            <input type="radio" name="_deal_${idx}" value="flat" ${dt === 'flat' ? 'checked' : ''}> Flat
-          </label>
-          <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;">
-            <input type="radio" name="_deal_${idx}" value="door" ${dt === 'door' ? 'checked' : ''}> Door
-          </label>
-          <span class="_doorInputs" style="display:${dt === 'door' ? 'inline-flex' : 'none'};align-items:center;gap:6px;font-size:0.78rem;">
-            <label>Guarantee $<input type="number" min="0" step="0.01" class="_doorGua" value="${gua}" style="width:75px;padding:2px 5px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);color:var(--text);border-radius:3px;font-size:0.78rem;"></label>
-            <label>+ <input type="number" min="0" max="100" class="_doorPct" value="${pct}" style="width:50px;padding:2px 5px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);color:var(--text);border-radius:3px;font-size:0.78rem;">% of door</label>
-          </span>
-        </div>`;
-      rowsEl.appendChild(row);
-      // Toggle inputs based on radio change
-      row.querySelectorAll(`input[name="_deal_${idx}"]`).forEach(r => {
-        r.addEventListener('change', () => {
-          row.querySelector('._doorInputs').style.display = r.value === 'door' && r.checked ? 'inline-flex' : 'none';
-        });
-      });
-    });
-
-    overlay.querySelector('#_dealCancel').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('#_dealSave').addEventListener('click', async () => {
-      const rows = rowsEl.querySelectorAll('[data-slot-id]');
-      let errors = 0;
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const sid = row.dataset.slotId;
-        if (!sid) continue;
-        const dealType = row.querySelector(`input[name="_deal_${i}"]:checked`).value;
-        const guaDollars = parseFloat(row.querySelector('._doorGua')?.value || '0') || 0;
-        const pct = parseInt(row.querySelector('._doorPct')?.value || '0', 10) || 0;
-        const payload = {
-          deal_type: dealType,
-          door_pct: dealType === 'door' ? pct : 0,
-          guarantee_cents: dealType === 'door' ? Math.round(guaDollars * 100) : 0
-        };
-        try {
-          if (window.apiPutSafe) {
-            await window.apiPutSafe(`/api/gigs/${gigId}/slots/${sid}/deal`, payload);
-          } else {
-            const res = await fetch(`/api/gigs/${gigId}/slots/${sid}/deal`, {
-              method: 'PUT', credentials: 'include',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify(payload)
-            });
-            if (!res.ok) throw new Error(`Slot ${i + 1}: failed`);
-          }
-        } catch (e) {
-          console.error(e);
-          errors++;
-        }
-      }
-      overlay.remove();
-      if (errors) (typeof showAlert === 'function' ? showAlert : alert)(`Saved with ${errors} error(s) — check the console.`);
-      else (typeof showAlert === 'function' ? showAlert : alert)('Door deals saved.');
-    });
-  }
-
-  async function _openDealConfig() {
-    if (!selectedGig || !selectedGig.id) {
-      (typeof showAlert === 'function' ? showAlert : alert)('Save the gig first, then configure deals.');
-      return;
-    }
-    // Read current slots from the gig modal so the venue sees what they're editing.
-    const rows = document.querySelectorAll('#slotList .slot-row');
-    if (!rows.length) { (typeof showAlert === 'function' ? showAlert : alert)('No slots to configure.'); return; }
-    // Fetch the current gig slots from backend to get slot_id + deal state.
-    let backendSlots = [];
-    try {
-      const data = window.apiGetSafe
-        ? await window.apiGetSafe(`/api/gigs/${selectedGig.id}`)
-        : await (await fetch(`/api/gigs/${selectedGig.id}`, { credentials: 'include' })).json();
-      backendSlots = (data && (data.slots || data.gig_slots)) || [];
-    } catch (_) {}
-    if (!backendSlots.length) {
-      (typeof showAlert === 'function' ? showAlert : alert)('Could not load slot details. Try saving the gig first.');
-      return;
-    }
-    _showDealConfigPopover(selectedGig.id, backendSlots);
-  }
+  // (Jun 2026) _openDealConfig() removed — deal config moved inline into
+  // each slot row's .slot-deal-row so it persists with the gig save and
+  // no longer requires a saved gig as a precondition.
 
   async function _openDealSettle() {
     if (!selectedGig || !selectedGig.id) return;
@@ -1252,7 +1189,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  if (configureDealsBtn) configureDealsBtn.addEventListener('click', _openDealConfig);
   if (settleDealsBtn) settleDealsBtn.addEventListener('click', _openDealSettle);
 
   // Reveal Settle button when viewing a past gig with door-deal slots.
@@ -2797,7 +2733,10 @@ async function renderCalendar() {
                 addSlotRow(slot.start_time, slot.end_time, payD, payC,
                            slot.artist_type || '',
                            slot.band_formats || '',
-                           slot.styles || '');
+                           slot.styles || '',
+                           slot.deal_type || 'flat',
+                           slot.door_pct || 0,
+                           slot.guarantee_cents || 0);
               }
             }
           } catch(e) {
@@ -2983,7 +2922,10 @@ async function renderCalendar() {
       addSlotRow(slot.start_time, slot.end_time, payD, payC,
         slot.artist_type || gig.artist_type || '',
         slot.band_formats || gig.band_formats || '',
-        slot.styles || gig.styles || '');
+        slot.styles || gig.styles || '',
+        slot.deal_type || 'flat',
+        slot.door_pct || 0,
+        slot.guarantee_cents || 0);
       // Lock: hide artist type / styles / lineup rows on the last-added slot row
       const slotList = document.getElementById('slotList');
       const lastRow = slotList ? slotList.lastElementChild : null;
@@ -3052,7 +2994,10 @@ async function renderCalendar() {
           addSlotRow(slot.start_time, slot.end_time, payD, payC,
             slot.artist_type || gig.artist_type || '',
             slot.band_formats || gig.band_formats || '',
-            slot.styles || gig.styles || '');
+            slot.styles || gig.styles || '',
+            slot.deal_type || 'flat',
+            slot.door_pct || 0,
+            slot.guarantee_cents || 0);
         }
       });
     } else {
