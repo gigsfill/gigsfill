@@ -453,8 +453,34 @@
              expectations. Twilio integration is on the roadmap. -->
         <!-- Hidden by default — revealed by user-profile.js after a
              cheap GET /api/public/texting-status confirms the admin has
-             toggled "Texting Enabled" on. Until that flips, the section
-             stays completely out of the DOM flow. -->
+             toggled "Texting Enabled" on. The inline early-execute
+             script below also hides the section unconditionally on
+             every page load and only un-hides it if the server says
+             texting is enabled — robust against the cached-HTML case
+             where the inline `display:none` might be missing. -->
+        <script>
+          (function () {
+            // Run immediately so the section is hidden before first paint.
+            const _hide = () => {
+              const el = document.getElementById('smsSetupSection');
+              if (el) el.style.display = 'none';
+            };
+            _hide();
+            // Re-check after DOM ready in case smsSetupSection isn't in
+            // the tree yet when this script tag executes (defensive).
+            document.addEventListener('DOMContentLoaded', _hide);
+            // Then ask the server. Only un-hide on explicit true.
+            fetch('/api/public/texting-status', { credentials: 'omit' })
+              .then(r => r.ok ? r.json() : { enabled: false })
+              .then(d => {
+                if (d && d.enabled) {
+                  const el = document.getElementById('smsSetupSection');
+                  if (el) el.style.display = '';
+                }
+              })
+              .catch(() => { /* stay hidden on error */ });
+          })();
+        </script>
         <div id="smsSetupSection" style="display:none;background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 8px; padding: 16px 20px; margin-bottom: 28px;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
             <span style="font-size: 1.1rem;">📱</span>

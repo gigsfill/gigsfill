@@ -1883,7 +1883,50 @@ def process_bounce_inbox(conn=None):
         return summary
     except Exception as e:
         logger.error(f"[BOUNCE] Fatal error: {e}", exc_info=True)
-        summary["reason"] = f"fatal: {str(e)[:200]}"
+        # Translate the raw stdlib exceptions into something the admin
+        # can act on in the "Test & Poll Now" status line. The cryptic
+        # "[Errno -2] Name or service not known" is the #1 source of
+        # confusion — it just means the IMAP hostname couldn't be
+        # resolved by DNS, usually a typo or wrong host.
+        _msg = str(e)
+        _hint = ""
+        if "Errno -2" in _msg or "Name or service not known" in _msg or "nodename nor servname" in _msg:
+            _hint = (
+                "IMAP server hostname couldn't be resolved by DNS. "
+                "Check the spelling — it should be the IMAP host for your "
+                "mailbox (e.g. imap.gmail.com for Gmail, outlook.office365.com "
+                "for Outlook 365). Most providers use the same domain as your "
+                "SMTP server with 'smtp' replaced by 'imap'."
+            )
+        elif "Errno 111" in _msg or "Connection refused" in _msg:
+            _hint = (
+                "IMAP server refused the connection. Check the port (993 for "
+                "IMAP SSL, the default) — if you've entered a different port "
+                "the host probably isn't listening on it."
+            )
+        elif "timed out" in _msg.lower() or "timeout" in _msg.lower():
+            _hint = (
+                "IMAP server didn't respond in time. Check that the host is "
+                "reachable from this server and that no firewall is blocking "
+                "outbound traffic to port 993."
+            )
+        elif "auth" in _msg.lower() or "login" in _msg.lower() or "credentials" in _msg.lower():
+            _hint = (
+                "IMAP login was rejected. Verify the credentials source "
+                "(Platform / Support / Custom) points at the right mailbox "
+                "and the password is correct. For Gmail / Outlook 365 you "
+                "must use an app-specific password, not your account password."
+            )
+        elif "SSL" in _msg or "ssl" in _msg or "certificate" in _msg.lower():
+            _hint = (
+                "TLS/SSL handshake failed. The IMAP host might not support "
+                "implicit SSL on port 993, or the certificate is invalid. "
+                "Confirm with your email provider's IMAP docs."
+            )
+        summary["reason"] = (
+            (f"fatal: {_hint} (raw: {_msg[:160]})") if _hint
+            else f"fatal: {_msg[:200]}"
+        )
         try:
             _save_bounce_check_result(cursor, summary["reason"])
             conn.commit()
