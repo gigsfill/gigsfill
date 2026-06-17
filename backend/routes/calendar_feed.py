@@ -29,6 +29,80 @@ automatically.
 import uuid
 from datetime import datetime, timedelta
 from backend.services.email_dispatch import format_pay_summary_with_sign
+from backend.utils import US_STATE_TIMEZONES, get_platform_timezone
+
+
+# Hand-rolled VTIMEZONE blocks for the IANA zones that ever appear in
+# US_STATE_TIMEZONES. We emit one block per unique zone the user's gigs
+# touch — Google / Apple / Outlook need the VTIMEZONE in the calendar
+# header before they'll honor `DTSTART;TZID=X:...` on events. These are
+# the standard US DST rules (second Sunday of March → first Sunday of
+# November) plus stationary-offset zones for Arizona, Hawaii, and the
+# US territories. Encoded as raw VTIMEZONE bodies — RFC 5545 §3.6.5.
+_VTZ_DST_US = (
+    "BEGIN:STANDARD\r\n"
+    "DTSTART:19701101T020000\r\n"
+    "TZOFFSETFROM:{daylight_offset}\r\n"
+    "TZOFFSETTO:{standard_offset}\r\n"
+    "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU\r\n"
+    "TZNAME:{standard_name}\r\n"
+    "END:STANDARD\r\n"
+    "BEGIN:DAYLIGHT\r\n"
+    "DTSTART:19700308T020000\r\n"
+    "TZOFFSETFROM:{standard_offset}\r\n"
+    "TZOFFSETTO:{daylight_offset}\r\n"
+    "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU\r\n"
+    "TZNAME:{daylight_name}\r\n"
+    "END:DAYLIGHT\r\n"
+)
+_VTZ_FIXED = (
+    "BEGIN:STANDARD\r\n"
+    "DTSTART:19700101T000000\r\n"
+    "TZOFFSETFROM:{offset}\r\n"
+    "TZOFFSETTO:{offset}\r\n"
+    "TZNAME:{name}\r\n"
+    "END:STANDARD\r\n"
+)
+
+# All IANA zones referenced from US_STATE_TIMEZONES (plus the platform
+# default fallback). Each maps to a VTIMEZONE body string. Keeping these
+# in code (vs. relying on a library like ics or icalendar) avoids adding
+# a dependency for a feature that only needs ~10 zones.
+_VTIMEZONE_BODIES = {
+    "America/New_York":     _VTZ_DST_US.format(standard_offset="-0500", daylight_offset="-0400", standard_name="EST", daylight_name="EDT"),
+    "America/Chicago":      _VTZ_DST_US.format(standard_offset="-0600", daylight_offset="-0500", standard_name="CST", daylight_name="CDT"),
+    "America/Denver":       _VTZ_DST_US.format(standard_offset="-0700", daylight_offset="-0600", standard_name="MST", daylight_name="MDT"),
+    "America/Boise":        _VTZ_DST_US.format(standard_offset="-0700", daylight_offset="-0600", standard_name="MST", daylight_name="MDT"),
+    "America/Detroit":      _VTZ_DST_US.format(standard_offset="-0500", daylight_offset="-0400", standard_name="EST", daylight_name="EDT"),
+    "America/Indiana/Indianapolis": _VTZ_DST_US.format(standard_offset="-0500", daylight_offset="-0400", standard_name="EST", daylight_name="EDT"),
+    "America/Los_Angeles":  _VTZ_DST_US.format(standard_offset="-0800", daylight_offset="-0700", standard_name="PST", daylight_name="PDT"),
+    "America/Anchorage":    _VTZ_DST_US.format(standard_offset="-0900", daylight_offset="-0800", standard_name="AKST", daylight_name="AKDT"),
+    # Fixed-offset zones (no DST).
+    "America/Phoenix":      _VTZ_FIXED.format(offset="-0700", name="MST"),
+    "Pacific/Honolulu":     _VTZ_FIXED.format(offset="-1000", name="HST"),
+    "America/Puerto_Rico":  _VTZ_FIXED.format(offset="-0400", name="AST"),
+    "Pacific/Guam":         _VTZ_FIXED.format(offset="+1000", name="ChST"),
+    "Pacific/Pago_Pago":    _VTZ_FIXED.format(offset="-1100", name="SST"),
+    "Pacific/Saipan":       _VTZ_FIXED.format(offset="+1000", name="ChST"),
+}
+
+
+def _tz_for_state(state):
+    """Map a US state code → IANA timezone string. Falls back to the
+    platform default for unknown / blank states."""
+    if not state:
+        return None
+    return US_STATE_TIMEZONES.get(str(state).strip().upper())
+
+
+def _build_vtimezone(tz_name):
+    """Render a VTIMEZONE block for the given IANA zone, or '' if we
+    don't have a body for it (event will fall back to floating time
+    and the calendar app will use the subscriber's local TZ)."""
+    body = _VTIMEZONE_BODIES.get(tz_name)
+    if not body:
+        return ""
+    return f"BEGIN:VTIMEZONE\r\nTZID:{tz_name}\r\n{body}END:VTIMEZONE\r\n"
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from sqlalchemy import text
 
@@ -84,8 +158,13 @@ def _fold_line(line):
     return "\r\n".join(out)
 
 
-def _build_vevent(gig):
-    """Render one gig as a VEVENT block."""
+def _build_vevent(gig, tz_name=None):
+    """Render one gig as a VEVENT block. tz_name (IANA, e.g.
+    'America/Los_Angeles') anchors DTSTART / DTEND so subscribers in
+    other timezones see the gig at the venue's wall clock time, not their
+    own. When None, the event uses floating time (the subscriber's local
+    TZ wins) — that's the legacy pre-TZ behavior, kept as a safety net
+    for venues whose state we can't map to a zone."""
     gig_id = gig["gig_id"]
     date_str = str(gig["date"])[:10].replace("-", "")
     start = (gig.get("start_time") or "00:00").replace(":", "") + "00"
@@ -134,12 +213,22 @@ def _build_vevent(gig):
     location_str = ", ".join(location)
 
     uid_suffix = f"slot{gig['slot_id']}" if gig.get("slot_id") else "gig"
+    # When we know the venue's IANA zone, anchor DTSTART/DTEND to it via
+    # TZID. The matching VTIMEZONE block is emitted in the VCALENDAR
+    # header — Google / Apple / Outlook need both halves to render the
+    # event at the venue's wall clock time across subscriber timezones.
+    if tz_name:
+        dtstart = f"DTSTART;TZID={tz_name}:{date_str}T{start}"
+        dtend   = f"DTEND;TZID={tz_name}:{end_date_str}T{end}"
+    else:
+        dtstart = f"DTSTART:{date_str}T{start}"
+        dtend   = f"DTEND:{end_date_str}T{end}"
     lines = [
         "BEGIN:VEVENT",
         f"UID:gigsfill-{gig_id}-{uid_suffix}@gigsfill.com",
         f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}",
-        f"DTSTART:{date_str}T{start}",
-        f"DTEND:{end_date_str}T{end}",
+        dtstart,
+        dtend,
         f"SUMMARY:{_ics_escape(summary)}",
     ]
     if description:
@@ -241,6 +330,22 @@ def calendar_feed(token: str, db=Depends(get_db)):
         {"uid": user_id}
     ).mappings().all()
 
+    # First pass — resolve each row's timezone via its venue's state and
+    # collect the unique set so we know which VTIMEZONE blocks to emit
+    # in the header. Falls back to the platform default for venues whose
+    # state we can't map.
+    platform_tz = get_platform_timezone(db)
+    resolved = []  # list of (row_dict, tz_name_or_None)
+    used_tzs = set()
+    for r in rows:
+        d = dict(r)
+        tz = _tz_for_state(d.get("state")) or platform_tz
+        if tz not in _VTIMEZONE_BODIES:
+            tz = None  # unknown zone → floating time (subscriber's local)
+        resolved.append((d, tz))
+        if tz:
+            used_tzs.add(tz)
+
     body_lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -250,8 +355,16 @@ def calendar_feed(token: str, db=Depends(get_db)):
         f"X-WR-CALNAME:GigsFill — {_ics_escape((user.get('first_name') or '') + ' ' + (user.get('last_name') or '')).strip() or 'My Calendar'}",
         "X-PUBLISHED-TTL:PT1H",
     ]
-    for r in rows:
-        body_lines.extend(_build_vevent(dict(r)))
+    # Emit one VTIMEZONE per unique zone in the feed. The blocks are
+    # pre-rendered with CRLF inside; split on CRLF and feed line-by-line
+    # so the surrounding "\r\n".join(...) below stays correct.
+    for tz in sorted(used_tzs):
+        block = _build_vtimezone(tz)
+        if block:
+            for line in block.rstrip("\r\n").split("\r\n"):
+                body_lines.append(line)
+    for d, tz in resolved:
+        body_lines.extend(_build_vevent(d, tz_name=tz))
     body_lines.append("END:VCALENDAR")
 
     body = "\r\n".join(body_lines) + "\r\n"

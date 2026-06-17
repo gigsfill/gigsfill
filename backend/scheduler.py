@@ -1882,7 +1882,15 @@ def process_bounce_inbox(conn=None):
         logger.info(f"[BOUNCE] Done — {result_summary}")
         return summary
     except Exception as e:
-        logger.error(f"[BOUNCE] Fatal error: {e}", exc_info=True)
+        # logger.warning (was .error) so we don't trigger the global
+        # email-alert handler in main.py — the bounce poller failing is
+        # ALREADY captured (a) inline in the Bounce Detection panel's
+        # "Last poll: …" status line and (b) in Admin → DB / Logs →
+        # Application Logs (filter Level: WARNING, search "BOUNCE").
+        # Emailing the admin every 5 minutes when the IMAP host is mis-
+        # configured drowned the inbox and the admin only needs to see
+        # this on-demand, not pushed.
+        logger.warning(f"[BOUNCE] Fatal error: {e}", exc_info=True)
         # Translate the raw stdlib exceptions into something the admin
         # can act on in the "Test & Poll Now" status line. The cryptic
         # "[Errno -2] Name or service not known" is the #1 source of
