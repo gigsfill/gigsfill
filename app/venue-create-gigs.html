@@ -1853,15 +1853,20 @@
 .legal-subtab-content { display: none; }
 .legal-subtab-content.active { display: block; }
 
-/* Invited Artists Tracker */
+/* Invited Artists Tracker.
+   Grid: Email | Status | Invited | Action.
+   Email gets a moderate minmax (not 1fr) so it doesn't eat the row and
+   force Resend+Delete to wrap to a second line. Action widened to 190px
+   so Resend (~52px) + (×N) counter + Delete (~58px) all fit inline. */
 .inv-row {
   display: grid;
-  grid-template-columns: 1fr 120px 140px 100px;
+  grid-template-columns: minmax(140px, 1.6fr) 130px 110px 190px;
   gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid rgba(255,255,255,0.05);
   align-items: center;
 }
+.inv-row > div:last-child { white-space: nowrap; }
 .inv-row:last-child { border-bottom: none; }
 .inv-email {
   font-size: 0.85rem;
@@ -2442,7 +2447,7 @@
         </div>
       </div>
       
-      <div style="display:grid;grid-template-columns:1fr 120px 140px 100px;gap:8px;padding:8px 12px;background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.3);border-radius:6px;margin-bottom:6px;">
+      <div style="display:grid;grid-template-columns:minmax(140px, 1.6fr) 130px 110px 190px;gap:8px;padding:8px 12px;background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.3);border-radius:6px;margin-bottom:6px;">
         <div style="font-size:0.75rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Email</div>
         <div style="font-size:0.75rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Status</div>
         <div style="font-size:0.75rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Invited</div>
