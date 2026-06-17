@@ -333,29 +333,33 @@ async function loadAffMyEmails() {
       sent:              '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(107,114,128,0.15);color:#9ca3af;">Sent</span>',
     }[s] || '');
 
+    // (Jun 2026) Dropped the "Sent Recommendations" label — the section
+    // header on the card above already says "Recommend GigsFill — Emails
+    // Sent" so the second header was redundant. Columns + data now all
+    // left-aligned per cell (same convention as the Invite Artists table)
+    // so each column reads as a single vertical lane.
     el.innerHTML = `
-      <div style="font-size:0.72rem;font-weight:700;color:var(--text-gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Sent Recommendations</div>
       <table style="width:100%;border-collapse:collapse;">
         <thead><tr style="border-bottom:1px solid var(--border);">
           <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Recipient</th>
           <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Email</th>
-          <th style="padding:5px 8px;text-align:center;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Sent</th>
-          <th style="padding:5px 8px;text-align:center;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Status</th>
-          <th style="padding:5px 8px;"></th>
+          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Sent</th>
+          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Status</th>
+          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Action</th>
         </tr></thead>
         <tbody>${emails.map(e => `
           <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
-            <td style="padding:6px 8px;color:var(--text);font-size:0.78rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            <td style="padding:6px 8px;text-align:left;color:var(--text);font-size:0.78rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
               ${e.recipient_name ? esc(e.recipient_name) : '<span style="color:var(--text-gray);">—</span>'}
             </td>
-            <td style="padding:6px 8px;color:var(--text-gray);font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            <td style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
               ${esc(e.recipient_email)}
             </td>
-            <td style="padding:6px 8px;text-align:center;color:var(--text-gray);font-size:0.72rem;white-space:nowrap;">
+            <td style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.72rem;white-space:nowrap;">
               ${new Date(e.sent_at).toLocaleDateString()}
             </td>
-            <td style="padding:6px 8px;text-align:center;">${badge(e.status)}</td>
-            <td style="padding:6px 8px;text-align:right;">
+            <td style="padding:6px 8px;text-align:left;">${badge(e.status)}</td>
+            <td style="padding:6px 8px;text-align:left;">
               <button onclick="window.resendAffRecommend(${e.id}, this)"
                 style="padding:3px 10px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.3);border-radius:4px;color:var(--cyan);font-size:0.68rem;cursor:pointer;white-space:nowrap;">
                 Resend
@@ -860,7 +864,6 @@ async function checkAffW9Prompt() {
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
     modal.innerHTML = `
       <div style="background:#1a1f2e;border:1px solid rgba(16,185,129,0.4);border-radius:14px;padding:32px 36px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.6);text-align:center;">
-        <div style="font-size:2.5rem;margin-bottom:12px;">🎉</div>
         <h2 style="margin:0 0 10px;font-size:1.2rem;font-weight:700;color:#10b981;">You're now affiliated with ${d.referral_count} venue${d.referral_count>1?'s':''}!</h2>
         <p style="margin:0 0 20px;font-size:0.88rem;line-height:1.6;color:var(--text-gray);">
           Congrats — you'll earn a commission on every gig booked at the venue${d.referral_count>1?'s':''} you referred.<br><br>

@@ -1832,13 +1832,28 @@ def check_new_venues(user=Depends(get_current_user), db=Depends(get_db)):
         and stripe_row.get("affiliate_stripe_connect_onboarding_complete")
     )
 
-    # Per-prompt dismissal flags so we don't re-pester the user after they
-    # close the popup once. They can revisit the setup steps via the
-    # checklist banner on the Affiliate Dashboard.
-    dismissed_w9 = db.execute(text(
+    # Per-prompt dismissal flags. The setting_value stores an ISO UTC
+    # timestamp of WHEN the user dismissed the popup; the popup auto
+    # re-fires after a 7-day cooldown so the user gets a weekly nudge
+    # until both prerequisites (W-9 + Stripe) are complete. Legacy rows
+    # that stored '1' as the value are treated as "dismissed long ago"
+    # so they DO re-fire — gives existing users a single fresh nudge.
+    from datetime import datetime as _dt, timedelta as _td
+    def _dismiss_active(value):
+        """Return True if the dismissal is still within the 7-day cooldown."""
+        if not value:
+            return False
+        try:
+            ts = _dt.fromisoformat(str(value).rstrip("Z"))
+        except (ValueError, TypeError):
+            # Legacy '1' / unparseable → treat as long-ago dismissal.
+            return False
+        return (_dt.utcnow() - ts) < _td(days=7)
+
+    dismissed_w9_val = db.execute(text(
         "SELECT setting_value FROM user_settings WHERE user_id = :uid AND setting_key = 'aff_w9_prompt_dismissed'"
     ), {"uid": user.id}).scalar()
-    dismissed_stripe = db.execute(text(
+    dismissed_stripe_val = db.execute(text(
         "SELECT setting_value FROM user_settings WHERE user_id = :uid AND setting_key = 'aff_stripe_prompt_dismissed'"
     ), {"uid": user.id}).scalar()
 
@@ -1846,24 +1861,28 @@ def check_new_venues(user=Depends(get_current_user), db=Depends(get_db)):
         "has_referrals": bool(has_referrals),
         "has_w9": bool(has_w9),
         "has_stripe": has_stripe,
-        "needs_w9_prompt":     bool(has_referrals and not has_w9     and not dismissed_w9),
-        "needs_stripe_prompt": bool(has_referrals and not has_stripe and not dismissed_stripe),
+        "needs_w9_prompt":     bool(has_referrals and not has_w9     and not _dismiss_active(dismissed_w9_val)),
+        "needs_stripe_prompt": bool(has_referrals and not has_stripe and not _dismiss_active(dismissed_stripe_val)),
         "referral_count": has_referrals,
     }
 
 
 @router.post("/api/affiliate/dismiss-stripe-prompt")
 def dismiss_stripe_prompt(user=Depends(get_current_user), db=Depends(get_db)):
-    """Mark that user has dismissed the Stripe setup prompt (so we don't
-    show it on every login). They can still set up Stripe any time from
-    the Affiliate Dashboard.
+    """Mark that user has dismissed the Stripe setup prompt. The popup
+    auto re-fires after a 7-day cooldown (see check_new_venues for the
+    expiry check) so the user gets a weekly nudge until Stripe is set
+    up — they can also complete the flow any time from the Affiliate
+    Dashboard checklist banner.
     """
+    from datetime import datetime as _dt
+    now_iso = _dt.utcnow().isoformat()
     try:
         db.execute(text("""
             INSERT INTO user_settings (user_id, setting_key, setting_value)
-            VALUES (:uid, 'aff_stripe_prompt_dismissed', '1')
-            ON CONFLICT(user_id, setting_key) DO UPDATE SET setting_value = '1'
-        """), {"uid": user.id})
+            VALUES (:uid, 'aff_stripe_prompt_dismissed', :ts)
+            ON CONFLICT(user_id, setting_key) DO UPDATE SET setting_value = :ts
+        """), {"uid": user.id, "ts": now_iso})
         db.commit()
     except Exception:
         pass
@@ -1872,13 +1891,16 @@ def dismiss_stripe_prompt(user=Depends(get_current_user), db=Depends(get_db)):
 
 @router.post("/api/affiliate/dismiss-w9-prompt")
 def dismiss_w9_prompt(user=Depends(get_current_user), db=Depends(get_db)):
-    """Mark that user has dismissed the W9 prompt (so we don't show it every login)."""
+    """Mark that user has dismissed the W-9 prompt. Re-fires weekly per
+    check_new_venues' _dismiss_active() cooldown."""
+    from datetime import datetime as _dt
+    now_iso = _dt.utcnow().isoformat()
     try:
         db.execute(text("""
             INSERT INTO user_settings (user_id, setting_key, setting_value)
-            VALUES (:uid, 'aff_w9_prompt_dismissed', '1')
-            ON CONFLICT(user_id, setting_key) DO UPDATE SET setting_value = '1'
-        """), {"uid": user.id})
+            VALUES (:uid, 'aff_w9_prompt_dismissed', :ts)
+            ON CONFLICT(user_id, setting_key) DO UPDATE SET setting_value = :ts
+        """), {"uid": user.id, "ts": now_iso})
         db.commit()
     except Exception:
         pass
