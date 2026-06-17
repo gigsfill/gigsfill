@@ -935,37 +935,38 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    /* Greyed-out neutral look when door split is INACTIVE so the active
-       pay pill on the left reads as the "current" option. Switches to
-       bright green when .is-on is toggled by the JS.
-       A11y fix (Jun 2026): old color/opacity gave a 1.8:1 text contrast
-       ratio — fails WCAG 1.4.3 AA (4.5:1 minimum). New values give ~5:1
-       which is readable AND still visually muted next to the bright
-       green pay pill. */
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.30);
+    /* OFF state — muted white-alpha so the bubble reads as "default off"
+       and the bright green pay pill to its left is clearly the active
+       option. */
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 4px;
-    padding: 3px 8px;
-    color: rgba(255, 255, 255, 0.78);
-    opacity: 1;
+    /* IDENTICAL height math to .slot-pay-pill: same font-size (0.85rem)
+       and same line-height (1.2). The pay pill computes:
+         2px border + 2px pill pad + 2px input pad + 16.32px content = 22.32px
+       The door pill computes:
+         2px border + 4px pill pad (2+2) + 16.32px content = 22.32px
+       Result: pixel-identical heights without needing align-self:stretch
+       (which was inflating the door pill because the time inputs in the
+       same flex row render taller, so stretch pushed it to ~26px). */
+    padding: 2px 8px;
+    color: rgba(255, 255, 255, 0.55);
+    opacity: 0.75;
     font-weight: 600;
-    font-size: 0.78rem;
+    font-size: 0.85rem;
     line-height: 1.2;
     white-space: nowrap;
     user-select: none;
     transition: background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s;
     box-sizing: border-box;
-    /* Height-match the .slot-pay-pill, which has a real <input> inside
-       (browser default line-height: normal makes the input ~2-3px taller
-       than a plain span at the same font-size). align-self:stretch makes
-       this pill match the row's tallest sibling. */
-    align-self: stretch;
-    min-height: 1.55rem;
   }
+  /* ON state — visually identical to the .slot-pay-pill (same bg / border /
+     text alphas) so when the user clicks Door Split, the two pills look
+     like matching twins flanking the "— OR —" divider. */
   .slot-door-pill.is-on {
-    background: rgba(34, 197, 94, 0.20);
-    border-color: rgba(34, 197, 94, 0.60);
-    color: #86efac;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.30);
+    color: #22c55e;
     opacity: 1;
   }
   .slot-door-pill .slot-door-toggle-btn {
@@ -3189,14 +3190,14 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=13"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=157"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=163"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
 
 <script src="/app/static/js/activity-center.js?v=3"></script>
 
-<script src="/app/static/js/my-artists.js?v=6"></script>
+<script src="/app/static/js/my-artists.js?v=7"></script>
 <script src="/app/static/js/entity-users.js?v=3"></script>
 <script src="/app/static/js/venue-email-center.js?v=5"></script>
 

@@ -2221,10 +2221,13 @@ def book_gig(
     if not open_slot:
         raise HTTPException(403, "No open slots available for this gig")
 
-    # Apply pay override on the slot
+    # Apply pay override on the slot. Door-deal slots SKIP the override —
+    # the guarantee floor is final (see _apply_slot_pay_override docstring
+    # for the design rationale: door split is the per-gig opt-out from
+    # the standing override).
     pay_override = db.execute(
         text("""
-            SELECT pa.pay_dollars_override, pa.pay_cents_override, gs.pay
+            SELECT pa.pay_dollars_override, pa.pay_cents_override, gs.pay, gs.deal_type
             FROM preferred_artists pa
             JOIN gig_slots gs ON gs.gig_id = :gid AND gs.id = :sid
             WHERE pa.venue_id = :vid AND pa.artist_id = :aid
@@ -2232,7 +2235,11 @@ def book_gig(
         {"gid": gig_id, "sid": open_slot["id"], "vid": gig["venue_id"], "aid": artist_id}
     ).mappings().first()
 
-    if pay_override and pay_override["pay_dollars_override"] is not None:
+    if (
+        pay_override
+        and pay_override["pay_dollars_override"] is not None
+        and (pay_override.get("deal_type") or "").lower() != "door"
+    ):
         override_pay = float(pay_override["pay_dollars_override"]) + float(pay_override["pay_cents_override"] or 0) / 100
         if override_pay > float(pay_override["pay"] or 0):
             db.execute(
@@ -4241,7 +4248,9 @@ def book_slot(
     except Exception:
         pass
 
-    # Apply pay override: effective_pay = MAX(slot_listed_pay, artist_override_pay)
+    # Apply pay override: effective_pay = MAX(slot_listed_pay, artist_override_pay).
+    # Door-deal slots SKIP the override — the per-gig guarantee floor is final
+    # (see _apply_slot_pay_override docstring for design rationale).
     slot_pay_override = db.execute(
         text("""
             SELECT pa.pay_dollars_override, pa.pay_cents_override
@@ -4250,8 +4259,13 @@ def book_slot(
         """),
         {"vid": gig["venue_id"], "aid": artist_id}
     ).mappings().first()
-    
-    if slot_pay_override and slot_pay_override["pay_dollars_override"] is not None:
+
+    _slot_deal_type = (slot.get("deal_type") or "").lower() if isinstance(slot, dict) or hasattr(slot, "get") else ""
+    if (
+        slot_pay_override
+        and slot_pay_override["pay_dollars_override"] is not None
+        and _slot_deal_type != "door"
+    ):
         override_pay = float(slot_pay_override["pay_dollars_override"]) + float(slot_pay_override["pay_cents_override"] or 0) / 100
         slot_pay = float(slot.get("pay") or 0)
         if override_pay > slot_pay:

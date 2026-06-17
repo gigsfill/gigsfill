@@ -561,7 +561,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 aria-pressed="${dealType === 'door' ? 'true' : 'false'}"
                 aria-label="Toggle Door Split pay">
             <input type="checkbox" class="slot-door-checkbox" ${dealType === 'door' ? 'checked' : ''}>
-            <span class="slot-door-toggle-text"><span aria-hidden="true">🎯 </span>Door Split</span>
+            <span class="slot-door-toggle-text">Door Split</span>
           </span>
         </span>
         <button type="button" class="remove-slot-btn" style="
@@ -3125,6 +3125,43 @@ async function renderCalendar() {
     }
   
     modal.classList.remove("hidden");
+
+    // Unsaved-changes guard. Snapshot the initial form state then flip
+    // a dirty flag on any input/change inside the modal. The Close-button
+    // handler reads this flag and prompts via showConfirm before closing.
+    // Modes that should NOT prompt (the read-only past-event view, the
+    // cancelled / in-progress / pending-approval views) are handled by
+    // skipping the listener setup — `window._gigModalEditable` is set
+    // by those branches before the modal opens.
+    try {
+      window._gigModalDirty = false;
+      // Take a delayed snapshot so any post-display population finishes.
+      // We don't compare values explicitly — any user-driven input/change
+      // event flips dirty=true. Programmatic mutations during open are
+      // squelched by a brief grace window.
+      window._gigModalOpenedAt = Date.now();
+      // Idempotent: only bind once. The same modal element survives across
+      // open/close cycles.
+      if (modal && !modal._gfDirtyBound) {
+        const _markDirty = (e) => {
+          // Ignore events fired during the open animation / population.
+          if (Date.now() - (window._gigModalOpenedAt || 0) < 250) return;
+          // Skip noisy events from elements we don't track as user edits.
+          if (e.target && e.target.closest && e.target.closest('[data-skip-dirty]')) return;
+          window._gigModalDirty = true;
+        };
+        modal.addEventListener('input',  _markDirty, true);
+        modal.addEventListener('change', _markDirty, true);
+        modal.addEventListener('click', (e) => {
+          // Add Slot / Remove Slot / pill toggles are user edits too.
+          const t = e.target.closest && e.target.closest('#addSlotBtn, .remove-slot-btn, .slot-pill, .slot-door-toggle-btn');
+          if (t && Date.now() - (window._gigModalOpenedAt || 0) > 250) {
+            window._gigModalDirty = true;
+          }
+        }, true);
+        modal._gfDirtyBound = true;
+      }
+    } catch (_) { /* non-fatal — fall through to existing Close behavior */ }
   }
 
   // ===================================
@@ -3913,6 +3950,11 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
   };
 
   saveBtn.onclick = async () => {
+    // Saving counts as committing — clear the unsaved-changes flag so
+    // the close handler doesn't re-prompt after a successful save. (If
+    // the save then fails / aborts, the user will edit again and the
+    // flag flips back on the first input event.)
+    window._gigModalDirty = false;
     // Check if payment method is selected
     // Block if venue is suspended
     if (typeof window.isVenueSuspended === 'function' && window.isVenueSuspended()) {
@@ -4811,22 +4853,47 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
   };
 
   cancelBtn.onclick = () => {
-    // Remove any cancellation section if it exists
-    const cancellationSection = document.getElementById("cancellationSection");
-    if (cancellationSection) {
-      cancellationSection.remove();
+    // Unsaved-changes guard. If the user made edits since open, ask
+    // before closing — site-styled showConfirm rather than the native
+    // browser dialog. Three paths:
+    //   Save Changes   → click the Save button (existing handler)
+    //   Discard        → close without saving
+    //   Keep Editing   → return to modal (do nothing)
+    const _hasDirty = !!window._gigModalDirty;
+    const _doClose = () => {
+      const cancellationSection = document.getElementById("cancellationSection");
+      if (cancellationSection) cancellationSection.remove();
+      cancelBtn.dataset.cancelMode = "false";
+      recurringCheckbox.disabled = false;
+      _restoreRecurringSnapshot();
+      window._gigModalDirty = false;
+      modal.classList.add("hidden");
+    };
+    if (_hasDirty && window.showConfirm) {
+      window.showConfirm(
+        'Unsaved changes',
+        'You have unsaved changes to this gig. Save them, or discard and close?',
+        () => {
+          // SAVE branch — trigger the existing Save button click. Its
+          // handler will close the modal on success, so we don't call
+          // _doClose here.
+          const _save = document.getElementById('saveGig');
+          if (_save) _save.click();
+        },
+        () => {
+          // CANCEL/DISCARD branch — close without saving.
+          _doClose();
+        },
+        {
+          confirmLabel: 'Save Changes',
+          cancelLabel:  'Discard & Close',
+          confirmStyle: 'primary',
+          tone:         'warning',
+        }
+      );
+      return;
     }
-    
-    // Reset cancel mode
-    cancelBtn.dataset.cancelMode = "false";
-    
-    // v97: Reset recurring checkbox disabled state
-    recurringCheckbox.disabled = false;
-
-    // Restore any recurring UI changes the user made but didn't save
-    _restoreRecurringSnapshot();
-    
-    modal.classList.add("hidden");
+    _doClose();
   };
 
   // ===================================

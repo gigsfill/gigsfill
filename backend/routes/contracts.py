@@ -67,13 +67,27 @@ def _apply_slot_pay_override(db, slot_id: int, venue_id: int, artist_id: int):
     Override only applies when the relationship is 'approved' — pending/denied/revoked
     rows still carry the old override columns, but the per-artist negotiated rate no
     longer applies. Missed in the part 10m pay-override audit; fixed here.
+
+    DOOR-DEAL SAFETY (Jun 2026): when the slot has deal_type='door', the
+    pay column carries the guarantee floor that the venue explicitly set
+    for THIS slot. Letting the venue's standing per-artist override raise
+    that floor here would (a) silently desync the booking charge from the
+    "guarantee + X% of door" terms shown in the email + contract, and (b)
+    take away the venue's ability to use door split as a per-gig opt-out
+    from the standing override (which is the design the user asked for —
+    pick door split for the gig where you don't want to pay the full
+    override fee). Door slots skip the override; the guarantee is final.
     """
     try:
         slot = db.execute(
-            text("SELECT pay FROM gig_slots WHERE id = :sid"),
+            text("SELECT pay, deal_type FROM gig_slots WHERE id = :sid"),
             {"sid": slot_id}
         ).mappings().first()
         if not slot:
+            return
+        # Door slots use guarantee terms set per-gig — standing override
+        # does not apply.
+        if (slot.get("deal_type") or "").lower() == "door":
             return
         base_pay = float(slot["pay"] or 0)
         override = db.execute(

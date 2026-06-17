@@ -511,12 +511,15 @@ class MyArtists {
       statusBadge = '<span style="background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.5); color: #38bdf8; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">Non-Preferred</span>';
     }
     
-    // Pay and frequency: use override if set, otherwise venue default.
-    // Only meaningful for actively-preferred ('approved') artists — for revoked/denied/
-    // non-preferred/banned, the per-artist terms don't apply, so we hide the chip.
-    const payDollars = (artist.pay_dollars_override != null) ? artist.pay_dollars_override : (artist.venue_default_pay_dollars || 0);
-    const payCents = String((artist.pay_cents_override != null) ? artist.pay_cents_override : (artist.venue_default_pay_cents || 0)).padStart(2, '0');
-    const freqDays = (artist.frequency_days_override != null) ? artist.frequency_days_override : (artist.venue_default_freq_days || 0);
+    // Pay + frequency override INPUT values. When no override has been set
+    // (a freshly-approved preferred artist) we default to 0 so the venue
+    // explicitly sees "no override" rather than the inherited venue
+    // default (which would mislead them into thinking they'd set one).
+    // The backend treats override = 0 / NULL identically (max() with the
+    // gig pay wins), so 0 here is purely a clearer UI default.
+    const payDollars = (artist.pay_dollars_override != null) ? artist.pay_dollars_override : 0;
+    const payCents = String((artist.pay_cents_override != null) ? artist.pay_cents_override : 0).padStart(2, '0');
+    const freqDays = (artist.frequency_days_override != null) ? artist.frequency_days_override : 0;
     const showOverrideChip = (status === 'approved');
     
     // Audit fix (May 2026 part 7): escape every user-controlled field.
