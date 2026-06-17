@@ -214,7 +214,7 @@
      Resend + Delete need the row. */
   .inv-table-header, .inv-row {
     grid-template-columns: 1.4fr 1fr 1fr 1.6fr !important;
-    gap: 4px !important;
+    gap: 16px !important;
     font-size: 0.75rem !important;
   }
   .inv-table-header > div:last-child,
