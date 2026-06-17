@@ -134,19 +134,17 @@ async function initUserDropdown() {
     });
     toRemove.forEach(el => el.remove());
     
-    // Build invite/recommend link based on whether user has venues
-    // Build dropdown links — Invite Artists only on venue pages
+    // Build dropdown links — Invite Artists only on venue pages.
+    // (Jun 2026) "My Invites" standalone page removed: the invitation
+    // status tracking now lives inside the Email Center → Invite Artists
+    // sub-tab in venue-create-gigs.html, where the venue user is already
+    // managing invites in context. Keeping a separate top-level dropdown
+    // entry just to open a list page was duplicate surface area.
     const isArtistPage = window.location.pathname.includes('artist-book-gigs');
     const inviteLink = (userVenues.length > 0 && !isArtistPage)
       ? '<a href="#" onclick="openInviteArtistsModal(event)">Invite Artists</a>\n'
       : '';
-    // Part 10p: My Invites — track sent invitations across all venues you control.
-    // Show on every venue-side page (including the artist tracker, since the
-    // user-as-venue can still navigate to it from any page).
-    const myInvitesLink = (userVenues.length > 0)
-      ? '<a href="/app/my-invites.html">My Invites</a>\n'
-      : '';
-    
+
     // Create dropdown HTML
     const dropdown = document.createElement('div');
     dropdown.className = 'user-dropdown';
@@ -162,7 +160,6 @@ async function initUserDropdown() {
         <a href="#" onclick="openFeedbackModal(event)">Feedback</a>
         <a href="#" onclick="openRecommendModal(event)">Recommend GigsFill</a>
         ${inviteLink}
-        ${myInvitesLink}
         <div class="divider"></div>
         <a href="#" onclick="userDropdownSignOut(event)">Sign Out</a>
       </div>

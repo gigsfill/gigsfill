@@ -580,7 +580,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         <span aria-hidden="true" style="visibility:hidden; font-size:0.68rem; flex-shrink:0;">to</span>
         <span aria-hidden="true" style="width:96px; flex-shrink:0; visibility:hidden;">&nbsp;</span>
         <span class="slot-door-inputs">
-          <span class="slot-door-label-text">Guarantee Pay:</span>
+          <span class="slot-door-label-text" data-tooltip="This amount will supercede any Artist Pay Override you set in the My Artists tab.">Guarantee Pay:</span>
           <span class="slot-door-symbol">$</span>
           <input type="text" class="slot-door-guarantee" value="${_formatPayAmount(Math.floor(guaranteeCents / 100), guaranteeCents % 100)}" inputmode="decimal" maxlength="12" placeholder="0.00">
           <span class="slot-door-plus">+</span>
