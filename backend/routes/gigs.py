@@ -6787,11 +6787,20 @@ def artist_ical(artist_id: int, user=Depends(get_current_user), db=Depends(get_d
     ).mappings().first()
     artist_name = artist["name"] if artist else "Artist"
 
+    # Door-aware: pull this artist's slot row alongside the gig so the
+    # Pay line in the iCal description renders door split terms
+    # ("$X guarantee + Y% of door") when the slot has deal_type='door'.
+    # gs.* fields are NULL for single-slot legacy gigs that booked via
+    # gigs.artist_id directly — the helper falls back to gigs.pay then.
     rows = db.execute(
         text("""
             SELECT DISTINCT
                 g.id, g.date, g.start_time, g.end_time, g.title, g.notes,
                 g.pay, g.status,
+                gs.pay              as slot_pay,
+                gs.deal_type        as slot_deal_type,
+                gs.door_pct         as slot_door_pct,
+                gs.guarantee_cents  as slot_guarantee_cents,
                 v.venue_name, v.address_line_1, v.city, v.state, v.postal_code
             FROM gigs g
             JOIN venues v ON v.id = g.venue_id
@@ -6804,13 +6813,24 @@ def artist_ical(artist_id: int, user=Depends(get_current_user), db=Depends(get_d
         {"aid": artist_id}
     ).mappings().all()
 
+    from backend.services.email_dispatch import format_pay_summary_with_sign
+
     events = []
     for r in rows:
         parts = []
         if r["venue_name"]:
             parts.append(f"Venue: {r['venue_name']}")
-        if r["pay"] is not None and float(r["pay"]) > 0:
-            parts.append(f"Pay: ${float(r['pay']):,.2f}")
+        # Build a probe dict pointing the helper at whichever pay source
+        # actually has data — slot_* when this artist has a slot row,
+        # gig-level pay otherwise.
+        pay_probe = {
+            "pay":             r["slot_pay"] if r["slot_pay"] is not None else r["pay"],
+            "deal_type":       r["slot_deal_type"],
+            "door_pct":        r["slot_door_pct"],
+            "guarantee_cents": r["slot_guarantee_cents"],
+        }
+        if pay_probe["pay"] is not None and float(pay_probe["pay"]) > 0:
+            parts.append(f"Pay: {format_pay_summary_with_sign(pay_probe)}")
         if r["notes"]:
             parts.append(f"Notes: {r['notes']}")
         events.append({
@@ -6853,7 +6873,7 @@ def venue_ical(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)
     rows = db.execute(
         text("""
             SELECT g.id, g.date, g.start_time, g.end_time, g.title, g.notes,
-                   g.pay, g.status, g.artist_type,
+                   g.pay, g.status, g.artist_type, g.is_multi_slot,
                    a.name as artist_name
             FROM gigs g
             LEFT JOIN artists a ON g.artist_id = a.id
@@ -6865,6 +6885,30 @@ def venue_ical(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)
         {"vid": venue_id}
     ).mappings().all()
 
+    from backend.services.email_dispatch import format_pay_summary_with_sign
+
+    # Door-aware: multi-slot gigs can have different deal terms per slot
+    # (one slot flat, another door). Fetch every booked/pending slot
+    # in one round-trip then group per gig — one round trip beats N+1
+    # SELECTs even when the venue has many gigs. For single-slot gigs
+    # this stays a no-op (the helper falls back to gigs.pay below).
+    gig_ids = [r["id"] for r in rows]
+    slots_by_gig = {}
+    if gig_ids:
+        slot_rows = db.execute(
+            text("""
+                SELECT gs.gig_id, gs.slot_number, gs.pay, gs.deal_type,
+                       gs.door_pct, gs.guarantee_cents
+                FROM gig_slots gs
+                WHERE gs.gig_id IN :gids
+                  AND gs.status IN ('booked','pending_contract','awaiting_venue_contract')
+                ORDER BY gs.gig_id, gs.slot_number
+            """).bindparams(__import__('sqlalchemy').bindparam("gids", expanding=True)),
+            {"gids": gig_ids}
+        ).mappings().all()
+        for s in slot_rows:
+            slots_by_gig.setdefault(s["gig_id"], []).append(dict(s))
+
     events = []
     for r in rows:
         parts = []
@@ -6872,8 +6916,26 @@ def venue_ical(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)
             parts.append(f"Artist: {r['artist_name']}")
         elif r["artist_type"]:
             parts.append(f"Type: {r['artist_type']}")
-        if r["pay"] is not None and float(r["pay"]) > 0:
-            parts.append(f"Pay: ${float(r['pay']):,.2f}")
+
+        # Pay line(s) — multi-slot gigs render per-slot terms so a
+        # mixed flat+door gig shows both: "Pay: Slot 1 $50.00; Slot 2
+        # $25.00 guarantee + 20% of door". Single-slot uses the gig.pay
+        # fallback inside the helper.
+        slots = slots_by_gig.get(r["id"]) or []
+        if slots and r.get("is_multi_slot"):
+            pay_lines = []
+            for s in slots:
+                pay_str = format_pay_summary_with_sign(s)
+                if pay_str and pay_str != "$0.00":
+                    pay_lines.append(f"Slot {s['slot_number']} {pay_str}")
+            if pay_lines:
+                parts.append("Pay: " + "; ".join(pay_lines))
+        else:
+            # Single-slot: use the one slot's terms if booked, else the
+            # gig-level pay column for the legacy / not-yet-booked case.
+            probe = slots[0] if slots else {"pay": r["pay"]}
+            if probe.get("pay") is not None and float(probe.get("pay") or 0) > 0:
+                parts.append(f"Pay: {format_pay_summary_with_sign(probe)}")
         if r["notes"]:
             parts.append(f"Notes: {r['notes']}")
         status_label = {"open": "Open", "booked": "Booked", "pending_contract": "Pending Contract"}.get(r["status"], r["status"].title())
