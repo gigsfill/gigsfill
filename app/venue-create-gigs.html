@@ -1976,6 +1976,13 @@
 #emailSentMsg.show { opacity: 1 !important; }
   </style>
 <script src="/app/static/js/security.js?v=2"></script>
+<!-- api-globals.js exports window.apiGetSafe/PostSafe/PutSafe/DeleteSafe
+     AND the door-aware window.formatPaySummary helper. Without this,
+     gig-modal.js and venue.create-gigs.js fall back to a flat "$X.XX"
+     render and door split terms are invisible on the slot row. This
+     was the root cause of door deals showing as just the guarantee
+     amount on the venue calendar's gig modal. -->
+<script src="/app/static/js/api-globals.js?v=4"></script>
 <script src="/app/static/js/event-delegate.js"></script>
 <script src="/app/static/js/timezone-utils.js"></script>
 <script src="/app/static/js/auth.guard.js?v=2"></script>
