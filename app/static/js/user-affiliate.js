@@ -300,50 +300,16 @@ function _doCopyAffLink() {
 window._doCopyAffLink = _doCopyAffLink;
 
 // ── Recommend Form ────────────────────────────────────────────────────────────
-
-function toggleRecommendForm() {
-  const form = document.getElementById('affRecommendForm');
-  const btn  = document.getElementById('affRecommendToggle');
-  if (!form) return;
-  const show = form.style.display === 'none' || !form.style.display;
-  form.style.display = show ? 'block' : 'none';
-  if (btn) btn.textContent = show ? '✕ Cancel' : '+ Recommend';
-}
-
-async function sendAffRecommend() {
-  const email = (document.getElementById('affRecipEmail')?.value || '').trim();
-  const name  = (document.getElementById('affRecipName')?.value || '').trim();
-  const note  = (document.getElementById('affPersonalNote')?.value || '').trim();
-  const resultEl = document.getElementById('affSendResult');
-
-  if (!email || !email.includes('@')) {
-    if (resultEl) { resultEl.style.color='#ef4444'; resultEl.textContent='Valid email required.'; resultEl.style.opacity='1'; }
-    return;
-  }
-  try {
-    const r = await fetch('/api/affiliate/recommend', {
-      method:'POST', credentials:'include',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ recipient_email:email, recipient_name:name, personal_note:note })
-    });
-    const d = await r.json();
-    if (resultEl) {
-      if (d.already_claimed) {
-        resultEl.style.color='#f59e0b'; resultEl.textContent='That email was already recommended by someone else.';
-      } else if (d.ok) {
-        resultEl.style.color='#10b981'; resultEl.textContent='✓ Recommendation sent!';
-        ['affRecipEmail','affRecipName','affPersonalNote'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
-        await loadAffMyEmails();
-      } else {
-        resultEl.style.color='#ef4444'; resultEl.textContent=d.detail||'Send failed';
-      }
-      resultEl.style.opacity='1';
-      setTimeout(() => resultEl.style.opacity='0', 4000);
-    }
-  } catch(e) {
-    if (resultEl) { resultEl.style.color='#ef4444'; resultEl.textContent='Request failed'; resultEl.style.opacity='1'; }
-  }
-}
+// (Jun 2026) The inline form + toggleRecommendForm / sendAffRecommend
+// were deleted in favor of the same modal the dropdown's "Recommend
+// GigsFill" entry opens (openRecommendModal in user-dropdown.js). Single
+// source of truth for the affiliate-recommend flow. After a successful
+// send the modal's submit handler dispatches `affRecommendSent` so the
+// "Sent Recommendations" table on this page refreshes — see the
+// listener wired below.
+window.addEventListener('affRecommendSent', () => {
+  if (typeof loadAffMyEmails === 'function') loadAffMyEmails();
+});
 
 // ── Sent Emails List ──────────────────────────────────────────────────────────
 
@@ -931,8 +897,9 @@ window._dismissAffW9Prompt = async function() {
 window.loadAffMyEmails         = loadAffMyEmails;
 window.loadAffiliatesPage      = loadAffiliatesPage;
 window.copyAffCode             = copyAffCode;
-window.toggleRecommendForm     = toggleRecommendForm;
-window.sendAffRecommend        = sendAffRecommend;
+// toggleRecommendForm + sendAffRecommend removed (Jun 2026) — the inline
+// form was replaced by openRecommendModal in user-dropdown.js. See the
+// `affRecommendSent` event listener above for the refresh hook.
 window.startAffStripeOnboard   = startAffStripeOnboard;
 window.toggleAffW9Form         = toggleAffW9Form;
 window.saveAffW9               = saveAffW9;

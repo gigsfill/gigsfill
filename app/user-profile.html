@@ -338,7 +338,7 @@
 <script src="/app/static/js/api-globals.js?v=4"></script>
 <script src="/app/static/js/email-verify-banner.js"></script>
 <script src="/app/static/js/event-delegate.js"></script>
-  <script src="/app/static/js/user-dropdown.js?v=7"></script>
+  <script src="/app/static/js/user-dropdown.js?v=8"></script>
 
   <div class="profile-container">
 
@@ -689,44 +689,20 @@
       </div>
     </div>
 
-    <!-- Recommend button -->
+    <!-- Recommend button — opens the SAME modal as the "Recommend GigsFill"
+         option in the upper-right user dropdown (openRecommendModal +
+         recommendModal in user-dropdown.js), so the affiliate flow has one
+         visual surface across the entire site instead of two parallel
+         forms with different field names. The "Sent Recommendations"
+         table below lists every email sent via that flow, with a Resend
+         button per row. -->
     <div class="content-card" style="margin-bottom:16px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <h3 style="margin:0;font-size:0.85rem;color:var(--text);">Recommend GigsFill to a Venue</h3>
-        <button onclick="toggleRecommendForm()" id="affRecommendToggle"
+        <button onclick="openRecommendModal(event)" id="affRecommendToggle"
           style="padding:6px 16px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.4);border-radius:6px;color:var(--cyan);font-size:0.78rem;cursor:pointer;font-weight:600;">
-          + Recommend
+          Recommend GigsFill
         </button>
-      </div>
-
-      <!-- Recommend form (hidden by default) -->
-      <div id="affRecommendForm" style="display:none;margin-bottom:16px;padding:14px;background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;">
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <div style="flex:1;min-width:160px;">
-              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Recipient Name (optional)</label>
-              <input type="text" id="affRecipName" placeholder="John's Bar & Grill"
-                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
-            </div>
-            <div style="flex:1;min-width:180px;">
-              <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Email Address <span style="color:#ef4444;">*</span></label>
-              <input type="email" id="affRecipEmail" placeholder="venue@example.com"
-                style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);box-sizing:border-box;">
-            </div>
-          </div>
-          <div>
-            <label style="font-size:0.7rem;color:var(--text-gray);display:block;margin-bottom:3px;">Personal Note (optional)</label>
-            <textarea id="affPersonalNote" rows="2" placeholder="Hey, I've been using GigsFill for booking gigs — you should check it out!"
-              style="width:100%;padding:7px 10px;font-size:0.78rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);resize:vertical;box-sizing:border-box;"></textarea>
-          </div>
-          <div style="display:flex;align-items:center;gap:12px;">
-            <button onclick="sendAffRecommend()"
-              style="padding:7px 20px;background:rgba(6,182,212,0.2);border:1px solid rgba(6,182,212,0.5);border-radius:6px;color:var(--cyan);font-size:0.78rem;font-weight:600;cursor:pointer;">
-              Send Recommendation →
-            </button>
-            <span id="affSendResult" style="font-size:0.75rem;opacity:0;transition:opacity .3s;color:#10b981;"></span>
-          </div>
-        </div>
       </div>
 
       <!-- Sent emails list -->
@@ -1135,7 +1111,7 @@
   <script src="/app/static/js/gf-modals.js?v=6"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/user-profile.js?v=2"></script>
-  <script src="/app/static/js/user-affiliate.js"></script>
+  <script src="/app/static/js/user-affiliate.js?v=2"></script>
   <script src="/app/static/js/user-availability.js?v=5"></script>
   
 

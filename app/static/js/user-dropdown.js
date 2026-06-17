@@ -725,6 +725,10 @@ async function submitRecommendation() {
     btn.textContent = 'OK';
     btn.disabled = false;
     btn.onclick = () => closeRecommendModal();
+    // Tell the Affiliate dashboard's "Sent Recommendations" table to
+    // refresh if the user is currently viewing it. user-affiliate.js
+    // listens for this event and re-fetches GET /api/affiliate/my-emails.
+    try { window.dispatchEvent(new CustomEvent('affRecommendSent')); } catch (_) {}
   } catch (error) {
     console.error('Error sending recommendation:', error);
     status.textContent = 'Failed to send. Please try again.';
