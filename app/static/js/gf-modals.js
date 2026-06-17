@@ -163,7 +163,18 @@
           try {
             if (_handler) {
               const r = _handler();
-              if (r === false) stayOpen = true;
+              // Async handler (returns a Promise) → KEEP MODAL OPEN.
+              // The handler is responsible for calling closeAllModals()
+              // (or _closeOne) on success, AND for surfacing errors
+              // inline so the user can retry. Without this guard the
+              // sync close happened immediately on click and async
+              // validation that returned `Promise<false>` was racing
+              // against an already-closed modal → user saw the modal
+              // disappear and a calendar refresh, with nothing actually
+              // saved on the backend. Surfaced via the contract-sign
+              // empty-name regression (Jun 2026).
+              if (r && typeof r.then === 'function') stayOpen = true;
+              else if (r === false) stayOpen = true;
             }
           } catch (e) { console.error('[gfm-modal] button onClick error:', e); }
           if (!stayOpen) _closeOne(overlay, opts);

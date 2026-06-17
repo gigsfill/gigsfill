@@ -2604,6 +2604,10 @@ function showContractSigningModal(gig, preview, artistId) {
       {
         text: 'Sign & Book This Gig', style: 'primary',
         onClick: async () => {
+          // (Server-side guard duplicates this — see book_with_contract:
+          // "Signature name is required for digital contracts" — but the
+          // button is also disabled in the DOM until ≥2 chars are typed,
+          // so this branch only fires if someone manipulates the DOM.)
           const overlay = document.querySelector('.gfm-modal-overlay');
           if (!overlay) return;
           const sigInput = overlay.querySelector('#contractSignatureName');
@@ -2658,6 +2662,32 @@ function showContractSigningModal(gig, preview, artistId) {
     ],
     { size: 'xl' }
   );
+
+  // Disable the Sign & Book button until the artist types ≥ 2 chars of
+  // their name. setTimeout(0) defers until the modal DOM is in place
+  // (showStyledModal builds + appends synchronously, but querying right
+  // after the call returns races with the layout pass on some browsers).
+  setTimeout(() => {
+    const overlay = document.querySelector('.gfm-modal-overlay');
+    if (!overlay) return;
+    const sigInput = overlay.querySelector('#contractSignatureName');
+    const footerBtns = overlay.querySelectorAll('.gfm-modal-footer .btn');
+    const signBtn = footerBtns[footerBtns.length - 1]; // primary = last btn
+    if (!sigInput || !signBtn) return;
+    const _setEnabled = (on) => {
+      signBtn.disabled = !on;
+      signBtn.style.opacity = on ? '' : '0.45';
+      signBtn.style.cursor = on ? '' : 'not-allowed';
+      signBtn.title = on
+        ? 'Click to sign the contract and confirm your booking.'
+        : 'Type your full legal name above to enable signing.';
+    };
+    _setEnabled(false); // start disabled — name field is empty
+    sigInput.addEventListener('input', () => {
+      _setEnabled(sigInput.value.trim().length >= 2);
+    });
+    sigInput.focus();
+  }, 0);
 }
 
 /**
