@@ -1478,7 +1478,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (contractInfo && contractInfo.required) {
           btn.disabled = true; btn.textContent = 'Loading...';
           try {
-            const prevRes = await fetch(`/api/gigs/${data.id}/contract-preview?artist_id=${artistId}`, { credentials: 'include' });
+            const prevRes = await fetch(`/api/gigs/${data.id}/contract-preview?artist_id=${artistId}${slotId ? '&slot_id=' + slotId : ''}`, { credentials: 'include' });
             if (!prevRes.ok) throw new Error('Failed to load contract');
             const preview = await prevRes.json();
             window._pendingSlotBooking = { gigId: data.id, slotId, slotNum, artistId };

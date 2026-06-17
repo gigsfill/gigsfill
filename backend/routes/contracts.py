@@ -194,7 +194,7 @@ def format_time_12hr(time_str):
 AUTO_CONTRACT_DISCLAIMER = """DISCLAIMER: This contract template is provided by GigsFill for convenience only and does not constitute legal advice. GigsFill is not a law firm, is not a party to this agreement, makes no representations or warranties regarding the enforceability, completeness, or legal sufficiency of this document, and assumes no liability whatsoever for its use. Both parties are solely responsible for understanding and agreeing to the terms herein. Both parties are strongly encouraged to consult with a licensed attorney before executing any contract. By signing this document, both parties acknowledge they have read and understood this disclaimer and agree to use this template at their own risk."""
 
 
-def _get_effective_pay_str(db, gig, venue_id, artist_id):
+def _get_effective_pay_str(db, gig, venue_id, artist_id, slot_id=None):
     """Get the effective pay for a gig considering pay overrides from preferred_artists.
 
     Door-split aware (Jun 2026): when the gig (or the booked slot) has
@@ -204,19 +204,28 @@ def _get_effective_pay_str(db, gig, venue_id, artist_id):
     as they did when booking.
     """
     # Door-split path — check the slot table first (multi-slot gigs)
-    # then fall back to the gig itself (single-slot legacy).
+    # then fall back to the gig itself (single-slot legacy). When
+    # slot_id is provided (preview path before booking), look it up
+    # directly — the by-artist filter would miss because slot.artist_id
+    # isn't set until _apply_slot_booking runs.
     deal_type = None
     door_pct = 0
     guarantee_cents = 0
     try:
-        slot_row = db.execute(
-            text("""SELECT deal_type, door_pct, guarantee_cents
-                    FROM gig_slots
-                    WHERE gig_id = :gid AND artist_id = :aid
-                      AND status IN ('booked','pending_contract','awaiting_venue_contract')
-                    ORDER BY slot_number ASC LIMIT 1"""),
-            {"gid": gig.get("id"), "aid": artist_id}
-        ).mappings().first()
+        if slot_id:
+            slot_row = db.execute(
+                text("SELECT deal_type, door_pct, guarantee_cents FROM gig_slots WHERE id = :sid"),
+                {"sid": slot_id}
+            ).mappings().first()
+        else:
+            slot_row = db.execute(
+                text("""SELECT deal_type, door_pct, guarantee_cents
+                        FROM gig_slots
+                        WHERE gig_id = :gid AND artist_id = :aid
+                          AND status IN ('booked','pending_contract','awaiting_venue_contract')
+                        ORDER BY slot_number ASC LIMIT 1"""),
+                {"gid": gig.get("id"), "aid": artist_id}
+            ).mappings().first()
         if slot_row:
             deal_type = (slot_row.get("deal_type") or "").lower() or None
             door_pct = int(slot_row.get("door_pct") or 0)
@@ -239,8 +248,16 @@ def _get_effective_pay_str(db, gig, venue_id, artist_id):
     return f"${pay:,.2f}" if pay else "$0"
 
 
-def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int) -> str:
-    """Generate a contract from venue profile data, gig details, and boilerplate"""
+def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int, slot_id: int = None) -> str:
+    """Generate a contract from venue profile data, gig details, and boilerplate.
+
+    slot_id: pass when known so multi-slot Performance Time renders the
+    SPECIFIC slot's times (7-9 PM), not the gig umbrella (7-11 PM).
+    Required at PREVIEW time (before booking) — the slot row doesn't
+    yet have artist_id set, so the by-artist lookup falls back to the
+    umbrella. At save time (post-_apply_slot_booking) the by-artist
+    lookup also works, but passing slot_id is cleaner.
+    """
     
     # Get venue data
     venue = db.execute(
@@ -304,14 +321,24 @@ def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int) -> st
     # slot gigs the slot times equal the gig times so the lookup is a
     # harmless echo. Same pattern as the door-deal lookup in
     # _get_effective_pay_str above.
-    _slot_times = db.execute(
-        text("""SELECT start_time, end_time
-                FROM gig_slots
-                WHERE gig_id = :gid AND artist_id = :aid
-                  AND status IN ('booked','pending_contract','awaiting_venue_contract')
-                ORDER BY slot_number ASC LIMIT 1"""),
-        {"gid": gig.get("id"), "aid": artist_id}
-    ).mappings().first()
+    # When slot_id is explicit, look it up directly — works at preview
+    # time when the slot isn't booked yet. Falls back to the by-artist
+    # lookup for backward compat (some legacy call sites don't have a
+    # slot_id handy, and post-booking the slot DOES have artist_id).
+    if slot_id:
+        _slot_times = db.execute(
+            text("SELECT start_time, end_time FROM gig_slots WHERE id = :sid"),
+            {"sid": slot_id}
+        ).mappings().first()
+    else:
+        _slot_times = db.execute(
+            text("""SELECT start_time, end_time
+                    FROM gig_slots
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND status IN ('booked','pending_contract','awaiting_venue_contract')
+                    ORDER BY slot_number ASC LIMIT 1"""),
+            {"gid": gig.get("id"), "aid": artist_id}
+        ).mappings().first()
     if _slot_times and _slot_times.get("start_time"):
         eff_start = _slot_times.get("start_time")
         eff_end   = _slot_times.get("end_time") or gig.get("end_time", "")
@@ -322,7 +349,7 @@ def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int) -> st
     end_time   = _ce(format_time_12hr(eff_end))
     # Door-aware pay line. `_get_effective_pay_str` returns content built
     # from numeric fields only — safe to interpolate without escaping.
-    pay_str = _get_effective_pay_str(db, gig, venue_id, artist_id)
+    pay_str = _get_effective_pay_str(db, gig, venue_id, artist_id, slot_id=slot_id)
     gig_title = _ce(gig.get("title", "Live Performance"))
     
     # Build performance time string
@@ -746,6 +773,11 @@ def create_gig_contract(gig_id: int, request: Request, user=Depends(get_current_
     if not artist_id:
         raise HTTPException(400, "artist_id required")
     artist_id = int(artist_id)
+    _slot_id_q = request.query_params.get('slot_id')
+    try:
+        _create_slot_id = int(_slot_id_q) if _slot_id_q else None
+    except ValueError:
+        _create_slot_id = None
     
     # Get gig info
     gig = db.execute(
@@ -806,7 +838,7 @@ def create_gig_contract(gig_id: int, request: Request, user=Depends(get_current_
     pdf_file_path = None
     
     if template["contract_type"] == "auto_generated":
-        rendered_body = generate_auto_contract(db, gig_id, venue_id, artist_id)
+        rendered_body = generate_auto_contract(db, gig_id, venue_id, artist_id, slot_id=_create_slot_id)
     elif template["contract_type"] == "custom_builder":
         # Render the custom template with known variables
         rendered_body = template.get("contract_body", "")
@@ -2487,7 +2519,10 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
         # Render the contract body
         rendered_body = ""
         if contract_type == "auto_generated":
-            rendered_body = generate_auto_contract(db, gig_id, venue_id, artist_id)
+            # Pass slot_id so generate_auto_contract picks the right slot's
+            # Performance Time / door terms for multi-slot gigs. slot_id
+            # comes from the request body (set above on line ~2362).
+            rendered_body = generate_auto_contract(db, gig_id, venue_id, artist_id, slot_id=slot_id)
         else:
             rendered_body = template.get("contract_body", "")
             # Fill placeholders
@@ -2776,11 +2811,23 @@ def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
 
 @router.get("/api/gigs/{gig_id}/contract-preview")
 def get_contract_preview(gig_id: int, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
-    """Get rendered contract text for the signing modal before booking"""
+    """Get rendered contract text for the signing modal before booking.
+
+    Accepts an optional `slot_id` query param so multi-slot gigs render
+    the SPECIFIC slot's Performance Time + door terms in the preview.
+    Without it, the slot's artist_id isn't set yet (booking hasn't
+    happened) and the by-artist fallback in generate_auto_contract
+    returns the gig umbrella (e.g. 7-11 PM for a 7-9 + 9-11 gig).
+    """
     artist_id = request.query_params.get("artist_id")
     if not artist_id:
         raise HTTPException(400, "artist_id required")
     artist_id = int(artist_id)
+    _slot_id_q = request.query_params.get("slot_id")
+    try:
+        slot_id = int(_slot_id_q) if _slot_id_q else None
+    except ValueError:
+        slot_id = None
 
     gig = db.execute(text("SELECT * FROM gigs WHERE id = :gid"), {"gid": gig_id}).mappings().first()
     if not gig:
@@ -2819,7 +2866,7 @@ def get_contract_preview(gig_id: int, request: Request, user=Depends(get_current
     rendered_body = ""
     
     if contract_type == "auto_generated":
-        rendered_body = generate_auto_contract(db, gig_id, venue_id, artist_id)
+        rendered_body = generate_auto_contract(db, gig_id, venue_id, artist_id, slot_id=slot_id)
     elif contract_type == "custom_builder":
         rendered_body = template.get("contract_body", "")
         # Fill placeholders
@@ -2828,6 +2875,14 @@ def get_contract_preview(gig_id: int, request: Request, user=Depends(get_current
             {"aid": artist_id}
         ).mappings().first()
         venue_data = db.execute(text("SELECT * FROM venues WHERE id = :vid"), {"vid": venue_id}).mappings().first()
+        # Slot-aware times (custom_builder preview) — use the specific
+        # slot when slot_id is supplied so {{gig_start_time}} renders
+        # 7:00 PM not the umbrella 7-11 PM.
+        _eff_start, _eff_end = gig.get("start_time"), gig.get("end_time")
+        if slot_id:
+            _sr = db.execute(text("SELECT start_time, end_time FROM gig_slots WHERE id = :sid"), {"sid": slot_id}).mappings().first()
+            if _sr:
+                _eff_start, _eff_end = _sr.get("start_time") or _eff_start, _sr.get("end_time") or _eff_end
         if rendered_body:
             replacements = {
                 "artist_name": artist_data["name"] if artist_data else "",
@@ -2839,9 +2894,9 @@ def get_contract_preview(gig_id: int, request: Request, user=Depends(get_current
                 "venue_name": venue_data["venue_name"] if venue_data else "",
                 "venue_address": venue_data["address_line_1"] if venue_data else "",
                 "gig_date": gig["date"] or "",
-                "gig_start_time": format_time_12hr(gig["start_time"]) if gig["start_time"] else "",
-                "gig_end_time": format_time_12hr(gig["end_time"]) if gig["end_time"] else "",
-                "gig_pay": _get_effective_pay_str(db, gig, venue_id, artist_id),
+                "gig_start_time": format_time_12hr(_eff_start) if _eff_start else "",
+                "gig_end_time": format_time_12hr(_eff_end) if _eff_end else "",
+                "gig_pay": _get_effective_pay_str(db, gig, venue_id, artist_id, slot_id=slot_id),
                 "gig_title": gig["title"] or "",
             }
             for key, val in replacements.items():

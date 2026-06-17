@@ -2941,7 +2941,13 @@ async function renderCalendar() {
           else if (_nk === 'cancelled_blast') _radiusKey = 'cancelled_blast';
           const _sentRadius = _radiusKey ? _radiusBlurb(_radiusKey) : '';
           const _freqNote = _sentRadius ? ' Frequency limitations and Preferred Status are not in effect.' : '';
-          const _whoNotified = `Preferred artists${_sentRadius} were notified.${_freqNote}`;
+          // Per-send recipient count from gig_email_log.recipient_count.
+          // Surfaced by the backend as last_notification_recipient_count
+          // alongside last_notification_key — bolded so the venue can
+          // see at a glance how many artists actually got the blast.
+          const _rcpt = Number(gig.last_notification_recipient_count || 0);
+          const _rcptStr = _rcpt > 0 ? ` <strong>${_rcpt} artist${_rcpt === 1 ? '' : 's'}</strong> received the email.` : '';
+          const _whoNotified = `Preferred artists${_sentRadius} were notified.${_freqNote}${_rcptStr}`;
           if (_nextB) {
             _bannerBody = `${_whoNotified} Next scheduled blast: <strong>${_nextB.label} notice</strong> — will fire automatically if this gig is still open.`;
           } else {

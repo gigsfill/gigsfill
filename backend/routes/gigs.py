@@ -1000,6 +1000,10 @@ def list_gigs(db=Depends(get_db)):
                      WHERE el.gig_id = g.id
                      AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
                      ORDER BY el.sent_at DESC LIMIT 1) as last_notification_key,
+                    (SELECT el.recipient_count FROM gig_email_log el
+                     WHERE el.gig_id = g.id
+                     AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
+                     ORDER BY el.sent_at DESC LIMIT 1) as last_notification_recipient_count,
                     v.venue_name,
                     v.address_line_1,
                     v.address_line_2,
@@ -1226,6 +1230,10 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                      WHERE el.gig_id = g.id
                      AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
                      ORDER BY el.sent_at DESC LIMIT 1) as last_notification_key,
+                    (SELECT el.recipient_count FROM gig_email_log el
+                     WHERE el.gig_id = g.id
+                     AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
+                     ORDER BY el.sent_at DESC LIMIT 1) as last_notification_recipient_count,
                     v.venue_name,
                     COALESCE(a.name,
                         (SELECT a2.name FROM artists a2
@@ -1304,6 +1312,10 @@ def get_gig_detail(gig_id: int, user=Depends(get_current_user), db=Depends(get_d
                 WHERE el.gig_id = g.id
                 AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
                 ORDER BY el.sent_at DESC LIMIT 1) as last_notification_key,
+               (SELECT el.recipient_count FROM gig_email_log el
+                WHERE el.gig_id = g.id
+                AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
+                ORDER BY el.sent_at DESC LIMIT 1) as last_notification_recipient_count,
                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
                v.latitude as venue_lat, v.longitude as venue_lon,
                a.name as artist_name
