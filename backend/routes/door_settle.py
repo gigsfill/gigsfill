@@ -109,6 +109,11 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
         f"pct={int(slot['door_pct'] or 0)}% "
         f"guarantee={int(slot['guarantee_cents'] or 0)}c]"
     )
+    # Defensive: restrict to artist-payout-shaped rows. artist_id IS NOT
+    # NULL is already implied by the slot row's artist_id (checked above),
+    # but adding transaction_type filtering makes the intent explicit and
+    # protects against future schema changes that introduce other row
+    # shapes sharing the same (gig_id, artist_id) tuple.
     updated = db.execute(
         text("""
             UPDATE transactions
@@ -119,6 +124,8 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
             WHERE gig_id = :gid
               AND artist_id = :aid
               AND status = 'scheduled'
+              AND (transaction_type IS NULL
+                   OR transaction_type IN ('artist_payout', 'single'))
         """),
         {"final": final_pay_cents,
          "audit_note": audit_note,

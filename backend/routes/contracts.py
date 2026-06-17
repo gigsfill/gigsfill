@@ -13,6 +13,18 @@ from sqlalchemy import text
 from datetime import datetime
 from backend.utils import utcnow_naive, to_admin_bool
 import json, os, re, shutil, tempfile, uuid
+import html as _html
+
+
+def _ce(s) -> str:
+    """Contract-HTML escape — used everywhere user-controlled values land
+    in the generated PERFORMANCE AGREEMENT or custom-template body. Without
+    this, an artist or venue with HTML in their display name (e.g.
+    "<img src=x onerror=...>") would XSS the contract viewer/signer.
+    """
+    if s is None:
+        return ""
+    return _html.escape(str(s), quote=True)
 
 logger = logging.getLogger("gigsfill.contracts")
 
@@ -245,27 +257,39 @@ def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int) -> st
     if not venue or not artist or not gig:
         raise HTTPException(404, "Venue, artist, or gig not found")
     
-    # Format values
-    venue_name = venue["venue_name"] or "Venue"
-    venue_address = ", ".join(filter(None, [
+    # Format values — every user-controlled string gets _ce()'d before
+    # landing in HTML. Without this, an artist or venue display name like
+    # `<img src=x onerror=alert(1)>` becomes a stored XSS that fires on
+    # every viewer of the contract PDF / signed HTML.
+    venue_name = _ce(venue["venue_name"] or "Venue")
+    venue_address = _ce(", ".join(filter(None, [
         venue.get("address_line_1", ""),
         venue.get("address_line_2", ""),
         venue.get("city", ""),
         venue.get("state", ""),
         venue.get("postal_code", "")
-    ]))
-    artist_name = artist["name"] or "Artist"
-    artist_location = ", ".join(filter(None, [artist.get("city", ""), artist.get("state", "")]))
-    
-    gig_date = gig["date"] or ""
-    start_time = format_time_12hr(gig.get("start_time", ""))
-    end_time = format_time_12hr(gig.get("end_time", ""))
-    # Door-aware pay line. `_get_effective_pay_str` checks the booked slot
-    # for deal_type='door' and renders "$X guarantee + Y% of door receipts"
-    # when applicable; otherwise it returns the flat override-aware pay
-    # (same logic that was inline here before).
+    ])))
+    artist_name = _ce(artist["name"] or "Artist")
+    artist_location = _ce(", ".join(filter(None, [artist.get("city", ""), artist.get("state", "")])))
+    # Pre-escaped views of owner contact + per-section fields so the f-strings
+    # below don't need _ce() at every interpolation site.
+    venue_owner_name  = _ce(venue.get("owner_name")  or "")
+    venue_owner_email = _ce(venue.get("owner_email") or "")
+    venue_owner_phone = _ce(venue.get("owner_phone") or "")
+    artist_owner_name  = _ce(artist.get("owner_name")  or "")
+    artist_owner_email = _ce(artist.get("owner_email") or "")
+    artist_owner_phone = _ce(artist.get("owner_phone") or "")
+    artist_type_esc     = _ce(artist.get("artist_type") or "N/A")
+    artist_band_fmts    = _ce(artist.get("band_formats") or "")
+    artist_styles       = _ce(artist.get("styles") or "")
+
+    gig_date = _ce(gig["date"] or "")
+    start_time = _ce(format_time_12hr(gig.get("start_time", "")))
+    end_time = _ce(format_time_12hr(gig.get("end_time", "")))
+    # Door-aware pay line. `_get_effective_pay_str` returns content built
+    # from numeric fields only — safe to interpolate without escaping.
     pay_str = _get_effective_pay_str(db, gig, venue_id, artist_id)
-    gig_title = gig.get("title", "Live Performance")
+    gig_title = _ce(gig.get("title", "Live Performance"))
     
     # Build performance time string
     time_str = ""
@@ -287,15 +311,15 @@ def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int) -> st
 <p>This Performance Agreement ("Agreement") is entered into as of the date of last signature below, by and between:</p>
 <p><strong>Venue:</strong> {venue_name}<br>
 Address: {venue_address or '{{venue_address}}'}<br>
-Contact: {venue.get('owner_name', '{{venue_contact_name}}')}<br>
-Email: {venue.get('owner_email', '{{venue_email}}')}<br>
-Phone: {venue.get('owner_phone', '{{venue_phone}}') or '{{venue_phone}}'}</p>
+Contact: {venue_owner_name or '{{venue_contact_name}}'}<br>
+Email: {venue_owner_email or '{{venue_email}}'}<br>
+Phone: {venue_owner_phone or '{{venue_phone}}'}</p>
 <p><strong>Performer:</strong> {artist_name}<br>
 Location: {artist_location or '{{artist_location}}'}<br>
-Artist Type: {artist.get('artist_type', 'N/A')}{(' — Lineup: ' + artist.get('band_formats', '')) if artist.get('band_formats') else ''}{(' — Styles: ' + artist.get('styles', '')) if artist.get('styles') else ''}<br>
-Contact: {artist.get('owner_name', '{{artist_contact_name}}')}<br>
-Email: {artist.get('owner_email', '{{artist_email}}')}<br>
-Phone: {artist.get('owner_phone', '{{artist_phone}}') or '{{artist_phone}}'}</p>""")
+Artist Type: {artist_type_esc}{(' — Lineup: ' + artist_band_fmts) if artist_band_fmts else ''}{(' — Styles: ' + artist_styles) if artist_styles else ''}<br>
+Contact: {artist_owner_name or '{{artist_contact_name}}'}<br>
+Email: {artist_owner_email or '{{artist_email}}'}<br>
+Phone: {artist_owner_phone or '{{artist_phone}}'}</p>""")
     
     # Section 2: Performance Details
     sections.append(f"""<h3>2. PERFORMANCE DETAILS</h3>
@@ -783,7 +807,13 @@ def create_gig_contract(gig_id: int, request: Request, user=Depends(get_current_
                 "gig_title": gig_data["title"] if gig_data else "",
             }
             for key, val in replacements.items():
-                rendered_body = rendered_body.replace(f"{{{{{key}}}}}", str(val or ""))
+                # gig_pay is built from numeric fields (safe). All other
+                # values are user-controlled (artist/venue display names,
+                # email, addresses) and must be HTML-escaped before being
+                # spliced into the template body — same XSS class as the
+                # auto-generated contract path above.
+                safe_val = val if key == "gig_pay" else _ce(val)
+                rendered_body = rendered_body.replace(f"{{{{{key}}}}}", str(safe_val or ""))
     elif template["contract_type"] == "pdf_upload":
         pdf_file_path = template.get("pdf_file_path", "")
     

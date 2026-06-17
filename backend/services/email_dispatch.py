@@ -358,8 +358,11 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
         for slot in booked_slots:
             aid = slot["artist_id"]
             email_vars = {
-                'artist_name':  slot.get("artist_name") or "",
-                'venue_name':   gig["venue_name"],
+                # Empty-name fallback: artists.name is nullable; without a
+                # default the email body renders "Hi ," (broken). Use a
+                # neutral placeholder so emails always read cleanly.
+                'artist_name':  slot.get("artist_name") or "there",
+                'venue_name':   gig["venue_name"] or "the venue",
                 'artist_id':    str(aid),
                 'venue_id':     str(gig["venue_id"]),
                 'gig_id':       str(gig_id),

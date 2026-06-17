@@ -49,6 +49,13 @@ def assert_no_charged_transactions(db, gig_id: int, artist_id: int = None):
     ``delete_gig_completely`` so the venue/admin is forced through the
     explicit refund + transfer-reversal flow in admin_payments.py
     instead of silently dropping the audit trail.
+
+    Door-deal extension (Jun 2026): also block cancellation when any of the
+    gig's slots have been SETTLED (settled_at IS NOT NULL). Once a door
+    deal is settled the transaction amount has been bumped to the full
+    receipts-based payout. Letting that cancel without going through the
+    explicit refund/reversal flow would charge the venue and leave the
+    artist with money (or vice versa) — a real cash loss.
     """
     from fastapi import HTTPException
     placeholders = ", ".join(f"'{s}'" for s in CHARGED_TRANSACTION_STATUSES)
@@ -75,6 +82,31 @@ def assert_no_charged_transactions(db, gig_id: int, artist_id: int = None):
             f"CHARGED_TRANSACTION_EXISTS: Cannot proceed — a transaction {who} "
             f"is in status '{row['status']}'. Use the cancel-payment / refund "
             f"flow in Admin → Payments first."
+        )
+
+    # Door-settle guard: settled slots have a finalized payout amount
+    # baked into the transaction. Cancelling without going through the
+    # refund flow would leak money in either direction.
+    if artist_id is None:
+        settled = db.execute(
+            text("""SELECT id FROM gig_slots
+                    WHERE gig_id = :gid AND settled_at IS NOT NULL LIMIT 1"""),
+            {"gid": gig_id}
+        ).mappings().first()
+    else:
+        settled = db.execute(
+            text("""SELECT id FROM gig_slots
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND settled_at IS NOT NULL LIMIT 1"""),
+            {"gid": gig_id, "aid": artist_id}
+        ).mappings().first()
+    if settled:
+        who = f"for this artist" if artist_id else "on this gig"
+        raise HTTPException(
+            409,
+            f"SETTLED_DOOR_DEAL_EXISTS: Cannot cancel — a door deal {who} "
+            f"has already been settled. Use the refund/reversal flow in "
+            f"Admin → Payments to reverse the settlement first."
         )
 
 

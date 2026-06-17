@@ -590,6 +590,9 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_gig_slots_gig ON gig_slots(gig_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_gig_slots_artist ON gig_slots(artist_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_gig_slots_status ON gig_slots(gig_id, status)")
+    # Perf fix (Jun 2026): door_settle.py + payout queries filter by
+    # (gig_id, artist_id, status='scheduled'). Add a covering composite.
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gig_slots_gig_artist_status ON gig_slots(gig_id, artist_id, status)")
     # _add_columns kept for existing DBs that pre-date inline column definitions
     _add_columns(cursor, "gig_slots", [
         "artist_type VARCHAR",
@@ -1830,6 +1833,38 @@ def setup_database():
             ON transactions(gig_id, artist_id)
             WHERE status NOT IN ('cancelled', 'payment_cancelled')
         """)
+    except Exception:
+        pass
+
+    # Perf indexes (Jun 2026 — audit fixes):
+    # - transactions composite covers door_settle.py WHERE (gig_id, artist_id, status)
+    # - users(calendar_token) covers /api/calendar/{token}.ics lookup (Google polls hourly)
+    # - users(vanity_slug) + artists(vanity_slug) + venues(vanity_slug) cover the
+    #   slug resolver hit on every gigsfill.com/<slug> redirect
+    # - gig_waitlist(gig_id, offer_sent, offer_expires_at) covers sequential offer cycle
+    # - notifications(user_id, created_at DESC) covers /api/notifications sort
+    try:
+        c4.execute("CREATE INDEX IF NOT EXISTS idx_transactions_gig_artist_status ON transactions(gig_id, artist_id, status)")
+    except Exception:
+        pass
+    try:
+        c4.execute("CREATE INDEX IF NOT EXISTS idx_users_calendar_token ON users(calendar_token)")
+    except Exception:
+        pass
+    try:
+        c4.execute("CREATE INDEX IF NOT EXISTS idx_artists_vanity_slug ON artists(vanity_slug)")
+    except Exception:
+        pass
+    try:
+        c4.execute("CREATE INDEX IF NOT EXISTS idx_venues_vanity_slug ON venues(vanity_slug)")
+    except Exception:
+        pass
+    try:
+        c4.execute("CREATE INDEX IF NOT EXISTS idx_waitlist_offer_cycle ON gig_waitlist(gig_id, offer_sent, offer_expires_at)")
+    except Exception:
+        pass
+    try:
+        c4.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at)")
     except Exception:
         pass
 
