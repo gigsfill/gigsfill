@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
@@ -217,14 +218,30 @@
       flex-direction: column;
       gap: 8px;
     }
-    
+
     .social-row {
+      /* 3 cols: drag handle, label (100px), input (flex). */
       display: grid;
-      grid-template-columns: 100px 1fr;
+      grid-template-columns: 22px 100px 1fr;
       gap: 10px;
       align-items: center;
+      padding: 4px;
+      border-radius: 6px;
+      transition: background 0.15s;
     }
-    
+    .social-row .drag-handle {
+      cursor: grab;
+      color: var(--text-gray);
+      user-select: none;
+      text-align: center;
+      font-size: 14px;
+      padding: 6px 0;
+      border-radius: 4px;
+    }
+    .social-row .drag-handle:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+    .social-row .drag-handle:active { cursor: grabbing; }
+    .social-row.dragging { opacity: 0.4; background: rgba(124,107,255,0.08); }
+
     .social-row label {
       font-size: 0.8rem;
       font-weight: 500;
@@ -299,7 +316,31 @@
       text-align: center;
       font-size: 0.8125rem;
     }
-    
+
+    /* Caption textareas inside the video / picture card overlays — sit
+       under the title input, full-width, multi-line but Enter-commits
+       (handler in venue.edit.js). Shared styling across media types. */
+    .video-caption,
+    .picture-caption {
+      width: 100%;
+      min-height: 36px;
+      max-height: 120px;
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      resize: vertical;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .video-caption::placeholder,
+    .picture-caption::placeholder { color: var(--text-gray); font-style: italic; }
+    .video-caption:focus,
+    .picture-caption:focus { outline: none; border-color: var(--cyan); }
+
     .media-title:focus {
       outline: none;
       border-color: var(--cyan);
@@ -402,14 +443,14 @@
     }
   </style>
   
-<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
-  <script src="/app/static/js/auth.guard.js"></script>
-  <script src="/app/static/js/api-globals.js"></script>
+  <script src="/app/static/js/auth.guard.js?v=2"></script>
+  <script src="/app/static/js/api-globals.js?v=4"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/gf-modals.js?v=6"></script>
-  <script defer src="/app/static/js/venue.edit.js?v=2"></script>
+  <script defer src="/app/static/js/venue.edit.js?v=6"></script>
   
 </head>
 
@@ -426,11 +467,9 @@
       </div>
     </div>
   </header>
-  <script src="/app/static/js/user-dropdown.js?v=2"></script>
+  <script src="/app/static/js/user-dropdown.js?v=6"></script>
 
   <div class="profile-container">
-    <!-- Public share URL — populated by vanity-url-editor.js on load -->
-    <div id="vanityUrlSection"></div>
 
     <div class="content-card">
       <div class="profile-pic-wrapper">
@@ -499,6 +538,10 @@
           <label style="text-align: right;">Zip Code</label>
           <input type="text" id="postal_code" inputmode="numeric" style="width: 120px;" />
         </div>
+        <!-- Public share URL — populated by vanity-url-editor.js. Sits below
+             city/state/zip so it groups with the rest of the venue identity
+             fields. Was previously above the profile-picture content-card. -->
+        <div id="vanityUrlSection"></div>
       </div>
     </div>
 
@@ -726,34 +769,36 @@
 
     <!-- SECTION 14: SOCIAL MEDIA -->
     <div class="content-card">
-      <h2>Social Media &amp; Links</h2>
-      <div class="social-grid">
-        <div class="social-row">
+      <h2 style="margin-bottom:4px;">Social Media &amp; Links</h2>
+      <p style="color:var(--text-gray);font-size:0.75rem;margin:0 0 8px;">Drag rows by the <strong>☰</strong> handle to reorder how they appear on your public profile.</p>
+      <div class="social-grid" id="socialGrid">
+        <div class="social-row" data-brand="website">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Website</label>
           <input id="website_url" type="text" placeholder="https://www.yourvenue.com" />
         </div>
-        
-        <div class="social-row">
+        <div class="social-row" data-brand="facebook">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Facebook</label>
           <input id="facebook_url" type="text" placeholder="https://www.facebook.com/..." />
         </div>
-        
-        <div class="social-row">
+        <div class="social-row" data-brand="instagram">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Instagram</label>
           <input id="instagram_url" type="text" placeholder="https://www.instagram.com/..." />
         </div>
-        
-        <div class="social-row">
-          <label>Twitter/X</label>
+        <div class="social-row" data-brand="twitter">
+          <span class="drag-handle" draggable="true">☰</span>
+          <label>X</label>
           <input id="twitter_url" type="text" placeholder="https://twitter.com/..." />
         </div>
-        
-        <div class="social-row">
+        <div class="social-row" data-brand="yelp">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Yelp</label>
           <input id="yelp_url" type="text" placeholder="https://www.yelp.com/biz/..." />
         </div>
-        
-        <div class="social-row">
+        <div class="social-row" data-brand="google_maps">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Google Maps</label>
           <input id="google_maps_url" type="text" placeholder="https://goo.gl/maps/..." />
         </div>
@@ -790,19 +835,23 @@
 
   
 
+<!-- Vanity URL editor: must load BEFORE the init scripts that want
+     to use window.applyVanityToLinks for the header profile button. -->
+<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
 <script src="/app/static/js/venue-edit-init.js"></script>
 <script src="/app/static/js/onboarding-checklist.js" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
-<!-- Vanity URL editor: shows + lets admin edit the public share URL. -->
-<script src="/app/static/js/vanity-url-editor.js?v=1"></script>
 <script>
   (function () {
     const vid = parseInt(new URLSearchParams(window.location.search).get('venue_id') || '0', 10);
     if (vid && typeof window.initVanityUrlEditor === 'function') {
-      window.initVanityUrlEditor('venue', vid);
+      window.initVanityUrlEditor('venue', vid, {
+        linkSelectors: ['#venueProfileBtn'],
+      });
     }
   })();
 </script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
 </html>

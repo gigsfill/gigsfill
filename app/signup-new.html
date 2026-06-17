@@ -152,10 +152,28 @@ textarea { min-height: 60px !important; max-height: 80px; }
 </head>
 <script>
   (function() {
-    var aff = new URLSearchParams(window.location.search).get('aff');
+    var params = new URLSearchParams(window.location.search);
+    var aff = params.get('aff');
     if (aff) {
       var exp = new Date(Date.now() + 30*24*60*60*1000).toUTCString();
       document.cookie = 'aff_code=' + encodeURIComponent(aff.trim().toUpperCase()) + '; expires=' + exp + '; path=/; SameSite=Lax; Secure';
+    }
+    // Deep-link: ?role=venue or ?role=artist auto-advances past the Step-1 role picker.
+    // Used by the affiliate Recommend Email + Copy Link flows to drop venues directly
+    // onto the venue signup form.
+    var role = (params.get('role') || '').toLowerCase();
+    if (role === 'venue' || role === 'artist') {
+      // Defer until DOM + step-handler is wired up
+      window.addEventListener('DOMContentLoaded', function() {
+        var tryRole = function(attempts) {
+          if (typeof window._selectRole === 'function') {
+            try { window._selectRole(role); } catch (e) {}
+          } else if (attempts > 0) {
+            setTimeout(function() { tryRole(attempts - 1); }, 50);
+          }
+        };
+        tryRole(20);
+      });
     }
   })();
 </script>
@@ -252,7 +270,16 @@ textarea { min-height: 60px !important; max-height: 80px; }
 </div>
 <div class="field">
 <label class="required">Password (min 6 characters)</label>
-<input id="password" placeholder="••••••••" type="password"/>
+<input id="password" placeholder="••••••••" type="password" autocomplete="new-password"/>
+<div id="passwordStrength" style="display:none;margin-top:6px;height:4px;border-radius:2px;background:rgba(255,255,255,0.06);overflow:hidden;">
+  <div id="passwordStrengthBar" style="height:100%;width:0;transition:width .15s,background .15s;"></div>
+</div>
+<div id="passwordStrengthLabel" style="display:none;margin-top:4px;font-size:0.72rem;color:var(--text-gray);"></div>
+</div>
+<div class="field">
+<label class="required">Confirm Password</label>
+<input id="passwordConfirm" placeholder="Re-enter password" type="password" autocomplete="new-password"/>
+<div id="passwordMatchMsg" style="display:none;margin-top:4px;font-size:0.72rem;"></div>
 </div>
 <div class="button-group">
 <button class="btn ghost" onclick="prevStep()">← Back</button>
@@ -540,9 +567,10 @@ textarea { min-height: 60px !important; max-height: 80px; }
 </footer>
 
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/signup-new-init.js?v=4"></script>
+<script src="/app/static/js/signup-new-init.js?v=7"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
 </html>
 

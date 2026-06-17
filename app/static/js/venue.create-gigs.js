@@ -1,3 +1,25 @@
+// Audit fix (May 2026 part 7): HTML/attr escape helpers. Artist + venue names,
+// cities, gig titles etc were interpolated raw into innerHTML and inline
+// onclick string args. _vcg_esc neutralizes HTML; _vcg_attr also escapes
+// apostrophes, double-quotes, and backslashes for inline event-handler args.
+function _vcg_esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function _vcg_attr(s) {
+  return String(s == null ? '' : s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, '\\&#39;')
+    .replace(/"/g, '\\&quot;')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const params = new URLSearchParams(window.location.search);
   const venueId = params.get("venue_id");
@@ -60,6 +82,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   const endTypeCheckboxes = document.querySelectorAll('input[name="endType"]');
   const endAfterInput = document.getElementById('endAfter');
   const endByInput = document.getElementById('endBy');
+
+  // Clamp "End After X week(s)" to the 1–104 range. The HTML max="104"
+  // alone only kicks in at form-submit time on type=number, so users can
+  // still type 999. This live clamp keeps the visible value in range as
+  // they type and on blur.
+  if (endAfterInput) {
+    const _clampEndAfter = () => {
+      if (endAfterInput.value === '') return;
+      const n = parseInt(endAfterInput.value, 10);
+      if (isNaN(n)) { endAfterInput.value = ''; return; }
+      if (n > 104) endAfterInput.value = '104';
+      else if (n < 1) endAfterInput.value = '1';
+    };
+    endAfterInput.addEventListener('input', _clampEndAfter);
+    endAfterInput.addEventListener('blur', _clampEndAfter);
+  }
 
   function _captureRecurringSnapshot() {
     _recurringSnapshot = {
@@ -220,7 +258,236 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     return { dollars: '0', cents: '00' };
   }
-  
+
+  // Convert between the input's display format (mm/dd/yyyy) and the
+  // backend's ISO format (yyyy-mm-dd). Used at the backend save/restore
+  // boundary only — internal snapshots store the display string verbatim.
+  function _isoToDisp(iso) {
+    if (!iso) return '';
+    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return '';
+    return `${m[2]}/${m[3]}/${m[1]}`;
+  }
+  function _dispToIso(disp) {
+    if (!disp) return '';
+    const m = String(disp).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!m) return '';
+    return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // GfDatePicker — minimal dark-themed calendar popup.
+  // Wraps a readonly text input. Stores value as ISO yyyy-mm-dd (what the
+  // backend expects), shows the same ISO string in the input. Built rather
+  // than restyled because native input[type=date] popups can't be reliably
+  // themed dark across browsers (color-scheme: dark didn't take in Safari /
+  // some Chrome configs).
+  // ─────────────────────────────────────────────────────────────────────
+  class GfDatePicker {
+    constructor(input) {
+      this.input = input;
+      this.popup = null;
+      this.viewDate = new Date();
+      this.outsideHandler = null;
+      this.repositionHandler = null;
+
+      input.addEventListener('click', () => { if (!input.disabled) this.open(); });
+      input.addEventListener('keydown', (e) => {
+        if (input.disabled) return;
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.open(); }
+        if (e.key === 'Escape') this.close();
+      });
+    }
+    _parseValue() {
+      // Accept the display format we write (mm/dd/yyyy) or the legacy ISO
+      // format (yyyy-mm-dd) so old saved values restore correctly.
+      const v = (this.input.value || '').trim();
+      let m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (m) {
+        const d = new Date(parseInt(m[3], 10), parseInt(m[1], 10) - 1, parseInt(m[2], 10));
+        d.setHours(0, 0, 0, 0);
+        return d;
+      }
+      m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) {
+        const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+        d.setHours(0, 0, 0, 0);
+        return d;
+      }
+      return null;
+    }
+    _toDisp(d) {
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      const y = d.getFullYear();
+      return `${mo}/${da}/${y}`;
+    }
+    open() {
+      if (this.popup) return;
+      const sel = this._parseValue();
+      if (sel) this.viewDate = new Date(sel);
+      else this.viewDate = new Date();
+      this.viewDate.setDate(1);
+
+      this.popup = document.createElement('div');
+      this.popup.className = 'gf-date-popup';
+      document.body.appendChild(this.popup);
+      this._render();
+      this._position();
+
+      // Outside-click closes (delayed so the opening click doesn't immediately close it).
+      setTimeout(() => {
+        this.outsideHandler = (e) => {
+          if (!this.popup) return;
+          if (!this.popup.contains(e.target) && e.target !== this.input) this.close();
+        };
+        document.addEventListener('mousedown', this.outsideHandler);
+      }, 0);
+
+      this.repositionHandler = () => this._position();
+      window.addEventListener('resize', this.repositionHandler);
+      window.addEventListener('scroll', this.repositionHandler, true);
+    }
+    close() {
+      if (!this.popup) return;
+      this.popup.remove();
+      this.popup = null;
+      if (this.outsideHandler) {
+        document.removeEventListener('mousedown', this.outsideHandler);
+        this.outsideHandler = null;
+      }
+      if (this.repositionHandler) {
+        window.removeEventListener('resize', this.repositionHandler);
+        window.removeEventListener('scroll', this.repositionHandler, true);
+        this.repositionHandler = null;
+      }
+    }
+    _position() {
+      if (!this.popup) return;
+      const rect = this.input.getBoundingClientRect();
+      this.popup.style.left = (rect.left + window.scrollX) + 'px';
+      this.popup.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+    }
+    _render() {
+      const selDate = this._parseValue();
+      const year = this.viewDate.getFullYear();
+      const month = this.viewDate.getMonth();
+      const monthNames = ['January','February','March','April','May','June',
+                          'July','August','September','October','November','December'];
+      const firstDay = new Date(year, month, 1);
+      const startDow = firstDay.getDay();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const cells = [];
+      for (let i = 0; i < startDow; i++) cells.push(`<span class="gf-date-cell empty"></span>`);
+      for (let d = 1; d <= daysInMonth; d++) {
+        const cellDate = new Date(year, month, d);
+        cellDate.setHours(0, 0, 0, 0);
+        const isToday = cellDate.getTime() === today.getTime();
+        const isSel = selDate && cellDate.getTime() === selDate.getTime();
+        const cls = ['gf-date-cell'];
+        if (isToday) cls.push('today');
+        if (isSel) cls.push('selected');
+        cells.push(`<button type="button" class="${cls.join(' ')}" data-day="${d}">${d}</button>`);
+      }
+
+      this.popup.innerHTML = `
+        <div class="gf-date-header">
+          <button type="button" class="gf-date-nav" data-dir="-1" aria-label="Previous month">&#9664;</button>
+          <span class="gf-date-title">${monthNames[month]} ${year}</span>
+          <button type="button" class="gf-date-nav" data-dir="1" aria-label="Next month">&#9654;</button>
+        </div>
+        <div class="gf-date-grid">
+          <span class="gf-date-dow">S</span>
+          <span class="gf-date-dow">M</span>
+          <span class="gf-date-dow">T</span>
+          <span class="gf-date-dow">W</span>
+          <span class="gf-date-dow">T</span>
+          <span class="gf-date-dow">F</span>
+          <span class="gf-date-dow">S</span>
+          ${cells.join('')}
+        </div>
+        <div class="gf-date-footer">
+          <button type="button" data-action="today">Today</button>
+          <button type="button" data-action="clear">Clear</button>
+        </div>
+      `;
+
+      this.popup.querySelectorAll('.gf-date-nav').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const dir = parseInt(btn.dataset.dir, 10);
+          this.viewDate = new Date(this.viewDate.getFullYear(), this.viewDate.getMonth() + dir, 1);
+          this._render();
+        });
+      });
+      this.popup.querySelectorAll('.gf-date-cell[data-day]').forEach((cell) => {
+        cell.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const d = parseInt(cell.dataset.day, 10);
+          const picked = new Date(year, month, d);
+          this.input.value = this._toDisp(picked);
+          this.input.dispatchEvent(new Event('change', { bubbles: true }));
+          this.close();
+        });
+      });
+      this.popup.querySelectorAll('[data-action]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const act = btn.dataset.action;
+          if (act === 'today') {
+            const t = new Date(); t.setHours(0, 0, 0, 0);
+            this.input.value = this._toDisp(t);
+            this.input.dispatchEvent(new Event('change', { bubbles: true }));
+            this.close();
+          } else if (act === 'clear') {
+            this.input.value = '';
+            this.input.dispatchEvent(new Event('change', { bubbles: true }));
+            this.close();
+          }
+        });
+      });
+    }
+  }
+
+  // Wire up the recurring "End By" date input with our dark picker.
+  (function _initEndByPicker() {
+    const endByInput = document.getElementById('endBy');
+    if (endByInput && !endByInput._gfDatePicker) {
+      endByInput._gfDatePicker = new GfDatePicker(endByInput);
+    }
+  })();
+
+  // Format a (dollars, cents) pair into the "X,XXX.YY" string shown in
+  // the slot-pay-amount input.
+  function _formatPayAmount(dollars, cents) {
+    const dollarsClean = (dollars || '0').toString().replace(/,/g, '');
+    const dollarsNum = parseInt(dollarsClean, 10) || 0;
+    const dollarsFmt = dollarsNum.toLocaleString('en-US');
+    const centsStr = (cents == null ? '00' : cents.toString()).padStart(2, '0').slice(0, 2);
+    return dollarsFmt + '.' + centsStr;
+  }
+
+  // ATM-style right-shift on input: extract digits from the typed value,
+  // pad to 3, last two are cents, the rest is dollars (with commas).
+  // Cursor parks at the right edge so successive digits keep shifting in.
+  function _liveFormatPayAmount(input) {
+    const digits = input.value.replace(/\D/g, '').slice(0, 9); // cap so we don't explode on paste
+    if (!digits) {
+      input.value = '0.00';
+    } else {
+      const padded = digits.padStart(3, '0');
+      const dollarsPart = padded.slice(0, -2);
+      const centsPart = padded.slice(-2);
+      const dollarsFormatted = parseInt(dollarsPart, 10).toLocaleString('en-US');
+      input.value = dollarsFormatted + '.' + centsPart;
+    }
+    // setTimeout 0 → after the input event finishes its current frame
+    setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
+  }
+
   function addSlotRow(startTime = '', endTime = '', payDollars = '', payCents = '', slotArtistType = '', slotBandFormats = '', slotStyles = '') {
     slotCounter++;
     const slotList = document.getElementById('slotList');
@@ -244,6 +511,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     
     const useDollars = payDollars || defaultPay.dollars;
     const useCents = payCents || defaultPay.cents;
+    // Pay pill now uses ONE input ("X,XXX.YY"). Build initial value from
+    // the dollars/cents pair the caller passed in.
+    const useAmount = _formatPayAmount(useDollars, useCents);
 
     const allStyles = ['Country','Hip-Hop','Indie','Jazz','Latin','Pop','Reggae','Rock'];
     const allLineup = ['Solo','Duo','Trio','Full Band'];
@@ -254,43 +524,54 @@ document.addEventListener("DOMContentLoaded", async () => {
     const row = document.createElement('div');
     row.className = 'slot-row';
     row.dataset.slotIndex = slotCounter;
-    row.style.cssText = 'padding:8px 10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:6px; margin-bottom:2px;';
-    
+    // Inline padding/bg are overridden by #slotList .slot-row CSS in
+    // venue-create-gigs.html (3px purple left stripe + faint purple wash).
+    // Keeping the inline attribute empty makes the override unambiguous.
+    row.style.cssText = '';
+
     row.innerHTML = `
       <div style="display:flex; align-items:center; gap:6px; flex-wrap:nowrap;">
-        <span style="font-size:0.75rem; font-weight:600; color:#a78bfa; min-width:40px; white-space:nowrap;">Slot ${slotNum}</span>
-        <input type="time" class="slot-start" value="${useStart}" style="flex:0 0 auto; width:105px; min-width:0; font-size:0.8rem; padding:4px 6px;">
-        <span style="color:var(--text-muted); font-size:0.7rem;">to</span>
-        <input type="time" class="slot-end" value="${useEnd}" style="flex:0 0 auto; width:105px; min-width:0; font-size:0.8rem; padding:4px 6px;">
-        <span style="color:var(--text-muted); font-size:0.75rem; margin-left:4px;">$</span>
-        <input type="text" class="slot-pay-dollars" value="${useDollars}" maxlength="6" style="width:7ch; text-align:right; font-size:0.8rem; padding:4px 6px;" placeholder="0">
-        <span style="color:var(--text-muted);">.</span>
-        <input type="text" class="slot-pay-cents" value="${useCents}" maxlength="2" style="width:4ch; text-align:center; font-size:0.8rem; padding:4px 6px;" placeholder="00">
+        <span style="font-weight:700; min-width:44px; color:#a855f7; letter-spacing:0.3px; font-size:0.78rem;">Slot ${slotNum}</span>
+        <input type="time" class="slot-start" value="${useStart}" style="flex:0 0 auto; width:96px; min-width:0; font-size:0.75rem; padding:2px 5px;">
+        <span style="color:var(--text-muted); font-size:0.68rem;">to</span>
+        <input type="time" class="slot-end" value="${useEnd}" style="flex:0 0 auto; width:96px; min-width:0; font-size:0.75rem; padding:2px 5px;">
+        <!-- Pay pill — single auto-formatting amount field.
+             User clicks → entire value is selected (focus/click handlers
+             below). User types a digit → ATM-style right-shift: digits
+             "1" "2" "3" "4" become "0.01" "0.12" "1.23" "12.34". No
+             period-typing required; it's auto-inserted. Read site in
+             getSlotData() parses "X,XXX.YY" back to a float. -->
+        <span class="slot-pay-pill" title="Slot pay (click and type)">
+          <span class="slot-pay-symbol">$</span>
+          <input type="text" class="slot-pay-amount" value="${useAmount}" inputmode="decimal" maxlength="12" placeholder="0.00">
+        </span>
         <button type="button" class="remove-slot-btn" style="
           background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#ef4444;
-          border-radius:4px; padding:2px 8px; font-size:0.8rem; cursor:pointer; line-height:1.4; flex-shrink:0; margin-left:auto;
+          border-radius:4px; padding:1px 7px; font-size:0.78rem; cursor:pointer; line-height:1.3; flex-shrink:0; margin-left:auto;
         " title="Remove slot">×</button>
       </div>
-      <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-        <label style="font-size:0.7rem; color:#a78bfa; min-width:80px; font-weight:600;">Artist Type:</label>
-        <select class="slot-artist-type" style="font-size:0.78rem; padding:3px 6px; flex:1; max-width:180px;">
-          <option value="">Select Type</option>
-          <option value="Live Band" ${slotArtistType === 'Live Band' ? 'selected' : ''}>Live Band</option>
-          <option value="DJ" ${slotArtistType === 'DJ' ? 'selected' : ''}>DJ</option>
-          <option value="Comedian" ${slotArtistType === 'Comedian' ? 'selected' : ''}>Comedian</option>
-          <option value="Trivia Host" ${slotArtistType === 'Trivia Host' ? 'selected' : ''}>Trivia Host</option>
+      <!-- Two-row meta layout:
+             Line 1: [Type ▾]  [Solo][Duo][Trio][Full Band]   (lineup, green)
+             Line 2:           [Country][Hip-Hop]...           (styles, purple, indented)
+           The pills wrap container is a column flex with two rows; both
+           rows align to the wrap's left edge, so the styles row hangs
+           directly under the lineup pills (not the Type select). -->
+      <div class="slot-meta-row" style="display:flex; align-items:flex-start; gap:6px; margin-top:7px;">
+        <select class="slot-artist-type">
+          <option value="">Type…</option>
+          <option value="Live Band" ${slotArtistType === 'Live Band' ? 'selected' : ''}>🎸 Live Band</option>
+          <option value="DJ" ${slotArtistType === 'DJ' ? 'selected' : ''}>🎧 DJ</option>
+          <option value="Comedian" ${slotArtistType === 'Comedian' ? 'selected' : ''}>🎤 Comedian</option>
+          <option value="Trivia Host" ${slotArtistType === 'Trivia Host' ? 'selected' : ''}>❓ Trivia Host</option>
         </select>
-      </div>
-      <div class="slot-styles-row" style="display:${isLiveBand ? 'flex' : 'none'}; align-items:flex-start; gap:8px; margin-top:4px; flex-wrap:wrap;">
-        <label style="font-size:0.7rem; color:#a78bfa; min-width:80px; font-weight:600; padding-top:2px;">Styles:</label>
-        <div style="display:flex; gap:8px 12px; flex-wrap:wrap; flex:1;">
-          ${allStyles.map(s => `<label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; cursor:pointer;"><input type="checkbox" class="slot-style-cb" value="${s}" ${selStyles.includes(s) || (!slotStyles && isLiveBand) ? 'checked' : ''}><span>${s}</span></label>`).join('')}
-        </div>
-      </div>
-      <div class="slot-lineup-row" style="display:${isLiveBand ? 'flex' : 'none'}; align-items:flex-start; gap:8px; margin-top:4px; flex-wrap:wrap;">
-        <label style="font-size:0.7rem; color:#a78bfa; min-width:80px; font-weight:600; padding-top:2px;">Lineup:</label>
-        <div style="display:flex; gap:8px 12px; flex-wrap:wrap; flex:1;">
-          ${allLineup.map(f => `<label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; cursor:pointer;"><input type="checkbox" class="slot-lineup-cb" value="${f}" ${selFormats.includes(f) || (!slotBandFormats && isLiveBand) ? 'checked' : ''}><span>${f}</span></label>`).join('')}
+        <div class="slot-pills-wrap">
+          <div class="slot-lineup-row" style="display:${isLiveBand ? 'flex' : 'none'};">
+            ${allLineup.map(f => `<label class="slot-pill"><input type="checkbox" class="slot-lineup-cb" value="${f}" ${selFormats.includes(f) ? 'checked' : ''} hidden><span>${f}</span></label>`).join('')}
+          </div>
+          <div class="slot-styles-row" style="display:${isLiveBand ? 'flex' : 'none'};">
+            ${allStyles.map(s => `<label class="slot-pill"><input type="checkbox" class="slot-style-cb" value="${s}" ${selStyles.includes(s) ? 'checked' : ''} hidden><span>${s}</span></label>`).join('')}
+          </div>
+          <div class="slot-pill-error" style="display:none;"></div>
         </div>
       </div>
     `;
@@ -303,6 +584,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       const isLB = typeSelect.value === 'Live Band';
       stylesRow.style.display = isLB ? 'flex' : 'none';
       lineupRow.style.display = isLB ? 'flex' : 'none';
+      // Clear any stale Live-Band error on this slot (don't show a new
+      // one here — that's reserved for click-away / save).
+      _updateLiveBandSlotError(row, false);
+      _refreshSlotLockHighlight();
       // Sync hidden global artistTypeInput from first slot (backward compat)
       const firstSlot = slotList.querySelector('.slot-row .slot-artist-type');
       if (firstSlot && artistTypeInput) artistTypeInput.value = firstSlot.value;
@@ -368,7 +653,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           { text: 'Yes, fix it', style: 'primary',
             onClick: () => { endInput.value = suggested; } },
         ],
-        { size: 'sm', tone: 'info' }
+        // dismissible:false — user MUST pick one of the two buttons. Without
+        // this, clicking the backdrop / pressing Esc closed the prompt and
+        // silently left the wrong (next-day) end time in place.
+        { size: 'sm', tone: 'info', dismissible: false }
       );
     }
 
@@ -417,22 +705,38 @@ document.addEventListener("DOMContentLoaded", async () => {
           row.remove();
           renumberSlots();
           clearSlotError();
+          _refreshSlotLockHighlight();
         }, null, { tone: isBookedRow ? 'warning' : undefined, confirmLabel: 'Remove Slot', confirmStyle: 'danger' });
         return;
       }
       row.remove();
       renumberSlots();
       clearSlotError();
+      _refreshSlotLockHighlight();
     });
     
-    // Dollar formatting on pay input
-    row.querySelector('.slot-pay-dollars').addEventListener('input', (e) => {
-      e.target.value = formatWithCommas(e.target.value);
-    });
+    // Pay-amount auto-format (ATM-style right-shift) + select-all on
+    // focus/click so the user can just start typing.
+    const payAmountInput = row.querySelector('.slot-pay-amount');
+    if (payAmountInput) {
+      payAmountInput.addEventListener('input', () => _liveFormatPayAmount(payAmountInput));
+      const selectAll = () => payAmountInput.select();
+      payAmountInput.addEventListener('focus', selectAll);
+      payAmountInput.addEventListener('click', selectAll);
+    }
     
     // Validate on time change
     row.querySelector('.slot-start').addEventListener('change', validateSlots);
     row.querySelector('.slot-end').addEventListener('change', validateSlots);
+    // On every pill toggle: silently CLEAR the Live-Band error if the
+    // slot is now valid, and update the lock highlight. We do NOT raise
+    // a new error here — that's reserved for click-away and save.
+    row.querySelectorAll('.slot-lineup-cb, .slot-style-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        _updateLiveBandSlotError(row, false);
+        _refreshSlotLockHighlight();
+      });
+    });
     
     slotList.appendChild(row);
     clearSlotError();
@@ -494,9 +798,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     rows.forEach((row, i) => {
       const start = row.querySelector('.slot-start').value;
       const end = row.querySelector('.slot-end').value;
-      const dollars = (row.querySelector('.slot-pay-dollars')?.value || '0').replace(/,/g, '');
-      const cents = row.querySelector('.slot-pay-cents')?.value || '0';
-      const pay = parseFloat(`${dollars}.${cents}`);
+      const amountRaw = (row.querySelector('.slot-pay-amount')?.value || '0').replace(/,/g, '');
+      const pay = parseFloat(amountRaw) || 0;
       const artistType = row.querySelector('.slot-artist-type')?.value || null;
       let bandFormats = null;
       let styles = null;
@@ -512,9 +815,63 @@ document.addEventListener("DOMContentLoaded", async () => {
     return slots;
   }
   
+  // Reads just the Live-Band fields from one slot row's DOM. Cheap helper
+  // for the inline error logic so we don't have to call getSlotData()
+  // (which walks the whole list) on every pill toggle.
+  function _readSlotLiveBand(row) {
+    const at = row.querySelector('.slot-artist-type')?.value || null;
+    if (at !== 'Live Band') return { artist_type: at, band_formats: '', styles: '' };
+    const lineup = Array.from(row.querySelectorAll('.slot-lineup-cb:checked')).map(c => c.value).join(',');
+    const styles = Array.from(row.querySelectorAll('.slot-style-cb:checked')).map(c => c.value).join(',');
+    return { artist_type: at, band_formats: lineup, styles };
+  }
+  // Show / hide the inline Live-Band error on a single slot row.
+  //   allowShow = true  → if the slot is invalid, render the error message
+  //   allowShow = false → only HIDE the error if the slot is now valid;
+  //                       leave a visible error in place; never raise a new one
+  // Returns true if the slot is valid (or non-Live-Band), false if invalid.
+  function _updateLiveBandSlotError(row, allowShow) {
+    const errEl = row.querySelector('.slot-pill-error');
+    if (!errEl) return true;
+    const s = _readSlotLiveBand(row);
+    let msg = '';
+    if (s.artist_type === 'Live Band') {
+      if (!s.band_formats) msg = 'Pick at least one lineup option (Solo / Duo / Trio / Full Band).';
+      else if (!s.styles)  msg = 'Pick at least one style (Country, Pop, Rock, etc).';
+    }
+    if (!msg) {
+      // Valid (or not Live Band) — always clear stale error.
+      errEl.textContent = '';
+      errEl.style.display = 'none';
+      return true;
+    }
+    if (allowShow) {
+      errEl.textContent = msg;
+      errEl.style.display = 'block';
+    }
+    return false;
+  }
+
   function validateSlots() {
     const slots = getSlotData();
-    
+    const rows = document.querySelectorAll('#slotList .slot-row');
+
+    // Live-Band check: surface ALL invalid slots inline (so the user sees
+    // every offender, not just the first). Don't early-return on the
+    // first failure — keep walking.
+    let allLiveBandOk = true;
+    rows.forEach(row => {
+      const ok = _updateLiveBandSlotError(row, true);
+      if (!ok) allLiveBandOk = false;
+    });
+    if (!allLiveBandOk) {
+      // Live-Band errors are displayed inline per slot; suppress the
+      // global #slotError so we don't double-up.
+      clearSlotError();
+      return false;
+    }
+
+    // Time / overlap checks — first failure wins, shown in #slotError.
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
       // Allow end_time <= start_time for overnight slots (e.g. 11pm–1am; end is next day)
@@ -537,6 +894,63 @@ document.addEventListener("DOMContentLoaded", async () => {
     clearSlotError();
     return true;
   }
+
+  // Pure check — does this row have a complete Live Band selection?
+  // (Non-Live-Band slots always pass.)
+  function _isLiveBandSlotValid(row) {
+    const s = _readSlotLiveBand(row);
+    if (s.artist_type !== 'Live Band') return true;
+    return !!s.band_formats && !!s.styles;
+  }
+  // Toggle the .slot-locked highlight on every slot row based on its
+  // current validity. Call after any change that could affect validity
+  // (pill toggle, type change, slot removal).
+  function _refreshSlotLockHighlight() {
+    document.querySelectorAll('#slotList .slot-row').forEach(row => {
+      row.classList.toggle('slot-locked', !_isLiveBandSlotValid(row));
+    });
+  }
+  // Expose so other code paths (slot removal) can refresh after mutating.
+  window._refreshSlotLockHighlight = _refreshSlotLockHighlight;
+
+  // Capture-phase mousedown — hard lock. If ANY slot is an invalid Live
+  // Band (no lineup OR no styles), clicks outside that slot are blocked:
+  //   • preventDefault + stopPropagation kill the click before any other
+  //     handler runs (Save button, Cancel, other modals — all dead).
+  //   • The offending slot shakes + scrolls into view + shows its inline
+  //     red error so the user knows EXACTLY what to fix.
+  // Clicks INSIDE the offending slot are allowed (so they can change
+  // pills, the Type select, remove the slot, or edit its times).
+  document.addEventListener('mousedown', (e) => {
+    const rows = Array.from(document.querySelectorAll('#slotList .slot-row'));
+    if (rows.length === 0) return;
+    // Find FIRST invalid Live-Band slot (the one we'll lock to).
+    const invalidRow = rows.find(row => !_isLiveBandSlotValid(row));
+
+    if (invalidRow && !invalidRow.contains(e.target)) {
+      // Block the click outright.
+      e.preventDefault();
+      e.stopPropagation();
+      // Make sure the inline error is visible + draw the eye.
+      _updateLiveBandSlotError(invalidRow, true);
+      invalidRow.classList.add('slot-locked');
+      // Replay shake (restart the animation by toggling the class).
+      invalidRow.classList.remove('slot-shake');
+      void invalidRow.offsetWidth;  // force reflow so the animation re-runs
+      invalidRow.classList.add('slot-shake');
+      setTimeout(() => invalidRow.classList.remove('slot-shake'), 360);
+      // Scroll the invalid slot into view inside the modal.
+      try { invalidRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) { /* old browsers */ }
+      return;
+    }
+    // No lock OR click inside the locked row → fall through. Also surface
+    // errors on any other slot the click was outside of (so multi-slot
+    // forms show all offenders, not just the first).
+    rows.forEach(row => {
+      if (!row.contains(e.target)) _updateLiveBandSlotError(row, true);
+    });
+    _refreshSlotLockHighlight();
+  }, true);  // capture phase — runs before bubble-phase listeners on other elements
   
   function showSlotError(msg) {
     const el = document.getElementById('slotError');
@@ -1008,6 +1422,17 @@ async function renderCalendar() {
                 }
                 openGigModal(g);
               };
+              if (typeof window.attachGigHoverCard === 'function') {
+                // Merge slot info into the gig payload so the hover card
+                // reflects this specific slot's artist/time.
+                window.attachGigHoverCard(slotDiv, {
+                  ...g,
+                  artist_name: slot.artist_name,
+                  artist_id: slot.artist_id,
+                  start_time: slot.start_time,
+                  status: slot.status,
+                });
+              }
               gigsContainer.appendChild(slotDiv);
             });
           } else {
@@ -1061,6 +1486,9 @@ async function renderCalendar() {
               e.stopPropagation();
               openGigModal(g);
             };
+            if (typeof window.attachGigHoverCard === 'function') {
+              window.attachGigHoverCard(div, g);
+            }
             gigsContainer.appendChild(div);
           }
         });
@@ -1821,15 +2249,25 @@ async function renderCalendar() {
         // firedKey: the notification_key that already fired — exclude it and anything more urgent
         function _findNextBlast(hoursUntil, firedKey) {
           function _toH(val, unit) { return unit==='hours' ? val : unit==='days' ? val*24 : val*7*24; }
-          function _lbl(val, unit) { return unit==='hours' ? `${val}h` : unit==='days' ? `${val} day${val!==1?'s':''}` : `${val} week${val!==1?'s':''}`; }
+          function _lbl(val, unit) { return unit==='hours' ? `${val} hour${val!==1?'s':''}` : unit==='days' ? `${val} day${val!==1?'s':''}` : `${val} week${val!==1?'s':''}`; }
           const _ord = ['open_gig_36h','open_gig_1w','open_gig_2w','open_gig_4w'];
-          // Find the threshold of the already-fired blast — exclude it and anything smaller
+          // Threshold (hours-before-gig) of the blast that already fired.
+          // Blasts fire in order: 4w (672h) → 2w (336h) → 1w (168h) → 36h
+          // as hoursUntil decreases. So the NEXT scheduled blast must have
+          // a SMALLER threshold than the one that already fired (it will
+          // fire later, closer to the gig). Bug fix (Jun 2026): the old
+          // filter used `> _firedH`, which excluded every remaining blast
+          // and made the banner say "no further blasts scheduled" even
+          // when 1-week / 36-hour were enabled and pending.
           const _firedSettings = firedKey && _bs[firedKey];
-          const _firedH = _firedSettings ? _toH(_firedSettings.time_value||1, _firedSettings.time_unit||'weeks') : 0;
+          const _firedH = _firedSettings ? _toH(_firedSettings.time_value||1, _firedSettings.time_unit||'weeks') : Infinity;
           const _th = _ord.filter(k => _bs[k] && _bs[k].enabled)
             .map(k => ({key:k, wh:_toH(_bs[k].time_value||1,_bs[k].time_unit||'weeks'), label:_lbl(_bs[k].time_value||1,_bs[k].time_unit||'weeks')}))
-            .filter(t => t.wh > _firedH) // only blasts with LARGER threshold than what already fired
+            .filter(t => t.wh < _firedH) // only blasts that fire AFTER the one that already fired
             .sort((a,b) => a.wh-b.wh);
+          // From the remaining enabled blasts, pick the one with the LARGEST
+          // threshold still less than the current hoursUntil — that's the
+          // one that fires next (soonest in time from now).
           let next = null;
           for (let i=_th.length-1;i>=0;i--) { if (_th[i].wh < hoursUntil) { next=_th[i]; break; } }
           return next; // null = no more blasts scheduled
@@ -2001,7 +2439,8 @@ async function renderCalendar() {
             endAfterInput.value = gig.recurring_end_after;
           }
           if (endType === 'by' && gig.recurring_end_by_date) {
-            endByInput.value = gig.recurring_end_by_date;
+            // Convert backend ISO yyyy-mm-dd to the display mm/dd/yyyy.
+            endByInput.value = _isoToDisp(gig.recurring_end_by_date);
           }
           
           // Add series indicator
@@ -2509,15 +2948,27 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       // in-progress slot loses its cancel affordance.
       const _slotHasStarted = isSlotStartedToday(gig, slot);
       if (isBooked) {
-        const _aname = (slot.artist_name || 'Artist').replace(/['"]/g, '');
+        // Audit fix (May 2026 part 8): inline-onclick string args now use
+        // jsAttr (JSON.stringify-based) which emits its own outer quotes
+        // and is HTML-attribute-safe — the prior `(name).replace(/['"]/g,'')`
+        // strip + `'${name}'` pattern broke on backslash-in-name AND on the
+        // broken `(gig.title||'').replace(/'/g,"\'")` which is a no-op since
+        // "\'" is just "'".
+        const _jsa = window.jsAttr || JSON.stringify;
+        const _aname_safe = _jsa(slot.artist_name || 'Artist');
+        const _aname_html = (typeof esc === 'function' ? esc(slot.artist_name) : String(slot.artist_name || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])));
+        const _gid_safe = parseInt(gig.id, 10) || 0;
+        const _aid_safe = parseInt(slot.artist_id, 10) || 0;
+        const _sid_safe = parseInt(slot.id, 10) || 0;
+        const _snum_safe = parseInt(slot.slot_number, 10) || 0;
         const cancelBtn = (!isPastGig && !_slotHasStarted)
-          ? `<button onclick="cancelSlotBooking(${gig.id}, ${slot.id}, ${slot.slot_number}, ${slot.artist_id || 'null'})"
+          ? `<button onclick="cancelSlotBooking(${_gid_safe}, ${_sid_safe}, ${_snum_safe}, ${_aid_safe || 'null'})"
                style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 9px;font-size:0.75rem;cursor:pointer;white-space:nowrap;"
                title="Cancel this slot booking">✕</button>`
           : '';
-        const msgBtn = `<button onclick="if(typeof openMessageModal==='function') openMessageModal(${gig.id},'${_aname}',${slot.artist_id})"
+        const msgBtn = `<button onclick="if(typeof openMessageModal==='function') openMessageModal(${_gid_safe},${_aname_safe},${_aid_safe})"
           style="background:transparent;border:1px solid rgba(6,182,212,0.4);color:#06b6d4;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;white-space:nowrap;">Message Artist</button>`;
-        const rateBtn = `<button class="_rateArtistBtn" data-artist-id="${slot.artist_id}" onclick="if(typeof openReviewModal==='function') openReviewModal({artistId:${slot.artist_id},artistName:'${_aname}',gigId:${gig.id},gigDate:'${gig.date}',gigTitle:'${(gig.title||'').replace(/'/g,"\'")}'})"
+        const rateBtn = `<button class="_rateArtistBtn" data-artist-id="${_aid_safe}" onclick="if(typeof openReviewModal==='function') openReviewModal({artistId:${_aid_safe},artistName:${_aname_safe},gigId:${_gid_safe},gigDate:${_jsa(gig.date || '')},gigTitle:${_jsa(gig.title || '')}})"
           style="background:transparent;border:1px solid rgba(245,158,11,0.4);color:#f59e0b;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;white-space:nowrap;">Rate Artist</button>`;
 
         html += `
@@ -2532,8 +2983,8 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             ${typeInfo ? `<div style="margin-top:5px;color:var(--text-muted);font-size:0.78rem;line-height:1.4;font-style:italic;">${typeInfo}</div>` : ''}
             <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">
               <span style="color:var(--text-muted);font-size:0.78rem;margin-right:4px;">Artist:</span>
-              <a href="/app/artist-profile.html?artist_id=${slot.artist_id}" target="_blank"
-                 style="color:${color};font-weight:600;font-size:0.82rem;text-decoration:none;flex:1;min-width:120px;">${slot.artist_name}</a>
+              <a href="/app/artist-profile.html?artist_id=${_aid_safe}" target="_blank"
+                 style="color:${color};font-weight:600;font-size:0.82rem;text-decoration:none;flex:1;min-width:120px;">${_aname_html}</a>
               ${msgBtn}
               ${rateBtn}
             </div>
@@ -2816,7 +3267,14 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             credentials: 'include',
             body: JSON.stringify({ cancelled_by: 'venue', cancellation_reason: result.reason, keep_open: result.keepOpen })
           });
-          if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+          if (!resp.ok) {
+            // Audit fix (May 2026 part 3): surface FastAPI's {"detail": "..."}
+            // body instead of just "Server returned 409". Frequency-policy /
+            // in-progress / charged-transaction errors are unactionable without it.
+            let _detail = '';
+            try { const _j = await resp.json(); _detail = _j && _j.detail ? _j.detail : ''; } catch (_) {}
+            throw new Error(_detail || `Server returned ${resp.status}`);
+          }
           document.getElementById('gigModal').classList.add('hidden');
           invalidateGigs(); await renderCalendar();
           if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
@@ -2833,12 +3291,18 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         const confirmed = await _showDeleteOpenSlotOverlay(slotNum);
         if (!confirmed) return;
         try {
-          await fetch(`/api/gigs/${gigId}/cancel`, {
+          const _r2 = await fetch(`/api/gigs/${gigId}/cancel`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
             body: JSON.stringify({ cancelled_by: 'venue', keep_open: false })
           });
+          if (!_r2.ok) {
+            // Surface FastAPI's detail body.
+            let _detail = '';
+            try { const _j = await _r2.json(); _detail = _j && _j.detail ? _j.detail : ''; } catch (_) {}
+            throw new Error(_detail || `Server returned ${_r2.status}`);
+          }
           document.getElementById('gigModal').classList.add('hidden');
           invalidateGigs(); await renderCalendar();
           showAlert('Gig removed from calendar.', 'Gig Deleted');
@@ -3163,7 +3627,8 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     
     const endType = document.querySelector('input[name="endType"]:checked')?.value || 'after';
     const endAfter = endType === 'after' ? (parseInt(endAfterInput.value) || null) : null;
-    const endBy = endType === 'by' ? (endByInput.value || null) : null;
+    // Convert display mm/dd/yyyy back to ISO yyyy-mm-dd for the backend.
+    const endBy = endType === 'by' ? (_dispToIso(endByInput.value) || null) : null;
 
     // Get slot data for start/end/pay (already validated above)
     const startTime = slots[0].start_time;
@@ -3452,10 +3917,14 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     // Handle overlap conflicts — show modal so venue can decide
     if (_seriesResult && _seriesResult.conflicts && _seriesResult.conflicts.length > 0) {
       const fmtDate = d => { const [y,m,day] = d.split('-'); return new Date(parseInt(y),parseInt(m)-1,parseInt(day)).toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}); };
+      // Audit fix (May 2026 part 7): escape `existing_title` and `existing_times`
+      // — they come from another gig's DB row and could include user-controlled
+      // text. Without escape, a venue-supplied title with `<img onerror>` would
+      // run JS in this confirmation modal.
       const conflictList = _seriesResult.conflicts.map(c =>
         `<tr>
-          <td style="padding:7px 10px;font-size:0.85rem;color:#f0f0f0;white-space:nowrap;">${fmtDate(c.date)}</td>
-          <td style="padding:7px 10px;font-size:0.82rem;color:#fcd34d;">${c.existing_title} (${c.existing_times})</td>
+          <td style="padding:7px 10px;font-size:0.85rem;color:#f0f0f0;white-space:nowrap;">${_vcg_esc(fmtDate(c.date))}</td>
+          <td style="padding:7px 10px;font-size:0.82rem;color:#fcd34d;">${_vcg_esc(c.existing_title)} (${_vcg_esc(c.existing_times)})</td>
         </tr>`
       ).join('');
 
@@ -3502,7 +3971,16 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       return; // Don't show success here — handled in recursive call or cancelled
     }
 
-    showGigSuccess("Recurring gigs updated!");
+    // Audit fix (May 2026 part 7): surface `skipped_inflight` so the venue
+    // knows N gigs were preserved because they had bookings or contracts in
+    // progress. Without this, the "updated cleanly" success message hides
+    // the fact that some gigs in the series weren't rebuilt.
+    const _sk = (_seriesResult && _seriesResult.skipped_inflight) || 0;
+    if (_sk > 0) {
+      showGigSuccess(`Recurring gigs updated — ${_sk} gig${_sk === 1 ? '' : 's'} kept because ${_sk === 1 ? 'it has' : 'they have'} bookings or contracts in progress.`);
+    } else {
+      showGigSuccess("Recurring gigs updated!");
+    }
     invalidateGigs(); await renderCalendar();
   }
 
@@ -3673,7 +4151,13 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             credentials: 'include',
             body: JSON.stringify({ cancellation_reason: cancelReason, keep_open: keepOpen })
           });
-          if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+          if (!resp.ok) {
+            // Audit fix (May 2026 part 3): surface FastAPI detail body
+            // so charged-transaction / locked-gig errors are actionable.
+            let _detail = '';
+            try { const _j = await resp.json(); _detail = _j && _j.detail ? _j.detail : ''; } catch (_) {}
+            throw new Error(_detail || `Server returned ${resp.status}`);
+          }
 
           if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
           if (window.myArtists) { await myArtists.loadArtists(); myArtists.render(); }
@@ -4389,15 +4873,24 @@ function initializeArtistSearch(venueId, venueData) {
       return;
     }
     
-    artistAutocomplete.innerHTML = matches.map(artist => `
-      <div style="padding: 8px 12px; cursor: pointer; transition: background 0.2s;" 
-           onmouseover="this.style.background='rgba(255,255,255,0.1)'" 
-           onmouseout="this.style.background='transparent'"
-           onclick="document.getElementById('searchArtist').value = '${artist.name.replace(/'/g, "\\'")}'; document.getElementById('artistAutocomplete').style.display = 'none'; applyFilters();">
-        ${artist.name}
-      </div>
-    `).join('');
-    
+    // Audit fix (May 2026 part 8): build options as DOM nodes with
+    // addEventListener instead of inline onclick. The previous
+    // `replace(/'/g, "\\'")` pattern was bypassed by backslash-in-name.
+    artistAutocomplete.innerHTML = '';
+    matches.forEach(artist => {
+      const opt = document.createElement('div');
+      opt.style.cssText = 'padding: 8px 12px; cursor: pointer; transition: background 0.2s;';
+      opt.textContent = artist.name;
+      opt.addEventListener('mouseover', () => { opt.style.background = 'rgba(255,255,255,0.1)'; });
+      opt.addEventListener('mouseout',  () => { opt.style.background = 'transparent'; });
+      opt.addEventListener('click', () => {
+        document.getElementById('searchArtist').value = artist.name;
+        artistAutocomplete.style.display = 'none';
+        applyFilters();
+      });
+      artistAutocomplete.appendChild(opt);
+    });
+
     artistAutocomplete.style.display = 'block';
   });
   
@@ -4640,6 +5133,17 @@ function initializeArtistSearch(venueId, venueData) {
       // v93: Check if already preferred
       const isPreferred = preferredArtistIds.has(artist.id);
       
+      // Audit fix (May 2026 part 7): escape every interpolation. IDs are
+      // coerced to int so they can't break out of attributes.
+      const _aid_safe = parseInt(artist.id, 10) || 0;
+      const _vid_safe = parseInt(venueId, 10) || 0;
+      const _aname_h  = _vcg_esc(artist.name);
+      const _aname_a  = _vcg_attr(artist.name);
+      const _city_h   = _vcg_esc(artist.city || 'N/A');
+      const _state_h  = _vcg_esc(artist.state || 'N/A');
+      const _atype_h  = _vcg_esc(artist.artist_type || '');
+      const _formats_h = _vcg_esc(formats);
+      const _styles_h = _vcg_esc(artStyles);
       return `
         <div style="
           display: flex;
@@ -4653,20 +5157,20 @@ function initializeArtistSearch(venueId, venueData) {
           transition: background 0.2s;
         " onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'">
           <div style="flex: 1;">
-            <a href="/app/artist-profile.html?artist_id=${artist.id}" target="_blank" style="font-weight: 600; color: #7c6bff; text-decoration: none; font-size: 0.95rem;">${artist.name}</a>
-            <span style="color: var(--text-muted); margin-left: 12px; font-size: 0.85rem;">${artist.city || 'N/A'}, ${artist.state || 'N/A'}</span>
-            <span style="color: var(--text-muted); margin-left: 12px; font-size: 0.85rem;">${artist.artist_type}${formats}${artStyles}</span>
+            <a href="/app/artist-profile.html?artist_id=${_aid_safe}" target="_blank" style="font-weight: 600; color: #7c6bff; text-decoration: none; font-size: 0.95rem;">${_aname_h}</a>
+            <span style="color: var(--text-muted); margin-left: 12px; font-size: 0.85rem;">${_city_h}, ${_state_h}</span>
+            <span style="color: var(--text-muted); margin-left: 12px; font-size: 0.85rem;">${_atype_h}${_formats_h}${_styles_h}</span>
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
           ${bannedArtistIds.has(artist.id) ? `
             <span style="padding:5px 10px;font-size:0.8rem;background:rgba(127,29,29,0.3);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;border-radius:6px;white-space:nowrap;">🚫 Banned</span>
-            <button onclick="unbanArtistFromSearch(${artist.id}, '${artist.name.replace(/'/g, "\\'")}', ${venueId})" class="btn ghost" style="padding:5px 10px;font-size:0.8rem;white-space:nowrap;" title="Remove ban — artist can request preferred status again">Remove Ban</button>
+            <button onclick="unbanArtistFromSearch(${_aid_safe}, '${_aname_a}', ${_vid_safe})" class="btn ghost" style="padding:5px 10px;font-size:0.8rem;white-space:nowrap;" title="Remove ban — artist can request preferred status again">Remove Ban</button>
           ` : isPreferred ? `
             <span style="padding:5px 10px;font-size:0.8rem;background:rgba(34,197,94,0.2);border:1px solid #22c55e;color:#22c55e;border-radius:6px;white-space:nowrap;">✓ Preferred</span>
-            <button onclick="banArtistFromSearch(${artist.id}, '${artist.name.replace(/'/g, "\\'")}', ${venueId})" class="btn" style="padding:5px 10px;font-size:0.8rem;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;white-space:nowrap;" title="Ban artist from ever booking a gig at this venue">🚫 Ban</button>
+            <button onclick="banArtistFromSearch(${_aid_safe}, '${_aname_a}', ${_vid_safe})" class="btn" style="padding:5px 10px;font-size:0.8rem;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;white-space:nowrap;" title="Ban artist from ever booking a gig at this venue">🚫 Ban</button>
           ` : `
-            <button onclick="approvePreferredArtist(${artist.id}, '${artist.name.replace(/'/g, "\\'")}', ${venueId})" class="btn" style="padding:5px 10px;font-size:0.8rem;background:#22c55e;border:1px solid #22c55e;white-space:nowrap;" title="Add as Preferred Artist — they can book your gigs directly">Approve Preferred</button>
-            <button onclick="banArtistFromSearch(${artist.id}, '${artist.name.replace(/'/g, "\\'")}', ${venueId})" class="btn" style="padding:5px 10px;font-size:0.8rem;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;white-space:nowrap;" title="Ban artist from ever booking a gig at this venue">🚫 Ban</button>
+            <button onclick="approvePreferredArtist(${_aid_safe}, '${_aname_a}', ${_vid_safe})" class="btn" style="padding:5px 10px;font-size:0.8rem;background:#22c55e;border:1px solid #22c55e;white-space:nowrap;" title="Add as Preferred Artist — they can book your gigs directly">Approve Preferred</button>
+            <button onclick="banArtistFromSearch(${_aid_safe}, '${_aname_a}', ${_vid_safe})" class="btn" style="padding:5px 10px;font-size:0.8rem;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;white-space:nowrap;" title="Ban artist from ever booking a gig at this venue">🚫 Ban</button>
           `}
           </div>
         </div>
@@ -4739,10 +5243,15 @@ function initializeArtistSearch(venueId, venueData) {
                 preferredArtistIds.delete(artistId);
                 displayArtists();
               } else {
-                window.showErrorModal('Ban Failed', 'Could not ban artist. Please try again.');
+                // Audit fix (May 2026 part 5): surface backend {detail} so the
+                // venue sees the real reason (e.g. "Artist has 2 booked future
+                // gigs — cancel them first") instead of a generic message.
+                let _detail = `HTTP ${r.status}`;
+                try { const _j = await r.json(); if (_j && _j.detail) _detail = _j.detail; } catch(_) {}
+                window.showErrorModal('Ban Failed', _detail);
               }
             } catch (e) {
-              window.showErrorModal('Ban Failed', 'Network error — please try again.');
+              window.showErrorModal('Ban Failed', (e && e.message) || 'Network error — please try again.');
             }
             return false;
           }
@@ -4770,10 +5279,13 @@ function initializeArtistSearch(venueId, venueData) {
                 bannedArtistIds.delete(artistId);
                 displayArtists();
               } else {
-                window.showErrorModal('Unban Failed', 'Could not remove ban. Please try again.');
+                // Audit fix (May 2026 part 5): surface backend {detail}.
+                let _detail = `HTTP ${r.status}`;
+                try { const _j = await r.json(); if (_j && _j.detail) _detail = _j.detail; } catch(_) {}
+                window.showErrorModal('Unban Failed', _detail);
               }
             } catch (e) {
-              window.showErrorModal('Unban Failed', 'Network error — please try again.');
+              window.showErrorModal('Unban Failed', (e && e.message) || 'Network error — please try again.');
             }
             return false;
           }
@@ -5348,27 +5860,46 @@ window._showNewGigBlastPrompt = async function(gigEntries, blastSettings, _venue
             gigSelections.push({ id: g.id, blast_preferred: doPreferred, blast_all: doRadius, blast_radius: radiusMiles });
           }
 
+          // Audit fix (May 2026 part 5): surface batch-blast failures so the
+          // venue isn't told emails sent when they didn't. We still close the
+          // modal and refresh the calendar (the gig itself was created), but
+          // distinguish "emails sent" from "emails failed".
+          let _blastError = null;
           if (gigSelections.length > 0) {
             try {
-              await fetch(`/api/venues/${_venueId}/batch-blast`, {
+              const _br = await fetch(`/api/venues/${_venueId}/batch-blast`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ gigs: gigSelections })
               });
-            } catch (e) { /* swallow — show success regardless */ }
+              if (!_br.ok) {
+                let _detail = `HTTP ${_br.status}`;
+                try { const _j = await _br.json(); if (_j && _j.detail) _detail = _j.detail; } catch(_) {}
+                _blastError = _detail;
+              }
+            } catch (e) {
+              _blastError = (e && e.message) || 'Network error';
+            }
           }
 
           window.closeAllModals();
           if (typeof window.invalidateGigs === 'function') window.invalidateGigs();
           if (typeof window.renderCalendar === 'function') window.renderCalendar();
 
-          window.showSuccessModal(
-            'Gig Created',
-            gigSelections.length > 0
-              ? 'Emails sent — artists will be alerted to your new gig!'
-              : 'Gig created successfully!'
-          );
+          if (_blastError) {
+            window.showSuccessModal(
+              'Gig Created (blast failed)',
+              `The gig was created, but the blast email could not be sent: ${_blastError}. You can manually blast from the gig's calendar bubble.`
+            );
+          } else {
+            window.showSuccessModal(
+              'Gig Created',
+              gigSelections.length > 0
+                ? 'Emails sent — artists will be alerted to your new gig!'
+                : 'Gig created successfully!'
+            );
+          }
           return false; // we already closed manually
         }
       },

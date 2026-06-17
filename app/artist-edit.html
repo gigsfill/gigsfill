@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
@@ -182,14 +183,31 @@
       flex-direction: column;
       gap: 8px;
     }
-    
+
     .social-row {
+      /* 3 cols: drag handle, label (100px), input (flex). Was 100px 1fr — added
+         a leading column for the new drag-handle so user can grab and reorder. */
       display: grid;
-      grid-template-columns: 100px 1fr;
+      grid-template-columns: 22px 100px 1fr;
       gap: 10px;
       align-items: center;
+      padding: 4px;
+      border-radius: 6px;
+      transition: background 0.15s;
     }
-    
+    .social-row .drag-handle {
+      cursor: grab;
+      color: var(--text-gray);
+      user-select: none;
+      text-align: center;
+      font-size: 14px;
+      padding: 6px 0;
+      border-radius: 4px;
+    }
+    .social-row .drag-handle:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+    .social-row .drag-handle:active { cursor: grabbing; }
+    .social-row.dragging { opacity: 0.4; background: rgba(124,107,255,0.08); }
+
     .social-row label {
       font-size: 0.8rem;
       font-weight: 500;
@@ -303,24 +321,66 @@
       gap: 8px !important;
       margin-top: 16px !important;
     }
-    
+
+    /* Audio entry = caption textarea + audio row, grouped in a card. The card
+       gives each (caption, audio) pair a single border + hover state so the
+       relationship is visually obvious. */
+    .audio-entry {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .audio-entry:hover {
+      border-color: var(--purple);
+    }
+
+    /* Captions for media — audio uses .audio-caption (textarea above row);
+       videos use .video-caption + pictures use .picture-caption (textarea
+       inside the overlay below the title). Same visual treatment so they
+       read as a consistent control across all three media types. */
+    .audio-caption,
+    .video-caption,
+    .picture-caption {
+      width: 100%;
+      min-height: 36px;
+      max-height: 120px;
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      resize: vertical;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .audio-caption::placeholder,
+    .video-caption::placeholder,
+    .picture-caption::placeholder { color: var(--text-gray); font-style: italic; }
+    .audio-caption:focus,
+    .video-caption:focus,
+    .picture-caption:focus { outline: none; border-color: var(--purple); }
+
     .audio-row {
       display: flex !important;
       flex-direction: row !important;
       align-items: center !important;
       gap: 12px !important;
-      padding: 8px 12px !important;
-      background: rgba(255, 255, 255, 0.02) !important;
-      border: 1px solid var(--border) !important;
-      border-radius: 8px !important;
+      padding: 0 !important;
+      background: transparent !important;
+      border: 0 !important;
+      border-radius: 0 !important;
       overflow: visible !important;
       max-width: none !important;
       width: 100% !important;
     }
     
-    .audio-row:hover {
-      border-color: var(--purple) !important;
-    }
+    /* hover styling moved to .audio-entry (the wrapping card) */
     
     .audio-row .drag-handle {
       flex: 0 0 auto !important;
@@ -376,10 +436,26 @@
       align-items: center;
       flex-wrap: wrap;
     }
-    
+
     .add-media-row input[type="text"] {
       flex: 1;
       min-width: 200px;
+    }
+
+    /* Uniform width for every "add another item" action button across the
+       artist edit page — Pictures, MP3 File, Audio Link, Video Link, and the
+       dynamic "+ Block Dates" button in the Availability section. 170px is
+       sized to fit the longest label state ("+ Add MP3 File (2/3)") with
+       comfortable padding; shorter labels center inside that width. Keeping
+       them visually identical removes the "jagged buttons" effect when the
+       eye scans down the page. */
+    #addPicBtn,
+    #addAudioBtn,
+    #addAudioLinkBtn,
+    #addVideoBtn,
+    .btn-uniform {
+      min-width: 170px;
+      text-align: center;
     }
     
     /* ========================================
@@ -489,14 +565,14 @@
     }
   </style>
   
-<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
-  <script src="/app/static/js/auth.guard.js"></script>
-  <script src="/app/static/js/api-globals.js"></script>
+  <script src="/app/static/js/auth.guard.js?v=2"></script>
+  <script src="/app/static/js/api-globals.js?v=4"></script>
   <script src="/app/static/js/gf-modals.js?v=6"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=6"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=15"></script>
   
 </head>
 
@@ -513,12 +589,9 @@
       </div>
     </div>
   </header>
-  <script src="/app/static/js/user-dropdown.js?v=2"></script>
+  <script src="/app/static/js/user-dropdown.js?v=6"></script>
 
   <main class="profile-container">
-
-    <!-- Public share URL — populated by vanity-url-editor.js on load -->
-    <div id="vanityUrlSection"></div>
 
     <!-- SECTION 1: PROFILE PICTURE -->
     <div class="content-card">
@@ -575,6 +648,11 @@
             <option value="WI">WI</option><option value="WY">WY</option>
           </select>
         </div>
+        <!-- Public share URL — populated by vanity-url-editor.js on load.
+             Sits inside Basic Info (below city/state) so it groups with the
+             other "who is this artist" fields rather than floating at the
+             top of the page. Full-width row inside the .form-rows column. -->
+        <div id="vanityUrlSection"></div>
       </div>
     </div>
 
@@ -602,34 +680,45 @@
     </div>
 
     <!-- SECTION 6: SOCIAL MEDIA -->
+    <!-- Drag rows by the ☰ handle to reorder. The DOM order at drag-end is
+         saved as `social_order` (comma-separated brand keys) so the public
+         profile renders tiles in this exact sequence. -->
     <div class="content-card">
-      <h2>Social Media</h2>
-      <div class="social-grid">
-        <div class="social-row">
+      <h2 style="margin-bottom:4px;">Social Media</h2>
+      <p style="color:var(--text-gray);font-size:0.75rem;margin:0 0 8px;">Drag rows by the <strong>☰</strong> handle to reorder how they appear on your public profile.</p>
+      <div class="social-grid" id="socialGrid">
+        <div class="social-row" data-brand="spotify">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Spotify</label>
           <input id="spotify_url" type="text" placeholder="https://open.spotify.com/artist/..." />
         </div>
-        <div class="social-row">
+        <div class="social-row" data-brand="instagram">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Instagram</label>
           <input id="instagram_url" type="text" placeholder="https://www.instagram.com/..." />
         </div>
-        <div class="social-row">
+        <div class="social-row" data-brand="facebook">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Facebook</label>
           <input id="facebook_url" type="text" placeholder="https://www.facebook.com/..." />
         </div>
-        <div class="social-row">
+        <div class="social-row" data-brand="youtube">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>YouTube</label>
           <input id="youtube_url" type="text" placeholder="https://www.youtube.com/..." />
         </div>
-        <div class="social-row">
-          <label>Twitter/X</label>
+        <div class="social-row" data-brand="twitter">
+          <span class="drag-handle" draggable="true">☰</span>
+          <label>X</label>
           <input id="twitter_url" type="text" placeholder="https://twitter.com/..." />
         </div>
-        <div class="social-row">
+        <div class="social-row" data-brand="tiktok">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>TikTok</label>
           <input id="tiktok_url" type="text" placeholder="https://www.tiktok.com/@..." />
         </div>
-        <div class="social-row">
+        <div class="social-row" data-brand="website">
+          <span class="drag-handle" draggable="true">☰</span>
           <label>Website</label>
           <input id="website_url" type="text" placeholder="https://www.yourwebsite.com" />
         </div>
@@ -647,13 +736,17 @@
     <!-- SECTION 8: AUDIO -->
     <div class="content-card">
       <h2>Audio</h2>
-      <p style="color:var(--text-gray);font-size:0.8rem;margin:-4px 0 12px;">
-        Upload up to <strong>3 MP3 files</strong>, plus unlimited links to external audio
-        (SoundCloud, Bandcamp, etc.).
-      </p>
-      <button id="addAudioBtn" class="btn primary">+ Add MP3 File <span id="addAudioBtnCount" style="opacity:0.7;font-weight:400;"></span></button>
-      <input id="audioInput" type="file" accept="audio/*,.mp3" hidden />
-      <div class="add-media-row" style="margin-top:12px;">
+      <!-- Help text + Add-MP3 button on one line. Button is right-aligned so it
+           vertically lines up with the Add-Audio-Link button on the row below. -->
+      <div style="display:flex;align-items:flex-start;gap:12px;margin:-4px 0 12px;">
+        <p style="color:var(--text-gray);font-size:0.8rem;margin:0;flex:1;line-height:1.4;">
+          Upload up to <strong>3 MP3 files</strong> (max <strong>5 MB each</strong>),
+          plus unlimited links to external audio (SoundCloud, Bandcamp, etc.).
+        </p>
+        <button id="addAudioBtn" class="btn primary" style="flex-shrink:0;">+ Add MP3 File <span id="addAudioBtnCount" style="opacity:0.7;font-weight:400;"></span></button>
+      </div>
+      <input id="audioInput" type="file" accept="audio/mpeg,.mp3" hidden />
+      <div class="add-media-row">
         <input id="audioLinkUrl" type="text" placeholder="SoundCloud / Bandcamp / other audio URL" />
         <button id="addAudioLinkBtn" class="btn primary">+ Add Audio Link</button>
       </div>
@@ -702,21 +795,25 @@
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
-<script src="/app/static/js/artist-availability.js?v=3"></script>
+<!-- Vanity URL editor: must load BEFORE the init scripts that want
+     to use window.applyVanityToLinks for the header profile button. -->
+<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/artist-availability.js?v=5"></script>
 <script src="/app/static/js/artist-member-availability.js?v=3"></script>
 <script src="/app/static/js/artist-edit-init.js"></script>
 <script src="/app/static/js/onboarding-checklist.js" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
-<!-- Vanity URL editor: shows + lets admin edit the public share URL. -->
-<script src="/app/static/js/vanity-url-editor.js?v=1"></script>
 <script>
   (function () {
     const aid = parseInt(new URLSearchParams(window.location.search).get('artist_id') || '0', 10);
     if (aid && typeof window.initVanityUrlEditor === 'function') {
-      window.initVanityUrlEditor('artist', aid);
+      window.initVanityUrlEditor('artist', aid, {
+        linkSelectors: ['#artistProfileBtn'],
+      });
     }
   })();
 </script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
 </html>

@@ -18,6 +18,7 @@
   <meta name="twitter:title" content="Artist Profile – GigsFill">
   <meta name="twitter:description" content="View this artist's profile on GigsFill.">
   <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/gig-hover-card.css" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
@@ -41,6 +42,11 @@
     .profile-tabs {
       display: flex; gap: 0; border-bottom: 1px solid var(--border);
       margin-bottom: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+      /* Center tabs in the row when they all fit (>~700px wide). On
+         narrower viewports the overflow-x:auto kicks in for horizontal
+         scrolling, and justify-content:center is ignored anyway because
+         content overflows. */
+      justify-content: center;
     }
     .profile-tabs button {
       flex-shrink: 0; padding: 10px 16px; background: none; border: none;
@@ -170,16 +176,44 @@
     .gig-modal-value a { color: var(--cyan); text-decoration: none; }
     .gig-modal-value a:hover { text-decoration: underline; }
 
-    /* Social Media */
-    .social-links { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-    .social-link {
-      display: inline-flex; align-items: center; gap: 10px; padding: 10px 18px;
-      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
-      border-radius: 8px; color: var(--text-gray); text-decoration: none;
-      font-size: 1rem; font-weight: 600; transition: all 0.2s;
+    /* Social Media — centered grid of branded tiles. Mirrors the new
+       video/picture grid layout: fixed 110px tiles, auto-fit wrapping,
+       justify-content:center so a partial row sits in the middle of the
+       container instead of left-aligned. Each tile is a square card with
+       the brand's iconic SVG (real logos, not emoji) and label below. */
+    .social-links {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, 110px);
+      justify-content: center;
+      gap: 12px;
     }
-    .social-link span:first-child { font-size: 1.3rem; }
-    .social-link:hover { background: rgba(139,92,246,0.15); border-color: var(--purple); color: var(--purple); transform: translateX(3px); }
+    .social-link {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 8px; padding: 18px 8px;
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+      border-radius: 12px; color: var(--text-gray); text-decoration: none;
+      font-size: 0.75rem; font-weight: 600; transition: all 0.18s ease;
+      /* Per-tile brand color set via inline style="--brand:#..." so the same
+         class hovers to whichever color belongs to that tile. */
+    }
+    .social-link svg {
+      width: 34px; height: 34px;
+      color: var(--brand, var(--text-gray));
+      transition: transform 0.18s ease;
+    }
+    .social-link:hover {
+      background: rgba(255,255,255,0.06);
+      border-color: var(--brand, var(--purple));
+      color: var(--text);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+    }
+    .social-link:hover svg { transform: scale(1.1); }
+    @media (max-width: 480px) {
+      .social-links { grid-template-columns: repeat(auto-fit, 90px); gap: 10px; }
+      .social-link { padding: 14px 6px; font-size: 0.7rem; }
+      .social-link svg { width: 28px; height: 28px; }
+    }
 
     /* Media */
     .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
@@ -193,12 +227,89 @@
       padding: 6px 8px; font-size: 0.65rem; color: var(--text-gray);
       text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(0,0,0,0.3);
     }
+    /* Caption row beneath the title-label on video/photo cards. Optional —
+       JS only emits this element when the caption is non-empty, so cards
+       without a caption keep their original 2-row look. Multi-line allowed
+       up to 2 lines, then ellipsis (line-clamp). */
+    .media-caption-label {
+      padding: 4px 8px 8px;
+      font-size: 0.7rem;
+      color: var(--text);
+      line-height: 1.35;
+      background: rgba(0,0,0,0.3);
+      text-align: center;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+    }
+
+    /* Video + Picture grid: bigger cards (4 per row on desktop, wraps to 3/2/1
+       as viewport narrows), centered when a row is partially full. Using
+       `auto-fit` with FIXED column widths + `justify-content: center` is what
+       gives the centered behavior — `auto-fit` keeps as many fixed-width
+       tracks as fit, justify-content centers the resulting tracks when there's
+       leftover space (so 3 videos in a 4-col container render centered, not
+       left-aligned). */
+    #videos.media-grid,
+    #pictures.media-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, 210px);
+      justify-content: center;
+      gap: 14px;
+    }
+    #videos .media-card img,
+    #pictures .media-card img { height: 130px; }
+    #videos .media-title-label,
+    #pictures .media-title-label {
+      font-size: 0.78rem; padding: 8px 10px 4px;
+      white-space: normal; line-height: 1.3;
+      color: var(--text); font-weight: 600;
+      /* 2-line max for title — long names wrap */
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    #videos .media-caption-label,
+    #pictures .media-caption-label {
+      font-size: 0.72rem; padding: 0 10px 10px;
+      text-align: left;
+      -webkit-line-clamp: 5;       /* 5 lines now that the card is wider */
+      background: transparent;
+      color: var(--text-gray);
+    }
+    /* Narrow-viewport breakpoints — fewer fixed columns. The same auto-fit
+       behavior applies; we only change the fixed track width / row gap on
+       tiny screens so the card stays comfortably readable. */
+    @media (max-width: 480px) {
+      #videos.media-grid,
+      #pictures.media-grid {
+        grid-template-columns: minmax(0, 360px);
+      }
+      #videos .media-card img,
+      #pictures .media-card img { height: 180px; }
+    }
     .audio-container { display: flex; flex-direction: column; gap: 6px; }
-    .audio-row {
-      display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+    /* Audio entry groups an optional caption with its player row. When the
+       caption is empty the entry contains only the row, so visually it looks
+       identical to the old layout (no blank caption row). */
+    .audio-entry {
+      display: flex; flex-direction: column; gap: 6px; padding: 8px 12px;
       background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px;
     }
-    .audio-row:hover { border-color: var(--purple); }
+    .audio-entry:hover { border-color: var(--purple); }
+    .audio-caption-display {
+      font-size: 0.78rem; color: var(--text-gray); line-height: 1.4;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .audio-row {
+      display: flex; align-items: center; gap: 12px;
+      /* Padding/background/border moved up to .audio-entry. Keep them here as
+         a fallback for any historical row not wrapped in .audio-entry. */
+      padding: 0; background: transparent; border: 0;
+    }
     .audio-row strong { flex: 0 0 160px; max-width: 160px; font-size: 0.75rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .audio-row audio { flex: 1; height: 28px; }
     .empty-msg { color: var(--text-gray); font-size: 0.82rem; text-align: center; padding: 24px 0; }
@@ -223,7 +334,7 @@
       .profile-tabs button { padding: 8px 10px; font-size: 0.7rem; }
     }
   </style>
-  <script src="/app/static/js/security.js"></script>
+  <script src="/app/static/js/security.js?v=2"></script>
   <script src="/app/static/js/time-format.js"></script>
 </head>
 <body>
@@ -249,7 +360,7 @@
       <button onclick="switchTab('videos')">Videos</button>
       <button onclick="switchTab('audio')">Audio</button>
       <button onclick="switchTab('social')">Social Media</button>
-      <button onclick="switchTab('reviews')">Reviews</button>
+      <button onclick="switchTab('reviews')">Reviews <span id="reviewsBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
     </div>
 
     <div class="tab-panel" id="tab-info">
@@ -307,15 +418,56 @@
   <div id="lightboxContent"></div>
 </div>
   <script>
-    const TAB_NAMES = ['info','calendar','videos','pictures','audio','social','reviews'];
+    /* ───────────────────────────────────────────────────────────────────────
+       Brand icon helpers — inline SVGs (no external deps) + brand colors.
+       Used by the Social Media tab to render real brand logos instead of
+       emoji. Each path is single-color (fill="currentColor"); the tile sets
+       `style="--brand:#hex"` and the SVG inherits it via `color: var(--brand)`.
+       Paths are minified silhouettes — recognizable but compact. Keep the
+       map name -> svg in sync with the BRAND_COLORS map below.
+       ─────────────────────────────────────────────────────────────────────── */
+    const BRAND_COLORS = {
+      spotify:    '#1DB954',
+      instagram:  '#E1306C',
+      facebook:   '#1877F2',
+      youtube:    '#FF0000',
+      twitter:    '#e5e7eb',  /* X branding is mono — use light gray on dark theme */
+      tiktok:     '#69C9D0',  /* TikTok cyan accent */
+      website:    '#06b6d4',
+      yelp:       '#D32323',
+      google_maps:'#EA4335'
+    };
+    function brandIcon(name) {
+      const ICONS = {
+        spotify:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.52 17.34c-.24.36-.66.48-1.02.24-2.82-1.74-6.36-2.1-10.56-1.14-.42.12-.78-.18-.9-.54-.12-.42.18-.78.54-.9 4.56-1.02 8.52-.6 11.64 1.32.42.18.48.66.3 1.02zm1.44-3.3c-.3.42-.84.6-1.26.3-3.24-1.98-8.16-2.58-11.94-1.38-.48.12-1.02-.12-1.14-.6-.12-.48.12-1.02.6-1.14C9.6 9.9 15 10.56 18.72 12.84c.36.18.54.78.24 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.3c-.6.18-1.2-.18-1.38-.72-.18-.6.18-1.2.72-1.38 4.26-1.26 11.28-1.02 15.72 1.62.54.3.72 1.02.42 1.56-.3.42-1.02.6-1.56.3z"/></svg>',
+        instagram: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.16c3.2 0 3.58.01 4.85.07 3.25.15 4.77 1.69 4.92 4.92.06 1.27.07 1.65.07 4.85 0 3.21-.01 3.58-.07 4.85-.15 3.23-1.66 4.77-4.92 4.92-1.27.06-1.64.07-4.85.07-3.2 0-3.58-.01-4.85-.07-3.26-.15-4.77-1.7-4.92-4.92-.06-1.27-.07-1.64-.07-4.85 0-3.2.01-3.58.07-4.85.15-3.23 1.66-4.77 4.92-4.92 1.27-.06 1.65-.07 4.85-.07zM12 0C8.74 0 8.33.01 7.05.07 2.7.27.27 2.69.07 7.05.01 8.33 0 8.74 0 12c0 3.26.01 3.67.07 4.95.2 4.36 2.62 6.78 6.98 6.98C8.33 23.99 8.74 24 12 24c3.26 0 3.67-.01 4.95-.07 4.35-.2 6.78-2.62 6.98-6.98.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95C23.73 2.69 21.31.27 16.95.07 15.67.01 15.26 0 12 0zm0 5.84a6.16 6.16 0 1 0 0 12.32 6.16 6.16 0 0 0 0-12.32zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.41-11.85a1.44 1.44 0 1 0 0 2.88 1.44 1.44 0 0 0 0-2.88z"/></svg>',
+        facebook:  '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M24 12.07C24 5.45 18.63.07 12 .07S0 5.45 0 12.07c0 5.99 4.39 10.96 10.13 11.86V15.5H7.08v-3.47h3.05V9.43c0-3.01 1.79-4.67 4.53-4.67 1.31 0 2.69.23 2.69.23v2.95H15.83c-1.49 0-1.96.93-1.96 1.88v2.25h3.33l-.53 3.47h-2.8v8.43C19.61 23.03 24 18.06 24 12.07z"/></svg>',
+        youtube:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.55 12 3.55 12 3.55s-7.5 0-9.38.5A3.02 3.02 0 0 0 .5 6.2C0 8.07 0 12 0 12s0 3.93.5 5.81a3.02 3.02 0 0 0 2.12 2.14c1.87.5 9.38.5 9.38.5s7.5 0 9.38-.5a3.02 3.02 0 0 0 2.12-2.14C24 15.93 24 12 24 12s0-3.93-.5-5.81zM9.55 15.57V8.43L15.82 12l-6.27 3.57z"/></svg>',
+        twitter:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.24 2.25h3.31l-7.23 8.26 8.5 11.24h-6.65l-5.21-6.82L4.99 21.75H1.68l7.73-8.83L1.25 2.25h6.83l4.71 6.23zM17.08 19.77h1.83L7.08 4.13H5.12L17.08 19.77z"/></svg>',
+        tiktok:    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5.07 20.1a6.34 6.34 0 0 0 10.86-4.43V8.31a8.16 8.16 0 0 0 4.77 1.52V6.42a4.85 4.85 0 0 1-1.11.27z"/></svg>',
+        website:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM11 19.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>',
+        yelp:      '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14.05 14.42l1.43 4.94c.1.38-.14.78-.5.83-1.66.21-3.24-.16-4.7-.96-.21-.11-.27-.39-.13-.59l3.27-4.45c.2-.28.55-.16.63.23zm-2.06-2.97L7.81 6.05c-.22-.27-.62-.14-.78.18A11.15 11.15 0 0 0 6.4 9.96c-.02.36.26.69.62.71l5.16-.04c.34-.01.5-.41.31-.69zm5.96-.34l-4.7 1.43c-.36.11-.36.62 0 .73l4.7 1.43c.4.13.78-.17.78-.59v-2.41c0-.42-.38-.72-.78-.59zm-3.59-1.6l3.27 4.45c.14.2.42.14.55-.06.84-1.36 1.32-2.86 1.42-4.45.03-.36-.24-.65-.6-.7l-4.31-.63c-.34-.05-.53.4-.33.66zm-3.06 4.71l-3.4-3.85c-.27-.31-.78-.16-.83.25C7 12.16 7 13.71 7.38 15.18c.08.34.46.46.73.23l3.39-3.85c.18-.2.18-.51 0-.71l-.2-.43z"/></svg>',
+        google_maps:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>'
+      };
+      return ICONS[name] || ICONS.website;
+    }
+
     function switchTab(name) {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.profile-tabs button').forEach(b => b.classList.remove('active'));
       const panel = document.getElementById('tab-' + name);
       if (panel) panel.classList.add('active');
-      const idx = TAB_NAMES.indexOf(name);
-      const btns = document.querySelectorAll('.profile-tabs button');
-      if (btns[idx]) btns[idx].classList.add('active');
+      // Find the button by matching its onclick attribute against the tab name.
+      // Previous version used `TAB_NAMES.indexOf(name)` to index into the button
+      // NodeList — fragile, because any drift between the names array and the
+      // DOM order swapped underlines (the original Pictures/Videos bug). This
+      // approach is order-independent: each button finds itself.
+      document.querySelectorAll('.profile-tabs button').forEach(b => {
+        const oc = b.getAttribute('onclick') || '';
+        if (oc.indexOf("'" + name + "'") !== -1 || oc.indexOf('"' + name + '"') !== -1) {
+          b.classList.add('active');
+        }
+      });
       // Lazy-load reviews tab
       if (name === 'reviews' && typeof renderRatingSummary !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
@@ -365,22 +517,55 @@
       document.getElementById("artistBooking").textContent = artist.booking_contact ? `Booking: ${artist.booking_contact}` : "";
 
       const ensureProto = u => { if (!u) return ''; const t = u.trim(); return (t.startsWith('http://') || t.startsWith('https://')) ? t : 'https://' + t; };
-      const links = [
-        { url: artist.spotify_url, label: "Spotify", icon: "🎵" },
-        { url: artist.instagram_url, label: "Instagram", icon: "📷" },
-        { url: artist.facebook_url, label: "Facebook", icon: "👥" },
-        { url: artist.youtube_url, label: "YouTube", icon: "▶️" },
-        { url: artist.twitter_url, label: "Twitter/X", icon: "🐦" },
-        { url: artist.tiktok_url, label: "TikTok", icon: "🎬" },
-        { url: artist.website_url, label: "Website", icon: "🌐" }
+      let links = [
+        { url: artist.spotify_url,   label: "Spotify",   brand: "spotify" },
+        { url: artist.instagram_url, label: "Instagram", brand: "instagram" },
+        { url: artist.facebook_url,  label: "Facebook",  brand: "facebook" },
+        { url: artist.youtube_url,   label: "YouTube",   brand: "youtube" },
+        { url: artist.twitter_url,   label: "X",         brand: "twitter" },
+        { url: artist.tiktok_url,    label: "TikTok",    brand: "tiktok" },
+        { url: artist.website_url,   label: "Website",   brand: "website" }
       ].filter(l => l.url && l.url.trim());
+      // Apply user-chosen social order. Each entry in `social_order` is a
+      // brand key; tiles for those brands move to the front in the saved
+      // sequence. Brands not in the saved order (or with empty URLs) keep
+      // their original natural position relative to each other at the end.
+      if (artist.social_order) {
+        const desired = String(artist.social_order).split(',').map(s => s.trim()).filter(Boolean);
+        const byBrand = Object.fromEntries(links.map(l => [l.brand, l]));
+        const ordered = [];
+        desired.forEach(b => { if (byBrand[b]) { ordered.push(byBrand[b]); delete byBrand[b]; } });
+        links.forEach(l => { if (byBrand[l.brand]) ordered.push(l); });
+        links = ordered;
+      }
       if (links.length > 0) {
-        document.getElementById("socialMedia").innerHTML = links.map(l => `<a href="${ensureProto(l.url)}" target="_blank" rel="noopener noreferrer" class="social-link"><span>${l.icon}</span><span>${l.label}</span></a>`).join('');
+        // Audit fix (May 2026 part 5): escape the URL with escAttr() before
+        // interpolating into href, and reject non-http(s) schemes so a saved
+        // URL like `javascript:alert(1)` or `"onclick=...` can't execute.
+        const _isSafeHref = (u) => { try { const t = String(u||'').trim().toLowerCase(); return t.startsWith('http://') || t.startsWith('https://'); } catch(_) { return false; } };
+        document.getElementById("socialMedia").innerHTML = links.map(l => {
+          const safeUrl = ensureProto(l.url);
+          if (!_isSafeHref(safeUrl)) return '';
+          const color = BRAND_COLORS[l.brand] || '#9ca3af';
+          return `<a href="${escAttr(safeUrl)}" target="_blank" rel="noopener noreferrer" class="social-link" style="--brand:${color}" title="${esc(l.label)}">${brandIcon(l.brand)}<span>${esc(l.label)}</span></a>`;
+        }).join('');
       } else { document.getElementById("socialEmpty").style.display = "block"; }
 
       document.getElementById("artistLogo").src = "/app/static/img/profile-placeholder.svg";
       loadMedia();
       loadGigs();
+
+      // Populate the Reviews tab badge ("Reviews (N)") on first load — without
+      // this, the badge stays blank until the user actually clicks the Reviews
+      // tab. Cheap one-shot fetch; failure is silent (badge just stays empty).
+      try {
+        const _rsRes = await fetch(`/api/artists/${artistId}/reviews/summary`, { credentials: "include" });
+        if (_rsRes.ok) {
+          const _rs = await _rsRes.json();
+          const _b = document.getElementById("reviewsBadge");
+          if (_b && _rs.review_count > 0) _b.textContent = `(${_rs.review_count})`;
+        }
+      } catch (_) { /* non-fatal */ }
     })();
 
     // ========== CALENDAR ==========
@@ -415,7 +600,32 @@
             const t = fmtTime(g.start_time);
             const icon = g.is_multi_slot ? (icons[g.artist_type] || '🎵') + ' ' : '';
             const label = `${icon}${t} ${g.venue_name || g.title || 'Gig'}`;
-            html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${idx})" title="${esc(label)}">${esc(label)}</div>`;
+            const endStr = g.end_time ? ` – ${fmtTime(g.end_time)}` : '';
+            const venueName = g.venue_name || g.title || 'Gig';
+            const street = [g.address_line_1, g.address_line_2].filter(Boolean).join(' ');
+            const cityState = [g.city, g.state].filter(Boolean).join(', ');
+            const mapsQ = [venueName, street, g.city, g.state].filter(Boolean).join(', ');
+            const isOpen = !(cls === 'booked');
+            const hoverData = {
+              header: isOpen ? 'Open' : 'Booked',
+              isOpen: isOpen,
+              venue: venueName,
+              streetAddress: street,
+              cityState: cityState,
+              date: (function(){
+                const [y,mo,dy] = ds.split('-').map(Number);
+                const dt = new Date(y, mo-1, dy);
+                const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+                const mos=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                return `${days[dt.getDay()]}, ${mos[dt.getMonth()]} ${dt.getDate()} ${y}`;
+              })(),
+              time: t + endStr,
+              mapsUrl: mapsQ ? ('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(mapsQ)) : null,
+              statusLabel: '',
+              artistType: g.artist_type || '',
+            };
+            const hoverAttr = esc(JSON.stringify(hoverData));
+            html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${idx})" data-gig-hover="${hoverAttr}">${esc(label)}</div>`;
           });
           html += '</div>';
         }
@@ -841,8 +1051,26 @@
       const pics = document.getElementById("pictures"), audio = document.getElementById("audio"), videos = document.getElementById("videos");
       media.forEach(m => {
         if (m.media_type === "logo" || m.media_type === "profile") document.getElementById("artistLogo").src = m.file_path;
-        if (m.media_type === "picture") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(m.file_path)}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.file_path, "image"); pics.appendChild(d); }
-        if (m.media_type === "audio") { const d = document.createElement("div"); d.className = "audio-row"; d.innerHTML = `<strong>${esc((m.title||"").substring(0,50))}</strong><audio controls src="${escAttr(m.file_path)}"></audio>`; audio.appendChild(d); d.querySelector("audio").addEventListener("play", function(){ document.querySelectorAll("#audio audio").forEach(a => { if(a!==this) a.pause(); }); }); }
+        if (m.media_type === "picture") {
+          const cap = (m.caption || "").trim();
+          // Caption row only renders when non-empty — plain pictures keep
+          // their original 2-row look (thumbnail + title only).
+          const capHtml = cap ? `<div class="media-caption-label">${esc(cap)}</div>` : "";
+          const d = document.createElement("div");
+          d.className = "media-card";
+          d.innerHTML = `<img src="${escAttr(m.file_path)}"><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
+          d.onclick = () => openModal(m.file_path, "image");
+          pics.appendChild(d);
+        }
+        if (m.media_type === "audio") {
+          const cap = (m.caption || "").trim();
+          const capHtml = cap ? `<div class="audio-caption-display">${esc(cap)}</div>` : "";
+          const d = document.createElement("div");
+          d.className = "audio-entry";
+          d.innerHTML = `${capHtml}<div class="audio-row"><strong>${esc((m.title||"").substring(0,50))}</strong><audio controls src="${escAttr(m.file_path)}"></audio></div>`;
+          audio.appendChild(d);
+          d.querySelector("audio").addEventListener("play", function(){ document.querySelectorAll("#audio audio").forEach(a => { if(a!==this) a.pause(); }); });
+        }
         if (m.media_type === "audio_link") {
           const url = m.video_url || '';
           let player;
@@ -857,14 +1085,25 @@
             const display = url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
             player = `<a href="${escAttr(url)}" target="_blank" rel="noopener" style="flex:1;min-width:0;color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;" title="${escAttr(url)}">🔗 ${esc(display)}</a>`;
           }
+          const cap = (m.caption || "").trim();
+          const capHtml = cap ? `<div class="audio-caption-display">${esc(cap)}</div>` : "";
           const d = document.createElement("div");
-          d.className = "audio-row";
-          d.innerHTML = `<strong>${esc((m.title||"").substring(0,50))}</strong>${player}`;
+          d.className = "audio-entry";
+          d.innerHTML = `${capHtml}<div class="audio-row"><strong>${esc((m.title||"").substring(0,50))}</strong>${player}</div>`;
           audio.appendChild(d);
           const aud = d.querySelector("audio");
           if (aud) aud.addEventListener("play", function(){ document.querySelectorAll("#audio audio").forEach(a => { if(a!==this) a.pause(); }); });
         }
-        if (m.media_type === "video") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(ytThumb(m.video_url))}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.video_url, "video"); videos.appendChild(d); }
+        if (m.media_type === "video") {
+          const cap = (m.caption || "").trim();
+          // Caption row only renders when non-empty — no blank line for plain videos.
+          const capHtml = cap ? `<div class="media-caption-label">${esc(cap)}</div>` : "";
+          const d = document.createElement("div");
+          d.className = "media-card";
+          d.innerHTML = `<img src="${escAttr(ytThumb(m.video_url))}"><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
+          d.onclick = () => openModal(m.video_url, "video");
+          videos.appendChild(d);
+        }
       });
       if (!pics.children.length) document.getElementById('picturesEmpty').style.display = 'block';
       if (!audio.children.length) document.getElementById('audioEmpty').style.display = 'block';
@@ -879,6 +1118,9 @@
   </script>
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
+<script src="/app/static/js/gig-hover-card.js?v=3"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
+<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
 </html>

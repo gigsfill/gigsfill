@@ -2,6 +2,7 @@
 
 <html lang="en">
 <head>
+<script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
 <meta charset="utf-8"/>
 <title>Find Venues – GigsFill</title>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
@@ -180,7 +181,7 @@
     }
   </style>
 
-<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
 <script src="/app/static/js/time-format.js"></script>
 
@@ -198,7 +199,7 @@
 </div>
 </div>
 </header>
-<script src="/app/static/js/user-dropdown.js?v=2"></script>
+<script src="/app/static/js/user-dropdown.js?v=6"></script>
 <main class="container">
 <div class="dusk-column">
 <!-- Stats -->
@@ -244,8 +245,8 @@
 </section>
 </div>
 </main>
-<script src="/app/static/js/auth.guard.js"></script>
-<script src="/app/static/js/api-globals.js"></script>
+<script src="/app/static/js/auth.guard.js?v=2"></script>
+<script src="/app/static/js/api-globals.js?v=4"></script>
 <script src="/app/static/js/city-autocomplete.js"></script>
 <script src="/app/static/js/venue.discovery.js" type="module"></script>
 
@@ -256,5 +257,7 @@
 <script src="/app/static/js/venue-discovery-init.js"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
 </html>

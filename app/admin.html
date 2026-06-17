@@ -765,13 +765,13 @@
       </div>
     </div>
   </header>
-<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
   <script src="/app/static/js/timezone-utils.js"></script>
   
-  <script src="/app/static/js/auth.guard.js"></script>
-  <script src="/app/static/js/api-globals.js"></script>
-  <script src="/app/static/js/user-dropdown.js?v=2"></script>
+  <script src="/app/static/js/auth.guard.js?v=2"></script>
+  <script src="/app/static/js/api-globals.js?v=4"></script>
+  <script src="/app/static/js/user-dropdown.js?v=6"></script>
 
   <div class="admin-container">
 
@@ -996,6 +996,79 @@
             <label style="font-size:0.7rem;">Admin Email Address</label>
             <input type="email" id="adminAlertEmail" placeholder="you@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;">
           </div>
+
+          <div style="height:1px;background:var(--border);margin:12px 0;"></div>
+
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Far-Away Booking Alert</div>
+          <div style="color:var(--text-gray);font-size:0.7rem;margin-bottom:10px;">When an artist books a gig from farther than this distance, the venue gets a heads-up in their booking notification and the artist gets a soft "this venue is far away" notice on their confirmation. Booking is still allowed — this only informs both parties. Blast emails still only go to artists within each venue's own radius.</div>
+          <div class="field" style="max-width:200px;">
+            <label style="font-size:0.7rem;">Distance threshold (miles)</label>
+            <input type="number" id="farBookingAlertMiles" min="0" step="1" placeholder="50" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;">
+          </div>
+
+          <div style="height:1px;background:var(--border);margin:12px 0;"></div>
+
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Rate Limits</div>
+          <div style="color:var(--text-gray);font-size:0.7rem;margin-bottom:10px;">How many requests per minute (per source IP) one user can make against each sensitive endpoint before getting blocked for ~1 minute. Lower = stricter brute-force protection but easier to accidentally lock out a real user. Higher = friendlier but easier to abuse. <strong>Hover any label for a full explanation.</strong> Changes take effect within 30 seconds — no restart needed.</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 14px;max-width:720px;">
+            <div class="field">
+              <label style="font-size:0.7rem;" title="Caps how often someone from one IP can attempt to log in. Default 5/min. If they exceed it, login responses return HTTP 429 for ~1 minute. Set lower to make brute-forcing a password from one IP impractical; set higher for shared-IP environments (e.g. a venue's office Wi-Fi where 3 staff log in back-to-back).">Login (per min)</label>
+              <input type="number" id="rateLogin" min="1" max="100000" step="1" placeholder="5" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;" title="Caps how many new accounts can be created from one IP per minute. Default 3/min. Prevents bots from mass-creating throwaway accounts. Bump it up if you're running a demo and creating multiple test accounts in front of someone — otherwise the 4th signup gets rejected with HTTP 429.">Signup (per min)</label>
+              <input type="number" id="rateSignup" min="1" max="100000" step="1" placeholder="3" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;" title="Caps password-reset requests (both 'send me a reset link' and 'submit my new password') from one IP per minute. Default 3/min. Stops attackers from spamming reset emails to a victim or guessing reset tokens.">Password Reset (per min)</label>
+              <input type="number" id="ratePasswordReset" min="1" max="100000" step="1" placeholder="3" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;" title="Caps support-ticket submissions from one IP per minute. Default 2/min. Stops support inbox from being flooded by a single angry/bot user. Bump up only if a real user is submitting multiple tickets back-to-back.">Support (per min)</label>
+              <input type="number" id="rateSupport" min="1" max="100000" step="1" placeholder="2" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;" title="Caps email-sending user actions per IP per minute. Covers: venue inviting secondary users, artist-to-venue messages, venue-to-artist messages, 'recommend GigsFill to a friend' from the affiliate page. Default 10/min. Stops a compromised account or bot from using the platform as a spam relay.">Email Send (per min)</label>
+              <input type="number" id="rateEmailSend" min="1" max="100000" step="1" placeholder="10" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;" title="Caps how many affiliate click-tracking pings the /track endpoint accepts from one IP per minute. Default 30/min (higher because legitimate users may visit several affiliate-linked pages in a session). Stops bots from inflating an affiliate's click count to game commission.">Affiliate Track (per min)</label>
+              <input type="number" id="rateAffTrack" min="1" max="100000" step="1" placeholder="30" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+
+          <div style="height:1px;background:var(--border);margin:12px 0;"></div>
+
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Bounce Detection (async)</div>
+          <div style="color:var(--text-gray);font-size:0.7rem;margin-bottom:10px;">Synchronous SMTP refusals (mailbox unknown at send time) are caught automatically. Bounces that happen <em>after</em> delivery (mailbox full, content filtered, etc.) come back as Delivery Status Notification (DSN) emails. When enabled, the scheduler polls the platform email's IMAP inbox every 30 minutes and marks matching artist-invitation rows <strong>Bounced</strong>. <strong>Hover labels for full explanations.</strong></div>
+          <div class="field" style="max-width:200px;margin-bottom:10px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;cursor:pointer;">
+              <input type="checkbox" id="bounceCheckEnabled" onchange="autoSaveSettings()" style="accent-color:#06b6d4;width:14px;height:14px;cursor:pointer;">
+              <span>Enable bounce polling</span>
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 14px;max-width:720px;">
+            <div class="field">
+              <label style="font-size:0.7rem;" title="The IMAP hostname for the mailbox that receives bounced-email DSN messages. Usually IMAP for the same provider as your SMTP server: smtp.gmail.com → imap.gmail.com, smtp.office365.com → outlook.office365.com. Required when bounce polling is enabled.">IMAP Server</label>
+              <input type="text" id="bounceImapServer" placeholder="imap.gmail.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;" title="IMAP SSL port. 993 is the standard (default). 143 is unencrypted IMAP — don't use it for credentials over the public internet.">IMAP Port</label>
+              <input type="number" id="bounceImapPort" min="1" max="65535" placeholder="993" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field">
+              <label style="font-size:0.7rem;" title="IMAP login username. Leave blank to reuse the Platform Email address above — useful when SMTP and IMAP run on the same account, which is the common case.">IMAP Username</label>
+              <input type="text" id="bounceImapUsername" placeholder="(defaults to Platform Email)" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field" style="grid-column:1/3;">
+              <label style="font-size:0.7rem;" title="IMAP login password. For Gmail/Outlook, generate an app-specific password (16 chars). Leave blank to reuse the Platform Email password above. Stored encrypted at rest and never echoed back to the browser (the dots below are a placeholder when a password is on file).">IMAP Password</label>
+              <input type="password" id="bounceImapPassword" placeholder="(defaults to Platform Email password)" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            </div>
+            <div class="field" style="display:flex;align-items:flex-end;">
+              <button type="button" onclick="bounceCheckTestNow()" style="background:#06b6d4;color:white;border:none;padding:7px 14px;border-radius:4px;font-size:0.78rem;cursor:pointer;width:100%;font-weight:600;" title="Connect to IMAP right now and poll for bounces. Updates the artist_invitations table for any matched DSN messages and reports the result here. Same code path the scheduler runs every 30 minutes.">Test &amp; Poll Now</button>
+            </div>
+          </div>
+          <div id="bounceCheckStatus" style="margin-top:10px;font-size:0.72rem;color:var(--text-gray);"></div>
         </div>
       </div>
 
@@ -1837,7 +1910,7 @@
   
   <script src="/app/static/js/modals.js"></script>
   <script src="/app/static/js/gf-modals.js?v=6"></script>
-  <script src="/app/static/js/flyer-editor.js?v=3" defer></script>
+  <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
 
 <script>
 function openAdminFlyerEditor() {
@@ -1947,10 +2020,10 @@ function switchDbLogsTab(tab) {
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
-<script src="/app/static/js/admin-platform.js"></script>
-<script src="/app/static/js/admin-payments.js?v=23"></script>
-<script src="/app/static/js/admin-templates.js"></script>
-<script src="/app/static/js/admin-affiliate.js"></script>
+<script src="/app/static/js/admin-platform.js?v=5"></script>
+<script src="/app/static/js/admin-payments.js?v=25"></script>
+<script src="/app/static/js/admin-templates.js?v=2"></script>
+<script src="/app/static/js/admin-affiliate.js?v=2"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>
 <script src="/app/static/js/sw-register.js"></script>
 
@@ -2019,5 +2092,6 @@ document.addEventListener('DOMContentLoaded', function() {
   </div>
 </div>
 
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
 </html>

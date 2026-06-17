@@ -2,6 +2,7 @@
 
 <html lang="en">
 <head>
+<script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
 <meta charset="utf-8"/>
 <title>Create &amp; Manage Gigs – GigsFill</title>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
@@ -854,6 +855,552 @@
     flex-wrap: nowrap;
   }
 
+  /* ────────────────────────────────────────────────────────────────────────
+     Edit/Create Gig modal — slot card + pay pill restyling (June 2026).
+     Adopts the visual identity of the read-only "Past Event Details" modal:
+       • Each slot is a clear card with a 3px purple left stripe and a faint
+         purple wash so it reads as a distinct unit while editing.
+       • Dollar/cents inputs sit inside a green "pay pill" that mirrors the
+         read-only pay badge (`$60.00` in a rounded green chip). The pill
+         brightens when any of its inputs is focused.
+     The slot-row inline padding/bg from venue.create-gigs.js are overridden
+     here (the CSS has higher specificity than the inline-style tail because
+     :focus-within isn't expressible inline).
+     ──────────────────────────────────────────────────────────────────────── */
+  #slotList .slot-row {
+    padding: 9px 10px !important;
+    background: rgba(124, 107, 255, 0.06) !important;
+    border: 1px solid rgba(124, 107, 255, 0.18) !important;
+    border-left: 3px solid #a855f7 !important;
+    border-radius: 6px !important;
+    margin-bottom: 10px !important;
+  }
+  #slotList .slot-row:hover {
+    background: rgba(124, 107, 255, 0.10) !important;
+  }
+
+  .slot-pay-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.30);
+    border-radius: 4px;
+    padding: 1px 8px;
+    color: #22c55e;
+    font-weight: 700;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .slot-pay-pill:focus-within {
+    background: rgba(34, 197, 94, 0.18);
+    border-color: rgba(34, 197, 94, 0.55);
+  }
+  .slot-pay-pill input.slot-pay-amount {
+    background: transparent !important;
+    border: 0 !important;
+    color: #22c55e !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    padding: 1px 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    line-height: 1.2;
+    width: 8ch;
+    text-align: center;
+    /* hide the spinner native chrome from inputs */
+    -moz-appearance: textfield;
+  }
+  .slot-pay-pill input.slot-pay-amount::-webkit-outer-spin-button,
+  .slot-pay-pill input.slot-pay-amount::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .slot-pay-pill input:focus { outline: none !important; }
+  /* "$" prefix — same green as the amount text */
+  .slot-pay-pill .slot-pay-symbol {
+    color: #22c55e;
+    font-weight: 700;
+    font-size: 0.85rem;
+    line-height: 1;
+    margin-right: 1px;
+  }
+
+  /* Slot metadata sub-row — single dense line of pill toggles that mirrors
+     the "🎸 Live Band · Solo,Duo,Trio · Country,Pop,Rock" line on the
+     read-only Past Event Details modal. Hidden checkboxes inside each
+     label preserve the existing save path (.slot-style-cb / .slot-lineup-cb
+     are still read by querySelectorAll(':checked') at save time).
+
+     The HARD display:none !important on the nested input is load-bearing:
+     modals-legacy.css and gigsfill.css set width/height + appearance:none
+     on all `.modal-clean input[type="checkbox"]`, and on some browsers
+     those win against the `hidden` HTML attribute and the styled boxes
+     leak through inside the pill. */
+  /* Shared pill rule — used by slot lineup/styles pills and recurring
+     day/end-type pills. `.modal label` (modals-legacy.css) injects
+     margin-bottom:16px + display:flex;flex-direction:column;gap:8px into
+     EVERY label in the modal. Without these !important resets, each pill
+     would carry 16px of phantom margin below it. */
+  #slotList .slot-pill,
+  #recurringOptions .day-pill,
+  #recurringOptions .end-pill {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    justify-content: center;
+    gap: 0 !important;
+    margin: 0 !important;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    box-sizing: border-box;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+  }
+  #slotList .slot-pill > span,
+  #recurringOptions .day-pill > span,
+  #recurringOptions .end-pill > span { line-height: 1; }
+  #slotList .slot-pill input[type="checkbox"],
+  #recurringOptions .day-pill input[type="checkbox"],
+  #recurringOptions .end-pill input[type="radio"] {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+  }
+  #slotList .slot-pill:hover,
+  #recurringOptions .day-pill:hover,
+  #recurringOptions .end-pill:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+  /* Selected state — uses :has(input:checked) so toggling is purely native
+     <label>→<input> behavior, no JS handler needed. Purple is the default
+     (styles pills, end-type pills). Green variant below. */
+  #slotList .slot-pill:has(input:checked),
+  #recurringOptions .end-pill:has(input:checked) {
+    background: rgba(124, 107, 255, 0.22);
+    border-color: rgba(124, 107, 255, 0.55);
+    color: #c4b5fd;
+  }
+  /* Pills wrap container — sits BESIDE the Type select. Stacks the
+     lineup row (line 1) over the styles row (line 2), both aligned
+     to the wrap container's left edge — so the styles row is indented
+     under the lineup pills (not under the Type dropdown). */
+  #slotList .slot-pills-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    flex: 1;
+    min-width: 0;
+    line-height: 1;
+  }
+  #slotList .slot-lineup-row,
+  #slotList .slot-styles-row {
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  /* Per-slot error message displayed under the lineup/styles pills when
+     the user clicks away from a Live Band slot without making at least
+     one selection in each row. Lives inside the slot card so it points
+     at the offending slot directly (not at the global #slotError under
+     "+ Add Slot"). */
+  #slotList .slot-pill-error {
+    color: #fca5a5;
+    font-size: 0.72rem;
+    font-weight: 500;
+    background: rgba(239, 68, 68, 0.10);
+    border: 1px solid rgba(239, 68, 68, 0.28);
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin-top: 2px;
+    line-height: 1.35;
+  }
+  /* "Locked" slot — Live Band picked but lineup/styles missing. While in
+     this state, clicks outside the slot are blocked (see capture-phase
+     mousedown handler in venue.create-gigs.js). Red glow draws the eye. */
+  #slotList .slot-row.slot-locked {
+    border-color: rgba(239, 68, 68, 0.45) !important;
+    border-left-color: #ef4444 !important;
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.20), 0 4px 12px rgba(239, 68, 68, 0.10);
+  }
+  #slotList .slot-row.slot-shake {
+    animation: gf-slot-shake 0.32s cubic-bezier(.36,.07,.19,.97) both;
+  }
+  @keyframes gf-slot-shake {
+    10%, 90% { transform: translateX(-2px); }
+    20%, 80% { transform: translateX(3px); }
+    30%, 50%, 70% { transform: translateX(-5px); }
+    40%, 60% { transform: translateX(5px); }
+  }
+  /* Green variant for lineup pills (Solo/Duo/Trio/Full Band) and
+     day-of-week pills — these are the multi-select "pick any" toggles.
+     End-type radios stay purple (mutually exclusive choice). */
+  #slotList .slot-lineup-row .slot-pill,
+  #recurringOptions .day-pill {
+    border-color: rgba(34, 197, 94, 0.22);
+    color: rgba(134, 239, 172, 0.78);
+  }
+  #slotList .slot-lineup-row .slot-pill:hover,
+  #recurringOptions .day-pill:hover {
+    background: rgba(34, 197, 94, 0.10);
+    border-color: rgba(34, 197, 94, 0.42);
+  }
+  #slotList .slot-lineup-row .slot-pill:has(input:checked),
+  #recurringOptions .day-pill:has(input:checked) {
+    background: rgba(34, 197, 94, 0.22);
+    border-color: rgba(34, 197, 94, 0.55);
+    color: #86efac;
+  }
+
+  /* Recurring options panel — purple-left-stripe card matching the
+     slot-card aesthetic. Tight inline rows: each row is one labeled
+     line (Every / Days / Ends). */
+  #recurringOptions.recur-panel {
+    display: none;
+    margin: 6px 0 0 0;
+    padding: 9px 11px;
+    background: rgba(124, 107, 255, 0.06);
+    border: 1px solid rgba(124, 107, 255, 0.18);
+    border-left: 3px solid #a855f7;
+    border-radius: 6px;
+  }
+  #recurringOptions.recur-panel .recur-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 7px 0;
+  }
+  #recurringOptions.recur-panel .recur-row:last-child { margin-bottom: 0; }
+  #recurringOptions.recur-panel .recur-label {
+    min-width: 44px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  #recurringOptions.recur-panel .recur-num-input {
+    width: 52px;
+    text-align: center;
+    height: 22px;
+    font-size: 0.78rem;
+    padding: 0 4px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: var(--text);
+    border-radius: 4px;
+    box-sizing: border-box;
+  }
+  #recurringOptions.recur-panel .recur-num-input:disabled,
+  #recurringOptions.recur-panel .recur-date-input:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  #recurringOptions.recur-panel .recur-date-input {
+    width: 92px;
+    height: 22px;
+    font-size: 0.78rem;
+    padding: 0 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: var(--text);
+    border-radius: 4px;
+    box-sizing: border-box;
+    text-align: center;
+    /* color-scheme: dark tells Chrome/Edge/Firefox to render the native
+       date picker popup in dark mode — calendar grid, month-year header,
+       and arrows all switch to the dark variant of the browser chrome. */
+    color-scheme: dark;
+  }
+  /* Tint the calendar icon purple-ish to match the modal accent.
+     Webkit-only pseudo, but the icon is the same in other browsers
+     too — color-scheme: dark already lightens it. */
+  #recurringOptions.recur-panel .recur-date-input::-webkit-calendar-picker-indicator {
+    filter: invert(0.55) sepia(1) saturate(4) hue-rotate(220deg);
+    cursor: pointer;
+    opacity: 0.85;
+  }
+  #recurringOptions.recur-panel .recur-date-input::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+  }
+  #recurringOptions.recur-panel .recur-suffix {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+  #recurringOptions.recur-panel .recur-days {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  #recurringOptions.recur-panel .recur-end-options {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 18px;
+    flex: 1;
+    min-width: 0;
+  }
+  #recurringOptions.recur-panel .recur-end-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* End-type pills slightly wider so "After"/"By" labels look balanced */
+  #recurringOptions.recur-panel .end-pill { min-width: 54px; }
+  /* Recurring master toggle pill — replaces the old checkbox. Same pill
+     family as day/end pills but slightly larger so it reads as a
+     section-level "make this a recurring gig" action. !important resets
+     defeat the global `.modal label` margin/flex-direction injection. */
+  .recurring-toggle-row {
+    margin: 10px 0;
+  }
+  .recurring-master-pill {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px !important;
+    margin: 0 !important;
+    height: 30px;
+    padding: 0 16px;
+    border-radius: 999px;
+    border: 1.5px solid rgba(124, 107, 255, 0.30);
+    background: rgba(124, 107, 255, 0.05);
+    color: rgba(168, 139, 250, 0.85);
+    font-size: 0.82rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    box-sizing: border-box;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .recurring-master-pill > span { line-height: 1; }
+  .recurring-master-pill input[type="checkbox"] {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+  }
+  .recurring-master-pill:hover {
+    background: rgba(124, 107, 255, 0.12);
+    border-color: rgba(124, 107, 255, 0.5);
+  }
+  .recurring-master-pill:has(input:checked) {
+    background: rgba(124, 107, 255, 0.22);
+    border-color: rgba(124, 107, 255, 0.65);
+    color: #c4b5fd;
+  }
+
+  /* Custom dark date picker — the native input[type=date] popup couldn't
+     be reliably themed dark across browsers, so we use a text input +
+     custom popup (see GfDatePicker class in venue.create-gigs.js).
+     Designed to match the modal: dark card bg, purple accents. */
+  .gf-date-input {
+    cursor: pointer;
+  }
+  .gf-date-input:disabled {
+    cursor: not-allowed;
+  }
+  .gf-date-popup {
+    position: absolute;
+    background: #1a1a2e;
+    border: 1px solid rgba(124, 107, 255, 0.45);
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+    z-index: 100000;
+    font-family: var(--font-primary, -apple-system, BlinkMacSystemFont, sans-serif);
+    user-select: none;
+    min-width: 248px;
+  }
+  .gf-date-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    padding: 0 2px;
+  }
+  .gf-date-title {
+    background: linear-gradient(135deg, #a855f7, #06b6d4);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700;
+    font-size: 0.88rem;
+    letter-spacing: 0.02em;
+  }
+  .gf-date-nav {
+    background: rgba(124, 107, 255, 0.10);
+    border: 1px solid rgba(124, 107, 255, 0.25);
+    color: #c4b5fd;
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
+    font-size: 0.85rem;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .gf-date-nav:hover {
+    background: rgba(124, 107, 255, 0.22);
+    border-color: rgba(124, 107, 255, 0.55);
+  }
+  .gf-date-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 32px);
+    gap: 2px;
+  }
+  .gf-date-dow {
+    text-align: center;
+    font-size: 0.62rem;
+    color: rgba(255, 255, 255, 0.4);
+    padding: 4px 0;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .gf-date-cell {
+    width: 32px;
+    height: 28px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #d1d5db;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 0;
+    line-height: 1;
+    transition: background 0.10s, border-color 0.10s;
+  }
+  .gf-date-cell:hover {
+    background: rgba(124, 107, 255, 0.18);
+    border-color: rgba(124, 107, 255, 0.40);
+  }
+  .gf-date-cell.today {
+    border-color: rgba(34, 197, 94, 0.55);
+    color: #86efac;
+    font-weight: 700;
+  }
+  .gf-date-cell.selected {
+    background: linear-gradient(135deg, #a855f7, #7c3aed);
+    color: #ffffff;
+    border-color: rgba(168, 85, 247, 0.8);
+    font-weight: 700;
+  }
+  .gf-date-cell.selected:hover {
+    background: linear-gradient(135deg, #c084fc, #a855f7);
+  }
+  .gf-date-cell.empty {
+    cursor: default;
+    pointer-events: none;
+  }
+  .gf-date-footer {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .gf-date-footer button {
+    background: transparent;
+    border: 0;
+    color: #a78bfa;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .gf-date-footer button:hover {
+    background: rgba(124, 107, 255, 0.15);
+    color: #c4b5fd;
+  }
+
+  /* "— OR —" separator between the After and By end options. Muted,
+     uppercase-ish so it reads as a passive divider, not a control. */
+  #recurringOptions.recur-panel .recur-or-sep {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    opacity: 0.7;
+    user-select: none;
+    white-space: nowrap;
+  }
+  /* Restore the native dropdown chrome — the global `select` rule
+     (gigsfill-modern.css:524) sets appearance:none with a custom SVG
+     chevron and large internal padding that don't shrink to our compact
+     row height and clip the text. Forcing appearance:auto + killing the
+     bg-image gives us a small native select that auto-sizes correctly. */
+  #slotList .slot-meta-row select.slot-artist-type {
+    appearance: auto !important;
+    -webkit-appearance: auto !important;
+    -moz-appearance: auto !important;
+    background-image: none !important;
+    background-position: initial !important;
+    height: 28px;
+    min-height: 28px;
+    font-size: 0.78rem;
+    padding: 0 4px !important;
+    max-width: 150px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: var(--text);
+    border-radius: 4px;
+    box-sizing: border-box;
+    line-height: normal;
+  }
+
+  /* "+ Add Slot" button — card-style placeholder that visually echoes a
+     slot card (full-width, dashed purple border) so it reads as "add
+     another card here", not a generic action button. */
+  #addSlotBtn {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 7px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    background: rgba(124, 107, 255, 0.06);
+    border: 1.5px dashed rgba(124, 107, 255, 0.38);
+    color: #a78bfa;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  #addSlotBtn:hover {
+    background: rgba(124, 107, 255, 0.14);
+    border-color: rgba(124, 107, 255, 0.65);
+    color: #c4b5fd;
+  }
+
   /* ===============================
    CUSTOM RADIO = SQUARE CHECKBOX
    (Recurring "Ends" section)
@@ -1195,12 +1742,13 @@
 .modal-overlay.hidden { display: none !important; }
 #emailSentMsg.show { opacity: 1 !important; }
   </style>
-<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
 <script src="/app/static/js/timezone-utils.js"></script>
-<script src="/app/static/js/auth.guard.js"></script>
+<script src="/app/static/js/auth.guard.js?v=2"></script>
 <script src="/app/static/js/time-format.js"></script>
 <link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
+<link href="/app/static/css/gig-hover-card.css" rel="stylesheet"/>
   <link href="/app/static/css/mobile.css" rel="stylesheet"/>
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
   <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet"/>
@@ -1221,7 +1769,7 @@
 </div>
 </div>
 </header>
-<script src="/app/static/js/user-dropdown.js?v=2"></script>
+<script src="/app/static/js/user-dropdown.js?v=6"></script>
 
 <div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
 
@@ -2235,20 +2783,13 @@
         </div>
       </div>
 
-      <!-- SLOT BUILDER (always visible - per-slot artist type) -->
-      <div id="slotBuilder" style="display:block;">
-        <div style="padding: 12px; background: rgba(124, 107, 255, 0.10); border: 1px solid rgba(124, 107, 255, 0.25); border-radius: 8px; margin: 8px 0 12px 0;">
-
-          <div id="slotList" style="display: flex; flex-direction: column; gap: 8px;"></div>
-          <button type="button" id="addSlotBtn" style="
-            margin-top: 10px; padding: 6px 14px; font-size: 0.8rem; 
-            background: rgba(124, 107, 255, 0.15); border: 1px dashed rgba(124, 107, 255, 0.4);
-            color: #a78bfa; border-radius: 6px; cursor: pointer; transition: all 0.2s;
-          " onmouseover="this.style.background='rgba(124,107,255,0.25)'" onmouseout="this.style.background='rgba(124,107,255,0.15)'">
-            + Add Slot
-          </button>
-          <div id="slotError" style="display:none; color:#ef4444; font-size:0.75rem; margin-top:6px;"></div>
-        </div>
+      <!-- SLOT BUILDER (always visible - per-slot artist type).
+           Outer purple-tinted container removed June 2026 — cards now sit
+           directly on the modal background, matching Past Event Details. -->
+      <div id="slotBuilder" style="display:block; margin: 4px 0 8px 0;">
+        <div id="slotList" style="display: flex; flex-direction: column; gap: 0;"></div>
+        <button type="button" id="addSlotBtn">+ Add Slot</button>
+        <div id="slotError" style="display:none; color:#ef4444; font-size:0.75rem; margin-top:6px;"></div>
       </div>
       
       
@@ -2263,82 +2804,58 @@
         </div>
       </div>
 
-      <div class="modal-row">
-        <label>Recurring Gig?</label>
-        <div class="modal-control">
-          <input type="checkbox" id="recurringGig">
-        </div>
+      <!-- Recurring master toggle — a single pill that turns the whole
+           recurring panel on/off. The hidden checkbox keeps its id so the
+           existing JS (recurringCheckbox.checked / change event) still works. -->
+      <div class="recurring-toggle-row">
+        <label class="recurring-master-pill">
+          <input type="checkbox" id="recurringGig" hidden>
+          <span>🔁 Recurring Gig</span>
+        </label>
       </div>
       
 
-      <!-- RECURRING OPTIONS (JS NEEDS THIS ID + display toggle) -->
-      <div id="recurringOptions" class="subgroup" style="display:none; padding-left: 20px; border-left: 2px solid rgba(124, 107, 255, 0.3); margin-left: 14px;">
+      <!-- RECURRING OPTIONS (JS NEEDS THIS ID + display toggle).
+           Pill-based redesign: day checkboxes → green pills, end-type
+           radios → purple pills, all inputs keep their original IDs so
+           the save/restore code in venue.create-gigs.js still works. -->
+      <div id="recurringOptions" class="recur-panel">
 
-        <div class="modal-row" style="grid-template-columns: 78px 1fr;">
-          <label>Repeat Every</label>
-          <div class="modal-control" style="gap: 8px;">
-            <input id="recurWeeks" type="number" value="1" style="width:60px; text-align:center;">
-            <span>week(s)</span>
+        <div class="recur-row" data-tooltip="Example: 1 week(s) will repeat this gig each week using choices below.&#10;Example: 2 week(s) will repeat this gig every other week using choices below.">
+          <span class="recur-label">Every</span>
+          <input id="recurWeeks" type="number" value="1" class="recur-num-input">
+          <span class="recur-suffix">week(s)</span>
+        </div>
+
+        <div class="recur-row">
+          <span class="recur-label">Days</span>
+          <div class="recur-days">
+            <label class="day-pill"><input id="daySun" type="checkbox" hidden><span>Sun</span></label>
+            <label class="day-pill"><input id="dayMon" type="checkbox" hidden><span>Mon</span></label>
+            <label class="day-pill"><input id="dayTue" type="checkbox" hidden><span>Tue</span></label>
+            <label class="day-pill"><input id="dayWed" type="checkbox" hidden><span>Wed</span></label>
+            <label class="day-pill"><input id="dayThu" type="checkbox" hidden><span>Thu</span></label>
+            <label class="day-pill"><input id="dayFri" type="checkbox" hidden><span>Fri</span></label>
+            <label class="day-pill"><input id="daySat" type="checkbox" hidden><span>Sat</span></label>
           </div>
         </div>
-        
-      
-        <div class="modal-row" style="grid-template-columns: 78px 1fr;">
-          <label>Days</label>
-          <div class="modal-control days-row">
-            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-              <input id="daySun" type="checkbox">
-              <span>Sun</span>
-            </label>
-            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-              <input id="dayMon" type="checkbox">
-              <span>Mon</span>
-            </label>
-            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-              <input id="dayTue" type="checkbox">
-              <span>Tue</span>
-            </label>
-            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-              <input id="dayWed" type="checkbox">
-              <span>Wed</span>
-            </label>
-            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-              <input id="dayThu" type="checkbox">
-              <span>Thu</span>
-            </label>
-            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-              <input id="dayFri" type="checkbox">
-              <span>Fri</span>
-            </label>
-            <label style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-              <input id="daySat" type="checkbox">
-              <span>Sat</span>
-            </label>
+
+        <div class="recur-row">
+          <span class="recur-label">Ends</span>
+          <div class="recur-end-options">
+            <div class="recur-end-option">
+              <label class="end-pill"><input type="radio" name="endType" value="after" checked hidden><span>After</span></label>
+              <input id="endAfter" type="number" placeholder="##" min="1" max="104" class="recur-num-input">
+              <span class="recur-suffix">week(s) (max 104)</span>
+            </div>
+            <span class="recur-or-sep">&mdash; OR &mdash;</span>
+            <div class="recur-end-option">
+              <label class="end-pill"><input type="radio" name="endType" value="by" hidden><span>By</span></label>
+              <input id="endBy" type="text" readonly disabled placeholder="mm/dd/yyyy" class="recur-date-input gf-date-input">
+            </div>
           </div>
         </div>
-        
-        <div class="modal-separator" style="margin: 12px 0;"></div>
-      
-        <div class="modal-row" style="grid-template-columns: 78px 1fr; align-items: flex-start; margin-top:16px;">
-          <label>Ends</label>
-        
-          <div class="modal-control" style="flex-direction:column; align-items:flex-start; gap:8px;">
-            <label style="display: flex; align-items: center; gap: 8px;">
-              <input type="radio" name="endType" value="after" checked>
-              <span>End After</span>
-              <input id="endAfter" type="number" disabled style="width:60px; text-align:center;" placeholder="##">
-              <span>occurrences</span>
-            </label>
-            
-            <label style="display: flex; align-items: center; gap: 8px;">
-              <input type="radio" name="endType" value="by">
-              <span>End By</span>
-              <input id="endBy" type="date" disabled>
-            </label>
-            
-          </div>
-        </div>
-      
+
       </div>
       
       
@@ -2403,30 +2920,33 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=5" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=6" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=2" defer></script>
-<script src="/app/static/js/messages.js?v=4"></script>
+<script src="/app/static/js/messages.js?v=5"></script>
 <script src="/app/static/js/review-modal.js?v=3"></script>
 <script src="/app/static/js/artist-reviews.js"></script>
-<script src="/app/static/js/gig-modal.js?v=12"></script>
+<script src="/app/static/js/gig-modal.js?v=13"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=108"></script>
-<script src="/app/static/js/venue.contracts.js?v=2" defer></script>
-<script src="/app/static/js/flyer-editor.js?v=3" defer></script>
+<script src="/app/static/js/venue.create-gigs.js?v=136"></script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
+<script src="/app/static/js/venue.contracts.js?v=3" defer></script>
+<script src="/app/static/js/flyer-editor.js?v=17" defer></script>
 
-<script src="/app/static/js/activity-center.js?v=2"></script>
+<script src="/app/static/js/activity-center.js?v=3"></script>
 
-<script src="/app/static/js/my-artists.js?v=3"></script>
-<script src="/app/static/js/entity-users.js?v=2"></script>
-<script src="/app/static/js/venue-email-center.js"></script>
+<script src="/app/static/js/my-artists.js?v=6"></script>
+<script src="/app/static/js/entity-users.js?v=3"></script>
+<script src="/app/static/js/venue-email-center.js?v=5"></script>
 
 <footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
+<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
 <script src="/app/static/js/venue-create-gigs-init.js?v=6"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/gig-hover-card.js?v=3"></script>
 <script src="/app/static/js/sw-register.js"></script>
 </body>
 </html>

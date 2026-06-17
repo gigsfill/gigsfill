@@ -21,6 +21,7 @@
 <meta name="twitter:title" content="Find Live Music Near You – GigsFill">
 <meta name="twitter:description" content="Browse upcoming live music events at local venues.">
 <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+<link href="/app/static/css/gig-hover-card.css" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet">
@@ -212,6 +213,9 @@
 
     .gig.open { background: #10b981; }
     .gig.booked { background: #dc3545; }
+    /* Audit fix (May 2026 part 9): multi-slot gig with some slots open and
+       some booked — was indistinguishable from fully-booked red before. */
+    .gig.partial { background: #f59e0b; }
 
     /* Gigs container with custom scrollbar */
     .gigs-container {
@@ -445,6 +449,17 @@
       box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35) !important;
     }
 
+    /* PARTIAL (multi-slot, some open + some booked) — amber */
+    .calendar .gig.partial {
+      background: linear-gradient(
+        135deg,
+        #f59e0b,
+        #b45309
+      ) !important;
+      box-shadow: 0 4px 12px rgba(245, 158, 11, 0.35) !important;
+      color: #000000 !important;
+    }
+
     /* Hover lift (subtle, dusk-style) */
     .calendar .gig:hover {
       transform: translateY(-1px);
@@ -528,7 +543,7 @@
     </div>
   </div>
 </header>
-<script src="/app/static/js/security.js"></script>
+<script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
 
 
@@ -752,10 +767,13 @@
 </div>
 
 <script src="/app/static/js/city-autocomplete.js"></script>
-<script src="/app/static/js/public-gigs.js"></script>
+<script src="/app/static/js/public-gigs.js?v=4"></script>
 
 <script src="/app/static/js/gf-modals.js?v=6"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/gig-hover-card.js?v=3"></script>
 <script src="/app/static/js/sw-register.js"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
 </html>

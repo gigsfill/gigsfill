@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
@@ -332,12 +333,12 @@
       </div>
     </div>
   </header>
-<script src="/app/static/js/security.js"></script>
-<script src="/app/static/js/auth.guard.js"></script>
-<script src="/app/static/js/api-globals.js"></script>
+<script src="/app/static/js/security.js?v=2"></script>
+<script src="/app/static/js/auth.guard.js?v=2"></script>
+<script src="/app/static/js/api-globals.js?v=4"></script>
 <script src="/app/static/js/email-verify-banner.js"></script>
 <script src="/app/static/js/event-delegate.js"></script>
-  <script src="/app/static/js/user-dropdown.js?v=2"></script>
+  <script src="/app/static/js/user-dropdown.js?v=6"></script>
 
   <div class="profile-container">
 
@@ -474,6 +475,22 @@
   <!-- AFFILIATES TAB -->
   <div class="tab-content" id="affiliates-tab" style="display:none;">
 
+    <!-- Affiliate setup checklist banner (only shown when user has linked
+         venues and tasks are incomplete) -->
+    <div id="affChecklistBanner" style="display:none;margin-bottom:12px;padding:14px 18px;background:linear-gradient(135deg,rgba(245,158,11,0.12),rgba(245,158,11,0.04));border:1px solid rgba(245,158,11,0.4);border-radius:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:0.9rem;font-weight:700;color:#fbbf24;margin-bottom:4px;">⚠️ Complete your Affiliate setup</div>
+          <div id="affChecklistMessage" style="font-size:0.78rem;color:var(--text);line-height:1.5;"></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="affChecklistStripeBtn" onclick="document.getElementById('affStripeBlock')?.scrollIntoView({behavior:'smooth',block:'center'})" style="padding:6px 14px;background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.5);border-radius:6px;color:#fbbf24;font-size:0.74rem;cursor:pointer;font-weight:600;">Set up Stripe</button>
+          <button id="affChecklistW9Btn"     onclick="document.getElementById('affW9Filed')?.scrollIntoView({behavior:'smooth',block:'center'}); var f=document.getElementById('affW9Form'); if(f) f.style.display='block';" style="padding:6px 14px;background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.5);border-radius:6px;color:#fbbf24;font-size:0.74rem;cursor:pointer;font-weight:600;">File W-9</button>
+        </div>
+      </div>
+      <div id="affChecklistProgress" style="margin-top:10px;font-size:0.7rem;color:var(--text-gray);"></div>
+    </div>
+
     <!-- Header row: code + Stripe status -->
     <div class="content-card" style="margin-bottom:12px;">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
@@ -487,7 +504,7 @@
         </div>
         <div id="affStripeBlock" style="width:50%;min-width:260px;max-width:500px;">
           <div id="affStripeStatus" style="font-size:0.75rem;color:#f59e0b;padding:12px 16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;">
-            <div style="margin-bottom:8px;">⚠️ Set up Stripe to receive payouts</div>
+            <div style="margin-bottom:8px;">⚠️ Please set up Stripe to receive your Affiliate payouts…</div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
               <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px;">
                 <label style="font-size:0.68rem;color:var(--text-gray);">Use existing artist account</label>
@@ -1106,4 +1123,5 @@
 <script src="/app/static/js/user-profile-init.js"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
 </body>
