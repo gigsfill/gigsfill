@@ -208,21 +208,17 @@
   }
 
   /* ── Invite / Entity Users ──
-     Match the desktop layout's fractional columns + per-column text
-     alignment so the row stays balanced (Email left, middle centered,
-     Action right) on phones too. Action gets slightly more weight than
-     middle columns since Resend + Delete need the room. */
+     Every column left-justified within its grid lane so the header and
+     the value below it share the same left edge — single alignment per
+     column. Action gets slightly more weight than middle columns since
+     Resend + Delete need the row. */
   .inv-table-header, .inv-row {
     grid-template-columns: 1.4fr 1fr 1fr 1.6fr !important;
     gap: 4px !important;
     font-size: 0.75rem !important;
   }
-  .inv-table-header > div:nth-child(2),
-  .inv-table-header > div:nth-child(3),
-  .inv-row > div:nth-child(2),
-  .inv-row > div:nth-child(3) { text-align: center !important; }
   .inv-table-header > div:last-child,
-  .inv-row > div:last-child { text-align: right !important; white-space: nowrap !important; }
+  .inv-row > div:last-child { white-space: nowrap !important; }
   .inv-stats {
     flex-wrap: wrap !important;
   }
