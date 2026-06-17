@@ -841,9 +841,20 @@ async function checkAffW9Prompt() {
     const r = await fetch('/api/affiliate/check-new-venues', { credentials: 'include' });
     if (!r.ok) return;
     const d = await r.json();
-    if (!d.needs_w9_prompt) return;
+    // Two prerequisites for payout: W-9 + Stripe Connect. Show whichever
+    // (or both) is still missing. If both are done, no popup.
+    if (!d.needs_w9_prompt && !d.needs_stripe_prompt) return;
 
-    // Build modal
+    // Build the missing-steps list dynamically so the message matches
+    // what the user actually still has to do.
+    const missing = [];
+    if (d.needs_stripe_prompt) missing.push({ key: 'stripe', label: 'Stripe payout account' });
+    if (d.needs_w9_prompt)     missing.push({ key: 'w9',     label: 'W-9 tax form' });
+    const missingNames = missing.map(m => m.label).join(' and ');
+    const buttonLabel  = missing.length === 1
+      ? `Set up ${missing[0].label} →`
+      : `Set up payouts →`;
+
     const modal = document.createElement('div');
     modal.id = 'affW9PromptModal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -853,17 +864,18 @@ async function checkAffW9Prompt() {
         <h2 style="margin:0 0 10px;font-size:1.2rem;font-weight:700;color:#10b981;">You're now affiliated with ${d.referral_count} venue${d.referral_count>1?'s':''}!</h2>
         <p style="margin:0 0 20px;font-size:0.88rem;line-height:1.6;color:var(--text-gray);">
           Congrats — you'll earn a commission on every gig booked at the venue${d.referral_count>1?'s':''} you referred.<br><br>
-          <strong style="color:#f59e0b;">Important:</strong> You need to complete your W-9 tax form so we can process your payouts. This is required by the IRS for anyone earning over $600/year.
+          <strong style="color:#f59e0b;">Before we can pay you:</strong> Please complete your ${missingNames}. We can't release affiliate payouts until ${missing.length === 1 ? 'this is' : 'these are'} on file.
         </p>
         <div style="display:flex;flex-direction:column;gap:10px;">
-          <button id="affW9PromptGoBtn"
+          <button id="affPayoutSetupGoBtn"
+            data-missing="${missing.map(m=>m.key).join(',')}"
             style="padding:13px 24px;background:linear-gradient(135deg,#10b981,#059669);border:none;border-radius:8px;color:#fff;font-size:0.95rem;font-weight:700;cursor:pointer;"
-            onclick="window._doAffW9Prompt()">
-            Complete W-9 →
+            onclick="window._doAffPayoutSetup(this)">
+            ${buttonLabel}
           </button>
           <button
             style="padding:8px 16px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:var(--text-gray);font-size:0.78rem;cursor:pointer;"
-            onclick="window._dismissAffW9Prompt()">
+            onclick="window._dismissAffSetupPrompt()" data-missing="${missing.map(m=>m.key).join(',')}">
             Remind me later
           </button>
         </div>
@@ -872,26 +884,53 @@ async function checkAffW9Prompt() {
   } catch(e) {}
 }
 
-window._doAffW9Prompt = function() {
-  const modal = document.getElementById('affW9PromptModal');
+// Send user to the right setup affordance(s). If both are missing, jump
+// to the Stripe block first since W-9 is filed inline near it on the
+// same page (and the Affiliate setup checklist banner stays visible
+// until both are done).
+window._doAffPayoutSetup = function(btn) {
+  const modal = document.getElementById('affPayoutSetupGoBtn')?.closest('#affW9PromptModal') || document.getElementById('affW9PromptModal');
   if (modal) modal.remove();
-  // Navigate to affiliates tab and open W9 form
+  const missing = (btn && btn.getAttribute('data-missing') || '').split(',').filter(Boolean);
   const affTab = document.querySelector('[onclick*="affiliates"]');
   if (affTab) affTab.click();
   setTimeout(() => {
-    const toggleBtn = document.getElementById('affW9ToggleBtn');
-    if (toggleBtn) toggleBtn.click();
-    const w9Form = document.getElementById('affW9Form');
-    if (w9Form) { w9Form.style.display = 'block'; w9Form.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    if (missing.includes('stripe')) {
+      const block = document.getElementById('affStripeBlock');
+      if (block) block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else if (missing.includes('w9')) {
+      const toggleBtn = document.getElementById('affW9ToggleBtn');
+      if (toggleBtn) toggleBtn.click();
+      const w9Form = document.getElementById('affW9Form');
+      if (w9Form) { w9Form.style.display = 'block'; w9Form.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    }
   }, 400);
 };
 
-window._dismissAffW9Prompt = async function() {
+// Dismiss both prompts the user is currently being shown. Backend has
+// separate flags per prompt so we POST to whichever endpoints apply.
+window._dismissAffSetupPrompt = async function() {
+  const btn = document.querySelector('#affW9PromptModal button[onclick*="_dismissAffSetupPrompt"]');
   const modal = document.getElementById('affW9PromptModal');
   if (modal) modal.remove();
+  const missing = (btn && btn.getAttribute('data-missing') || '').split(',').filter(Boolean);
   try {
-    await fetch('/api/affiliate/dismiss-w9-prompt', { method: 'POST', credentials: 'include' });
+    if (missing.includes('w9')) {
+      await fetch('/api/affiliate/dismiss-w9-prompt', { method: 'POST', credentials: 'include' });
+    }
+    if (missing.includes('stripe')) {
+      await fetch('/api/affiliate/dismiss-stripe-prompt', { method: 'POST', credentials: 'include' });
+    }
   } catch(e) {}
+};
+
+// Back-compat: existing button onclicks in old cached HTML still
+// reference these names. Route them to the new combined handlers.
+window._doAffW9Prompt        = function() { return window._doAffPayoutSetup({ getAttribute: () => 'w9' }); };
+window._dismissAffW9Prompt   = function() {
+  const modal = document.getElementById('affW9PromptModal');
+  if (modal) modal.remove();
+  return fetch('/api/affiliate/dismiss-w9-prompt', { method: 'POST', credentials: 'include' }).catch(() => {});
 };
 
 window.loadAffMyEmails         = loadAffMyEmails;

@@ -1807,7 +1807,10 @@ def get_my_venue_earnings(
 
 @router.get("/api/affiliate/check-new-venues")
 def check_new_venues(user=Depends(get_current_user), db=Depends(get_db)):
-    """Check if user has new referrals they haven't been notified about + W9 status."""
+    """Check if user has new referrals they haven't been notified about,
+    plus the two payout prerequisites (W-9 + Stripe Connect) so the
+    welcome popup can nudge whichever one is missing.
+    """
     has_referrals = db.execute(text(
         "SELECT COUNT(*) FROM affiliate_referrals WHERE affiliate_user_id = :uid"
     ), {"uid": user.id}).scalar() or 0
@@ -1816,17 +1819,55 @@ def check_new_venues(user=Depends(get_current_user), db=Depends(get_db)):
         "SELECT COUNT(*) FROM w9_forms WHERE entity_type = 'user' AND entity_id = :uid"
     ), {"uid": user.id}).scalar() or 0
 
-    # Check if user dismissed this prompt (stored in user preferences or a flag column)
-    dismissed = db.execute(text(
+    # Stripe Connect must be onboarded for the user to actually receive
+    # affiliate payouts. The same columns are used by /api/affiliate/my-summary
+    # to gate the "Setup Stripe" banner on the dashboard.
+    stripe_row = db.execute(text(
+        "SELECT affiliate_stripe_connect_account_id, affiliate_stripe_connect_onboarding_complete "
+        "FROM users WHERE id = :uid"
+    ), {"uid": user.id}).mappings().first()
+    has_stripe = bool(
+        stripe_row
+        and stripe_row.get("affiliate_stripe_connect_account_id")
+        and stripe_row.get("affiliate_stripe_connect_onboarding_complete")
+    )
+
+    # Per-prompt dismissal flags so we don't re-pester the user after they
+    # close the popup once. They can revisit the setup steps via the
+    # checklist banner on the Affiliate Dashboard.
+    dismissed_w9 = db.execute(text(
         "SELECT setting_value FROM user_settings WHERE user_id = :uid AND setting_key = 'aff_w9_prompt_dismissed'"
+    ), {"uid": user.id}).scalar()
+    dismissed_stripe = db.execute(text(
+        "SELECT setting_value FROM user_settings WHERE user_id = :uid AND setting_key = 'aff_stripe_prompt_dismissed'"
     ), {"uid": user.id}).scalar()
 
     return {
         "has_referrals": bool(has_referrals),
         "has_w9": bool(has_w9),
-        "needs_w9_prompt": bool(has_referrals and not has_w9 and not dismissed),
+        "has_stripe": has_stripe,
+        "needs_w9_prompt":     bool(has_referrals and not has_w9     and not dismissed_w9),
+        "needs_stripe_prompt": bool(has_referrals and not has_stripe and not dismissed_stripe),
         "referral_count": has_referrals,
     }
+
+
+@router.post("/api/affiliate/dismiss-stripe-prompt")
+def dismiss_stripe_prompt(user=Depends(get_current_user), db=Depends(get_db)):
+    """Mark that user has dismissed the Stripe setup prompt (so we don't
+    show it on every login). They can still set up Stripe any time from
+    the Affiliate Dashboard.
+    """
+    try:
+        db.execute(text("""
+            INSERT INTO user_settings (user_id, setting_key, setting_value)
+            VALUES (:uid, 'aff_stripe_prompt_dismissed', '1')
+            ON CONFLICT(user_id, setting_key) DO UPDATE SET setting_value = '1'
+        """), {"uid": user.id})
+        db.commit()
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 @router.post("/api/affiliate/dismiss-w9-prompt")

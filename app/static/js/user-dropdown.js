@@ -430,8 +430,12 @@ function injectGlobalModals() {
           <button class="gf-modal-close" onclick="closeRecommendModal()">&times;</button>
         </div>
         <div class="gf-modal-body">
-          <p style="color:#9ca3af;font-size:0.85rem;margin:0 0 20px;line-height:1.5;">Know an artist or venue that would love GigsFill? Send them an invite!</p>
-          
+          <p style="color:#9ca3af;font-size:0.85rem;margin:0 0 10px;line-height:1.5;">Know an artist or venue that would love GigsFill? Send them an invite!</p>
+          <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.30);border-radius:8px;padding:10px 14px;margin:0 0 20px;color:#a7f3d0;font-size:0.78rem;line-height:1.5;">
+            <strong style="color:#10b981;">💰 Affiliate Perk:</strong> If a recommended <strong>venue</strong> signs up using your link, they're automatically attached to your affiliate account and you'll earn a commission on <strong>every gig they book</strong>. Track your referrals and earnings on the Affiliate tab of your profile.
+            <div style="color:#6b7280;margin-top:4px;font-size:0.72rem;">(Artist signups don't trigger affiliate credit — see <a href="/app/legal.html#affiliate" style="color:#06b6d4;" target="_blank">Terms</a>.)</div>
+          </div>
+
           <label for="recName">Their Name <span style="font-weight:400;text-transform:none;color:#6b7280;">(optional)</span></label>
           <input type="text" id="recName" placeholder="e.g. John Smith" maxlength="100">
           
