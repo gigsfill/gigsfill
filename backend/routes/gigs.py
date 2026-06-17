@@ -358,7 +358,29 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
       since the gig-level math equals the per-slot math when there's one slot.
     """
     try:
-        pay_amount = _get_effective_pay(db, venue_id, artist_id, pay_amount)
+        # Door-deal defensive: if this slot is a door deal, the canonical
+        # booking-time charge is the GUARANTEE in cents, regardless of
+        # what pay_amount the caller passed or what gs.pay happens to be.
+        # The door % share gets added at /settle (door_settle.py) by
+        # bumping this scheduled transaction's amount_cents before the
+        # payout scheduler actually runs the Stripe charge. Without this
+        # check, a stale gs.pay (or a wrong pay_amount handed in) could
+        # over- or under-charge for door deals; this anchors the booking
+        # row to the deal's intent.
+        if slot_id:
+            _deal_row = db.execute(
+                text("SELECT deal_type, guarantee_cents FROM gig_slots WHERE id = :sid"),
+                {"sid": slot_id}
+            ).mappings().first()
+            if _deal_row and (_deal_row.get("deal_type") or "").lower() == "door":
+                _g_cents = int(_deal_row.get("guarantee_cents") or 0)
+                pay_amount = _g_cents / 100.0
+                # Skip override application for door deals — overrides are
+                # for raising flat pay; the door guarantee is the contract.
+            else:
+                pay_amount = _get_effective_pay(db, venue_id, artist_id, pay_amount)
+        else:
+            pay_amount = _get_effective_pay(db, venue_id, artist_id, pay_amount)
 
         # Check if venue is on free trial — Stripe charge is skipped (free trial
         # venues pay artists directly), but we still record a 'free_trial' audit

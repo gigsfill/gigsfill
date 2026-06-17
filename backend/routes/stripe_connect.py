@@ -481,19 +481,31 @@ def charge_booking(data: dict, user=Depends(get_current_user), db=Depends(get_db
     # Never trust client-supplied amount_cents — derive from slot pay (or gig pay
     # for single-slot) and apply the per-artist preferred-status override via
     # _get_effective_pay (which filters status='approved').
+    #
+    # Door-deal defensive: for slots with deal_type='door' the canonical
+    # charge amount is guarantee_cents (NOT slot pay, NOT the preferred-
+    # artist override). The door % share is added later via /settle. This
+    # mirrors _create_booking_transaction's door branch in gigs.py.
     from backend.routes.gigs import _get_effective_pay as _cb_eff_pay
-    _slot_pay = None
+    amount_cents = None
     if slot_id:
         _sr = db.execute(
-            _cbt("SELECT pay FROM gig_slots WHERE id = :sid AND gig_id = :gid AND artist_id = :aid AND status = 'booked'"),
+            _cbt("""SELECT pay, deal_type, guarantee_cents
+                    FROM gig_slots
+                    WHERE id = :sid AND gig_id = :gid AND artist_id = :aid AND status = 'booked'"""),
             {"sid": slot_id, "gid": gig_id, "aid": artist_id}
         ).mappings().first()
         if _sr:
-            _slot_pay = float(_sr.get("pay") or 0)
-    if _slot_pay is None:
-        _slot_pay = float(_gig_check.get("pay") or 0)
-    _server_pay = _cb_eff_pay(db, venue_id, artist_id, _slot_pay)
-    amount_cents = int(round(float(_server_pay) * 100))
+            if (_sr.get("deal_type") or "").lower() == "door":
+                amount_cents = int(_sr.get("guarantee_cents") or 0)
+            else:
+                _slot_pay = float(_sr.get("pay") or 0)
+                _server_pay = _cb_eff_pay(db, venue_id, artist_id, _slot_pay)
+                amount_cents = int(round(_server_pay * 100))
+    if amount_cents is None:
+        _gig_pay = float(_gig_check.get("pay") or 0)
+        _server_pay = _cb_eff_pay(db, venue_id, artist_id, _gig_pay)
+        amount_cents = int(round(_server_pay * 100))
     if amount_cents <= 0:
         raise HTTPException(400, "Computed amount is zero — cannot charge")
 
