@@ -538,6 +538,11 @@ def get_settings(admin=Depends(check_admin), db=Depends(get_db)):
         'bounce_check_imap_password': _mask(settings.get('bounce_check_imap_password', '')),
         'bounce_check_last_run_at':   settings.get('bounce_check_last_run_at', ''),
         'bounce_check_last_result':   settings.get('bounce_check_last_result', ''),
+        # Bounce-check credentials source — 'platform' (default) / 'support' /
+        # 'custom'. When platform/support the scheduler uses that account's
+        # stored email + password for IMAP login; when custom it falls back
+        # to bounce_check_imap_username + _password.
+        'bounce_check_source':        settings.get('bounce_check_source', 'platform'),
         # Texting (SMS) global on/off — defaults to false until a real
         # SMS provider (Twilio etc.) is wired up. While false, all
         # user-facing SMS UI is hidden site-wide and dispatch is no-op'd.
@@ -583,6 +588,8 @@ async def update_settings(request: Request, admin=Depends(check_admin), db=Depen
         'bounce_check_imap_port':     'bounce_check_imap_port',
         'bounce_check_imap_username': 'bounce_check_imap_username',
         'bounce_check_imap_password': 'bounce_check_imap_password',
+        # Bounce-check credentials source — 'platform' / 'support' / 'custom'.
+        'bounce_check_source':        'bounce_check_source',
         # Texting (SMS) global on/off — see GET handler for docstring.
         'texting_enabled':            'texting_enabled',
     }

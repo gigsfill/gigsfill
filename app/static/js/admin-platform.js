@@ -439,6 +439,9 @@ window._adminConfirm = function(opts) {
       // the PUT endpoint skips any value starting with "•".
       const cb = document.getElementById('bounceCheckEnabled');
       if (cb) cb.checked = !!d.bounce_check_enabled;
+      const bs = document.getElementById('bounceCheckSource');
+      if (bs) bs.value = d.bounce_check_source || 'platform';
+      if (typeof window.updateBounceSourceUI === 'function') window.updateBounceSourceUI();
       const tx = document.getElementById('textingEnabled');
       if (tx) tx.checked = !!d.texting_enabled;
       set('bounceImapServer',   d.bounce_check_imap_server);
@@ -459,6 +462,19 @@ window._adminConfirm = function(opts) {
 
   // Part 10p Phase 3: manual trigger for the bounce-inbox poll. Hits the same
   // code path the scheduler runs every 30 minutes; result is shown inline.
+  // Show / hide the Custom IMAP username + password cells based on the
+  // Credentials Source dropdown. When using Platform or Support email
+  // credentials, those cells aren't needed (backend reuses the chosen
+  // account's stored creds). 'custom' reveals them for a separate inbox.
+  window.updateBounceSourceUI = function () {
+    const sel  = document.getElementById('bounceCheckSource');
+    const uCol = document.getElementById('bounceCheckCustomCredsCol');
+    const pCol = document.getElementById('bounceCheckCustomCredsRow');
+    const isCustom = sel && sel.value === 'custom';
+    if (uCol) uCol.style.display = isCustom ? '' : 'none';
+    if (pCol) pCol.style.display = isCustom ? '' : 'none';
+  };
+
   window.bounceCheckTestNow = async function () {
     const statusEl = document.getElementById('bounceCheckStatus');
     if (statusEl) {
@@ -543,6 +559,12 @@ window._adminConfirm = function(opts) {
     // the user actually clears it).
     const cb = document.getElementById('bounceCheckEnabled');
     if (cb) payload.bounce_check_enabled = cb.checked ? 'true' : 'false';
+    // Credentials source — picks where the bounce poller logs in.
+    // 'platform' / 'support' reuse the corresponding email account's
+    // username + password (no duplicate entry). 'custom' falls through
+    // to the manual bounce_check_imap_username / _password fields.
+    const bs = document.getElementById('bounceCheckSource');
+    if (bs) payload.bounce_check_source = bs.value || 'platform';
     // Texting (SMS) master switch — admin-only toggle that gates all
     // user-facing SMS UI site-wide. See /api/public/texting-status for
     // the public read endpoint the frontend uses to hide the SMS section.

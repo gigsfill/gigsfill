@@ -1041,12 +1041,26 @@
           <div style="height:1px;background:var(--border);margin:12px 0;"></div>
 
           <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Bounce Detection (async)</div>
-          <div style="color:var(--text-gray);font-size:0.7rem;margin-bottom:10px;">Synchronous SMTP refusals (mailbox unknown at send time) are caught automatically. Bounces that happen <em>after</em> delivery (mailbox full, content filtered, etc.) come back as Delivery Status Notification (DSN) emails. When enabled, the scheduler polls the platform email's IMAP inbox every 30 minutes and marks matching artist-invitation rows <strong>Bounced</strong>. <strong>Hover labels for full explanations.</strong></div>
+          <div style="color:var(--text-gray);font-size:0.7rem;margin-bottom:10px;">Synchronous SMTP refusals (mailbox unknown at send time) are caught automatically. Bounces that happen <em>after</em> delivery (mailbox full, content filtered, etc.) come back as Delivery Status Notification (DSN) emails to whichever mailbox the From address points at. When enabled, the scheduler logs into that mailbox over IMAP every 30 minutes and marks matching artist-invitation rows <strong>Bounced</strong>. <strong>Hover labels for full explanations.</strong></div>
           <div class="field" style="max-width:200px;margin-bottom:10px;">
             <label style="display:flex;align-items:center;gap:8px;font-size:0.72rem;cursor:pointer;">
               <input type="checkbox" id="bounceCheckEnabled" onchange="autoSaveSettings()" style="accent-color:#06b6d4;width:14px;height:14px;cursor:pointer;">
               <span>Enable bounce polling</span>
             </label>
+          </div>
+          <!-- Credentials source — picks where bounce polling gets its login.
+               'platform' / 'support' just reuse the corresponding email
+               settings above (no re-typing). 'custom' reveals the manual
+               IMAP fields below for a totally separate inbox. The IMAP
+               *server* is always required since it's a different host
+               from SMTP (typically smtp.X.com → imap.X.com). -->
+          <div class="field" style="max-width:420px;margin-bottom:10px;">
+            <label style="font-size:0.7rem;" title="Pick which mailbox the bounce poller logs into. Most setups send AND receive bounces on the same account, so 'Use Platform Email credentials' is the right default — no re-typing the username + password. Pick 'Use Support Email' if you've split the support inbox to a different account. Pick 'Custom' only if bounces land in a third, separate mailbox.">Credentials Source</label>
+            <select id="bounceCheckSource" onchange="autoSaveSettings(); window.updateBounceSourceUI && window.updateBounceSourceUI();" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+              <option value="platform">Use Platform Email credentials (default)</option>
+              <option value="support">Use Support Email credentials</option>
+              <option value="custom">Custom (configure username + password below)</option>
+            </select>
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 14px;max-width:720px;">
             <div class="field">
@@ -1057,13 +1071,13 @@
               <label style="font-size:0.7rem;" title="IMAP SSL port. 993 is the standard (default). 143 is unencrypted IMAP — don't use it for credentials over the public internet.">IMAP Port</label>
               <input type="number" id="bounceImapPort" min="1" max="65535" placeholder="993" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
-            <div class="field">
-              <label style="font-size:0.7rem;" title="IMAP login username. Leave blank to reuse the Platform Email address above — useful when SMTP and IMAP run on the same account, which is the common case.">IMAP Username</label>
-              <input type="text" id="bounceImapUsername" placeholder="(defaults to Platform Email)" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            <div class="field" id="bounceCheckCustomCredsCol">
+              <label style="font-size:0.7rem;" title="IMAP login username. Used only when Credentials Source is set to 'Custom'.">IMAP Username</label>
+              <input type="text" id="bounceImapUsername" placeholder="bounces@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
-            <div class="field" style="grid-column:1/3;">
-              <label style="font-size:0.7rem;" title="IMAP login password. For Gmail/Outlook, generate an app-specific password (16 chars). Leave blank to reuse the Platform Email password above. Stored encrypted at rest and never echoed back to the browser (the dots below are a placeholder when a password is on file).">IMAP Password</label>
-              <input type="password" id="bounceImapPassword" placeholder="(defaults to Platform Email password)" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+            <div class="field" id="bounceCheckCustomCredsRow" style="grid-column:1/3;">
+              <label style="font-size:0.7rem;" title="IMAP login password. Used only when Credentials Source is set to 'Custom'. For Gmail/Outlook, generate an app-specific password (16 chars). Stored encrypted at rest and never echoed back to the browser.">IMAP Password</label>
+              <input type="password" id="bounceImapPassword" placeholder="" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
             <div class="field" style="display:flex;align-items:flex-end;">
               <button type="button" onclick="bounceCheckTestNow()" style="background:#06b6d4;color:white;border:none;padding:7px 14px;border-radius:4px;font-size:0.78rem;cursor:pointer;width:100%;font-weight:600;" title="Connect to IMAP right now and poll for bounces. Updates the artist_invitations table for any matched DSN messages and reports the result here. Same code path the scheduler runs every 30 minutes.">Test &amp; Poll Now</button>
@@ -2045,7 +2059,7 @@ function switchDbLogsTab(tab) {
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
-<script src="/app/static/js/admin-platform.js?v=6"></script>
+<script src="/app/static/js/admin-platform.js?v=7"></script>
 <script src="/app/static/js/admin-payments.js?v=25"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=2"></script>

@@ -1514,22 +1514,50 @@ def start_scheduler():
 # Cadence: every 30 minutes from the main scheduler loop.
 
 def _bounce_check_settings(cursor):
-    """Read bounce-check settings from platform_settings. Falls back to the
-    platform_email/password for IMAP credentials when blank."""
+    """Read bounce-check settings from platform_settings. The credentials
+    source (bounce_check_source) picks which mailbox's username + password
+    to use for IMAP login:
+        'platform' (default) — reuse platform_email + platform_email_password
+        'support'            — reuse support_email + support_email_password
+        'custom'             — read bounce_check_imap_username + _password
+    Legacy fallback: when no source is set and the bounce_check_imap_*
+    fields are blank, treat as 'platform' (matches the pre-source behavior).
+    """
     cursor.execute(
         "SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ("
         "'bounce_check_enabled','bounce_check_imap_server','bounce_check_imap_port',"
-        "'bounce_check_imap_username','bounce_check_imap_password',"
-        "'platform_email','platform_email_password')"
+        "'bounce_check_imap_username','bounce_check_imap_password','bounce_check_source',"
+        "'platform_email','platform_email_password',"
+        "'support_email','support_email_password')"
     )
     s = {r[0]: r[1] for r in cursor.fetchall()}
     enabled = str(s.get('bounce_check_enabled') or 'false').lower() in ('true', '1', 'yes')
+    source = (s.get('bounce_check_source') or 'platform').strip().lower()
+    if source == 'support':
+        username = (s.get('support_email') or '').strip()
+        password = (s.get('support_email_password') or '').strip()
+    elif source == 'custom':
+        username = (s.get('bounce_check_imap_username') or '').strip()
+        password = (s.get('bounce_check_imap_password') or '').strip()
+    else:  # 'platform' or anything unrecognized
+        username = (s.get('platform_email') or '').strip()
+        password = (s.get('platform_email_password') or '').strip()
+    # Legacy compatibility: if source was unset AND the custom fields had
+    # values, the pre-source code path used those — keep matching that
+    # behavior so existing deployments don't suddenly switch creds.
+    if not s.get('bounce_check_source'):
+        legacy_user = (s.get('bounce_check_imap_username') or '').strip()
+        legacy_pass = (s.get('bounce_check_imap_password') or '').strip()
+        if legacy_user:
+            username = legacy_user
+        if legacy_pass:
+            password = legacy_pass
     return {
         "enabled": enabled,
         "server": (s.get('bounce_check_imap_server') or '').strip(),
         "port": int((s.get('bounce_check_imap_port') or '993').strip() or 993),
-        "username": (s.get('bounce_check_imap_username') or '').strip() or (s.get('platform_email') or '').strip(),
-        "password": (s.get('bounce_check_imap_password') or '').strip() or (s.get('platform_email_password') or '').strip(),
+        "username": username,
+        "password": password,
     }
 
 
