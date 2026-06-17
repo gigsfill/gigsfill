@@ -2922,7 +2922,24 @@ async function renderCalendar() {
           _bannerTitle = `${_sl.icon} ${_sl.title}`;
           // Find next upcoming blast
           const _nextB = _findNextBlast(_hoursUntil, _nk);
-          const _sentRadius = (_nk === 'open_gig_36h' || _nk === 'open_gig_1w') ? _radiusBlurb(_nk) : '';
+          // Resolve the "and all artists within N miles" blurb based on
+          // which blast key actually fired:
+          //   - open_gig_36h / open_gig_1w → consult their own row in
+          //     venue_email_notifications (blast_all_enabled + radius)
+          //   - new_gig_blast / radius_blast → these are venue-triggered
+          //     wide blasts; the venue's saved 'radius_blast' settings
+          //     describe their typical reach. Use those as the proxy
+          //     for blurb wording.
+          //   - cancelled_blast → consult its own row (independent toggle)
+          // Without this mapping, new_gig_blast fell through to an empty
+          // blurb and the message read "Preferred artists were notified"
+          // even when blast_all_enabled=1 → the radius cohort was missed
+          // from the recap.
+          let _radiusKey = null;
+          if (_nk === 'open_gig_36h' || _nk === 'open_gig_1w') _radiusKey = _nk;
+          else if (_nk === 'new_gig_blast' || _nk === 'radius_blast') _radiusKey = 'radius_blast';
+          else if (_nk === 'cancelled_blast') _radiusKey = 'cancelled_blast';
+          const _sentRadius = _radiusKey ? _radiusBlurb(_radiusKey) : '';
           const _freqNote = _sentRadius ? ' Frequency limitations and Preferred Status are not in effect.' : '';
           const _whoNotified = `Preferred artists${_sentRadius} were notified.${_freqNote}`;
           if (_nextB) {
