@@ -1388,6 +1388,116 @@ document.addEventListener("DOMContentLoaded", async () => {
   // each slot row's .slot-deal-row so it persists with the gig save and
   // no longer requires a saved gig as a precondition.
 
+  // Door settle UI now uses a real modal (no more prompt()). Walks
+  // through pending slots one at a time: opens the modal for slot 1,
+  // waits for Finalize, then opens slot 2, etc. Modal handles its own
+  // input formatting, live total calculation, and error display.
+  let _doorSettleQueue = [];   // remaining pending slots to walk
+  let _doorSettleActive = null; // current slot being settled in the modal
+
+  // ATM-style live formatter for the receipts input. Mirrors the
+  // _liveFormatPayAmount helper used by slot-pay-amount + slot-door-
+  // guarantee — same rightmost-two-digits-are-cents behavior so the
+  // typing experience is identical to other pay inputs on the site.
+  function _liveFormatReceiptsInput(input) {
+    const digits = input.value.replace(/\D/g, '').slice(0, 9);
+    if (!digits) {
+      input.value = '0.00';
+    } else {
+      const padded = digits.padStart(3, '0');
+      const dollarsPart = padded.slice(0, -2);
+      const centsPart   = padded.slice(-2);
+      input.value = parseInt(dollarsPart, 10).toLocaleString('en-US') + '.' + centsPart;
+    }
+    setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
+  }
+
+  function _parseReceiptsCents() {
+    const raw = (document.getElementById('doorSettleReceiptsInput')?.value || '0').replace(/,/g, '');
+    const dollars = parseFloat(raw) || 0;
+    return Math.max(0, Math.round(dollars * 100));
+  }
+
+  function _updateDoorSettleTotal() {
+    if (!_doorSettleActive) return;
+    const gua = _doorSettleActive.guarantee_cents || 0;
+    const pct = _doorSettleActive.door_pct || 0;
+    const receipts = _parseReceiptsCents();
+    const doorShare = Math.floor((receipts * pct) / 100);
+    // Mirror backend _compute_settled_pay: max(g, g + door_share)
+    const total = Math.max(gua, gua + doorShare);
+    const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const totalEl = document.getElementById('doorSettleTotal');
+    const breakdownEl = document.getElementById('doorSettleBreakdown');
+    if (totalEl) totalEl.textContent = fmt(total);
+    if (breakdownEl) breakdownEl.textContent = `= ${fmt(gua)} guarantee + ${fmt(doorShare)} door share`;
+  }
+
+  function _openDoorSettleModal(slot) {
+    _doorSettleActive = slot;
+    const modal = document.getElementById('doorSettleModal');
+    if (!modal) return;
+    const sub = document.getElementById('doorSettleSubtitle');
+    if (sub) {
+      sub.textContent = `Slot ${slot.slot_number}${slot.artist_name ? ' — ' + slot.artist_name : ''}`;
+    }
+    document.getElementById('doorSettleGuarantee').textContent =
+      '$' + ((slot.guarantee_cents || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
+    document.getElementById('doorSettleDoorPct').textContent = (slot.door_pct || 0) + '%';
+    const inp = document.getElementById('doorSettleReceiptsInput');
+    inp.value = '0.00';
+    _updateDoorSettleTotal();
+    const errEl = document.getElementById('doorSettleErrorMsg');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    modal.classList.remove('hidden');
+    // Defer focus so the click that opened it doesn't immediately re-blur.
+    setTimeout(() => { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }, 30);
+  }
+
+  function _closeDoorSettleModal() {
+    const modal = document.getElementById('doorSettleModal');
+    if (modal) modal.classList.add('hidden');
+    _doorSettleActive = null;
+  }
+
+  async function _doorSettleFinalize() {
+    if (!_doorSettleActive || !selectedGig || !selectedGig.id) return;
+    const slot = _doorSettleActive;
+    const cents = _parseReceiptsCents();
+    const finalizeBtn = document.getElementById('doorSettleFinalizeBtn');
+    const errEl = document.getElementById('doorSettleErrorMsg');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (finalizeBtn) { finalizeBtn.disabled = true; finalizeBtn.textContent = 'Finalizing…'; }
+    try {
+      const payload = { door_receipts_cents: cents };
+      const res = window.apiPostSafe
+        ? await window.apiPostSafe(`/api/gigs/${selectedGig.id}/slots/${slot.slot_id}/settle`, payload)
+        : await (await fetch(`/api/gigs/${selectedGig.id}/slots/${slot.slot_id}/settle`, {
+            method: 'POST', credentials: 'include',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+          })).json();
+      _closeDoorSettleModal();
+      if (res && res.settled_pay_dollars != null) {
+        const msg = res.warning
+          ? `Slot ${slot.slot_number}: ${res.warning}`
+          : `Slot ${slot.slot_number} settled: artist will be paid $${res.settled_pay_dollars} via platform.`;
+        (typeof showAlert === 'function' ? showAlert : alert)(msg,
+          res.warning ? 'Door Settled — Action Required' : undefined);
+      }
+      // Walk to the next pending slot, if any.
+      if (_doorSettleQueue.length) {
+        _openDoorSettleModal(_doorSettleQueue.shift());
+      }
+    } catch (e) {
+      if (errEl) {
+        errEl.textContent = 'Failed to finalize: ' + ((e && e.message) || 'unknown error');
+        errEl.style.display = 'block';
+      }
+    } finally {
+      if (finalizeBtn) { finalizeBtn.disabled = false; finalizeBtn.textContent = 'Finalize Artist Payment'; }
+    }
+  }
+
   async function _openDealSettle() {
     if (!selectedGig || !selectedGig.id) return;
     let pending = [];
@@ -1401,47 +1511,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       (typeof showAlert === 'function' ? showAlert : alert)('No door-deal slots to settle.');
       return;
     }
-    for (const p of pending) {
-      const raw = prompt(
-        `Slot ${p.slot_number} — door receipts (dollars)?\n` +
-        `Artist: ${p.artist_name || '(none)'}\n` +
-        `Guarantee: $${((p.guarantee_cents || 0) / 100).toFixed(2)}\n` +
-        `Pays artist: ${p.door_pct || 0}% of receipts (over guarantee)`,
-        ''
-      );
-      if (raw === null) continue; // cancelled this slot
-      const dollars = parseFloat(raw);
-      if (isNaN(dollars) || dollars < 0) { alert(`Invalid amount on slot ${p.slot_number} — skipping`); continue; }
-      const cents = Math.round(dollars * 100);
-      try {
-        const payload = { door_receipts_cents: cents };
-        const res = window.apiPostSafe
-          ? await window.apiPostSafe(`/api/gigs/${selectedGig.id}/slots/${p.slot_id}/settle`, payload)
-          : await (await fetch(`/api/gigs/${selectedGig.id}/slots/${p.slot_id}/settle`, {
-              method: 'POST', credentials: 'include',
-              headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
-            })).json();
-        if (res && res.settled_pay_dollars != null) {
-          // Backend may include warning when the payout has already fired
-          // (status was no longer 'scheduled'). In that case the platform
-          // didn't move the door bonus — the venue owes the artist directly.
-          // Surface that explicitly so the venue doesn't think they're done.
-          if (res.warning) {
-            (typeof showAlert === 'function' ? showAlert : alert)(
-              `Slot ${p.slot_number}: ${res.warning}`,
-              'Door Settled — Action Required'
-            );
-          } else {
-            (typeof showAlert === 'function' ? showAlert : alert)(
-              `Slot ${p.slot_number} settled: artist will be paid $${res.settled_pay_dollars} via platform.`
-            );
-          }
-        }
-      } catch (e) {
-        alert(`Failed to settle slot ${p.slot_number}: ${(e && e.message) || 'error'}`);
-      }
-    }
+    // Queue the rest; open the modal on the first one. After each
+    // Finalize the next slot pops up automatically.
+    _doorSettleQueue = pending.slice(1);
+    _openDoorSettleModal(pending[0]);
   }
+
+  // Wire modal event listeners once DOM is ready (script runs at end of
+  // body so elements exist by now).
+  (function _wireDoorSettleModal() {
+    const inp = document.getElementById('doorSettleReceiptsInput');
+    if (inp) {
+      inp.addEventListener('input', () => { _liveFormatReceiptsInput(inp); _updateDoorSettleTotal(); });
+      // Select-all on focus so click-to-edit behaves like the other pay pills.
+      inp.addEventListener('focus', () => inp.setSelectionRange(0, inp.value.length));
+    }
+    const cancelBtn = document.getElementById('doorSettleCancelBtn');
+    if (cancelBtn) cancelBtn.addEventListener('click', _closeDoorSettleModal);
+    const finalizeBtn = document.getElementById('doorSettleFinalizeBtn');
+    if (finalizeBtn) finalizeBtn.addEventListener('click', _doorSettleFinalize);
+  })();
 
   if (settleDealsBtn) settleDealsBtn.addEventListener('click', _openDealSettle);
 

@@ -2927,6 +2927,79 @@
 </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Door Settle modal — opens when venue clicks "Add Door Receipts" on a
+     door-deal slot. Displays the guarantee (read-only), an ATM-style
+     receipts input that the artist's % share is calculated against in
+     real time, and the live total the platform will charge the venue
+     and transfer to the artist. Finalize button POSTs to
+     /api/gigs/{gid}/slots/{sid}/settle for the active slot.
+     For multi-slot gigs the modal walks slots one at a time —
+     successive opens show the next pending slot.
+     ════════════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="doorSettleModal" style="z-index: 10002;">
+<div class="modal" style="max-width: 520px;">
+  <h2 style="font-size: 1.1rem; margin-bottom: 6px; color: var(--text);">Settle Door Deal</h2>
+  <div id="doorSettleSubtitle" style="font-size:0.78rem;color:var(--text-gray);margin-bottom:18px;"></div>
+
+  <!-- Guaranteed Pay (read-only) -->
+  <div style="margin-bottom:16px;">
+    <div style="font-size:0.7rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;"
+      title="The floor amount you committed to at booking. The artist gets this even if door receipts are $0.">
+      Guaranteed Pay
+    </div>
+    <div id="doorSettleGuarantee" style="font-size:1.4rem;font-weight:700;color:#10b981;">$0.00</div>
+  </div>
+
+  <!-- Door Receipts input (ATM-style) -->
+  <div style="margin-bottom:16px;">
+    <label for="doorSettleReceiptsInput" style="display:block;font-size:0.7rem;font-weight:600;color:var(--text-gray);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;"
+      title="Gross cash collected at the door tonight, in dollars. Includes card receipts run through your POS at the door. Type digits — input formats ATM-style (rightmost two digits are cents).">
+      Add Door Receipts
+    </label>
+    <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:8px 12px;max-width:200px;">
+      <span style="font-size:1.1rem;color:var(--text-gray);font-weight:600;">$</span>
+      <input type="text" id="doorSettleReceiptsInput" value="0.00" inputmode="decimal" maxlength="12"
+        title="Click and start typing. Rightmost two digits are cents. e.g. type '1','5','0','0','0' → $150.00"
+        style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:1.1rem;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:right;width:100%;">
+    </div>
+    <div id="doorSettleReceiptsHint" style="font-size:0.7rem;color:var(--text-muted);margin-top:6px;line-height:1.4;"
+      title="Artist's share rate on door receipts — locked at booking time per the deal terms.">
+      Artist receives <strong id="doorSettleDoorPct">0%</strong> of door receipts <em>on top of</em> the guarantee.
+    </div>
+  </div>
+
+  <!-- Computed total — live -->
+  <div style="background:rgba(6,182,212,0.07);border:1px solid rgba(6,182,212,0.25);border-radius:8px;padding:14px 16px;margin-bottom:18px;">
+    <div style="font-size:0.7rem;font-weight:600;color:#67e8f9;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;"
+      title="The site will charge this amount to your saved card at tomorrow's 5 PM payout sweep, then transfer (net of platform fees) to the artist's Stripe Connect account.">
+      Artist's Total Payout
+    </div>
+    <div id="doorSettleTotal" style="font-size:1.6rem;font-weight:800;color:#06b6d4;">$0.00</div>
+    <div id="doorSettleBreakdown" style="font-size:0.72rem;color:var(--text-gray);margin-top:4px;">
+      = $0.00 guarantee + $0.00 door share
+    </div>
+  </div>
+
+  <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:6px;padding:8px 12px;margin-bottom:18px;font-size:0.72rem;color:#fbbf24;line-height:1.5;"
+    title="Settlement is final. Backend rejects any second attempt to settle the same slot; only an admin can revise via a database edit. Double-check your number before clicking Finalize.">
+    <strong>Heads up:</strong> Once you finalize, this can't be undone — the receipts amount is locked and the scheduled payout uses this number. Double-check before clicking below.
+  </div>
+
+  <div class="modal-actions" style="display:flex;gap:10px;justify-content:flex-end;">
+    <button class="btn ghost" id="doorSettleCancelBtn"
+      title="Close without saving. The slot stays open for settling later — you can reopen this dialog any time from the Add Door Receipts button.">
+      Cancel
+    </button>
+    <button class="btn primary" id="doorSettleFinalizeBtn"
+      title="Lock in the receipts. Updates the scheduled payout's amount in the database. The actual Stripe charge fires at tomorrow's 5 PM venue-local payout sweep.">
+      Finalize Artist Payment
+    </button>
+  </div>
+  <div id="doorSettleErrorMsg" style="display:none;margin-top:10px;color:#ef4444;font-size:0.78rem;text-align:right;"></div>
+</div>
+</div>
+
 <style>
 /* Invite Status Styles */
 .invite-status {
@@ -3067,8 +3140,9 @@
              below; appears on past gigs only. Posts to
              /api/gigs/{gid}/slots/{sid}/settle for each door-deal slot. -->
         <button type="button" id="settleDealsBtn" style="display:none;
-          margin-top:8px;padding:6px 14px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:5px;color:#fbbf24;font-size:0.75rem;cursor:pointer;font-weight:600;">
-          💰 File Door Receipts
+          margin-top:8px;padding:6px 14px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:5px;color:#fbbf24;font-size:0.75rem;cursor:pointer;font-weight:600;"
+          title="Open the door settlement window. Enter what you collected at the door tonight; we'll compute the artist's total (guarantee + door share) and queue the Stripe charge for tomorrow's 5 PM payout sweep.">
+          Add Door Receipts
         </button>
 
         <!-- Templates row moved to the modal header (upper-right). It's
@@ -3213,7 +3287,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=14"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=165"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=166"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
