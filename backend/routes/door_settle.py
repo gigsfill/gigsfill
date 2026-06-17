@@ -77,10 +77,28 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
         raise HTTPException(400, f"Slot must be booked to settle (current: {slot['status']})")
     if slot["deal_type"] != "door":
         raise HTTPException(400, "Slot is not a door deal — final pay is the listed `pay` field")
-    if slot["settled_at"]:
-        raise HTTPException(400, "This slot has already been settled. Contact admin to revise.")
     if not slot["artist_id"]:
         raise HTTPException(400, "Slot has no booked artist to settle with")
+    # Allow RE-SETTLE up until the scheduled payout actually fires
+    # (status='scheduled'/'test'). Once the parent venue_charge has
+    # moved past those states (charged / paid / transferred) the money
+    # is in motion and changing the amount would desync the books.
+    # Mirrors the gate already used by _save_bounce_check_result logic
+    # — money-state, not time-state, is the canonical lock.
+    if slot["settled_at"]:
+        _parent = db.execute(
+            text("""SELECT status FROM transactions
+                    WHERE gig_id = :gid AND transaction_type = 'venue_charge'
+                    ORDER BY id DESC LIMIT 1"""),
+            {"gid": gig_id}
+        ).mappings().first()
+        _parent_status = (_parent and _parent.get("status")) or ""
+        if _parent_status not in ("scheduled", "test"):
+            raise HTTPException(
+                400,
+                "Settlement already in flight — the venue charge has moved past 'scheduled' "
+                f"(currently '{_parent_status}'). Contact admin to revise."
+            )
 
     final_pay_cents = _compute_settled_pay(
         slot["guarantee_cents"], slot["door_pct"], receipts
@@ -237,17 +255,30 @@ def list_pending_settlements(gig_id: int,
         raise HTTPException(404, "Gig not found")
     check_venue_access(db, gig["venue_id"], user.id)
 
+    # Door slots that are still editable: either never settled
+    # (settled_at IS NULL) OR settled but the parent venue charge is
+    # still in the queue (status='scheduled'/'test') — the venue can
+    # bump receipts up if extra cash gets counted before payout time.
+    # Once the scheduler has charged the card, the row freezes.
     rows = db.execute(
         text("""
             SELECT gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time,
                    gs.deal_type, gs.door_pct, gs.guarantee_cents,
-                   gs.settled_at, a.name as artist_name
+                   gs.settled_at, gs.door_receipts_cents, a.name as artist_name
             FROM gig_slots gs
             LEFT JOIN artists a ON a.id = gs.artist_id
             WHERE gs.gig_id = :gid
               AND gs.deal_type = 'door'
               AND gs.status = 'booked'
-              AND gs.settled_at IS NULL
+              AND (
+                gs.settled_at IS NULL
+                OR EXISTS (
+                  SELECT 1 FROM transactions t
+                  WHERE t.gig_id = gs.gig_id
+                    AND t.transaction_type = 'venue_charge'
+                    AND t.status IN ('scheduled', 'test')
+                )
+              )
             ORDER BY gs.slot_number
         """),
         {"gid": gig_id}

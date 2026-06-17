@@ -1445,7 +1445,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       '$' + ((slot.guarantee_cents || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
     document.getElementById('doorSettleDoorPct').textContent = (slot.door_pct || 0) + '%';
     const inp = document.getElementById('doorSettleReceiptsInput');
-    inp.value = '0.00';
+    // Pre-populate prior receipts when re-opening a settled slot (the
+    // venue is editing — extra cash counted, refunds reconciled, etc.).
+    // Backend door_receipts_cents is the canonical prior value;
+    // settled_at being set means we're in re-edit mode.
+    if (slot.settled_at && slot.door_receipts_cents != null) {
+      const cents = Number(slot.door_receipts_cents) || 0;
+      const dollars = Math.floor(cents / 100);
+      const remainder = (cents % 100).toString().padStart(2, '0');
+      inp.value = dollars.toLocaleString('en-US') + '.' + remainder;
+    } else {
+      inp.value = '0.00';
+    }
     _updateDoorSettleTotal();
     const errEl = document.getElementById('doorSettleErrorMsg');
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
@@ -3275,6 +3286,14 @@ async function renderCalendar() {
     const deleteBtn = document.getElementById('deleteGig');
     const modalSection = document.querySelector('.modal-section');
     const modalTitle = document.getElementById('modalTitle');
+
+    // Surface the templates picker (top-right of the modal) in edit mode
+    // too. The confirm-replace dialog inside applyTemplate's click handler
+    // (search "Apply template?" in this file) already gates the actual
+    // replacement, so picking a template while editing prompts the venue
+    // before overwriting the slot configuration.
+    const _tplRow = document.getElementById('gigTemplatesRow');
+    if (_tplRow) _tplRow.style.display = 'flex';
 
     // Show the modal section (slot builder + title live in there)
     if (modalSection) modalSection.style.display = 'block';

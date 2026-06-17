@@ -6230,6 +6230,12 @@ def batch_blast(request: Request, venue_id: int, data: dict, background_tasks: B
         def _commas(s):
             return ', '.join(x.strip() for x in (s or '').split(',') if x.strip())
 
+        # Door-deal aware pay formatter. For slots with deal_type='door'
+        # this returns "$10.00 guarantee + 50% of door"; for flat slots
+        # the legacy "$15.00" format. Mirrors what the scheduler blast
+        # builder does in _build_slots_html_for_scheduler — both blast
+        # paths need the same door-aware output for consistency.
+        from backend.services.email_dispatch import format_pay_summary_with_sign as _door_pay_fmt
         def _fmt_pay(val):
             try:
                 return f"${float(val):.2f}"
@@ -6246,7 +6252,8 @@ def batch_blast(request: Request, venue_id: int, data: dict, background_tasks: B
             # slots aren't bookable so they're omitted from the email.
             slots = db.execute(
                 text("""SELECT start_time, end_time, pay, artist_type,
-                               band_formats, styles
+                               band_formats, styles,
+                               deal_type, door_pct, guarantee_cents
                         FROM gig_slots
                         WHERE gig_id = :gid AND status = 'open'
                         ORDER BY slot_number ASC"""),
@@ -6283,9 +6290,22 @@ def batch_blast(request: Request, venue_id: int, data: dict, background_tasks: B
                     if sl.get("end_time"):
                         t += " – " + format_time_12hr(sl["end_time"])
                     parts.append(_row("Time", t, indent=field_indent))
-                    sl_pay = override_pay or sl.get("pay") or g.get("pay")
-                    if sl_pay:
-                        parts.append(_row("Pay", _fmt_pay(sl_pay), "#059669", "600", indent=field_indent))
+                    # Door-aware Pay row. When this slot is a door
+                    # split (deal_type='door' with non-zero terms), render
+                    # "$X guarantee + Y% of door". Otherwise fall back to
+                    # flat formatting + the preferred-artist override.
+                    if (sl.get("deal_type") or "").lower() == "door":
+                        pay_str = _door_pay_fmt({
+                            "pay": sl.get("pay"),
+                            "deal_type": sl.get("deal_type"),
+                            "door_pct": sl.get("door_pct"),
+                            "guarantee_cents": sl.get("guarantee_cents"),
+                        }, fallback_pay=g.get("pay"))
+                        parts.append(_row("Pay", pay_str, "#059669", "600", indent=field_indent))
+                    else:
+                        sl_pay = override_pay or sl.get("pay") or g.get("pay")
+                        if sl_pay:
+                            parts.append(_row("Pay", _fmt_pay(sl_pay), "#059669", "600", indent=field_indent))
                     atype  = sl.get("artist_type") or g.get("artist_type")
                     lineup = _commas(sl.get("band_formats") or g.get("band_formats"))
                     styles = _commas(sl.get("styles") or g.get("styles"))
