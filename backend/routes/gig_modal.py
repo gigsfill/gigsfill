@@ -74,7 +74,24 @@ def _slot_status_for_viewer(slot, viewer_type, viewer_id, contract_rows,
         elif s_status == "pending_contract":
             relationship = "mine_pending_contract" if is_my_slot else "venue_pending_contract"
         elif s_status == "awaiting_venue_contract":
-            relationship = "mine_awaiting_venue" if is_my_slot else "venue_awaiting_upload"
+            # Bug fix (Jun 2026): `awaiting_venue_contract` can mean two
+            # very different things depending on contract_type:
+            #   - pdf_upload      → artist downloaded, signed, uploaded
+            #     back; venue must now upload their countersigned PDF
+            #     (the legacy "venue_awaiting_upload" UI).
+            #   - auto_generated / custom_builder → artist clicked Sign
+            #     on the digital contract; venue must COUNTERSIGN with
+            #     ONE click (no PDF upload involved).
+            # Routing both to venue_awaiting_upload caused the gig modal
+            # to show "Upload Contract PDF" for digital contracts the
+            # artist had already signed — confusing and wrong.
+            if contract_type == "pdf_upload":
+                relationship = "mine_awaiting_venue" if is_my_slot else "venue_awaiting_upload"
+            else:
+                # Digital flow — countersign UI lives inside the
+                # venue_pending_contract branch (gig-modal.js renders
+                # _countersignBlock when contract_status == 'artist_signed').
+                relationship = "mine_awaiting_venue" if is_my_slot else "venue_pending_contract"
         elif s_status == "pending_venue_approval":
             relationship = "mine_pending_approval" if is_my_slot else "venue_pending_approval"
         else:
