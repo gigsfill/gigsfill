@@ -913,6 +913,7 @@
       <!-- Sub-tabs -->
       <div class="ps-subtabs">
         <button class="ps-subtab active" onclick="switchPsTab('email')">Email Settings</button>
+        <button class="ps-subtab" onclick="switchPsTab('text')">Text Settings</button>
         <button class="ps-subtab" onclick="switchPsTab('payment')">Payment Settings</button>
         <button class="ps-subtab" onclick="switchPsTab('accounting')">Payment Accounting</button>
       </div>
@@ -1069,6 +1070,30 @@
             </div>
           </div>
           <div id="bounceCheckStatus" style="margin-top:10px;font-size:0.72rem;color:var(--text-gray);"></div>
+        </div>
+      </div>
+
+      <!-- ── Sub-tab: Text Settings ── -->
+      <div class="ps-subtab-content" id="ps-text">
+        <div class="content-card" style="padding:14px;">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Texting (SMS)</div>
+          <p style="color:var(--text-gray);font-size:0.8rem;line-height:1.55;margin:0 0 14px;">
+            Master switch for the platform's SMS notifications feature. When this is <strong style="color:var(--text);">OFF</strong>
+            (the default until a paid SMS provider is wired up), all user-facing SMS opt-in UI is hidden
+            site-wide and no carrier email-to-SMS dispatch fires. The underlying infrastructure (carrier
+            list, user preferences columns, dispatch functions) stays in place so flipping this back ON
+            re-exposes the existing flow without re-implementation.
+          </p>
+          <label style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;cursor:pointer;">
+            <input type="checkbox" id="textingEnabled" onchange="autoSaveSettings()" style="width:18px;height:18px;cursor:pointer;">
+            <div>
+              <div style="font-size:0.85rem;font-weight:600;color:var(--text);">Texting Enabled</div>
+              <div style="font-size:0.72rem;color:var(--text-gray);margin-top:2px;">When checked, users can opt into SMS notifications from their profile. When unchecked, the SMS sections disappear from the site.</div>
+            </div>
+          </label>
+          <div style="margin-top:14px;padding:10px 14px;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:6px;font-size:0.72rem;color:var(--text-gray);line-height:1.5;">
+            <strong style="color:#fbbf24;">Heads up:</strong> the current SMS path uses carrier email-to-SMS gateways (free but unreliable on AT&amp;T / Verizon). When a real provider (Twilio / AWS SNS) is configured, more options will land in this section.
+          </div>
         </div>
       </div>
 
@@ -2020,7 +2045,7 @@ function switchDbLogsTab(tab) {
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
-<script src="/app/static/js/admin-platform.js?v=5"></script>
+<script src="/app/static/js/admin-platform.js?v=6"></script>
 <script src="/app/static/js/admin-payments.js?v=25"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=2"></script>

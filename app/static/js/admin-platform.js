@@ -439,6 +439,8 @@ window._adminConfirm = function(opts) {
       // the PUT endpoint skips any value starting with "•".
       const cb = document.getElementById('bounceCheckEnabled');
       if (cb) cb.checked = !!d.bounce_check_enabled;
+      const tx = document.getElementById('textingEnabled');
+      if (tx) tx.checked = !!d.texting_enabled;
       set('bounceImapServer',   d.bounce_check_imap_server);
       set('bounceImapPort',     d.bounce_check_imap_port);
       set('bounceImapUsername', d.bounce_check_imap_username);
@@ -541,6 +543,11 @@ window._adminConfirm = function(opts) {
     // the user actually clears it).
     const cb = document.getElementById('bounceCheckEnabled');
     if (cb) payload.bounce_check_enabled = cb.checked ? 'true' : 'false';
+    // Texting (SMS) master switch — admin-only toggle that gates all
+    // user-facing SMS UI site-wide. See /api/public/texting-status for
+    // the public read endpoint the frontend uses to hide the SMS section.
+    const tx = document.getElementById('textingEnabled');
+    if (tx) payload.texting_enabled = tx.checked ? 'true' : 'false';
     [
       ['bounceImapServer',   'bounce_check_imap_server'],
       ['bounceImapPort',     'bounce_check_imap_port'],

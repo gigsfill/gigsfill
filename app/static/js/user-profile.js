@@ -404,11 +404,30 @@ async function loadEmailPreferences() {
     const hasArtists = artistsResponse.ok && (await artistsResponse.json()).length > 0;
     const hasVenues = venuesResponse.ok && (await venuesResponse.json()).length > 0;
     
-    // Load email prefs, SMS prefs, carriers, and user data in parallel
+    // Texting (SMS) is gated by an admin master switch. If it's off, the
+    // SMS Setup section stays display:none (already set on the element)
+    // and we skip the carrier / SMS-prefs fetches entirely. Cheap public
+    // endpoint, no auth needed. Once admin flips Texting Enabled = ON
+    // in Platform Settings → Text Settings, this resolves true and the
+    // existing flow takes over unchanged.
+    let textingEnabled = false;
+    try {
+      const tx = await fetch('/api/public/texting-status', { credentials: 'omit' });
+      if (tx.ok) {
+        const txData = await tx.json();
+        textingEnabled = !!txData.enabled;
+      }
+    } catch (_) { /* default off */ }
+    const smsSection = document.getElementById('smsSetupSection');
+    if (smsSection) smsSection.style.display = textingEnabled ? '' : 'none';
+
+    // Load email prefs, SMS prefs, carriers, and user data in parallel.
+    // SMS prefs + carriers are only fetched when texting is enabled —
+    // saves two round trips on every profile load while the feature is off.
     const [emailRes, smsRes, carrierRes, userRes] = await Promise.all([
       fetch('/api/user-email-preferences', { credentials: 'include' }),
-      fetch('/api/user-sms-preferences', { credentials: 'include' }),
-      fetch('/api/sms-carriers', { credentials: 'include' }),
+      textingEnabled ? fetch('/api/user-sms-preferences', { credentials: 'include' }) : Promise.resolve({ ok: false }),
+      textingEnabled ? fetch('/api/sms-carriers', { credentials: 'include' }) : Promise.resolve({ ok: false }),
       fetch('/api/me', { credentials: 'include' })
     ]);
     

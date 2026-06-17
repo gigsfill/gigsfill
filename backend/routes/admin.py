@@ -538,6 +538,10 @@ def get_settings(admin=Depends(check_admin), db=Depends(get_db)):
         'bounce_check_imap_password': _mask(settings.get('bounce_check_imap_password', '')),
         'bounce_check_last_run_at':   settings.get('bounce_check_last_run_at', ''),
         'bounce_check_last_result':   settings.get('bounce_check_last_result', ''),
+        # Texting (SMS) global on/off — defaults to false until a real
+        # SMS provider (Twilio etc.) is wired up. While false, all
+        # user-facing SMS UI is hidden site-wide and dispatch is no-op'd.
+        'texting_enabled':            str(settings.get('texting_enabled', False)).lower() in ('true', '1', 'yes'),
     }
 
 @router.put("/api/admin/settings")
@@ -579,6 +583,8 @@ async def update_settings(request: Request, admin=Depends(check_admin), db=Depen
         'bounce_check_imap_port':     'bounce_check_imap_port',
         'bounce_check_imap_username': 'bounce_check_imap_username',
         'bounce_check_imap_password': 'bounce_check_imap_password',
+        # Texting (SMS) global on/off — see GET handler for docstring.
+        'texting_enabled':            'texting_enabled',
     }
     _RATE_KEYS = {'rate_login','rate_signup','rate_password_reset','rate_support','rate_email_send','rate_aff_track'}
 

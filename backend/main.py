@@ -523,6 +523,28 @@ def maintenance_status():
     except Exception:
         return {"maintenance": False, "message": ""}
 
+
+@app.get("/api/public/texting-status")
+def public_texting_status():
+    """Public endpoint — returns whether the platform's texting (SMS)
+    feature is globally enabled. Defaults to false until admin flips the
+    toggle in Platform Settings → Text Settings. Frontend uses this to
+    show / hide the SMS Setup UI in user-profile.html and any other
+    surface that asks the user about texting. Cached for ~60s on the
+    client side; no auth required."""
+    try:
+        import sqlite3, os as _os
+        _db_path = _os.environ.get('GIGSFILL_DB_PATH', '/opt/gigsfill/backend.db')
+        _conn = sqlite3.connect(_db_path, timeout=2)
+        _row = _conn.execute(
+            "SELECT setting_value FROM platform_settings WHERE setting_key = 'texting_enabled'"
+        ).fetchone()
+        _conn.close()
+        enabled = bool(_row and str(_row[0]).lower() in ('true', '1'))
+        return {"enabled": enabled}
+    except Exception:
+        return {"enabled": False}
+
 @app.get("/api/validate-city")
 def validate_city(city: str = "", state: str = ""):
     """Check if a city+state exists in our US cities database. Returns matching state if only city provided."""

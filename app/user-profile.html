@@ -451,7 +451,11 @@
              Verizon filter automated messages more aggressively. Clear
              "experimental" framing in the UI so users have realistic
              expectations. Twilio integration is on the roadmap. -->
-        <div id="smsSetupSection" style="background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 8px; padding: 16px 20px; margin-bottom: 28px;">
+        <!-- Hidden by default — revealed by user-profile.js after a
+             cheap GET /api/public/texting-status confirms the admin has
+             toggled "Texting Enabled" on. Until that flips, the section
+             stays completely out of the DOM flow. -->
+        <div id="smsSetupSection" style="display:none;background: rgba(6,182,212,0.08); border: 1px solid rgba(6,182,212,0.25); border-radius: 8px; padding: 16px 20px; margin-bottom: 28px;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
             <span style="font-size: 1.1rem;">📱</span>
             <strong style="color: var(--cyan); font-size: 0.9rem;">Text Message Setup</strong>
@@ -1110,7 +1114,7 @@
   <script src="/app/static/js/modals.js"></script>
   <script src="/app/static/js/gf-modals.js?v=6"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script src="/app/static/js/user-profile.js?v=2"></script>
+  <script src="/app/static/js/user-profile.js?v=3"></script>
   <script src="/app/static/js/user-affiliate.js?v=4"></script>
   <script src="/app/static/js/user-availability.js?v=5"></script>
   
