@@ -313,62 +313,166 @@ window.addEventListener('affRecommendSent', () => {
 
 // ── Sent Emails List ──────────────────────────────────────────────────────────
 
+// Shared state for the Emails table — sort key/dir, current page, search.
+// Defaults: sort by Sent DESC (most recent first); 10 per page.
+const _affEmails = { all: [], sortKey: 'sent_at', sortDir: 'desc', page: 1, perPage: 10, q: '' };
+
 async function loadAffMyEmails() {
   const el = document.getElementById('affEmailsList');
   if (!el) return;
   try {
     const r = await fetch('/api/affiliate/my-emails', { credentials: 'include' });
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const emails = await r.json();
-
-    if (!emails.length) {
-      el.innerHTML = '<div style="font-size:0.78rem;color:var(--text-gray);text-align:center;padding:8px 0;">No recommendations sent yet. Send one above!</div>';
-      return;
-    }
-
-    const badge = s => ({
-      converted:         '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(16,185,129,0.15);color:#10b981;font-weight:700;">✓ Converted</span>',
-      claimed_by_other:  '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(245,158,11,0.12);color:#f59e0b;">Claimed by other</span>',
-      signed_up_no_link: '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(59,130,246,0.12);color:#60a5fa;">Signed up</span>',
-      sent:              '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(107,114,128,0.15);color:#9ca3af;">Sent</span>',
-    }[s] || '');
-
-    // (Jun 2026) Dropped the "Sent Recommendations" label — the section
-    // header on the card above already says "Recommend GigsFill — Emails
-    // Sent" so the second header was redundant. Columns + data now all
-    // left-aligned per cell (same convention as the Invite Artists table)
-    // so each column reads as a single vertical lane.
-    el.innerHTML = `
-      <table style="width:100%;border-collapse:collapse;">
-        <thead><tr style="border-bottom:1px solid var(--border);">
-          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Recipient</th>
-          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Email</th>
-          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Sent</th>
-          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Status</th>
-          <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Action</th>
-        </tr></thead>
-        <tbody>${emails.map(e => `
-          <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
-            <td style="padding:6px 8px;text-align:left;color:var(--text);font-size:0.78rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-              ${e.recipient_name ? esc(e.recipient_name) : '<span style="color:var(--text-gray);">—</span>'}
-            </td>
-            <td style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-              ${esc(e.recipient_email)}
-            </td>
-            <td style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.72rem;white-space:nowrap;">
-              ${new Date(e.sent_at).toLocaleDateString()}
-            </td>
-            <td style="padding:6px 8px;text-align:left;">${badge(e.status)}</td>
-            <td style="padding:6px 8px;text-align:left;">
-              <button onclick="window.resendAffRecommend(${e.id}, this)"
-                style="padding:3px 10px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.3);border-radius:4px;color:var(--cyan);font-size:0.68rem;cursor:pointer;white-space:nowrap;">
-                Resend
-              </button>
-            </td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
+    if (!r.ok) { el.innerHTML = ''; _affEmails.all = []; return; }
+    _affEmails.all = await r.json();
+    // Reset to page 1 on fresh load (after a send / resend etc.) so the
+    // user always lands on the most-recently-changed row's page.
+    _affEmails.page = 1;
+    _renderAffEmails();
   } catch(e) { el.innerHTML = ''; }
+}
+
+// Sort + filter + paginate, then render. Pure DOM redraw — state lives
+// in _affEmails so the sort/page/search persists across re-renders
+// triggered by Resend (which calls loadAffMyEmails again).
+function _renderAffEmails() {
+  const el = document.getElementById('affEmailsList');
+  if (!el) return;
+  const all = _affEmails.all || [];
+
+  if (!all.length) {
+    el.innerHTML = '<div style="font-size:0.78rem;color:var(--text-gray);text-align:center;padding:8px 0;">No recommendations sent yet. Send one above!</div>';
+    return;
+  }
+
+  const badge = s => ({
+    converted:         '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(16,185,129,0.15);color:#10b981;font-weight:700;">✓ Converted</span>',
+    claimed_by_other:  '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(245,158,11,0.12);color:#f59e0b;">Claimed by other</span>',
+    signed_up_no_link: '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(59,130,246,0.12);color:#60a5fa;">Signed up</span>',
+    sent:              '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(107,114,128,0.15);color:#9ca3af;">Sent</span>',
+  }[s] || '');
+
+  // Search — matches Recipient name + Email + Status (case-insensitive).
+  const q = (_affEmails.q || '').trim().toLowerCase();
+  const filtered = q
+    ? all.filter(e =>
+        (e.recipient_name  || '').toLowerCase().includes(q) ||
+        (e.recipient_email || '').toLowerCase().includes(q) ||
+        (e.status          || '').toLowerCase().includes(q))
+    : all;
+
+  // Sort by the configured key/dir. Date columns parsed as ms; everything
+  // else compared as case-insensitive strings (handles status, name, etc).
+  const key = _affEmails.sortKey;
+  const dir = _affEmails.sortDir === 'asc' ? 1 : -1;
+  const valOf = (row) => {
+    const v = row[key];
+    if (key === 'sent_at') return v ? new Date(v).getTime() : 0;
+    return (v == null ? '' : String(v)).toLowerCase();
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    const va = valOf(a), vb = valOf(b);
+    if (va < vb) return -1 * dir;
+    if (va > vb) return  1 * dir;
+    return 0;
+  });
+
+  // Paginate.
+  const perPage = _affEmails.perPage;
+  const totalPages = Math.max(1, Math.ceil(sorted.length / perPage));
+  if (_affEmails.page > totalPages) _affEmails.page = totalPages;
+  const start = (_affEmails.page - 1) * perPage;
+  const pageRows = sorted.slice(start, start + perPage);
+
+  const arrow = (col) =>
+    _affEmails.sortKey === col
+      ? `<span style="font-size:0.7rem;opacity:0.85;">${_affEmails.sortDir === 'asc' ? '▲' : '▼'}</span>`
+      : '<span style="font-size:0.7rem;opacity:0.25;">↕</span>';
+  const th = (col, label) =>
+    `<th onclick="affEmailsSort('${col}')" style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;cursor:pointer;user-select:none;white-space:nowrap;">${label} ${arrow(col)}</th>`;
+
+  const pageNav = totalPages > 1
+    ? `<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px;font-size:0.72rem;color:var(--text-gray);">
+        <button onclick="affEmailsPage(${_affEmails.page - 1})" ${_affEmails.page <= 1 ? 'disabled' : ''}
+          style="padding:3px 9px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:4px;color:${_affEmails.page <= 1 ? 'var(--text-muted)' : 'var(--text)'};font-size:0.7rem;cursor:${_affEmails.page <= 1 ? 'default' : 'pointer'};">‹ Prev</button>
+        <span>Page ${_affEmails.page} of ${totalPages} <span style="color:var(--text-muted);">(${sorted.length}${q ? ' filtered' : ''})</span></span>
+        <button onclick="affEmailsPage(${_affEmails.page + 1})" ${_affEmails.page >= totalPages ? 'disabled' : ''}
+          style="padding:3px 9px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:4px;color:${_affEmails.page >= totalPages ? 'var(--text-muted)' : 'var(--text)'};font-size:0.7rem;cursor:${_affEmails.page >= totalPages ? 'default' : 'pointer'};">Next ›</button>
+      </div>`
+    : '';
+
+  const emptyFiltered = q && !sorted.length
+    ? '<tr><td colspan="5" style="padding:14px 8px;color:var(--text-gray);font-size:0.78rem;text-align:center;">No matches for "' + esc(q) + '"</td></tr>'
+    : '';
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:6px;">
+      <input id="affEmailsSearchInput" type="search" placeholder="Search emails…" value="${esc(_affEmails.q || '')}" oninput="affEmailsSearch(this.value)"
+        style="padding:4px 10px;background:#0f1116;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.72rem;width:180px;">
+    </div>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr style="border-bottom:1px solid var(--border);">
+        ${th('recipient_name', 'Recipient')}
+        ${th('recipient_email', 'Email')}
+        ${th('sent_at', 'Sent')}
+        ${th('status', 'Status')}
+        <th style="padding:5px 8px;text-align:left;font-size:0.68rem;color:var(--text-gray);font-weight:600;">Action</th>
+      </tr></thead>
+      <tbody>${emptyFiltered || pageRows.map(e => `
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+          <td style="padding:6px 8px;text-align:left;color:var(--text);font-size:0.78rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${e.recipient_name ? esc(e.recipient_name) : '<span style="color:var(--text-gray);">—</span>'}
+          </td>
+          <td style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${esc(e.recipient_email)}
+          </td>
+          <td style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.72rem;white-space:nowrap;">
+            ${new Date(e.sent_at).toLocaleDateString()}
+          </td>
+          <td style="padding:6px 8px;text-align:left;">${badge(e.status)}</td>
+          <td style="padding:6px 8px;text-align:left;">
+            <button onclick="window.resendAffRecommend(${e.id}, this)"
+              style="padding:3px 10px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.3);border-radius:4px;color:var(--cyan);font-size:0.68rem;cursor:pointer;white-space:nowrap;">
+              Resend
+            </button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    ${pageNav}`;
+}
+
+// Column-header click — same column toggles direction, different column
+// snaps to sensible default (DESC for dates / status, ASC for names).
+function affEmailsSort(col) {
+  if (_affEmails.sortKey === col) {
+    _affEmails.sortDir = _affEmails.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _affEmails.sortKey = col;
+    _affEmails.sortDir = (col === 'sent_at' || col === 'status') ? 'desc' : 'asc';
+  }
+  _affEmails.page = 1;
+  _renderAffEmails();
+}
+function affEmailsPage(n) {
+  const totalPages = Math.max(1, Math.ceil((_affEmails.all || []).length / _affEmails.perPage));
+  if (n < 1 || n > totalPages) return;
+  _affEmails.page = n;
+  _renderAffEmails();
+}
+// Search is debounced via setTimeout so each keystroke doesn't redraw —
+// 150ms is the typical "feels live" threshold.
+let _affEmailsSearchTimer = null;
+function affEmailsSearch(value) {
+  if (_affEmailsSearchTimer) clearTimeout(_affEmailsSearchTimer);
+  _affEmailsSearchTimer = setTimeout(() => {
+    _affEmails.q = value;
+    _affEmails.page = 1;
+    _renderAffEmails();
+    // Restore focus + cursor to the search input after redraw so the
+    // user can keep typing without re-clicking the field.
+    const inp = document.getElementById('affEmailsSearchInput');
+    if (inp) { inp.focus(); inp.setSelectionRange(value.length, value.length); }
+  }, 150);
 }
 
 async function resendAffRecommend(emailId, btn) {
@@ -402,6 +506,9 @@ async function resendAffRecommend(emailId, btn) {
 // ── Referrals List (expandable rows) ──────────────────────────────────────────
 
 let _affReferrals = [];
+// State for the Referred Venues & Earnings table — defaults: sort by
+// total_earned_cents DESC (highest first), 10 per page.
+const _affRefs = { sortKey: 'total_earned_cents', sortDir: 'desc', page: 1, perPage: 10, q: '' };
 
 async function loadAffMyReferrals() {
   const el = document.getElementById('affReferralsList');
@@ -410,6 +517,7 @@ async function loadAffMyReferrals() {
     const r = await fetch('/api/affiliate/my-referrals', { credentials: 'include' });
     if (!r.ok) { el.innerHTML = '<div style="color:var(--text-gray);font-size:0.8rem;text-align:center;padding:12px;">No referrals yet</div>'; return; }
     _affReferrals = await r.json();
+    _affRefs.page = 1;
     _renderAffReferrals(el);
   } catch(e) {
     el.innerHTML = '<div style="color:#ef4444;font-size:0.78rem;text-align:center;padding:12px;">Error loading referrals</div>';
@@ -423,24 +531,89 @@ function _renderAffReferrals(el) {
     return;
   }
   const hasEarnings = _affReferrals.some(rv => rv.gig_count > 0);
-  let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+
+  // Search — matches venue name + city + state.
+  const q = (_affRefs.q || '').trim().toLowerCase();
+  const filtered = q
+    ? _affReferrals.filter(rv =>
+        (rv.venue_name || '').toLowerCase().includes(q) ||
+        (rv.city       || '').toLowerCase().includes(q) ||
+        (rv.state      || '').toLowerCase().includes(q))
+    : _affReferrals;
+
+  // Sort. Numeric columns use number compare; venue name / location strings.
+  const key = _affRefs.sortKey;
+  const dir = _affRefs.sortDir === 'asc' ? 1 : -1;
+  const valOf = (rv) => {
+    if (key === 'total_earned_cents' || key === 'unpaid_cents' || key === 'gig_count') {
+      return Number(rv[key] || 0);
+    }
+    if (key === 'current_rate_percent') {
+      const linkedDays = Math.floor((Date.now() - new Date(rv.linked_at)) / 86400000);
+      const cur = (rv.current_rate_percent !== undefined && rv.current_rate_percent !== null)
+        ? rv.current_rate_percent
+        : (linkedDays >= (rv.reduced_after_days||365) ? rv.reduced_rate_percent : rv.initial_rate_percent);
+      return Number(cur || 0);
+    }
+    return (rv[key] == null ? '' : String(rv[key])).toLowerCase();
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    const va = valOf(a), vb = valOf(b);
+    if (va < vb) return -1 * dir;
+    if (va > vb) return  1 * dir;
+    return 0;
+  });
+
+  // Paginate.
+  const perPage = _affRefs.perPage;
+  const totalPages = Math.max(1, Math.ceil(sorted.length / perPage));
+  if (_affRefs.page > totalPages) _affRefs.page = totalPages;
+  const start = (_affRefs.page - 1) * perPage;
+  const pageRows = sorted.slice(start, start + perPage);
+
+  const arrow = (col) =>
+    _affRefs.sortKey === col
+      ? `<span style="font-size:0.7rem;opacity:0.85;">${_affRefs.sortDir === 'asc' ? '▲' : '▼'}</span>`
+      : '<span style="font-size:0.7rem;opacity:0.25;">↕</span>';
+  const th = (col, label, align) =>
+    `<th onclick="affRefsSort('${col}')" style="padding:7px 8px;text-align:${align||'left'};color:var(--text-gray);font-size:0.7rem;font-weight:600;cursor:pointer;user-select:none;white-space:nowrap;">${label} ${arrow(col)}</th>`;
+
+  const pageNav = totalPages > 1
+    ? `<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px;font-size:0.72rem;color:var(--text-gray);">
+        <button onclick="affRefsPage(${_affRefs.page - 1})" ${_affRefs.page <= 1 ? 'disabled' : ''}
+          style="padding:3px 9px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:4px;color:${_affRefs.page <= 1 ? 'var(--text-muted)' : 'var(--text)'};font-size:0.7rem;cursor:${_affRefs.page <= 1 ? 'default' : 'pointer'};">‹ Prev</button>
+        <span>Page ${_affRefs.page} of ${totalPages} <span style="color:var(--text-muted);">(${sorted.length}${q ? ' filtered' : ''})</span></span>
+        <button onclick="affRefsPage(${_affRefs.page + 1})" ${_affRefs.page >= totalPages ? 'disabled' : ''}
+          style="padding:3px 9px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:4px;color:${_affRefs.page >= totalPages ? 'var(--text-muted)' : 'var(--text)'};font-size:0.7rem;cursor:${_affRefs.page >= totalPages ? 'default' : 'pointer'};">Next ›</button>
+      </div>`
+    : '';
+
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:10px;flex-wrap:wrap;">
     <div style="font-size:0.72rem;font-weight:700;color:var(--text-gray);text-transform:uppercase;letter-spacing:.04em;">Referred Venues & Earnings</div>
-    ${hasEarnings ? `<div style="display:flex;gap:6px;">
-      <button onclick="exportAffEarnings('pdf')" style="padding:4px 12px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:5px;color:#f87171;font-size:0.68rem;font-weight:600;cursor:pointer;">PDF</button>
-      <button onclick="exportAffEarnings('excel')" style="padding:4px 12px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:5px;color:#34d399;font-size:0.68rem;font-weight:600;cursor:pointer;">Excel</button>
-    </div>` : ''}
+    <div style="display:flex;gap:6px;align-items:center;">
+      <input id="affRefsSearchInput" type="search" placeholder="Search venues…" value="${esc(_affRefs.q || '')}" oninput="affRefsSearch(this.value)"
+        style="padding:4px 10px;background:#0f1116;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.72rem;width:180px;">
+      ${hasEarnings ? `
+        <button onclick="exportAffEarnings('pdf')" style="padding:4px 12px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:5px;color:#f87171;font-size:0.68rem;font-weight:600;cursor:pointer;">PDF</button>
+        <button onclick="exportAffEarnings('excel')" style="padding:4px 12px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:5px;color:#34d399;font-size:0.68rem;font-weight:600;cursor:pointer;">Excel</button>
+      ` : ''}
+    </div>
   </div>
   <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
     <thead><tr style="border-bottom:1px solid var(--border);">
-      <th style="padding:7px 8px;text-align:left;color:var(--text-gray);font-size:0.7rem;font-weight:600;">Venue</th>
-      <th style="padding:7px 4px;text-align:center;color:var(--text-gray);font-size:0.7rem;font-weight:600;">Gigs</th>
-      <th style="padding:7px 8px;text-align:right;color:var(--text-gray);font-size:0.7rem;font-weight:600;">Total Earned</th>
-      <th style="padding:7px 8px;text-align:right;color:var(--text-gray);font-size:0.7rem;font-weight:600;">Unpaid</th>
-      <th style="padding:7px 8px;text-align:right;color:var(--text-gray);font-size:0.7rem;font-weight:600;">Rate</th>
+      ${th('venue_name', 'Venue', 'left')}
+      ${th('gig_count', 'Gigs', 'center')}
+      ${th('total_earned_cents', 'Total Earned', 'right')}
+      ${th('unpaid_cents', 'Unpaid', 'right')}
+      ${th('current_rate_percent', 'Rate', 'right')}
     </tr></thead>
     <tbody id="affReferralsBody">`;
 
-  _affReferrals.forEach((rv, idx) => {
+  if (!sorted.length && q) {
+    html += `<tr><td colspan="5" style="padding:14px 8px;color:var(--text-gray);font-size:0.78rem;text-align:center;">No matches for "${esc(q)}"</td></tr>`;
+  }
+
+  pageRows.forEach((rv) => {
     const linkedDays = Math.floor((Date.now() - new Date(rv.linked_at)) / 86400000);
     // Audit fix (May 2026 part 9c): prefer server-computed `current_rate_percent`
     // (live admin setting) over the row snapshot. Falls back to the snapshot if
@@ -473,8 +646,39 @@ function _renderAffReferrals(el) {
     </tr>`;
   });
 
-  html += '</tbody></table>';
+  html += '</tbody></table>' + pageNav;
   el.innerHTML = html;
+}
+
+// Column-header click for the Venues table — same column toggles
+// direction; switching column snaps to DESC for money/count, ASC for
+// names.
+function affRefsSort(col) {
+  if (_affRefs.sortKey === col) {
+    _affRefs.sortDir = _affRefs.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _affRefs.sortKey = col;
+    _affRefs.sortDir = (col === 'venue_name') ? 'asc' : 'desc';
+  }
+  _affRefs.page = 1;
+  _renderAffReferrals(document.getElementById('affReferralsList'));
+}
+function affRefsPage(n) {
+  const totalPages = Math.max(1, Math.ceil(_affReferrals.length / _affRefs.perPage));
+  if (n < 1 || n > totalPages) return;
+  _affRefs.page = n;
+  _renderAffReferrals(document.getElementById('affReferralsList'));
+}
+let _affRefsSearchTimer = null;
+function affRefsSearch(value) {
+  if (_affRefsSearchTimer) clearTimeout(_affRefsSearchTimer);
+  _affRefsSearchTimer = setTimeout(() => {
+    _affRefs.q = value;
+    _affRefs.page = 1;
+    _renderAffReferrals(document.getElementById('affReferralsList'));
+    const inp = document.getElementById('affRefsSearchInput');
+    if (inp) { inp.focus(); inp.setSelectionRange(value.length, value.length); }
+  }, 150);
 }
 
 const _affVenuePages = {};
@@ -615,16 +819,37 @@ async function exportAffEarnings(fmt) {
     a.download = `affiliate-earnings-${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
   } else {
-    // PDF via print-friendly HTML
+    // PDF via print-friendly HTML. Landscape A4 so every column fits on
+    // a single line — portrait was forcing the table into a multi-line
+    // wrap mess with 11 columns. Right-align money/rate cols, tighten
+    // font-size + padding so even long venue names + artist names sit
+    // on one row. @page size:landscape opens the print dialog with the
+    // right orientation pre-selected; @media print enforces it on save.
     const totalEarned = allRows.reduce((s,e) => s + (e.earned_cents||0), 0);
-    let tableRows = rows.map(r => `<tr>${r.map((v,i) => `<td style="border:1px solid #ddd;padding:4px 8px;font-size:11px;${i>=6&&i<=8?'text-align:right;':''}">${v}</td>`).join('')}</tr>`).join('');
+    let tableRows = rows.map(r => `<tr>${r.map((v,i) => `<td style="border:1px solid #ddd;padding:3px 6px;font-size:9.5px;${i>=6&&i<=8?'text-align:right;':''}white-space:nowrap;">${v}</td>`).join('')}</tr>`).join('');
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Affiliate Earnings</title>
-    <style>body{font-family:Arial,sans-serif;margin:20px;}h2{color:#1a1a2e;}table{border-collapse:collapse;width:100%;}th{background:#1a1a2e;color:#fff;padding:6px 8px;font-size:11px;text-align:left;}
-    .total{font-weight:700;margin-top:10px;text-align:right;}</style></head>
-    <body><h2>Affiliate Earnings Report</h2><p style="font-size:12px;color:#555;">Exported ${new Date().toLocaleDateString()}</p>
-    <table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${tableRows}</tbody></table>
-    <div class="total">Total Earned: $${(totalEarned/100).toFixed(2)}</div>
-    <script>window.onload=()=>{window.print();}<\/script></body></html>`;
+    <style>
+      @page { size: A4 landscape; margin: 10mm; }
+      @media print { @page { size: landscape; } }
+      body { font-family: Arial, sans-serif; margin: 10mm; }
+      h2 { color:#1a1a2e; margin: 0 0 4px 0; font-size: 16px; }
+      .meta { font-size:10px; color:#555; margin: 0 0 8px 0; }
+      table { border-collapse: collapse; width: 100%; table-layout: auto; }
+      th { background:#1a1a2e; color:#fff; padding:5px 6px; font-size:10px;
+           text-align:left; white-space:nowrap; }
+      td { vertical-align: top; }
+      .total { font-weight:700; margin-top:8px; text-align:right; font-size:11px; }
+    </style></head>
+    <body>
+      <h2>Affiliate Earnings Report</h2>
+      <p class="meta">Exported ${new Date().toLocaleDateString()} &middot; ${rows.length} gig${rows.length===1?'':'s'} across ${new Set(allRows.map(e=>e.venue_name)).size} venue${new Set(allRows.map(e=>e.venue_name)).size===1?'':'s'}</p>
+      <table>
+        <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+      <div class="total">Total Earned: $${(totalEarned/100).toFixed(2)}</div>
+      <script>window.onload=()=>{window.print();}<\/script>
+    </body></html>`;
     const w = window.open('','_blank'); w.document.write(html); w.document.close();
   }
 }
@@ -950,3 +1175,11 @@ window.toggleAffVenueExpand    = toggleAffVenueExpand;
 window.loadAffVenueEarnings    = loadAffVenueEarnings;
 window.exportAffEarnings       = exportAffEarnings;
 window.checkAffW9Prompt        = checkAffW9Prompt;
+// Sortable / searchable / paginated table handlers — inline onclick=
+// and oninput= bindings in the rendered tables call these.
+window.affEmailsSort           = affEmailsSort;
+window.affEmailsPage           = affEmailsPage;
+window.affEmailsSearch         = affEmailsSearch;
+window.affRefsSort             = affRefsSort;
+window.affRefsPage             = affRefsPage;
+window.affRefsSearch           = affRefsSearch;
