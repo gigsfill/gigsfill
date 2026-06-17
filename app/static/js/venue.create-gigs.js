@@ -1446,16 +1446,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (settleDealsBtn) settleDealsBtn.addEventListener('click', _openDealSettle);
 
   // Reveal Settle button when viewing a past gig with door-deal slots.
-  // Light heuristic: show it whenever selectedGig.id exists and the gig
-  // date is in the past. (The settle endpoint will 400 if nothing
-  // pending, which is fine — no harm shown.)
+  // Show the button as soon as the gig STARTS (was: after midnight of
+  // the gig day). Venues count the cash drawer at end of night and want
+  // to settle on the spot — making them wait until 12 AM is annoying
+  // and risky (cash sits unentered overnight). The actual settlement
+  // still requires the slot to be `booked` and not yet settled
+  // (door_settle.py enforces both, plus deal_type='door'), so showing
+  // the button early is safe — if nothing's settle-eligible the modal
+  // says "No door-deal slots to settle." For multi-slot gigs the gate
+  // uses the gig's start_time, which is the earliest slot's start
+  // (slot ordering is by start_time ASC).
   window._maybeShowSettleBtn = function(gig) {
     if (!settleDealsBtn) return;
     settleDealsBtn.style.display = 'none';
     if (!gig || !gig.id || !gig.date) return;
     try {
-      const gd = new Date(gig.date + 'T23:59:59');
-      if (gd < new Date()) settleDealsBtn.style.display = 'inline-flex';
+      // start_time may be HH:MM or HH:MM:SS; fall back to 00:00 so a
+      // missing start_time still shows the button on the gig date.
+      const startStr = (gig.start_time || '00:00').slice(0, 5);
+      const startDt = new Date(gig.date + 'T' + startStr + ':00');
+      if (startDt <= new Date()) settleDealsBtn.style.display = 'inline-flex';
     } catch (_) {}
   };
 
