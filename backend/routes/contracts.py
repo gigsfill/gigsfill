@@ -260,19 +260,11 @@ def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int) -> st
     gig_date = gig["date"] or ""
     start_time = format_time_12hr(gig.get("start_time", ""))
     end_time = format_time_12hr(gig.get("end_time", ""))
-    pay = float(gig.get("pay", 0) or 0)
-    
-    # Check for pay override from preferred_artists
-    pay_override = db.execute(
-        text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid AND status = 'approved'"),
-        {"vid": venue_id, "aid": artist_id}
-    ).mappings().first()
-    if pay_override and pay_override["pay_dollars_override"] is not None:
-        override_pay = float(pay_override["pay_dollars_override"]) + float(pay_override["pay_cents_override"] or 0) / 100
-        if override_pay > pay:
-            pay = override_pay
-    
-    pay_str = f"${pay:,.2f}" if pay else "$0"
+    # Door-aware pay line. `_get_effective_pay_str` checks the booked slot
+    # for deal_type='door' and renders "$X guarantee + Y% of door receipts"
+    # when applicable; otherwise it returns the flat override-aware pay
+    # (same logic that was inline here before).
+    pay_str = _get_effective_pay_str(db, gig, venue_id, artist_id)
     gig_title = gig.get("title", "Live Performance")
     
     # Build performance time string
@@ -783,7 +775,11 @@ def create_gig_contract(gig_id: int, request: Request, user=Depends(get_current_
                 "gig_date": gig_data["date"] if gig_data else "",
                 "gig_start_time": format_time_12hr(gig_data["start_time"]) if gig_data else "",
                 "gig_end_time": format_time_12hr(gig_data["end_time"]) if gig_data else "",
-                "gig_pay": f"${gig_data['pay']:,}" if gig_data and gig_data["pay"] else "$0",
+                # Door-aware: _get_effective_pay_str returns the door split
+                # terms ("$X guarantee + Y% of door receipts") when this
+                # artist's slot has deal_type='door'; otherwise the flat
+                # override-aware pay.
+                "gig_pay": _get_effective_pay_str(db, dict(gig_data), venue_id, artist_id) if gig_data else "$0",
                 "gig_title": gig_data["title"] if gig_data else "",
             }
             for key, val in replacements.items():

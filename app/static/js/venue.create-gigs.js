@@ -557,7 +557,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         </span>
         <span class="slot-deal-sep" style="font-size:0.7rem;color:var(--text-muted);letter-spacing:0.08em;opacity:0.7;user-select:none;white-space:nowrap;flex-shrink:0;">— OR —</span>
         <span class="slot-door-pill${dealType === 'door' ? ' is-on' : ''}" title="Pay artist a guarantee + share of door receipts">
-          <span class="slot-door-toggle-btn" role="button" tabindex="0">
+          <span class="slot-door-toggle-btn" role="button" tabindex="0"
+                aria-pressed="${dealType === 'door' ? 'true' : 'false'}"
+                aria-label="Toggle Door Split pay">
             <input type="checkbox" class="slot-door-checkbox" ${dealType === 'door' ? 'checked' : ''}>
             <span class="slot-door-toggle-text">🎯 Door Split</span>
           </span>
@@ -643,6 +645,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Brighten the bubble when active (driven by the `.is-on` class so the
       // CSS rule owns all the colors — keeps the inputs/borders consistent).
       if (doorPill) doorPill.classList.toggle('is-on', !!on);
+      // Keep aria-pressed in sync so screen readers announce the state.
+      if (doorToggleBtn) doorToggleBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
     if (doorToggleBtn && doorToggle) {
       doorToggleBtn.addEventListener('click', (e) => {
@@ -1133,8 +1137,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     tpl.slots.forEach(s => {
       const d = String(s.pay != null ? Math.floor(parseFloat(s.pay)) : 0);
       const c = String(s.pay != null ? Math.round((parseFloat(s.pay) * 100) % 100) : 0).padStart(2, '0');
+      // Door-deal preservation (commit fix): templates saved with a door
+      // split now rehydrate with the correct deal terms instead of falling
+      // back to flat. Defaults match addSlotRow's signature.
       addSlotRow(s.start_time || '', s.end_time || '', d, c,
-                 s.artist_type || '', s.band_formats || '', s.styles || '');
+                 s.artist_type || '', s.band_formats || '', s.styles || '',
+                 s.deal_type || 'flat',
+                 parseInt(s.door_pct, 10) || 0,
+                 parseInt(s.guarantee_cents, 10) || 0);
     });
     clearSlotError();
   }
@@ -1195,11 +1205,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       );
       if (!name) return;
       // Strip per-gig junk (slot_number is recomputed on apply, pay → in payload).
+      // Persist door-deal terms so a template saved with door split rehydrates
+      // with the same terms instead of falling back to flat.
       const payload = {
         name: name,
         slots: slots.map(s => ({
           start_time: s.start_time, end_time: s.end_time, pay: s.pay,
-          artist_type: s.artist_type, band_formats: s.band_formats, styles: s.styles
+          artist_type: s.artist_type, band_formats: s.band_formats, styles: s.styles,
+          deal_type: s.deal_type || 'flat',
+          door_pct: s.door_pct || 0,
+          guarantee_cents: s.guarantee_cents || 0,
         }))
       };
       try {

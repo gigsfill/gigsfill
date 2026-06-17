@@ -116,17 +116,38 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
          "pct": slot["door_pct"] or 0, "gua": slot["guarantee_cents"] or 0,
          "gid": gig_id, "aid": slot["artist_id"]}
     )
+    txn_updated_count = updated.rowcount or 0
+
+    # If we couldn't update any scheduled transaction it means the payout
+    # has already fired (charged → paid → transferred). Settle bookkeeping
+    # is still useful (the slot row carries the audit trail), but the
+    # bonus % won't flow through the platform — venue must pay the
+    # door delta to the artist in person. Surface this clearly so the
+    # venue knows the operation didn't move money instead of silently
+    # appearing to succeed.
+    settled_via_platform = txn_updated_count > 0
+    delta_cents = max(0, final_pay_cents - int(slot["guarantee_cents"] or 0))
+
     db.commit()
 
-    return {
+    response = {
         "ok": True,
         "settled_pay_cents": final_pay_cents,
         "settled_pay_dollars": round(final_pay_cents / 100.0, 2),
         "guarantee_cents": slot["guarantee_cents"] or 0,
         "door_pct": slot["door_pct"] or 0,
         "door_receipts_cents": receipts,
-        "transactions_updated": updated.rowcount or 0,
+        "transactions_updated": txn_updated_count,
+        "settled_via_platform": settled_via_platform,
     }
+    if not settled_via_platform:
+        response["warning"] = (
+            f"Receipts recorded, but the artist's payout has already been processed. "
+            f"The platform transaction was not adjusted — please pay the artist "
+            f"the door bonus of ${delta_cents/100:,.2f} directly."
+        )
+        response["off_platform_due_cents"] = delta_cents
+    return response
 
 
 @router.put("/api/gigs/{gig_id}/slots/{slot_id}/deal")

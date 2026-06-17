@@ -28,6 +28,7 @@ automatically.
 
 import uuid
 from datetime import datetime, timedelta
+from backend.services.email_dispatch import format_pay_summary_with_sign
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from sqlalchemy import text
 
@@ -114,8 +115,11 @@ def _build_vevent(gig):
         description_lines.append(f"Artist: {gig['artist_name']}")
     if gig.get("city"):
         description_lines.append(f"City: {gig['city']}, {gig.get('state','')}")
-    if gig.get("pay") is not None:
-        description_lines.append(f"Pay: ${float(gig['pay']):.2f}")
+    if gig.get("pay") is not None or gig.get("deal_type"):
+        # Door-aware: for slots with deal_type='door' this renders
+        # "$50.00 guarantee + 20% of door" so calendar subscribers (Google,
+        # Apple, Outlook) see the same terms the artist sees on the site.
+        description_lines.append(f"Pay: {format_pay_summary_with_sign(gig)}")
     if gig.get("notes"):
         description_lines.append(f"Notes: {gig['notes']}")
     description = "\\n".join(_ics_escape(l) for l in description_lines)
@@ -179,7 +183,13 @@ def calendar_feed(token: str, db=Depends(get_db)):
                 g.notes,
                 v.venue_name,
                 v.city, v.state,
-                a.name as artist_name
+                a.name as artist_name,
+                -- Door deals are slot-level only — single-slot gigs are always
+                -- flat, but we select these columns as NULL so both arms of the
+                -- UNION have matching shape (so the formatter can run unconditionally).
+                NULL as deal_type,
+                NULL as door_pct,
+                NULL as guarantee_cents
             FROM gigs g
             JOIN venues v ON v.id = g.venue_id
             LEFT JOIN artists a ON a.id = g.artist_id
@@ -207,7 +217,10 @@ def calendar_feed(token: str, db=Depends(get_db)):
                 g.notes,
                 v.venue_name,
                 v.city, v.state,
-                a.name as artist_name
+                a.name as artist_name,
+                gs.deal_type,
+                gs.door_pct,
+                gs.guarantee_cents
             FROM gig_slots gs
             JOIN gigs g  ON g.id = gs.gig_id
             JOIN venues v ON v.id = g.venue_id
