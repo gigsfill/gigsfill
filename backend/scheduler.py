@@ -477,8 +477,13 @@ def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gi
 
     SEP = '<tr><td colspan="2" style="padding:4px 0;border-top:1px solid #e5e7eb;"></td></tr>'
     try:
+        # Door-deal aware: pull deal_type / door_pct / guarantee_cents so the
+        # rendered "Pay" row shows "$50 guarantee + 20% of door" for door
+        # split slots instead of just the flat amount.
         slots = cursor.execute(
-            "SELECT start_time, end_time, pay, artist_type, band_formats, styles FROM gig_slots WHERE gig_id=? AND status='open' ORDER BY start_time",
+            "SELECT start_time, end_time, pay, artist_type, band_formats, styles, "
+            "deal_type, door_pct, guarantee_cents "
+            "FROM gig_slots WHERE gig_id=? AND status='open' ORDER BY start_time",
             (gig_id,)
         ).fetchall()
     except Exception:
@@ -488,6 +493,7 @@ def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gi
     _multi = len(slots) > 1
     field_indent = 32 if _multi else 16
     html = ''
+    from backend.services.email_dispatch import format_pay_summary_with_sign as _fpay
     for i, s in enumerate(slots):
         if i > 0:
             html += SEP
@@ -497,21 +503,30 @@ def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gi
         t_s = format_time_12hr(s[0] or '')
         t_e = format_time_12hr(s[1] or '')
         time_str = f"{t_s} – {t_e}" if t_e else t_s
-        base_pay = float(s[2] or gig_pay or 0)
-        if artist_override_pay is not None:
+        # Door-deal aware: when this slot is a door split, render the full
+        # deal terms. Otherwise pick the override-aware flat amount.
+        _slot_for_helper = {
+            "pay": s[2], "deal_type": s[6], "door_pct": s[7], "guarantee_cents": s[8],
+        }
+        if (s[6] or "").lower() == "door":
+            pay_display = _fpay(_slot_for_helper, fallback_pay=gig_pay)
+        else:
+            base_pay = float(s[2] or gig_pay or 0)
+            if artist_override_pay is not None:
+                try:
+                    base_pay = max(base_pay, float(artist_override_pay))
+                except Exception:
+                    pass
             try:
-                base_pay = max(base_pay, float(artist_override_pay))
+                pay_val = f"{base_pay:.2f}" if base_pay != int(base_pay) else str(int(base_pay))
             except Exception:
-                pass
-        try:
-            pay_val = f"{base_pay:.2f}" if base_pay != int(base_pay) else str(int(base_pay))
-        except Exception:
-            pay_val = str(s[2] or gig_pay or '0')
+                pay_val = str(s[2] or gig_pay or '0')
+            pay_display = f"${pay_val}"
         atype  = s[3] or gig_artist_type or ''
         lineup = ', '.join(x.strip() for x in (s[4] or gig_band_formats or '').split(',') if x.strip())
         st     = ', '.join(x.strip() for x in (s[5] or gig_styles or '').split(',') if x.strip())
         html += _row("Time", time_str, indent=field_indent)
-        html += _row("Pay",  f"${pay_val}", color="#059669", weight="600", indent=field_indent)
+        html += _row("Pay",  pay_display, color="#059669", weight="600", indent=field_indent)
         if atype:
             html += _row("Type",   atype,  indent=field_indent)
         if lineup:

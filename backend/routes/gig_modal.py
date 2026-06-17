@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from backend.routes.auth import get_current_user
 from backend.db import get_db
+from backend.services.email_dispatch import format_pay_summary_with_sign, slot_has_door_terms
 
 logger = logging.getLogger("gigsfill.gig_modal")
 router = APIRouter(tags=["gig_modal"])
@@ -127,6 +128,14 @@ def _slot_status_for_viewer(slot, viewer_type, viewer_id, contract_rows,
         "start_time_fmt":   _fmt_time(slot.get("start_time")),
         "end_time_fmt":     _fmt_time(slot.get("end_time")),
         "pay":              slot.get("pay"),
+        # Door-deal fields surfaced so the modal can render "$X guarantee
+        # + Y% of door" — without these the artist sees only the flat
+        # guarantee on the booking-decision screen and misses the upside.
+        "deal_type":        slot.get("deal_type"),
+        "door_pct":         slot.get("door_pct"),
+        "guarantee_cents":  slot.get("guarantee_cents"),
+        "pay_summary":      format_pay_summary_with_sign(slot),
+        "is_door_deal":     slot_has_door_terms(slot),
         "status":           s_status,
         "artist_id":        s_artist,
         "artist_name":      slot.get("artist_name"),
@@ -209,9 +218,13 @@ def get_gig_modal_data(
     gig = dict(gig)
 
     # ── Load slots ────────────────────────────────────────────────────────
+    # Door-deal columns included so the gig modal can render the same
+    # "$X guarantee + Y% of door" terms an artist sees in the booking email
+    # / contract / dashboard. Enriched with pay_summary below.
     slot_rows = db.execute(text("""
         SELECT gs.id, gs.slot_number, gs.start_time, gs.end_time, gs.pay,
                gs.status, gs.artist_id, gs.artist_type, gs.band_formats, gs.styles,
+               gs.deal_type, gs.door_pct, gs.guarantee_cents,
                a.name as artist_name
         FROM gig_slots gs
         LEFT JOIN artists a ON a.id = gs.artist_id

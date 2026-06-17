@@ -186,10 +186,12 @@ def calendar_feed(token: str, db=Depends(get_db)):
                 a.name as artist_name,
                 -- Door deals are slot-level only — single-slot gigs are always
                 -- flat, but we select these columns as NULL so both arms of the
-                -- UNION have matching shape (so the formatter can run unconditionally).
-                NULL as deal_type,
-                NULL as door_pct,
-                NULL as guarantee_cents
+                -- UNION have matching shape. CAST(NULL AS ...) is required on
+                -- Postgres which strictly type-checks UNION columns; SQLite is
+                -- lenient but accepts the cast as a no-op.
+                CAST(NULL AS TEXT)    as deal_type,
+                CAST(NULL AS INTEGER) as door_pct,
+                CAST(NULL AS INTEGER) as guarantee_cents
             FROM gigs g
             JOIN venues v ON v.id = g.venue_id
             LEFT JOIN artists a ON a.id = g.artist_id

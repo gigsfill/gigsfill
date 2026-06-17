@@ -3313,10 +3313,20 @@ def update_recurring_gigs(venue_id: int, recurring_group_id: str, data: dict, re
     # query that reads slots (gig list, public flyer, slot booking) would
     # display the OLD values until something else mutated the slots.
     try:
+        # Door-deal fields are propagated alongside times/pay so a recurring
+        # series edited with new door split terms updates ALL future open
+        # slots in the series — not just the gig-level fields. COALESCE
+        # preserves existing slot values when the payload doesn't carry
+        # door config (e.g. edits that leave deal_type out).
         db.execute(
             text("""
                 UPDATE gig_slots
-                SET start_time = :st, end_time = :et, pay = :pay
+                SET start_time = :st,
+                    end_time   = :et,
+                    pay        = :pay,
+                    deal_type        = COALESCE(:deal_type, deal_type),
+                    door_pct         = COALESCE(:door_pct, door_pct),
+                    guarantee_cents  = COALESCE(:guarantee_cents, guarantee_cents)
                 WHERE gig_id IN (
                     SELECT id FROM gigs
                     WHERE recurring_group_id = :group_id
@@ -3329,6 +3339,9 @@ def update_recurring_gigs(venue_id: int, recurring_group_id: str, data: dict, re
             {
                 "group_id": recurring_group_id, "venue_id": venue_id, "from_date": from_date,
                 "st": data.get("start_time"), "et": data.get("end_time"), "pay": data.get("pay"),
+                "deal_type":       data.get("deal_type"),
+                "door_pct":        data.get("door_pct"),
+                "guarantee_cents": data.get("guarantee_cents"),
             }
         )
     except Exception as _se:

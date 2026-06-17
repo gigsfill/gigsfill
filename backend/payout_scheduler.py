@@ -1347,6 +1347,23 @@ def _send_payout_email(conn, txn):
                     <p>— The GigsFill Team</p>""")
             return
 
+        # Door-deal aware {pay} line. The template renders "Gig Pay: ${{pay}}",
+        # so for flat slots {pay} = "60.00", door slots = "50.00 guarantee + 20% of door".
+        # `payout_amount` stays as the actual Stripe-transferred amount.
+        _door_row = None
+        if _txn_artist_id:
+            _door_row = conn.execute("""
+                SELECT pay, deal_type, door_pct, guarantee_cents
+                FROM gig_slots
+                WHERE gig_id = ? AND artist_id = ?
+                ORDER BY slot_number ASC LIMIT 1
+            """, (txn["gig_id"], _txn_artist_id)).fetchone()
+        if _door_row and (_door_row["deal_type"] or "").lower() == "door":
+            from backend.services.email_dispatch import format_slot_pay_summary as _fpa
+            _pay_str = _fpa(dict(_door_row), fallback_pay=amount/100)
+        else:
+            _pay_str = f"{amount/100:.2f}"
+
         # Audit fix (May 2026 part 5): escape user-controlled fields before
         # substitution. venue_name / artist_name come from DB and used to
         # land raw into the HTML body via `replace("{{venue_name}}", str(v))`.
@@ -1354,7 +1371,7 @@ def _send_payout_email(conn, txn):
             'artist_name': _esc(gig_info['artist_name'] or 'Artist'),
             'venue_name': _esc(gig_info['venue_name']),
             'date': format_email_date(gig_info['date']),
-            'pay': f"{amount/100:.2f}",
+            'pay': _pay_str,
             'artist_fee': f"{fee/100:.2f}",
             'payout_amount': f"{payout/100:.2f}",
             # gig_info is a sqlite3.Row, not a dict — bracket-index with
@@ -1426,6 +1443,23 @@ def _send_venue_charged_email(conn, txn, venue_id):
         venue_fee = (txn["venue_charge_cents"] - txn["amount_cents"]) / 100
         total_charged = txn["venue_charge_cents"] / 100
 
+        # Door-deal aware {pay} line on the venue charge email (mirror of
+        # the artist payment email above). Looks up the slot's deal_type
+        # and renders "$50 guarantee + 20% of door" if applicable.
+        _vpc_door_row = None
+        if txn["artist_id"]:
+            _vpc_door_row = conn.execute("""
+                SELECT pay, deal_type, door_pct, guarantee_cents
+                FROM gig_slots
+                WHERE gig_id = ? AND artist_id = ?
+                ORDER BY slot_number ASC LIMIT 1
+            """, (txn["gig_id"], txn["artist_id"])).fetchone()
+        if _vpc_door_row and (_vpc_door_row["deal_type"] or "").lower() == "door":
+            from backend.services.email_dispatch import format_slot_pay_summary as _fpa
+            _vpc_pay_str = _fpa(dict(_vpc_door_row), fallback_pay=pay)
+        else:
+            _vpc_pay_str = f"{pay:.2f}"
+
         # Build artist list for multi-slot gigs
         artist_name = gig_info["artist_name"] or "Artist"
         # sqlite3.Row uses bracket indexing, not .get(). Check key
@@ -1452,7 +1486,7 @@ def _send_venue_charged_email(conn, txn, venue_id):
             "venue_name": _esc(gig_info["venue_name"] or ""),
             "artist_name": _esc(artist_name),
             "date": gig_info["date"] or "",
-            "pay": f"{pay:.2f}",
+            "pay": _vpc_pay_str,
             "venue_fee": f"{venue_fee:.2f}",
             "total_charged": f"{total_charged:.2f}",
             "slot_times": _compute_slot_times_sqlite(conn, txn["gig_id"]),

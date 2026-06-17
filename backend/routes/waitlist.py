@@ -700,7 +700,8 @@ def _build_open_slots_html(db, gig_id: int, gig: dict) -> str:
         from sqlalchemy import text as _st
         from backend.services.notification_service import format_time_12hr as _fmt
         slots = db.execute(_st("""
-            SELECT slot_number, start_time, end_time, pay, artist_type
+            SELECT slot_number, start_time, end_time, pay, artist_type,
+                   deal_type, door_pct, guarantee_cents
             FROM gig_slots WHERE gig_id=:gid AND status='open' ORDER BY slot_number
         """), {"gid": gig_id}).mappings().all()
         if not slots:
@@ -717,8 +718,12 @@ def _build_open_slots_html(db, gig_id: int, gig: dict) -> str:
             t0 = _fmt(s.get("start_time") or "")
             t1 = _fmt(s.get("end_time") or "")
             html += ROW.format(label="Time", color="#111827", weight="500", value=f"{t0} \u2013 {t1}" if t1 else t0)
-            p = float(s.get("pay") or gp)
-            html += ROW.format(label="Pay", color="#059669", weight="600", value=f"${p:,.2f}")
+            # Door-deal aware: "$50 guarantee + 20% of door" for door slots,
+            # "$60.00" for flat. format_pay_summary_with_sign returns the
+            # right string and includes the leading "$".
+            from backend.services.email_dispatch import format_pay_summary_with_sign as _fpay
+            pay_display = _fpay(s, fallback_pay=gp)
+            html += ROW.format(label="Pay", color="#059669", weight="600", value=pay_display)
             at = s.get("artist_type") or gig.get("artist_type") or ""
             if at: html += ROW.format(label="Type", color="#111827", weight="500", value=at)
         return html
@@ -1125,6 +1130,25 @@ def _blast_waitlist_and_nearby(db, gig_id: int, gig, hours_until: float):
             except Exception:
                 return gig_base_pay
 
+        def _get_pay_display(artist_id):
+            """Return a template-ready pay string (no leading "$" — template
+            prepends one). Returns door deal terms when the first open slot
+            uses door split, otherwise the override-aware flat pay."""
+            try:
+                from backend.services.email_dispatch import format_slot_pay_summary as _fpa
+                _slot = db.execute(
+                    text("""SELECT pay, deal_type, door_pct, guarantee_cents
+                            FROM gig_slots
+                            WHERE gig_id = :gid AND status = 'open'
+                            ORDER BY slot_number ASC LIMIT 1"""),
+                    {"gid": gig_id}
+                ).mappings().first()
+                if _slot and (_slot.get("deal_type") or "").lower() == "door":
+                    return _fpa(dict(_slot), fallback_pay=gig_base_pay)
+            except Exception:
+                pass
+            return f"{_get_effective_pay(artist_id):,.2f}"
+
         # Step 1: Send sequential OFFER (with 24hr book/decline links) to the top waitlisted artist
         # This sets offer_sent=1 so has_active_waitlist=1 → red blinking bubble on calendar
         waitlist_entry = db.execute(
@@ -1157,7 +1181,7 @@ def _blast_waitlist_and_nearby(db, gig_id: int, gig, hours_until: float):
             )
             db.commit()
 
-            pay = _get_effective_pay(waitlist_entry["artist_id"])
+            pay_display = _get_pay_display(waitlist_entry["artist_id"])
             book_url = f"{base_url}/api/waitlist/respond?token={token}&action=book"
             decline_url = f"{base_url}/api/waitlist/respond?token={token}&action=decline"
 
@@ -1171,7 +1195,7 @@ def _blast_waitlist_and_nearby(db, gig_id: int, gig, hours_until: float):
                     "date": format_email_date(gig.get("date", "")),
                     "start_time": format_time_12hr(gig.get("start_time")),
                     "end_time": end_time_str,
-                    "pay": f"{pay:,.2f}",
+                    "pay": pay_display,
                     "title": gig.get("title") or "",
                     "artist_type": gig.get("artist_type") or "",
                     "book_url": book_url,
@@ -1202,7 +1226,7 @@ def _blast_waitlist_and_nearby(db, gig_id: int, gig, hours_until: float):
                 continue
             try:
                 booking_url = f"{base_url}/app/artist-book-gigs.html?artist_id={entry['artist_id']}"
-                pay = _get_effective_pay(entry["artist_id"])
+                pay_display = _get_pay_display(entry["artist_id"])
                 email_service.send_notification_email(
                     user_email=entry["email"],
                     user_id=entry["user_id"],
@@ -1213,7 +1237,7 @@ def _blast_waitlist_and_nearby(db, gig_id: int, gig, hours_until: float):
                         "date": format_email_date(gig.get("date", "")),
                         "start_time": format_time_12hr(gig.get("start_time")),
                         "end_time": end_time_str,
-                        "pay": f"{pay:,.2f}",
+                        "pay": pay_display,
                         "title": gig.get("title") or "",
                         "artist_type": gig.get("artist_type") or "",
                         "booking_url": booking_url,

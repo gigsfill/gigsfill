@@ -1005,6 +1005,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       return false;
     }
 
+    // Door-deal sanity: a slot can't be deal_type='door' with both guarantee=0
+    // AND door_pct=0 — that produces a "0 + 0% of 0" booking which would
+    // charge the venue nothing and pay the artist nothing. Surface clearly
+    // so the user sets at least one of the two before saving.
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      if (s.deal_type === 'door' && (s.guarantee_cents || 0) === 0 && (s.door_pct || 0) === 0) {
+        showSlotError(`Slot ${i + 1}: Door Split is selected but Guarantee Pay and % of door are both empty. Enter at least one, or switch back to flat pay.`);
+        return false;
+      }
+    }
+
     // Time / overlap checks — first failure wins, shown in #slotError.
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
@@ -1383,7 +1395,20 @@ document.addEventListener("DOMContentLoaded", async () => {
               headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
             })).json();
         if (res && res.settled_pay_dollars != null) {
-          (typeof showAlert === 'function' ? showAlert : alert)(`Slot ${p.slot_number} settled: artist pay $${res.settled_pay_dollars}`);
+          // Backend may include warning when the payout has already fired
+          // (status was no longer 'scheduled'). In that case the platform
+          // didn't move the door bonus — the venue owes the artist directly.
+          // Surface that explicitly so the venue doesn't think they're done.
+          if (res.warning) {
+            (typeof showAlert === 'function' ? showAlert : alert)(
+              `Slot ${p.slot_number}: ${res.warning}`,
+              'Door Settled — Action Required'
+            );
+          } else {
+            (typeof showAlert === 'function' ? showAlert : alert)(
+              `Slot ${p.slot_number} settled: artist will be paid $${res.settled_pay_dollars} via platform.`
+            );
+          }
         }
       } catch (e) {
         alert(`Failed to settle slot ${p.slot_number}: ${(e && e.message) || 'error'}`);

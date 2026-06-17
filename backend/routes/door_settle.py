@@ -101,19 +101,27 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
     # (gig_id, artist_id) and pre-charge status — only `scheduled` rows
     # are safe to revise (we don't want to alter anything already
     # charged or in flight).
+    # Pre-build the audit note in Python so we don't rely on SQL string ||
+    # int concatenation, which works in SQLite but throws on Postgres
+    # ("operator does not exist: text || integer"). Now a plain TEXT param.
+    audit_note = (
+        f" [door-settled receipts={int(receipts)}c "
+        f"pct={int(slot['door_pct'] or 0)}% "
+        f"guarantee={int(slot['guarantee_cents'] or 0)}c]"
+    )
     updated = db.execute(
         text("""
             UPDATE transactions
             SET amount_cents = :final,
                 venue_charge_cents = :final,
                 artist_payout_cents = :final,
-                notes = COALESCE(notes, '') || ' [door-settled receipts=' || :rec || 'c pct=' || :pct || '% guarantee=' || :gua || 'c]'
+                notes = COALESCE(notes, '') || :audit_note
             WHERE gig_id = :gid
               AND artist_id = :aid
               AND status = 'scheduled'
         """),
-        {"final": final_pay_cents, "rec": receipts,
-         "pct": slot["door_pct"] or 0, "gua": slot["guarantee_cents"] or 0,
+        {"final": final_pay_cents,
+         "audit_note": audit_note,
          "gid": gig_id, "aid": slot["artist_id"]}
     )
     txn_updated_count = updated.rowcount or 0

@@ -98,6 +98,18 @@ def db():
             pay REAL DEFAULT 0,
             status VARCHAR DEFAULT 'open',
             artist_id INTEGER,
+            artist_type VARCHAR,
+            band_formats VARCHAR,
+            styles VARCHAR,
+            -- Door-deal columns (Jun 2026). Tests that exercise door split
+            -- can SELECT/INSERT these directly; defaults match production
+            -- (flat pay with no door terms).
+            deal_type VARCHAR DEFAULT 'flat',
+            door_pct INTEGER DEFAULT 0,
+            guarantee_cents INTEGER DEFAULT 0,
+            door_receipts_cents INTEGER,
+            settled_pay_cents INTEGER,
+            settled_at DATETIME,
             FOREIGN KEY (gig_id) REFERENCES gigs(id),
             FOREIGN KEY (artist_id) REFERENCES artists(id)
         )
