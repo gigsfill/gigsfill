@@ -519,12 +519,22 @@
         <h2 class="section-header" style="display:flex;align-items:center;gap:10px;">
           <span>📅</span> Calendar Sync
         </h2>
-        <p style="color:var(--text-gray);font-size:0.82rem;margin:0 0 16px;">
+        <p style="color:var(--text-gray);font-size:0.82rem;margin:0 0 10px;">
           Subscribe to a live read-only feed of all your booked gigs.
           New bookings appear automatically; cancellations remove the event.
-          The token in the URL is your private key — anyone with the URL can
-          see your gigs. If you've shared it publicly, you can mint a fresh
-          one below.
+        </p>
+        <div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.22);border-radius:8px;padding:10px 14px;margin:0 0 16px;font-size:0.76rem;color:#a7f3d0;line-height:1.55;">
+          <strong style="color:#34d399;">✓ Safe to share publicly.</strong>
+          The feed includes venue name, address, date, slot times, and the
+          booked artist — perfect for embedding on a band's website, a venue's
+          show calendar, or a tour-dates page. <strong style="color:#fff;">Pay
+          terms are intentionally NOT included</strong>, so you can publish
+          the URL without leaking deal info.
+        </div>
+        <p style="color:var(--text-gray);font-size:0.75rem;margin:0 0 14px;font-style:italic;opacity:0.85;">
+          The URL still contains a private token — anyone with it can see
+          your booking schedule. If you ever want to invalidate a shared URL
+          (e.g. parted ways with a band member), hit Rotate below.
         </p>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <input

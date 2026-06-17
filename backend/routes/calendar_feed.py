@@ -28,7 +28,6 @@ automatically.
 
 import uuid
 from datetime import datetime, timedelta
-from backend.services.email_dispatch import format_pay_summary_with_sign
 from backend.utils import US_STATE_TIMEZONES, get_platform_timezone
 
 
@@ -194,11 +193,18 @@ def _build_vevent(gig, tz_name=None):
         description_lines.append(f"Artist: {gig['artist_name']}")
     if gig.get("city"):
         description_lines.append(f"City: {gig['city']}, {gig.get('state','')}")
-    if gig.get("pay") is not None or gig.get("deal_type"):
-        # Door-aware: for slots with deal_type='door' this renders
-        # "$50.00 guarantee + 20% of door" so calendar subscribers (Google,
-        # Apple, Outlook) see the same terms the artist sees on the site.
-        description_lines.append(f"Pay: {format_pay_summary_with_sign(gig)}")
+    # NOTE — DO NOT add a "Pay:" line here.
+    # This feed is served at /api/calendar/{token}.ics with the token as
+    # the only credential. Users routinely paste the URL into their public
+    # website / social bio / shared band calendar so subscribers can see
+    # the show schedule. Including pay (whether flat "$60.00" or door
+    # split terms) on a publishable feed leaks sensitive deal info to
+    # any subscriber — competitors, fans, anyone with the URL.
+    # The owner can always see pay terms in the GigsFill app itself;
+    # the iCal feed is intentionally a "schedule view", not a "financial
+    # view". If we later want owner-visible pay back in the feed, ship
+    # it as an explicit opt-in toggle with a warning that the feed
+    # should not be shared publicly.
     if gig.get("notes"):
         description_lines.append(f"Notes: {gig['notes']}")
     description = "\\n".join(_ics_escape(l) for l in description_lines)
