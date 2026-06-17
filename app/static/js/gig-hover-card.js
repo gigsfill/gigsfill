@@ -123,26 +123,65 @@
     let isOpenHere = false;
     let openSlots = 0;
     let totalSlots = 0;
+    // Status categorization — a slot with artist_id is NOT necessarily
+    // "Booked". It might be in pending_contract (artist hasn't signed),
+    // awaiting_venue_contract (artist signed, venue must countersign),
+    // or pending_venue_approval (same-day request). The header now
+    // reflects ACTUAL slot status, not just slot ownership.
+    const PENDING_STATUSES = new Set([
+      'pending_contract',         // artist needs to sign
+      'awaiting_venue_contract',  // venue needs to countersign
+      'pending_venue_approval',   // same-day approval pending
+    ]);
     if (g.is_multi_slot && Array.isArray(g.slots)) {
       totalSlots = g.slots.length;
-      const bookedSlots = g.slots.filter(s => s.artist_id || s.artist_name);
-      openSlots = totalSlots - bookedSlots.length;
-      if (bookedSlots.length === 0) {
+      const takenSlots = g.slots.filter(s => s.artist_id || s.artist_name);
+      const reallyBooked = takenSlots.filter(s => s.status === 'booked');
+      const pending      = takenSlots.filter(s => PENDING_STATUSES.has(s.status));
+      openSlots = totalSlots - takenSlots.length;
+      if (takenSlots.length === 0) {
         header = `Open — ${totalSlots} slots`;
         isOpenHere = true;
-      } else {
+      } else if (reallyBooked.length === takenSlots.length) {
+        // All taken slots are fully booked.
         header = 'Booked — ';
-        artistChips = bookedSlots.map(s => ({
+        artistChips = takenSlots.map(s => ({
           id: s.artist_id || null, name: s.artist_name || '',
         }));
-        if (openSlots > 0) header = 'Booked — ';  // suffix appended below
+      } else if (pending.length === takenSlots.length) {
+        // Every taken slot is mid-contract.
+        header = 'Pending Venue Countersign — ';
+        artistChips = takenSlots.map(s => ({
+          id: s.artist_id || null, name: s.artist_name || '',
+        }));
+      } else {
+        // Mixed — split header: "Booked — X · Pending — Y" so both
+        // states are unambiguous in a single line.
+        const _bookedNames = reallyBooked.map(s => s.artist_name || '?').filter(Boolean).join(', ');
+        const _pendingNames = pending.map(s => s.artist_name || '?').filter(Boolean).join(', ');
+        const parts = [];
+        if (_bookedNames) parts.push(`Booked — ${_bookedNames}`);
+        if (_pendingNames) parts.push(`Pending Countersign — ${_pendingNames}`);
+        header = parts.join(' · ');
+        // Chips stay linkable for the booked + pending mix; pending
+        // chips are visually de-emphasized via the statusLabel below.
+        artistChips = takenSlots.map(s => ({
+          id: s.artist_id || null, name: s.artist_name || '',
+        }));
       }
     } else {
       isOpenHere = (g.status === 'open' || !g.artist_id) && !g.artist_name;
       if (isOpenHere) {
         header = 'Open';
       } else {
-        header = 'Booked — ';
+        // Single-slot: pick label by gig.status. The artist_id check
+        // above already routed us here, so we know a slot is taken.
+        if (g.status === 'awaiting_venue_contract' || g.status === 'pending_contract'
+            || g.status === 'pending_venue_approval') {
+          header = 'Pending Venue Countersign — ';
+        } else {
+          header = 'Booked — ';
+        }
         artistChips = [{
           id: g.artist_id || null,
           name: g.artist_name || g.artistName || '',
@@ -151,10 +190,20 @@
     }
 
     let statusLabel = '';
+    // Compute pending-contract presence from slot statuses too — for
+    // multi-slot gigs the parent g.contract_status can lag behind what
+    // the slots actually say, and single-slot gigs may carry the state
+    // on g.status instead. Belt-and-suspenders so the badge fires
+    // whenever ANY slot is mid-flow.
+    const _anySlotPending = Array.isArray(g.slots) && g.slots.some(
+      s => s.status === 'pending_contract' || s.status === 'awaiting_venue_contract'
+    );
+    const _gigPending = g.status === 'pending_contract' || g.status === 'awaiting_venue_contract';
     if (g.is_blast_open) statusLabel = 'Blast — first to book';
     else if (g.waitlist_pending || g.contract_status === 'waitlist_pending')
       statusLabel = 'Waitlist · pending';
-    else if (g.contract_status === 'pending' || g.contract_status === 'awaiting_venue')
+    else if (_anySlotPending || _gigPending
+             || g.contract_status === 'pending' || g.contract_status === 'awaiting_venue')
       statusLabel = 'Contract pending';
     else if (g.status === 'cancelled') statusLabel = 'Cancelled';
 
