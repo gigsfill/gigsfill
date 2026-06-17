@@ -9,10 +9,69 @@
   const currentPath = window.location.pathname;
   const isExempt = VERIFY_EXEMPT.some(p => currentPath.endsWith(p.replace('/app/', '')));
 
+  // UX fix (Jun 2026): show a small "checking session…" overlay if /api/me
+  // hasn't resolved within 600ms. Without this, slow networks gave users
+  // up to 12s of blank-white page (the pre-paint script sets
+  // visibility:hidden on <html>, which would normally hide our overlay
+  // too — we use visibility:visible !important to break out of that).
+  let _guard_overlay = null;
+  const _guard_overlay_timer = setTimeout(() => {
+    try {
+      if (!document.body) return;
+      const o = document.createElement('div');
+      o.id = '__gf_auth_loading__';
+      o.setAttribute('style', [
+        'position:fixed', 'inset:0',
+        'background:#0a0a14',
+        'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+        'gap:14px',
+        'z-index:2147483647',
+        'visibility:visible !important',
+        'opacity:1',
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
+        'color:rgba(255,255,255,0.65)',
+        'font-size:0.85rem', 'letter-spacing:0.04em',
+      ].join(';'));
+      o.innerHTML = `
+        <div style="width:36px;height:36px;border-radius:50%;
+                    border:3px solid rgba(124,107,255,0.18);
+                    border-top-color:#a855f7;
+                    animation:__gf_auth_spin__ .9s linear infinite;"></div>
+        <div>Checking session&hellip;</div>
+        <style>@keyframes __gf_auth_spin__ { to { transform: rotate(360deg); } }</style>
+      `;
+      document.body.appendChild(o);
+      _guard_overlay = o;
+    } catch (_) {}
+  }, 600);
+  function _hideOverlay() {
+    clearTimeout(_guard_overlay_timer);
+    if (_guard_overlay) { try { _guard_overlay.remove(); } catch (_) {} _guard_overlay = null; }
+  }
+
+  // Audit fix (May 2026 part 7): timeout fallback. The protected-page inline
+  // pre-paint hide sets visibility:hidden synchronously; this script flips it
+  // back on success / navigates away on failure. If the fetch hangs (offline,
+  // slow network, broken backend), the page stays invisible forever with no
+  // spinner or error. After 12s, treat that as a network failure and route
+  // the user to the login page so they're not staring at a white screen.
+  const _guard_timeout = setTimeout(() => {
+    _hideOverlay();
+    try {
+      document.documentElement.style.visibility = 'visible';
+    } catch (_) {}
+    const _ret = encodeURIComponent(window.location.href);
+    window.location.href = `/app/index.html?redirect=${_ret}`;
+  }, 12000);
+
   try {
+    const _ctrl = ('AbortController' in window) ? new AbortController() : null;
+    if (_ctrl) setTimeout(() => { try { _ctrl.abort(); } catch (_) {} }, 10000);
     const res = await fetch("/api/me", {
-      credentials: "include"
+      credentials: "include",
+      signal: _ctrl ? _ctrl.signal : undefined
     });
+    clearTimeout(_guard_timeout);
 
     if (!res.ok) {
       throw new Error("Not authenticated");
@@ -40,8 +99,11 @@
     }
 
     // ✅ AUTH + VERIFICATION OK — SHOW PAGE
+    _hideOverlay();
     document.documentElement.style.visibility = "visible";
   } catch (err) {
+    clearTimeout(_guard_timeout);
+    _hideOverlay();
     console.warn("Auth failed — redirecting", err);
 
     // Clear session cookies

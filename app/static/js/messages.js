@@ -66,7 +66,9 @@ async function _loadMessages(gigId) {
         if (body) body.innerHTML = '<div style="text-align:center;padding:32px;"><div style="color:#f59e0b;font-size:0.9rem;font-weight:600;margin-bottom:10px;">Session expired</div><div style="color:#888;font-size:0.82rem;margin-bottom:16px;">Please log in again.</div><button onclick="window.location.href=\'/app/login.html\'" class="btn primary" style="font-size:0.82rem;">Go to Login</button></div>';
         return;
       }
-      throw new Error('Failed to load');
+      let detail = `Failed to load (${res.status})`;
+      try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+      throw new Error(detail);
     }
     const data = await res.json();
 
@@ -104,7 +106,13 @@ async function _loadMessages(gigId) {
 
   } catch (e) {
     const list = document.getElementById(`msgList_${gigId}`);
-    if (list) list.innerHTML = `<div style="color:#ef4444;font-size:0.8rem;text-align:center;">Could not load messages</div>`;
+    const detail = (e && e.message) || 'Could not load messages';
+    if (list) {
+      // Escape the detail to prevent any backend-controlled text from
+      // breaking out of the error chip.
+      const safe = String(detail).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      list.innerHTML = `<div style="color:#ef4444;font-size:0.8rem;text-align:center;padding:12px;">${safe}</div>`;
+    }
   }
 }
 
@@ -153,18 +161,36 @@ window.sendGigMessage = async function(gigId) {
     // Include venue_id so the backend knows which venue is sending (multi-venue users)
     const _vid = window._messageThreadVenueId;
     if (_vid) payload.venue_id = _vid;
-    const res = await fetch(`/api/gigs/${gigId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) throw new Error('Failed to send');
+    // Use apiPostSafe so the user sees the real backend `detail` message
+    // (booking conflict, venue access revoked, frequency cap, etc.) rather
+    // than a generic "Failed to send".
+    if (typeof window.apiPostSafe === 'function') {
+      await window.apiPostSafe(`/api/gigs/${gigId}/messages`, payload);
+    } else {
+      const res = await fetch(`/api/gigs/${gigId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        let detail = `Failed to send (${res.status})`;
+        try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+        throw new Error(detail);
+      }
+    }
     await _loadMessages(gigId);
     await _markThreadRead(gigId);
   } catch (e) {
     if (input) input.value = body; // restore on failure
     console.error('Send failed:', e);
+    // Surface the real backend reason in a toast/alert so the user knows
+    // why the message didn't go through.
+    try {
+      const msg = (e && e.message) || 'Failed to send message';
+      if (typeof window.showAlert === 'function') window.showAlert(msg);
+      else alert(msg);
+    } catch (_) {}
   } finally {
     if (input) input.disabled = false;
     if (input) input.focus();
@@ -369,7 +395,11 @@ window.openInboxModal = async function({ side = 'venue', artistId = null, venueI
     const hdrActive = hdrStyle + 'color:var(--cyan,#06b6d4);';
     const td  = 'padding:10px 10px;font-size:0.8rem;color:var(--text,#f0f0f0);border-bottom:1px solid rgba(255,255,255,0.05);vertical-align:middle;text-align:left;';
 
-    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    // Audit fix (May 2026 part 7): also escape apostrophes for JS-string-in-attr
+    // contexts. Otherwise a name like `Bob');alert(1);//` could end an inline
+    // onclick's JS string and inject code.
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const _jsAttr = s => String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
     // Profile URL helpers — artist page on venue side, venue page on artist side
     const artistProfileUrl = id => id ? `/app/artist-profile.html?artist_id=${id}` : null;
@@ -449,7 +479,7 @@ window.openInboxModal = async function({ side = 'venue', artistId = null, venueI
 
         const gigTitle = m.gig_title ? `<div style="font-size:0.7rem;color:var(--text-muted,#666);margin-top:2px;">${esc(m.gig_title)}</div>` : '';
 
-        h += `<tr style="cursor:pointer;" onclick="document.getElementById('msgInboxModal').remove(); openMessageModal(${m.gig_id}, '${esc(toName)}', ${m.artist_id || null})" onmouseover="this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.background=''">
+        h += `<tr style="cursor:pointer;" onclick="document.getElementById('msgInboxModal').remove(); openMessageModal(${parseInt(m.gig_id,10)||0}, '${_jsAttr(toName)}', ${parseInt(m.artist_id,10) || 'null'})" onmouseover="this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.background=''">
           <td style="${td}white-space:nowrap;font-size:0.75rem;">${msgDt}</td>
           <td style="${td}white-space:nowrap;">${esc(fromName)}${unread}</td>
           <td style="${td}">${toCell}${gigTitle}</td>

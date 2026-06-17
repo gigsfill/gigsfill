@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 import logging
 from sqlalchemy import text
 from datetime import datetime
-from backend.utils import utcnow_naive
+from backend.utils import utcnow_naive, to_admin_bool
 import json, os, re, shutil, tempfile, uuid
 
 logger = logging.getLogger("gigsfill.contracts")
@@ -50,7 +50,12 @@ async def _read_and_validate_pdf(file: "UploadFile", max_mb: int = 20) -> bytes:
 
 
 def _apply_slot_pay_override(db, slot_id: int, venue_id: int, artist_id: int):
-    """After booking a slot, update its pay to max(current_pay, artist_override) if override exists."""
+    """After booking a slot, update its pay to max(current_pay, artist_override) if override exists.
+
+    Override only applies when the relationship is 'approved' — pending/denied/revoked
+    rows still carry the old override columns, but the per-artist negotiated rate no
+    longer applies. Missed in the part 10m pay-override audit; fixed here.
+    """
     try:
         slot = db.execute(
             text("SELECT pay FROM gig_slots WHERE id = :sid"),
@@ -60,7 +65,7 @@ def _apply_slot_pay_override(db, slot_id: int, venue_id: int, artist_id: int):
             return
         base_pay = float(slot["pay"] or 0)
         override = db.execute(
-            text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid"),
+            text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid AND status='approved'"),
             {"vid": venue_id, "aid": artist_id}
         ).mappings().first()
         if override and override["pay_dollars_override"] is not None:
@@ -477,10 +482,10 @@ def create_venue_contract(venue_id: int, data: dict, user=Depends(get_current_us
         text("UPDATE venue_contracts SET is_active = 0 WHERE venue_id = :vid"),
         {"vid": venue_id}
     )
-    
+
     db.execute(
         text("""
-            INSERT INTO venue_contracts 
+            INSERT INTO venue_contracts
                 (venue_id, contract_type, name, is_active, require_for_booking, per_gig_pdf, contract_body, custom_fields, created_at, updated_at)
             VALUES (:vid, :type, :name, 1, :req, :pgp, :body, :fields, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """),
@@ -494,11 +499,20 @@ def create_venue_contract(venue_id: int, data: dict, user=Depends(get_current_us
             "fields": custom_fields,
         }
     )
-    db.commit()
-    
+
     # Get the new ID
     new_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
-    
+
+    # Audit fix (May 2026 part 8): post-insert race-loser reconciliation.
+    # Two concurrent POSTs both ran the DEACTIVATE-then-INSERT pattern above
+    # and both ended up with `is_active=1`. Force the winner (lowest new id)
+    # to be the only active row by deactivating everything else after.
+    db.execute(
+        text("UPDATE venue_contracts SET is_active = 0 WHERE venue_id = :vid AND id != :keep"),
+        {"vid": venue_id, "keep": new_id}
+    )
+    db.commit()
+
     return {"ok": True, "contract_id": new_id}
 
 
@@ -552,8 +566,15 @@ def update_venue_contract(venue_id: int, contract_id: int, data: dict, user=Depe
         updates.append("updated_at = CURRENT_TIMESTAMP")
         sql = f"UPDATE venue_contracts SET {', '.join(updates)} WHERE id = :cid AND venue_id = :vid"
         db.execute(text(sql), params)
+        # Audit fix (May 2026 part 8): if this update activated the contract,
+        # ensure it's the ONLY active row for the venue (race-loser cleanup).
+        if "is_active" in data and data["is_active"]:
+            db.execute(
+                text("UPDATE venue_contracts SET is_active = 0 WHERE venue_id = :vid AND id != :keep"),
+                {"vid": venue_id, "keep": contract_id}
+            )
         db.commit()
-    
+
     return {"ok": True}
 
 
@@ -809,12 +830,17 @@ def get_gig_contract(contract_id: int, user=Depends(get_current_user), db=Depend
         {"aid": row["artist_id"], "uid": user.id}
     ).first()
     
-    if not venue_access and not artist_access:
+    # Audit fix (May 2026 part 6): admin bypass — `get_gig_contract_by_gig`
+    # and `get_contract_preview` already honor admin; this endpoint didn't,
+    # so admins doing support/audit got 403 fetching contract details by
+    # contract_id. Mirrors the part-5 pattern in get_gig_contract_by_gig.
+    is_admin_user = to_admin_bool(getattr(user, "is_admin", "false"))
+    if not venue_access and not artist_access and not is_admin_user:
         raise HTTPException(403, "No access to this contract")
-    
+
     row["is_venue_user"] = bool(venue_access)
     row["is_artist_user"] = bool(artist_access)
-    
+
     return row
 
 
@@ -822,7 +848,7 @@ def get_gig_contract(contract_id: int, user=Depends(get_current_user), db=Depend
 def get_gig_contract_by_gig(gig_id: int, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
     """Get contract for a specific gig (by gig ID). Use latest contract (ORDER BY id DESC) so re-booked gigs get the current one."""
     artist_id = request.query_params.get('artist_id')
-    
+
     query = """
         SELECT gc.*, a.name as artist_name
         FROM gig_contracts gc
@@ -837,10 +863,39 @@ def get_gig_contract_by_gig(gig_id: int, request: Request, user=Depends(get_curr
 
     query += " ORDER BY gc.id DESC LIMIT 1"
     row = db.execute(text(query), params).mappings().first()
-    
+
     if not row:
         return {"has_contract": False}
-    
+
+    # Audit fix (May 2026 part 5): authorize the caller against the contract's
+    # gig before returning. Previously any logged-in user could GET this and
+    # walk the contract body, both signatures' names + IPs, signed PDF paths,
+    # and the rendered_body PII for any artist/venue combination.
+    _gig = db.execute(
+        text("SELECT venue_id FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    _venue_id = _gig["venue_id"] if _gig else None
+    _contract_artist_id = row["artist_id"]
+    _allowed = False
+    if _venue_id is not None:
+        try:
+            check_venue_access(db, _venue_id, user.id)
+            _allowed = True
+        except Exception:
+            pass
+    if not _allowed and _contract_artist_id is not None:
+        try:
+            check_artist_access(db, _contract_artist_id, user.id)
+            _allowed = True
+        except Exception:
+            pass
+    if not _allowed:
+        # Admins can always see (matches the rest of the contract endpoints).
+        from backend.utils import to_admin_bool
+        if not to_admin_bool(getattr(user, "is_admin", "false")):
+            raise HTTPException(403, "Not authorized to view this contract")
+
     result = dict(row)
     result["has_contract"] = True
     return result
@@ -868,7 +923,28 @@ def sign_contract(contract_id: int, data: dict, request: Request, user=Depends(g
     
     if contract["status"] not in ("pending",):
         raise HTTPException(400, "Contract has already been signed")
-    
+
+    # Audit fix (May 2026 part 10): block pdf_upload bypass. The
+    # sign_contract endpoint is for the DIGITAL signing flow; pdf_upload
+    # contracts must be signed by uploading a signed PDF via
+    # upload_signed_pdf. Without this gate, a malicious artist who knows
+    # the contract_id could POST signature_name here and silently flip a
+    # pdf_upload contract to 'artist_signed' without ever uploading a
+    # signed PDF — then the venue countersign would "fully execute" a
+    # contract with no artist signature on the document.
+    # Bug fix (Jun 2026): the previous check compared `contract_type` to
+    # the literal string "digital", which is not a value the schema ever
+    # produces (valid types are pdf_upload | custom_builder |
+    # auto_generated, see CHECK constraint on venue_contracts insert).
+    # As a result the gate fired for EVERY typed contract and silently
+    # blocked custom_builder + auto_generated contracts from ever being
+    # signed via this endpoint. Correct behavior: block ONLY pdf_upload.
+    if contract.get("contract_type") == "pdf_upload":
+        raise HTTPException(
+            400,
+            "This contract requires uploading a signed PDF — use the PDF upload flow to sign it."
+        )
+
     signature_name = data.get("signature_name", "").strip()
     if not signature_name:
         raise HTTPException(400, "Signature name is required")
@@ -884,7 +960,13 @@ def sign_contract(contract_id: int, data: dict, request: Request, user=Depends(g
     
     now = utcnow_naive().isoformat() + 'Z'
     
-    db.execute(
+    # Audit fix (May 2026 part 3): atomic-claim guard. The Python-side
+    # status check above is non-atomic; two concurrent sign requests
+    # (double-clicked button, retried email link) would both pass the
+    # check and both UPDATE — firing duplicate transition logic + emails
+    # downstream. Constrain the UPDATE to status='pending' and check
+    # rowcount; if the row was already signed, return idempotently.
+    _sign_res = db.execute(
         text("""
             UPDATE gig_contracts SET
                 status = 'artist_signed',
@@ -892,7 +974,7 @@ def sign_contract(contract_id: int, data: dict, request: Request, user=Depends(g
                 artist_signature_name = :sig_name,
                 artist_signature_date = :sig_date,
                 artist_signature_ip = :sig_ip
-            WHERE id = :cid
+            WHERE id = :cid AND status = 'pending'
         """),
         {
             "fields": filled_fields,
@@ -902,26 +984,80 @@ def sign_contract(contract_id: int, data: dict, request: Request, user=Depends(g
             "cid": contract_id,
         }
     )
+    if _sign_res.rowcount == 0:
+        # Lost the race — somebody else already advanced the contract.
+        # Return idempotently so the user sees "Signed" instead of an
+        # error if they double-clicked.
+        db.commit()
+        return {"ok": True, "already_signed": True}
     
-    # Transition gig from pending_contract to booked
+    # Transition gig (and any held slots) from pending → booked.
+    # Audit fix (May 2026 part 2): previously this only matched
+    # gig.status='pending_contract', which is the single-slot signal.
+    # For multi-slot the gig stays 'open' and the SLOT is pending_contract.
+    # The old code left the slot stuck in pending_contract forever, with
+    # no transaction created and no booking emails sent. Now we mirror
+    # the multi-slot handling from countersign_contract:
+    #   - Flip every slot held for this artist (pending_contract/open) to booked
+    #   - If all slots booked → mark parent gig 'booked'; otherwise just
+    #     clear the contract hold on the parent and leave status 'open'.
     gig = db.execute(
-        text("SELECT id, status, venue_id FROM gigs WHERE id = :gid"),
+        text("""SELECT id, status, venue_id, pay, date
+                FROM gigs WHERE id = :gid"""),
         {"gid": contract["gig_id"]}
     ).mappings().first()
-    if gig and gig["status"] == "pending_contract":
+    if gig and gig["status"] in ("pending_contract", "open", "awaiting_venue_contract"):
+        artist_id_local = contract["artist_id"]
+        # Audit fix (May 2026 part 5): defer the booking-transaction creation
+        # and booking emails to countersign_contract, matching what
+        # upload_signed_pdf already does. Previously this path flipped slots
+        # directly to 'booked' and created the venue charge at artist-sign —
+        # if the venue never countersigned, the scheduler would still charge
+        # the venue on payout day. The "fewer undos if venue never signs"
+        # invariant only held for the PDF path, not the electronic path.
+        # Now both paths move slots to 'awaiting_venue_contract' and parent
+        # gig matches; the countersign handler flips slots to 'booked',
+        # applies pay overrides, creates the venue charge, and sends booking
+        # emails — all in one atomic step gated on `status='artist_signed'`.
         db.execute(
-            text("UPDATE gigs SET status = 'booked', contract_hold_artist_id = NULL, contract_hold_expires_at = NULL, radius_blast_token = NULL WHERE id = :gid"),
-            {"gid": contract["gig_id"]}
+            text("""UPDATE gig_slots SET status = 'awaiting_venue_contract'
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND status IN ('pending_contract', 'open')"""),
+            {"gid": contract["gig_id"], "aid": artist_id_local}
         )
-        # Create payment transaction now that gig is fully booked
-        gig_full = db.execute(
-            text("SELECT pay, date FROM gigs WHERE id = :gid"),
+        # Parent gig: if every slot is now in awaiting-state (no still-open
+        # slots), flip parent to awaiting_venue_contract too so the calendar
+        # bubble reflects "awaiting venue countersign". Otherwise leave the
+        # parent 'open' so other slots remain bookable.
+        still_open = db.execute(
+            text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
             {"gid": contract["gig_id"]}
-        ).mappings().first()
-        if gig_full:
-            _create_booking_transaction(
-                db, contract["gig_id"], gig["venue_id"], contract["artist_id"],
-                gig_full["pay"], gig_full["date"]
+        ).scalar() or 0
+        # Audit fix (May 2026 part 6): set a 48h countersign deadline instead of
+        # NULL. The expiration sweep (_cleanup_expired_holds_impl) keys off
+        # contract_hold_expires_at < now and skips NULL — so leaving NULL here
+        # would permanently lock the slot in awaiting_venue_contract if the
+        # venue never countersigns.
+        from datetime import timedelta as _td_sign
+        _countersign_deadline = (utcnow_naive() + _td_sign(hours=48)).isoformat()
+        if still_open == 0:
+            db.execute(
+                text("""UPDATE gigs SET status = 'awaiting_venue_contract',
+                              artist_id = :aid,
+                              contract_hold_artist_id = :aid,
+                              contract_hold_expires_at = :exp,
+                              radius_blast_token = NULL
+                        WHERE id = :gid"""),
+                {"gid": contract["gig_id"], "aid": artist_id_local, "exp": _countersign_deadline}
+            )
+        else:
+            db.execute(
+                text("""UPDATE gigs SET artist_id = :aid,
+                              contract_hold_artist_id = :aid,
+                              contract_hold_expires_at = :exp,
+                              radius_blast_token = NULL
+                        WHERE id = :gid"""),
+                {"gid": contract["gig_id"], "aid": artist_id_local, "exp": _countersign_deadline}
             )
     
     # Notify venue that artist signed
@@ -992,11 +1128,18 @@ def _generate_signature_page_pdf(venue_name, signature_name, sig_date, sig_ip, a
     lines.append('0 0 0 RG')  # Reset to black
     y -= 30
     
-    # Contract info
-    lines.append(f'BT /F1 10 Tf 54 {y} Td (This document confirms that the venue representative has digitally) Tj ET')
+    # Contract info — audit fix (May 2026 part 10b): explicit legal language
+    # tying this page to the artist-signed page. This page is APPENDED to the
+    # artist's signed PDF; the legal reading is that both pages together
+    # constitute the fully-executed contract.
+    lines.append(f'BT /F1 10 Tf 54 {y} Td (This page is the venue countersignature of the contract on the preceding pages.) Tj ET')
     y -= 16
-    lines.append(f'BT /F1 10 Tf 54 {y} Td (countersigned the attached contract, making it fully executed.) Tj ET')
-    y -= 32
+    lines.append(f'BT /F1 10 Tf 54 {y} Td (By countersigning, the venue accepts and agrees to all terms set forth therein.) Tj ET')
+    y -= 16
+    lines.append(f'BT /F1 10 Tf 54 {y} Td (The artist signature on the prior pages and this countersignature together) Tj ET')
+    y -= 16
+    lines.append(f'BT /F1 10 Tf 54 {y} Td (constitute the fully-executed contract between the parties.) Tj ET')
+    y -= 28
     
     # Details box background
     box_top = y + 8
@@ -1073,7 +1216,18 @@ def _generate_signature_page_pdf(venue_name, signature_name, sig_date, sig_ip, a
     footer = f'Generated by GigsFill  |  Contract ID: {contract_id}  |  {utcnow_naive().strftime("%B %d, %Y")}'
     lines.append(f'BT /F1 7 Tf 0.5 0.5 0.5 rg 180 {y} Td ({esc(footer)}) Tj ET')
     
+    # Audit fix (May 2026 part 10b): transliterate non-latin-1 characters
+    # (e.g. accented vowels in artist names like "José" or "Beyoncé") to
+    # their closest ASCII equivalent before encoding. The previous
+    # errors='replace' rendered them as "?", making signatures unreadable.
     stream_content = '\n'.join(lines)
+    try:
+        import unicodedata as _ud
+        stream_content = _ud.normalize('NFKD', stream_content).encode('ascii', 'ignore').decode('ascii') \
+            if any(ord(c) > 127 for c in stream_content) else stream_content
+        # Re-apply NFC for any chars that survived
+    except Exception:
+        pass
     stream_bytes = stream_content.encode('latin-1', errors='replace')
     stream_len = len(stream_bytes)
     
@@ -1117,10 +1271,10 @@ def _stamp_venue_signature_on_pdf(db, contract, signature_name, sig_date, sig_ip
     Uses pypdf to merge the existing signed PDF with a generated signature page."""
     
     signed_path = contract.get("signed_pdf_path", "")
-    print(f"[PDF STAMP INNER] signed_pdf_path from contract: '{signed_path}'")
+    logger.debug(f"[PDF STAMP INNER] signed_pdf_path from contract: '{signed_path}'")
     if not signed_path:
         logger.warning(f"No signed_pdf_path for contract {contract.get('id')}")
-        print(f"[PDF STAMP INNER] ABORT: No signed_pdf_path")
+        logger.debug(f"[PDF STAMP INNER] ABORT: No signed_pdf_path")
         return "abort_no_path"
     
     # Resolve the file path — try multiple approaches
@@ -1130,22 +1284,21 @@ def _stamp_venue_signature_on_pdf(db, contract, signature_name, sig_date, sig_ip
         signed_path.lstrip("/"),              # strip leading slash (relative)
         os.path.join(".", signed_path.lstrip("/")),  # explicit relative
     ]
-    print(f"[PDF STAMP INNER] CWD: {os.getcwd()}")
+    logger.debug(f"[PDF STAMP INNER] CWD: {os.getcwd()}")
     for candidate in candidates:
         exists = os.path.exists(candidate)
-        print(f"[PDF STAMP INNER] Trying path: '{candidate}' → exists={exists}")
+        logger.debug(f"[PDF STAMP INNER] Trying path: '{candidate}' → exists={exists}")
         if exists:
             file_path = candidate
             break
     
     if not file_path:
         logger.warning(f"Signed PDF not found. Tried: {candidates}")
-        print(f"[PDF STAMP INNER] ABORT: File not found at any candidate path")
+        logger.debug(f"[PDF STAMP INNER] ABORT: File not found at any candidate path")
         return "abort_file_not_found"
     
     original_size = os.path.getsize(file_path)
-    print(f"[PDF STAMP INNER] Found PDF at: {file_path} (size={original_size} bytes)")
-    
+    logger.debug(f"[PDF STAMP INNER] Found PDF at: {file_path} (size={original_size} bytes)")
     # Get venue/artist/gig info for the signature page
     gig_info = db.execute(
         text("""SELECT g.date, v.venue_name, a.name as artist_name
@@ -1171,39 +1324,37 @@ def _stamp_venue_signature_on_pdf(db, contract, signature_name, sig_date, sig_ip
         gig_date=gig_date,
         contract_id=contract.get("id", 0)
     )
-    print(f"[PDF STAMP INNER] Generated signature page ({len(sig_page_pdf)} bytes)")
-    
+    logger.debug(f"[PDF STAMP INNER] Generated signature page ({len(sig_page_pdf)} bytes)")
     # Try to merge with pypdf/PyPDF2
     pdf_lib = None
     PdfReader = None
     PdfWriter = None
     import sys
-    print(f"[PDF STAMP INNER] Python executable: {sys.executable}")
-    print(f"[PDF STAMP INNER] sys.path: {sys.path[:5]}")
+    logger.debug(f"[PDF STAMP INNER] Python executable: {sys.executable}")
+    logger.debug(f"[PDF STAMP INNER] sys.path: {sys.path[:5]}")
     try:
         from pypdf import PdfReader as _R, PdfWriter as _W
         PdfReader, PdfWriter = _R, _W
         pdf_lib = "pypdf"
-        print(f"[PDF STAMP INNER] pypdf imported successfully")
+        logger.debug(f"[PDF STAMP INNER] pypdf imported successfully")
     except ImportError as ie1:
-        print(f"[PDF STAMP INNER] pypdf import failed: {ie1}")
+        logger.debug(f"[PDF STAMP INNER] pypdf import failed: {ie1}")
         try:
             from PyPDF2 import PdfReader as _R, PdfWriter as _W
             PdfReader, PdfWriter = _R, _W
             pdf_lib = "PyPDF2"
-            print(f"[PDF STAMP INNER] PyPDF2 imported successfully")
+            logger.debug(f"[PDF STAMP INNER] PyPDF2 imported successfully")
         except ImportError as ie2:
             pdf_lib = None
-            print(f"[PDF STAMP INNER] PyPDF2 import also failed: {ie2}")
-            print(f"[PDF STAMP INNER] Neither pypdf nor PyPDF2 available!")
-    
+            logger.debug(f"[PDF STAMP INNER] PyPDF2 import also failed: {ie2}")
+            logger.debug(f"[PDF STAMP INNER] Neither pypdf nor PyPDF2 available!")
     if not pdf_lib:
         # No PDF library available — save signature page as separate file alongside
         sig_path = file_path.replace('.pdf', '_countersigned.pdf')
         with open(sig_path, 'wb') as f:
             f.write(sig_page_pdf)
         logger.warning(f"No pypdf/PyPDF2 available; saved separate countersign page to {sig_path}")
-        print(f"[PDF STAMP INNER] FALLBACK: Saved separate file to {sig_path}")
+        logger.debug(f"[PDF STAMP INNER] FALLBACK: Saved separate file to {sig_path}")
         return "fallback_no_pdf_lib"
     
     logger.info(f"Using {pdf_lib} to merge signature page")
@@ -1215,18 +1366,17 @@ def _stamp_venue_signature_on_pdf(db, contract, signature_name, sig_date, sig_ip
     try:
         with open(sig_tmp_path, 'wb') as f:
             f.write(sig_page_pdf)
-        print(f"[PDF STAMP INNER] Wrote sig temp file: {sig_tmp_path}")
-        
+        logger.debug(f"[PDF STAMP INNER] Wrote sig temp file: {sig_tmp_path}")
         # Read existing signed PDF and append signature page
         writer = PdfWriter()
         
         reader = PdfReader(file_path)
-        print(f"[PDF STAMP INNER] Original PDF has {len(reader.pages)} pages")
+        logger.debug(f"[PDF STAMP INNER] Original PDF has {len(reader.pages)} pages")
         for page in reader.pages:
             writer.add_page(page)
         
         sig_reader = PdfReader(sig_tmp_path)
-        print(f"[PDF STAMP INNER] Signature page PDF has {len(sig_reader.pages)} pages")
+        logger.debug(f"[PDF STAMP INNER] Signature page PDF has {len(sig_reader.pages)} pages")
         for page in sig_reader.pages:
             writer.add_page(page)
         
@@ -1237,20 +1387,17 @@ def _stamp_venue_signature_on_pdf(db, contract, signature_name, sig_date, sig_ip
             writer.write(out_f)
         
         merged_size = os.path.getsize(out_tmp_path)
-        print(f"[PDF STAMP INNER] Merged PDF written to temp: {out_tmp_path} ({merged_size} bytes)")
-        
+        logger.debug(f"[PDF STAMP INNER] Merged PDF written to temp: {out_tmp_path} ({merged_size} bytes)")
         # Replace original with merged version (same filesystem = atomic rename)
         shutil.move(out_tmp_path, file_path)
         
         final_size = os.path.getsize(file_path)
-        print(f"[PDF STAMP INNER] SUCCESS: Replaced {file_path} (was {original_size} → now {final_size} bytes)")
-        
+        logger.debug(f"[PDF STAMP INNER] SUCCESS: Replaced {file_path} (was {original_size} → now {final_size} bytes)")
         # Verify the stamp actually made the file bigger
         if final_size <= original_size:
-            print(f"[PDF STAMP INNER] WARNING: File size did NOT increase! Stamp may have failed.")
+            logger.debug(f"[PDF STAMP INNER] WARNING: File size did NOT increase! Stamp may have failed.")
         else:
-            print(f"[PDF STAMP INNER] VERIFIED: File grew by {final_size - original_size} bytes ✓")
-        
+            logger.debug(f"[PDF STAMP INNER] VERIFIED: File grew by {final_size - original_size} bytes ✓")
         # Update DB with the resolved path (so download endpoint can find it reliably)
         db.execute(
             text("UPDATE gig_contracts SET signed_pdf_path = :path WHERE id = :cid"),
@@ -1262,7 +1409,7 @@ def _stamp_venue_signature_on_pdf(db, contract, signature_name, sig_date, sig_ip
         
     except Exception as e:
         logger.error(f"PDF merge failed: {e}", exc_info=True)
-        print(f"[PDF STAMP INNER] MERGE ERROR: {e}")
+        logger.debug(f"[PDF STAMP INNER] MERGE ERROR: {e}")
         import traceback
         traceback.print_exc()
         # Fallback: save signature page as separate file
@@ -1270,7 +1417,7 @@ def _stamp_venue_signature_on_pdf(db, contract, signature_name, sig_date, sig_ip
         with open(sig_path, 'wb') as f:
             f.write(sig_page_pdf)
         logger.info(f"Saved separate countersign page to {sig_path}")
-        print(f"[PDF STAMP INNER] FALLBACK: Saved separate file to {sig_path}")
+        logger.debug(f"[PDF STAMP INNER] FALLBACK: Saved separate file to {sig_path}")
         stamp_result = f"fallback_merge_failed: {e}"
     finally:
         # Clean up temp files
@@ -1312,15 +1459,61 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
         client_ip = forwarded.split(",")[0].strip()
     
     now = utcnow_naive().isoformat() + 'Z'
-    
-    db.execute(
+
+    # Audit fix (May 2026 part 10): for pdf_upload contracts, STAMP THE PDF
+    # FIRST. If the stamp fails, refuse to mark the contract fully_signed
+    # — otherwise the DB says "executed" but the file on disk lacks the
+    # venue signature. Previously this UPDATE ran first, then stamp errors
+    # were swallowed silently and the gig still became 'booked'.
+    pdf_stamp_result = "skipped"
+    if contract.get("contract_type") == "pdf_upload":
+        if not contract.get("signed_pdf_path"):
+            raise HTTPException(409, "Cannot countersign: artist has not uploaded a signed PDF yet.")
+        try:
+            stamp_status = _stamp_venue_signature_on_pdf(db, contract, signature_name, now, client_ip)
+            pdf_stamp_result = stamp_status or "returned_none"
+            # Treat known-failure return strings the same as exceptions
+            if isinstance(stamp_status, str) and stamp_status.startswith(("abort_", "error:", "fallback_")):
+                raise RuntimeError(f"stamp returned {stamp_status}")
+        except Exception as e:
+            logger.error(f"PDF stamp failed for contract {contract_id}: {e}", exc_info=True)
+            # Alert admin so an operator can intervene before the venue tries again
+            try:
+                from backend.payout_scheduler import _send_admin_alert
+                from backend.db import get_db_connection
+                _c = get_db_connection()
+                try:
+                    _send_admin_alert(
+                        _c,
+                        f"Countersign stamp failed — contract #{contract_id}",
+                        f"<p>Venue tried to countersign contract <strong>#{contract_id}</strong> "
+                        f"on gig #{contract.get('gig_id')} but the PDF stamp failed:</p>"
+                        f"<pre>{str(e)[:300]}</pre>"
+                        f"<p>The contract has NOT been marked fully_signed. The venue will need "
+                        f"to retry. If this persists, the artist's uploaded PDF may be corrupt.</p>"
+                    )
+                finally:
+                    _c.close()
+            except Exception:
+                pass
+            raise HTTPException(
+                500,
+                "Could not stamp signature onto the contract PDF. "
+                "Your countersign was NOT recorded. Please retry; if this persists, contact support."
+            )
+
+    # Audit fix (May 2026 part 3): atomic-claim guard. The Python check
+    # above is non-atomic; a double-clicked countersign would otherwise
+    # re-fire _create_booking_transaction + booking emails. Constrain to
+    # status='artist_signed' and bail idempotently on lost-race.
+    _cs_res = db.execute(
         text("""
             UPDATE gig_contracts SET
                 status = 'fully_signed',
                 venue_signature_name = :sig_name,
                 venue_signature_date = :sig_date,
                 venue_signature_ip = :sig_ip
-            WHERE id = :cid
+            WHERE id = :cid AND status = 'artist_signed'
         """),
         {
             "sig_name": signature_name,
@@ -1329,30 +1522,24 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
             "cid": contract_id,
         }
     )
-    
-    # For pdf_upload contracts: stamp venue digital signature onto the signed PDF
-    pdf_stamp_result = "skipped"
-    logger.info(f"Countersign contract {contract_id}: type={contract.get('contract_type')}, signed_pdf_path={contract.get('signed_pdf_path')}")
-    print(f"[PDF STAMP] Countersign contract {contract_id}: type={contract.get('contract_type')}, signed_pdf_path={contract.get('signed_pdf_path')}")
-    if contract.get("contract_type") == "pdf_upload" and contract.get("signed_pdf_path"):
+    if _cs_res.rowcount == 0:
+        db.commit()
+        return {"ok": True, "already_countersigned": True}
+
+    logger.info(f"Countersign contract {contract_id}: type={contract.get('contract_type')} pdf_stamp={pdf_stamp_result}")
+    if False:  # vestigial legacy block kept removed
         try:
-            print(f"[PDF STAMP] Calling _stamp_venue_signature_on_pdf for contract {contract_id}...")
             stamp_status = _stamp_venue_signature_on_pdf(db, contract, signature_name, now, client_ip)
-            print(f"[PDF STAMP] Stamp returned: {stamp_status}")
             pdf_stamp_result = stamp_status or "returned_none"
         except Exception as e:
             logger.error(f"Failed to stamp venue signature on PDF contract {contract_id}: {e}", exc_info=True)
-            print(f"[PDF STAMP] FAILED for contract {contract_id}: {e}")
-            import traceback
-            traceback.print_exc()
             pdf_stamp_result = f"error: {e}"
-            # Non-fatal: signature is recorded in DB even if PDF stamp fails
     elif contract.get("contract_type") == "pdf_upload":
         logger.warning(f"Contract {contract_id} is pdf_upload but has no signed_pdf_path")
-        print(f"[PDF STAMP] WARNING: Contract {contract_id} is pdf_upload but has no signed_pdf_path")
+        logger.debug(f"[PDF STAMP] WARNING: Contract {contract_id} is pdf_upload but has no signed_pdf_path")
         pdf_stamp_result = "no_signed_pdf_path"
     else:
-        print(f"[PDF STAMP] Skipping stamp: contract_type={contract.get('contract_type')} (not pdf_upload)")
+        logger.debug(f"[PDF STAMP] Skipping stamp: contract_type={contract.get('contract_type')} (not pdf_upload)")
         pdf_stamp_result = f"not_pdf_upload: {contract.get('contract_type')}"
     
     # Delete old pre-countersign notifications FIRST (so they are gone before we create the new one; delete by gig_id only so we never miss due to artist_id/venue_id type or null)
@@ -1377,9 +1564,12 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
     venue_id = contract["venue_id"]
     artist_id = contract["artist_id"]
     if gig_before and gig_before["status"] in ('pending_contract', 'open', 'awaiting_venue_contract'):
-        # Set this artist's slot(s) to booked and apply pay override
+        # Audit fix (May 2026 part 5): include 'awaiting_venue_contract' in the
+        # IN clause — that's the new intermediate state sign_contract leaves
+        # slots in (previously sign_contract flipped them directly to 'booked',
+        # but that meant the venue charge fired before countersign).
         db.execute(
-            text("UPDATE gig_slots SET status = 'booked' WHERE gig_id = :gid AND artist_id = :aid AND status IN ('pending_contract', 'open')"),
+            text("UPDATE gig_slots SET status = 'booked' WHERE gig_id = :gid AND artist_id = :aid AND status IN ('pending_contract', 'open', 'awaiting_venue_contract')"),
             {"gid": contract["gig_id"], "aid": artist_id}
         )
         # Apply pay override to all newly booked slots
@@ -1397,14 +1587,30 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
             text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status NOT IN ('booked')"),
             {"gid": contract["gig_id"]}
         ).scalar()
+        # Audit fix (May 2026 part 7): on the multi-slot path, do NOT
+        # unconditionally NULL `contract_hold_*` — if other artists are still
+        # awaiting countersign on other slots of this gig, their hold tracker
+        # would be nuked and the expiration sweep could never reap them. Only
+        # clear those columns when they point at the artist we just
+        # countersigned (or when no other in-flight contracts remain on this
+        # gig). Per-contract `gig_contracts.hold_expires_at` is still the
+        # source of truth for the sweep (post-part-7).
         if open_slots == 0:
             db.execute(
-                text("UPDATE gigs SET status = 'booked', artist_id = :aid, contract_hold_artist_id = NULL, contract_hold_expires_at = NULL, radius_blast_token = NULL WHERE id = :gid"),
+                text("UPDATE gigs SET status = 'booked', artist_id = :aid, "
+                     "    contract_hold_artist_id = NULL, "
+                     "    contract_hold_expires_at = NULL, "
+                     "    radius_blast_token = NULL "
+                     "WHERE id = :gid"),
                 {"gid": contract["gig_id"], "aid": artist_id}
             )
         else:
             db.execute(
-                text("UPDATE gigs SET artist_id = :aid, contract_hold_artist_id = NULL, contract_hold_expires_at = NULL, radius_blast_token = NULL WHERE id = :gid"),
+                text("UPDATE gigs SET artist_id = :aid, "
+                     "    contract_hold_artist_id = CASE WHEN contract_hold_artist_id = :aid THEN NULL ELSE contract_hold_artist_id END, "
+                     "    contract_hold_expires_at = CASE WHEN contract_hold_artist_id = :aid OR contract_hold_artist_id IS NULL THEN NULL ELSE contract_hold_expires_at END, "
+                     "    radius_blast_token = NULL "
+                     "WHERE id = :gid"),
                 {"gid": contract["gig_id"], "aid": artist_id}
             )
             # Set any pending_contract slots for this artist to booked
@@ -1412,10 +1618,31 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
                 text("UPDATE gig_slots SET status = 'booked' WHERE gig_id = :gid AND artist_id = :aid AND status = 'pending_contract'"),
                 {"gid": contract["gig_id"], "aid": artist_id}
             )
-        gig_pay = gig_before.get("pay") or 0
+        # Audit fix (May 2026 part 9): for multi-slot gigs, gigs.pay is MAX(slot.pay)
+        # — using it would charge every artist the highest booked slot's pay, not
+        # their own. Sum THIS artist's booked-slot pays instead. Falls back to
+        # gigs.pay for single-slot gigs (where pay lives on the gig row, not on
+        # gig_slots).
+        _slot_pay_sum = db.execute(
+            text("""SELECT COALESCE(SUM(pay), 0) FROM gig_slots
+                    WHERE gig_id = :gid AND artist_id = :aid AND status = 'booked'"""),
+            {"gid": contract["gig_id"], "aid": artist_id}
+        ).scalar() or 0
+        gig_pay = _slot_pay_sum if _slot_pay_sum > 0 else (gig_before.get("pay") or 0)
         gig_date = gig_before.get("date")
         gig_start = gig_before.get("start_time")
         gig_end = gig_before.get("end_time")
+        # Audit fix (May 2026 part 5): clear last_cancelled_artist_id on a
+        # successful countersign so a previously-cancelled artist isn't
+        # permanently excluded from future cancellation blasts on this gig.
+        # Mirrors book_slot's clearing at gigs.py:3999.
+        try:
+            db.execute(
+                text("UPDATE gigs SET last_cancelled_artist_id = NULL WHERE id = :gid"),
+                {"gid": contract["gig_id"]}
+            )
+        except Exception:
+            pass
         # Remove the booking artist from waitlist (they booked — no longer waiting)
         # Only clear ALL waitlist entries if gig is now fully booked (no open slots)
         # Preserve waitlist for partially-booked multi-slot gigs
@@ -1479,14 +1706,28 @@ async def upload_signed_pdf(
     
     contract = dict(contract)
     check_artist_access(db, contract["artist_id"], user.id)
-    
+
+    # Audit fix (May 2026 part 5): pre-check status BEFORE consuming the
+    # upload body. Previously a stale upload on a fully_signed / cancelled
+    # contract still read all 20 MB into memory before the 409 — trivial
+    # DoS vector against an authenticated endpoint.
+    if contract.get("status") not in ("pending", "awaiting_venue_upload"):
+        raise HTTPException(409, "Contract is no longer awaiting an artist upload — the venue may have already countersigned.")
+
     # Validate file (suffix + size + magic bytes)
     content = await _read_and_validate_pdf(file, max_mb=20)
-    
+
     # Gig date, venue name, artist name for filename: 2026_04_08_14Cannons_FridaysPast.pdf
+    # Audit fix (May 2026 part 5): JOIN artist on contract["artist_id"] not
+    # g.artist_id — for multi-slot gigs gigs.artist_id is NULL, so the
+    # filename would degrade to "...Artist.pdf" instead of the signer's name.
     gig_row = db.execute(
-        text("SELECT g.date, v.venue_name, a.name as artist_name FROM gigs g LEFT JOIN venues v ON v.id = g.venue_id LEFT JOIN artists a ON a.id = g.artist_id WHERE g.id = :gid"),
-        {"gid": contract["gig_id"]}
+        text("""SELECT g.date, v.venue_name, a.name as artist_name
+                FROM gigs g
+                LEFT JOIN venues v ON v.id = g.venue_id
+                LEFT JOIN artists a ON a.id = :aid
+                WHERE g.id = :gid"""),
+        {"gid": contract["gig_id"], "aid": contract["artist_id"]}
     ).mappings().first()
     venue_name = (gig_row and gig_row.get("venue_name")) or "Venue"
     artist_name = (gig_row and gig_row.get("artist_name")) or "Artist"
@@ -1495,6 +1736,20 @@ async def upload_signed_pdf(
     contract_dir = os.path.join(UPLOAD_DIR, f"signed/gig_{contract['gig_id']}")
     os.makedirs(contract_dir, exist_ok=True)
     
+    # Audit fix (May 2026 part 7): unlink the prior signed PDF on re-upload.
+    # Without this, the suffix-incrementing logic below produces _02, _03 …
+    # filenames and the previous file is orphaned on disk with no DB
+    # reference. Look up any existing path on this contract row and remove
+    # it before writing the new one.
+    _prior_pdf = contract.get("signed_pdf_path")
+    if _prior_pdf:
+        try:
+            _prior_abs = _prior_pdf.lstrip("/")
+            if os.path.isfile(_prior_abs):
+                os.unlink(_prior_abs)
+        except Exception as _pre_ue:
+            logger.warning(f"upload_signed_pdf: failed to remove prior PDF {_prior_pdf}: {_pre_ue}")
+
     base_name = _contract_display_filename(venue_name, artist_name, gig_date, suffix="")
     filename = base_name
     suffix_num = 2
@@ -1502,22 +1757,52 @@ async def upload_signed_pdf(
         filename = _contract_display_filename(venue_name, artist_name, gig_date, suffix=f"_{suffix_num:02d}")
         suffix_num += 1
     file_path = os.path.join(contract_dir, filename)
-    
+
+    # Audit fix (May 2026 part 5): pre-check status BEFORE writing the file to
+    # disk. Previously a stale upload (status already 'fully_signed' or
+    # 'cancelled') would still write a PDF that nothing references, leaving
+    # orphan files on disk forever. Pre-checking is best-effort; the atomic
+    # rowcount guard below is still authoritative against races.
+    _pre = db.execute(
+        text("SELECT status FROM gig_contracts WHERE id = :cid"),
+        {"cid": contract_id}
+    ).first()
+    if _pre and _pre[0] not in ("pending", "awaiting_venue_upload"):
+        raise HTTPException(409, "Contract is no longer awaiting an artist upload — the venue may have already countersigned.")
+
     with open(file_path, "wb") as f:
         f.write(content)
-    
+
     web_path = f"/{file_path}"
-    db.execute(
+    # Audit fix (May 2026 part 3): only flip to artist_signed when the
+    # contract is still waiting for that signature. Previously this
+    # blindly overwrote status, so an artist re-uploading after the
+    # venue countersigned (status='fully_signed') would regress the
+    # contract back to artist_signed and blank the venue side from the
+    # UI. Now we constrain to ('pending', 'awaiting_venue_upload') and
+    # reject otherwise.
+    _up_res = db.execute(
         text("""
             UPDATE gig_contracts SET
                 signed_pdf_path = :path,
                 status = 'artist_signed',
                 artist_signature_name = :sig_name,
                 artist_signature_date = CURRENT_TIMESTAMP
-            WHERE id = :cid
+            WHERE id = :cid AND status IN ('pending', 'awaiting_venue_upload')
         """),
         {"path": web_path, "cid": contract_id, "sig_name": artist_name}
     )
+    if _up_res.rowcount == 0:
+        # Status was something else (fully_signed, expired, cancelled).
+        # Don't regress it — surface the conflict.
+        # Audit fix (May 2026 part 5): race-lost path — the pre-check passed
+        # but another writer (e.g. venue countersign) advanced the status
+        # between then and the UPDATE. Delete the orphan PDF we just wrote.
+        try:
+            os.unlink(file_path)
+        except Exception as _ue:
+            logger.warning(f"upload_signed_pdf: failed to remove orphan file {file_path}: {_ue}")
+        raise HTTPException(409, "Contract is no longer awaiting an artist upload — the venue may have already countersigned.")
     
     # Transition gig — handle both single-slot (status=pending_contract) 
     # and multi-slot (status=open with contract_hold set)
@@ -1527,12 +1812,20 @@ async def upload_signed_pdf(
     ).mappings().first()
     _is_pending = gig and gig["status"] in ("pending_contract", "open")
     if _is_pending:
+        # Audit fix (May 2026 part 6): set a 48h countersign deadline rather than
+        # NULL so the expiration sweep can release this slot if the venue ghosts.
+        # Previously the NULL meant `_cleanup_expired_holds_impl` could never
+        # reap it (the WHERE clause requires NOT NULL), permanently locking the
+        # artist in pending_contract.
+        from datetime import timedelta as _td_upload
+        _upload_deadline = (utcnow_naive() + _td_upload(hours=48)).isoformat()
         db.execute(
             text("""
-                UPDATE gigs SET contract_hold_artist_id = NULL, contract_hold_expires_at = NULL
+                UPDATE gigs SET contract_hold_artist_id = :aid,
+                                contract_hold_expires_at = :exp
                 WHERE id = :gid
             """),
-            {"gid": contract["gig_id"]}
+            {"gid": contract["gig_id"], "aid": contract["artist_id"], "exp": _upload_deadline}
         )
         # Do NOT create payment - that happens at venue countersign
         # Delete old contract_pending notifications for BOTH parties
@@ -1602,12 +1895,13 @@ def list_venue_gig_contracts(venue_id: int, user=Depends(get_current_user), db=D
             LEFT JOIN gigs g ON gc.gig_id = g.id
             LEFT JOIN venues v ON gc.venue_id = v.id
             LEFT JOIN venue_contracts vc ON gc.venue_contract_id = vc.id
-            WHERE gc.venue_id = :vid AND gc.status = 'fully_signed'
+            WHERE gc.venue_id = :vid
+              AND gc.status IN ('pending','artist_signed','awaiting_venue_upload','fully_signed')
             ORDER BY gc.created_at DESC
         """),
         {"vid": venue_id}
     ).mappings().all()
-    
+
     return [dict(r) for r in rows]
 
 
@@ -1615,7 +1909,12 @@ def list_venue_gig_contracts(venue_id: int, user=Depends(get_current_user), db=D
 def list_artist_gig_contracts(artist_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     """List all gig contract instances for an artist"""
     check_artist_access(db, artist_id, user.id)
-    
+
+    # Audit fix (May 2026 part 5): widen status filter beyond 'fully_signed'
+    # so artists/venues see in-flight contracts (pending sign, awaiting upload,
+    # artist-signed, awaiting countersign). Previously the page only ever
+    # showed completed contracts — the artist couldn't find the "Upload Signed
+    # PDF" link or chase a venue's countersign from this view.
     rows = db.execute(
         text("""
             SELECT gc.*, v.venue_name, g.date as gig_date, g.title as gig_title,
@@ -1625,7 +1924,8 @@ def list_artist_gig_contracts(artist_id: int, user=Depends(get_current_user), db
             LEFT JOIN gigs g ON gc.gig_id = g.id
             LEFT JOIN artists a ON gc.artist_id = a.id
             LEFT JOIN venue_contracts vc ON gc.venue_contract_id = vc.id
-            WHERE gc.artist_id = :aid AND gc.status = 'fully_signed'
+            WHERE gc.artist_id = :aid
+              AND gc.status IN ('pending','artist_signed','awaiting_venue_upload','fully_signed')
             ORDER BY gc.created_at DESC
         """),
         {"aid": artist_id}
@@ -1967,8 +2267,23 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
             raise HTTPException(403, "Slot is not open for booking")
     elif gig["status"] != "open":
         raise HTTPException(403, "Gig is not open for booking")
-    
+
     venue_id = gig["venue_id"]
+
+    # Audit fix (May 2026 part 5): mirror book_slot's one-slot-per-artist guard.
+    # Without this, an artist with entity_user access could book multiple slots
+    # on the same multi-slot gig via the contract path. The booking would land
+    # twice but _create_booking_transaction silently refuses the second
+    # artist_payout child, leaving a slot booked with no payout row → fee imbalance.
+    if slot_id:
+        _existing_slot_bwc = db.execute(
+            text("""SELECT id FROM gig_slots
+                    WHERE gig_id = :gid AND artist_id = :aid AND id != :sid
+                      AND status IN ('booked','pending_venue_approval','pending_contract','awaiting_venue_contract')"""),
+            {"gid": gig_id, "aid": artist_id, "sid": int(slot_id)}
+        ).first()
+        if _existing_slot_bwc:
+            raise HTTPException(403, "You already have a slot booked or pending on this gig. Each artist can only hold one slot per event.")
 
     # ── Pre-booking checks — shared with book_gig and book_slot ─────────────
     _blast_token = request.query_params.get("blast_token") or data.get("blast_token") or ""
@@ -1984,20 +2299,45 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
                                         gig.get("date"), gig.get("start_time"), gig.get("end_time"))
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Same-day check: radius artists (non-preferred) need venue approval even with contract
-    _is_preferred_bwc = _check_result["pref"] and _check_result["pref"].get("status") == "approved"
+    # Same-day check: radius artists (non-preferred) need venue approval even with contract.
+    # Audit fix (May 2026 part 5): re-read `preferred_artists` directly instead
+    # of trusting `_check_result["pref"]`, which `_run_prebooking_checks`
+    # reassigns to a synthetic `{"status":"approved"}` for blast tokens.
+    # Same bug pattern that book_gig was fixed for earlier this audit.
+    _real_pref_bwc = db.execute(
+        text("SELECT status FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"),
+        {"vid": venue_id, "aid": artist_id}
+    ).first()
+    _is_preferred_bwc = bool(_real_pref_bwc and _real_pref_bwc[0] == "approved")
     _ensure_approval_columns(db)
     if _is_same_day_booking(str(gig.get("date", "")), gig.get("start_time")) and not _is_preferred_bwc:
-        # Route to pending_venue_approval — no contract flow for non-preferred same-day
+        # Route to pending_venue_approval — no contract flow for non-preferred same-day.
+        # Audit fix (May 2026 part 5): atomic claim guard. Without `AND status='open'`
+        # two concurrent same-day requests on the same slot would both pass the
+        # Python-side status check and both UPDATE. Rowcount check raises 409
+        # SLOT_TAKEN on the second one, matching `_apply_slot_booking`.
         if slot_id:
-            db.execute(
-                text("UPDATE gig_slots SET artist_id = :aid, status = 'pending_venue_approval', approval_requested_at = :now WHERE id = :sid"),
+            _claim = db.execute(
+                text("UPDATE gig_slots SET artist_id = :aid, status = 'pending_venue_approval', approval_requested_at = :now "
+                     "WHERE id = :sid AND status = 'open'"),
                 {"aid": artist_id, "sid": int(slot_id), "now": utcnow_naive().isoformat()}
             )
-            db.execute(
-                text("UPDATE gigs SET artist_id = :aid, status = 'pending_venue_approval', approval_requested_at = :now WHERE id = :gid"),
-                {"aid": artist_id, "gid": gig_id, "now": utcnow_naive().isoformat()}
-            )
+            if (_claim.rowcount or 0) == 0:
+                raise HTTPException(409, "SLOT_TAKEN: Another booking just claimed this slot. Please refresh.")
+            # Audit fix (May 2026 part 5): only flip the parent gig to
+            # pending_venue_approval when NO other open slots remain. The prior
+            # unconditional UPDATE blocked other artists from booking the gig's
+            # still-open slots until this one was approved/denied. Mirrors the
+            # book_slot logic at gigs.py:3878.
+            _other_open_bwc = db.execute(
+                text("SELECT COUNT(*) FROM gig_slots WHERE gig_id=:gid AND id!=:sid AND status='open'"),
+                {"gid": gig_id, "sid": int(slot_id)}
+            ).scalar()
+            if not _other_open_bwc:
+                db.execute(
+                    text("UPDATE gigs SET artist_id = :aid, status = 'pending_venue_approval', approval_requested_at = :now WHERE id = :gid"),
+                    {"aid": artist_id, "gid": gig_id, "now": utcnow_naive().isoformat()}
+                )
         else:
             db.execute(
                 text("UPDATE gigs SET artist_id = :aid, status = 'pending_venue_approval', approval_requested_at = :now WHERE id = :gid"),
@@ -2103,8 +2443,20 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
             }
         )
         contract_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        # Audit fix (May 2026 part 7): align slot status with contract status.
+        # `_apply_slot_booking` set the slot to 'pending_contract', but for the
+        # digital path the contract is already 'artist_signed' — the part-5
+        # invariant says these should pair. Without this, the calendar bubble
+        # and any consumer keyed off slot status mislabels the slot as
+        # "awaiting artist signature" when the artist has already signed.
+        if slot_id:
+            db.execute(
+                text("""UPDATE gig_slots SET status = 'awaiting_venue_contract'
+                        WHERE id = :sid AND artist_id = :aid AND status = 'pending_contract'"""),
+                {"sid": int(slot_id), "aid": artist_id}
+            )
         db.commit()
-        
+
         # Remove artist from waitlist now that they've booked (via contract)
         try:
             from backend.routes.waitlist import cleanup_gig_waitlist as _cwl_bwc
@@ -2113,9 +2465,9 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
             db.commit()
         except Exception as _wle:
             logger.warning(f"Waitlist cleanup on book-with-contract failed: {_wle}")
-        
+
         # Do NOT create payment transaction until venue countersigns (fewer undos if venue never signs)
-        
+
         # Create notifications — for digital contracts, artist signed but venue needs to countersign
         _create_booking_notifications(db, gig_id, venue_id, artist_id, "artist_signed")
         db.commit()  # Commit the notifications
@@ -2215,54 +2567,66 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
 
 
 def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
-    """Create notifications for both parties during contract booking flow"""
+    """Create notifications for both parties during contract booking flow.
+
+    Audit fix (May 2026 part 7): fan out to ALL entity_users (owner + team
+    members) on both sides for EVERY status — not just 'booked'. Previously
+    only the primary venues.user_id / artists.user_id received the
+    pending_contract / awaiting_venue_contract / artist_signed / fully_signed
+    notifications, so multi-user accounts missed every step of the contract
+    flow including the final "Booking Confirmed".
+    """
     try:
         gig_data = db.execute(text("SELECT date, title FROM gigs WHERE id = :gid"), {"gid": gig_id}).mappings().first()
         venue_data = db.execute(text("SELECT venue_name, user_id FROM venues WHERE id = :vid"), {"vid": venue_id}).mappings().first()
         artist_data = db.execute(text("SELECT name, user_id FROM artists WHERE id = :aid"), {"aid": artist_id}).mappings().first()
-        
+
         gig_label = gig_data["title"] or gig_data["date"] if gig_data else str(gig_id)
         venue_name = venue_data["venue_name"] if venue_data else "Venue"
         artist_name = artist_data["name"] if artist_data else "Artist"
+
+        # Audit fix (May 2026 part 7): compute entity-user lists once for fan-out.
+        from backend.utils import get_all_entity_users as _gaeu
+        try:
+            _venue_uids = [u["user_id"] for u in _gaeu(db, "venue", venue_id) if u.get("user_id")]
+        except Exception:
+            _venue_uids = [venue_data["user_id"]] if venue_data else []
+        try:
+            _artist_uids = [u["user_id"] for u in _gaeu(db, "artist", artist_id) if u.get("user_id")]
+        except Exception:
+            _artist_uids = [artist_data["user_id"]] if artist_data else []
+        # Dedup overlap (user owns BOTH artist AND venue) so they get one row.
+        _shared = set(_venue_uids) & set(_artist_uids)
+        def _ins_venue(ntype, title, message):
+            for uid in _venue_uids:
+                db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
+                    VALUES (:uid, :ntype, :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
+                    {"uid": uid, "ntype": ntype, "t": title, "m": message, "gid": gig_id, "vid": venue_id, "aid": artist_id})
+        def _ins_artist(ntype, title, message):
+            for uid in _artist_uids:
+                if uid in _shared:
+                    continue  # already inserted on the venue side
+                db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
+                    VALUES (:uid, :ntype, :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
+                    {"uid": uid, "ntype": ntype, "t": title, "m": message, "gid": gig_id, "vid": venue_id, "aid": artist_id})
         
         if status == "booked":
-            # Notify ALL venue and artist users (entity_users aware)
-            from backend.utils import get_all_entity_users
-            all_venue_users  = get_all_entity_users(db, "venue",  venue_id)
-            all_artist_users = get_all_entity_users(db, "artist", artist_id)
-            shared_uids = {u["user_id"] for u in all_venue_users} & {u["user_id"] for u in all_artist_users}
-            for u in all_venue_users:
-                db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                    VALUES (:uid, 'gig_booked', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                    {"uid": u["user_id"], "t": "Gig Booked & Contract Signed",
-                     "m": f"{artist_name} has booked and signed the contract for {gig_label}.", "gid": gig_id, "vid": venue_id, "aid": artist_id})
-            for u in all_artist_users:
-                if u["user_id"] in shared_uids:
-                    continue
-                db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                    VALUES (:uid, 'gig_booked', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                    {"uid": u["user_id"], "t": "Gig Booked!",
-                     "m": f"You've booked {gig_label} at {venue_name}. Contract signed.", "gid": gig_id, "vid": venue_id, "aid": artist_id})
-        
+            _ins_venue('gig_booked', "Gig Booked & Contract Signed",
+                       f"{artist_name} has booked and signed the contract for {gig_label}.")
+            _ins_artist('gig_booked', "Gig Booked!",
+                        f"You've booked {gig_label} at {venue_name}. Contract signed.")
+
         elif status == "pending_contract":
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'contract_pending', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": venue_data["user_id"], "t": "Gig Held — Awaiting Contract Signature",
-                 "m": f"{artist_name} is booking {gig_label}. Awaiting their signed contract (24hr hold).", "gid": gig_id, "vid": venue_id, "aid": artist_id})
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'contract_pending', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": artist_data["user_id"], "t": "Contract Required — 24 Hours to Sign",
-                 "m": f"Download, sign, and upload the contract for {gig_label} at {venue_name} within 24 hours to confirm your booking.", "gid": gig_id, "vid": venue_id, "aid": artist_id})
-        
+            _ins_venue('contract_pending', "Gig Held — Awaiting Contract Signature",
+                       f"{artist_name} is booking {gig_label}. Awaiting their signed contract (24hr hold).")
+            _ins_artist('contract_pending', "Contract Required — 24 Hours to Sign",
+                        f"Download, sign, and upload the contract for {gig_label} at {venue_name} within 24 hours to confirm your booking.")
+
         elif status == "awaiting_venue_contract":
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'contract_upload_needed', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": venue_data["user_id"], "t": "Contract Upload Needed — 48 Hours",
-                 "m": f"{artist_name} wants to book {gig_label}. Upload a contract within 48 hours.", "gid": gig_id, "vid": venue_id, "aid": artist_id})
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'contract_awaiting_venue', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": artist_data["user_id"], "t": "Awaiting Contract From Venue",
-                 "m": f"Your booking for {gig_label} at {venue_name} is being held. The venue will upload a contract within 48 hours.", "gid": gig_id, "vid": venue_id, "aid": artist_id})
+            _ins_venue('contract_upload_needed', "Contract Upload Needed — 48 Hours",
+                       f"{artist_name} wants to book {gig_label}. Upload a contract within 48 hours.")
+            _ins_artist('contract_awaiting_venue', "Awaiting Contract From Venue",
+                        f"Your booking for {gig_label} at {venue_name} is being held. The venue will upload a contract within 48 hours.")
         
         elif status == "artist_signed":
             # Get contract_id for the countersign link
@@ -2279,11 +2643,7 @@ def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
                 except Exception:
                     gig_date_fmt = gig_data["date"][:10] if gig_data.get("date") else ""
             msg_venue = f"{artist_name} has signed the contract for a gig on {gig_date_fmt}." if gig_date_fmt else f"{artist_name} has signed the contract for a gig."
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'contract_countersign_needed', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": venue_data["user_id"], "t": "Contract Signed",
-                 "m": msg_venue,
-                 "gid": gig_id, "vid": venue_id, "aid": artist_id})
+            _ins_venue('contract_countersign_needed', "Contract Signed", msg_venue)
             # Artist: "X has signed the contract for a gig at {venue} on {date}." (second line added in activity center)
             gig_date_fmt_artist = ""
             if gig_data and gig_data.get("date"):
@@ -2293,25 +2653,13 @@ def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
                 except Exception:
                     gig_date_fmt_artist = gig_data["date"][:10] if gig_data.get("date") else ""
             msg_artist = f"{artist_name} has signed the contract for a gig at {venue_name} on {gig_date_fmt_artist}." if gig_date_fmt_artist else f"{artist_name} has signed the contract for a gig at {venue_name}."
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'contract_artist_signed', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": artist_data["user_id"], "t": "Contract Signed — Awaiting Venue",
-                 "m": msg_artist,
-                 "gid": gig_id, "vid": venue_id, "aid": artist_id})
-        
+            _ins_artist('contract_artist_signed', "Contract Signed — Awaiting Venue", msg_artist)
+
         elif status == "fully_signed":
-            # Both parties: "Contract Signed — Booking Confirmed"
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'gig_booked', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": venue_data["user_id"], "t": "Contract Signed — Booking Confirmed",
-                 "m": f"The contract for {gig_label} with {artist_name} is fully signed. Booking confirmed!",
-                 "gid": gig_id, "vid": venue_id, "aid": artist_id})
-            # Artist: confirm gig is booked now that venue countersigned
-            db.execute(text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
-                VALUES (:uid, 'gig_booked', :t, :m, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
-                {"uid": artist_data["user_id"], "t": "Gig Booked — Contract Confirmed!",
-                 "m": f"Your gig {gig_label} at {venue_name} is confirmed! The venue has countersigned the contract.",
-                 "gid": gig_id, "vid": venue_id, "aid": artist_id})
+            _ins_venue('gig_booked', "Contract Signed — Booking Confirmed",
+                       f"The contract for {gig_label} with {artist_name} is fully signed. Booking confirmed!")
+            _ins_artist('gig_booked', "Gig Booked — Contract Confirmed!",
+                        f"Your gig {gig_label} at {venue_name} is confirmed! The venue has countersigned the contract.")
         
         db.commit()
     except Exception:
@@ -2329,12 +2677,32 @@ def get_contract_preview(gig_id: int, request: Request, user=Depends(get_current
     if not artist_id:
         raise HTTPException(400, "artist_id required")
     artist_id = int(artist_id)
-    
+
     gig = db.execute(text("SELECT * FROM gigs WHERE id = :gid"), {"gid": gig_id}).mappings().first()
     if not gig:
         raise HTTPException(404, "Gig not found")
-    
+
     venue_id = gig["venue_id"]
+
+    # Audit fix (May 2026 part 5): authorize the caller against the venue OR the
+    # supplied artist before rendering. Previously any logged-in user could pass
+    # any artist_id and receive that artist's email/phone/city/state interpolated
+    # into the response — a PII scrape across every artist for any venue's template.
+    _allowed = False
+    try:
+        check_venue_access(db, venue_id, user.id)
+        _allowed = True
+    except Exception:
+        pass
+    if not _allowed:
+        try:
+            check_artist_access(db, artist_id, user.id)
+            _allowed = True
+        except Exception:
+            pass
+    if not _allowed:
+        if not to_admin_bool(getattr(user, "is_admin", "false")):
+            raise HTTPException(403, "Not authorized to preview this contract")
     template = db.execute(
         text("SELECT * FROM venue_contracts WHERE venue_id = :vid AND is_active = 1 LIMIT 1"),
         {"vid": venue_id}
@@ -2409,15 +2777,26 @@ async def upload_gig_pdf(
     from datetime import timedelta
     
     check_venue_access(db, venue_id, user.id)
-    
+
     gig = db.execute(
-        text("SELECT id, status, artist_id FROM gigs WHERE id = :gid AND venue_id = :vid"),
+        text("SELECT id, status, artist_id, COALESCE(is_multi_slot, 0) as is_multi_slot FROM gigs WHERE id = :gid AND venue_id = :vid"),
         {"gid": gig_id, "vid": venue_id}
     ).mappings().first()
     if not gig:
         raise HTTPException(404, "Gig not found")
     if gig["status"] != "awaiting_venue_contract":
         raise HTTPException(400, "Gig is not awaiting a venue contract upload")
+    # Audit fix (May 2026 part 2): refuse multi-slot gigs at this single-
+    # slot-shaped endpoint. The blind `UPDATE gigs SET status = 'pending_contract'`
+    # below would corrupt the parent and hide the other slots from artist
+    # search. Multi-slot per-gig-PDF uploads need to be slot-scoped (a
+    # separate endpoint or an explicit `slot_id` query arg).
+    if gig["is_multi_slot"]:
+        raise HTTPException(
+            400,
+            "This endpoint is single-slot only. Multi-slot per-gig PDF uploads "
+            "must specify a slot_id (not yet implemented)."
+        )
     
     # Validate file (suffix + size + magic bytes)
     content = await _read_and_validate_pdf(file, max_mb=20)
@@ -2446,11 +2825,19 @@ async def upload_gig_pdf(
             {"pdf": web_path, "exp": hold_expires.isoformat(), "cid": gc["id"]}
         )
     
-    # Transition gig to pending_contract (artist now has 24 hours)
-    db.execute(
-        text("""UPDATE gigs SET status = 'pending_contract', contract_hold_expires_at = :exp WHERE id = :gid"""),
+    # Transition gig to pending_contract (artist now has 24 hours).
+    # Audit fix (May 2026 part 2): require the gig to STILL be in
+    # `awaiting_venue_contract`. Without this, a stale request that beats
+    # a cancellation could re-bind a cancelled (now open) gig back to
+    # pending_contract referencing an artist who already walked away.
+    result = db.execute(
+        text("""UPDATE gigs SET status = 'pending_contract',
+                                contract_hold_expires_at = :exp
+                WHERE id = :gid AND status = 'awaiting_venue_contract'"""),
         {"exp": hold_expires.isoformat(), "gid": gig_id}
     )
+    if result.rowcount == 0:
+        raise HTTPException(409, "Gig is no longer awaiting a venue contract (was the booking cancelled or already uploaded?).")
     
     # Notify artist
     try:
@@ -2476,8 +2863,12 @@ async def upload_gig_pdf(
 # ============================================
 
 @router.post("/api/contract-holds/cleanup")
-def cleanup_expired_holds(db=Depends(get_db)):
-    """Release gigs with expired contract holds back to open status.
+def cleanup_expired_holds(user=Depends(get_current_user), db=Depends(get_db)):
+    """Admin-only HTTP wrapper. Audit fix (May 2026 part 2): previously
+    unauthenticated, which let any anonymous caller fire the side effects
+    (cancellation emails, flyer mutations, blast re-triggers). The
+    scheduler now invokes ``_cleanup_expired_holds_impl(db)`` directly
+    so it can keep running without an HTTP request.
 
     Audit fix (May 2026): the prior version filtered on `g.status IN
     ('pending_contract','awaiting_venue_contract')`. Multi-slot gigs keep
@@ -2495,27 +2886,36 @@ def cleanup_expired_holds(db=Depends(get_db)):
         and venue get the standard "your hold expired" notification.
       - Fire the cancelled-gig blast for short-lead gigs (within 7 days).
     """
+    if not to_admin_bool(getattr(user, "is_admin", None)):
+        raise HTTPException(403, "Admin access required")
+    return _cleanup_expired_holds_impl(db)
+
+
+def _cleanup_expired_holds_impl(db):
+    """Actual hold-cleanup work. Called by the auth-gated HTTP route above
+    and by the hourly scheduler. Returns the same shape either way.
+
+    Audit fix (May 2026 part 7): iterate per `gig_contracts` row (each artist
+    has their own row with their own `hold_expires_at`) instead of joining
+    on the parent gig's single `contract_hold_expires_at`. The old approach
+    couldn't track multi-slot gigs where Artist B signs slot 2 at T (deadline
+    T+48h) and Artist C signs slot 3 at T+1h (deadline T+49h) — the parent
+    column got overwritten to C's deadline so B's slot stayed stuck forever.
+    Per-contract iteration releases each (gig, artist) pair independently.
+    """
     now = utcnow_naive().isoformat()
 
-    # Find expired holds — match by date, not by gigs.status, so multi-slot
-    # holds (gigs.status='open' with a pending_contract slot row) are caught.
     expired = db.execute(
         text("""
-            SELECT DISTINCT
-                g.id, g.venue_id, g.date, g.title,
-                COALESCE(g.contract_hold_artist_id,
-                         (SELECT gs.artist_id FROM gig_slots gs
-                          WHERE gs.gig_id = g.id
-                            AND gs.status IN ('pending_contract','awaiting_venue_contract')
-                          ORDER BY gs.id LIMIT 1)) AS held_artist_id,
-                g.status, g.contract_hold_expires_at, g.start_time, g.end_time
-            FROM gigs g
-            LEFT JOIN gig_slots gs ON gs.gig_id = g.id
-                                  AND gs.status IN ('pending_contract','awaiting_venue_contract')
-            WHERE (
-                  (g.contract_hold_expires_at IS NOT NULL AND g.contract_hold_expires_at < :now)
-                  OR (gs.id IS NOT NULL AND g.contract_hold_expires_at IS NOT NULL AND g.contract_hold_expires_at < :now)
-            )
+            SELECT
+                gc.id as contract_id, gc.gig_id, gc.artist_id, gc.status as contract_status,
+                gc.hold_expires_at,
+                g.venue_id, g.date, g.title, g.start_time, g.end_time
+            FROM gig_contracts gc
+            JOIN gigs g ON g.id = gc.gig_id
+            WHERE gc.hold_expires_at IS NOT NULL
+              AND gc.hold_expires_at < :now
+              AND gc.status IN ('pending', 'awaiting_venue_upload', 'artist_signed')
         """),
         {"now": now}
     ).mappings().all()
@@ -2537,28 +2937,11 @@ def cleanup_expired_holds(db=Depends(get_db)):
 
     for gig in expired:
         gig = dict(gig)
-        gig_id = gig["id"]
-        held_aid = gig.get("held_artist_id")
+        gig_id = gig["gig_id"]
+        held_aid = gig.get("artist_id")
+        contract_id = gig["contract_id"]
 
-        # 1. Reset the parent gigs row (single-slot path needs status flipped;
-        #    multi-slot is already 'open' so the SET is a no-op there).
-        #    Also clear contract_hold_* and last_cancelled is set below.
-        db.execute(
-            text("""
-                UPDATE gigs SET
-                    status = CASE WHEN status IN ('pending_contract','awaiting_venue_contract')
-                                  THEN 'open' ELSE status END,
-                    artist_id = CASE WHEN artist_id = :aid THEN NULL ELSE artist_id END,
-                    contract_hold_artist_id = NULL,
-                    contract_hold_expires_at = NULL,
-                    radius_blast_token = NULL,
-                    last_cancelled_artist_id = :aid
-                WHERE id = :gid
-            """),
-            {"gid": gig_id, "aid": held_aid}
-        )
-
-        # 2. Reset the slot row(s) the held artist is pinned to. Restores pay
+        # 1. Reset the slot row(s) the held artist is pinned to. Restores pay
         #    to the gig's listed pay (clears any per-artist override).
         if held_aid:
             db.execute(
@@ -2575,12 +2958,72 @@ def cleanup_expired_holds(db=Depends(get_db)):
                 {"gid": gig_id, "aid": held_aid}
             )
 
-        # 3. Mark the contract row(s) expired.
-        db.execute(
+        # 2. Mark just THIS contract row expired (don't touch other artists'
+        #    pending contracts on the same gig).
+        # Audit fix (May 2026 part 8): atomic claim — only expire if still
+        # in an in-flight status. Without this, if a venue countersigned
+        # mid-sweep (status='fully_signed'), this would blindly regress the
+        # contract back to 'expired' and blank the booking from the artist's UI.
+        _claim = db.execute(
             text("UPDATE gig_contracts SET status = 'expired' "
-                 "WHERE gig_id = :gid AND status IN ('pending', 'awaiting_venue_upload')"),
-            {"gid": gig_id}
+                 "WHERE id = :cid "
+                 "AND status IN ('pending', 'awaiting_venue_upload', 'artist_signed')"),
+            {"cid": contract_id}
         )
+        if (_claim.rowcount or 0) == 0:
+            # Status changed during the sweep (venue countersigned this contract
+            # right as we tried to expire it). Skip to avoid regressing fully_signed.
+            logger.info(f"[HOLD_EXPIRED] contract {contract_id} status changed during sweep — skipping expire")
+            continue
+
+        # 3. Reset the parent gigs row ONLY if no other in-flight contracts
+        #    or booked slots remain on this gig. Otherwise leave the parent
+        #    alone so co-pending artists' state is preserved.
+        _other_inflight = db.execute(
+            text("""SELECT 1 FROM gig_contracts gc2
+                    WHERE gc2.gig_id = :gid AND gc2.id != :cid
+                      AND gc2.status IN ('pending','awaiting_venue_upload','artist_signed','fully_signed')
+                    LIMIT 1"""),
+            {"gid": gig_id, "cid": contract_id}
+        ).first()
+        _other_booked_slot = db.execute(
+            text("SELECT 1 FROM gig_slots WHERE gig_id = :gid AND status = 'booked' LIMIT 1"),
+            {"gid": gig_id}
+        ).first()
+        if not _other_inflight and not _other_booked_slot:
+            db.execute(
+                text("""
+                    UPDATE gigs SET
+                        status = CASE WHEN status IN ('pending_contract','awaiting_venue_contract')
+                                      THEN 'open' ELSE status END,
+                        artist_id = CASE WHEN artist_id = :aid THEN NULL ELSE artist_id END,
+                        contract_hold_artist_id = NULL,
+                        contract_hold_expires_at = NULL,
+                        radius_blast_token = NULL
+                    WHERE id = :gid
+                """),
+                {"gid": gig_id, "aid": held_aid}
+            )
+        else:
+            # Just clear the per-gig tracker if it pointed at this released artist;
+            # the cancellation log (below) lets blast still exclude them.
+            db.execute(
+                text("""
+                    UPDATE gigs SET
+                        contract_hold_artist_id = CASE WHEN contract_hold_artist_id = :aid THEN NULL ELSE contract_hold_artist_id END,
+                        contract_hold_expires_at = CASE WHEN contract_hold_artist_id = :aid THEN NULL ELSE contract_hold_expires_at END
+                    WHERE id = :gid
+                """),
+                {"gid": gig_id, "aid": held_aid}
+            )
+        # Audit fix (May 2026 part 9): write to gig_cancelled_artists (and the legacy
+        # last_cancelled_artist_id column) so every cancelled artist is excluded by
+        # the blast filter, not just the most recent.
+        try:
+            from backend.routes.gigs import _record_artist_cancellation as _rac
+            _rac(db, gig_id, held_aid)
+        except Exception as _rae:
+            logger.warning(f"_record_artist_cancellation failed for gig {gig_id} artist {held_aid}: {_rae}")
 
         # 4. Clean up any stale transactions for this artist (rare on
         #    pending_contract since txns aren't created until countersign,
@@ -3130,8 +3573,13 @@ def download_contract_pdf(contract_id: int, request: Request, user=Depends(get_c
             {"cid": contract_id}
         ).mappings().first()
     except Exception as e:
+        # Audit fix (May 2026 part 4): log the original exception with
+        # stack so admin can diagnose. Previously this catch swallowed
+        # the trace.
+        logger.error(f"download_contract_pdf DB query failed for contract {contract_id}: {e}",
+                     exc_info=True)
         raise HTTPException(500, "Database error. Please try again.")
-    
+
     if not row:
         raise HTTPException(404, "Contract not found")
     
@@ -3146,13 +3594,14 @@ def download_contract_pdf(contract_id: int, request: Request, user=Depends(get_c
         text("SELECT 1 FROM artists a WHERE a.id = :aid AND (a.user_id = :uid OR EXISTS (SELECT 1 FROM entity_users eu WHERE eu.entity_type='artist' AND eu.entity_id=a.id AND eu.user_id=:uid))"),
         {"aid": contract["artist_id"], "uid": user.id}
     ).first()
-    if not venue_access and not artist_access:
+    # Audit fix (May 2026 part 6): admin bypass for support/audit access.
+    if not venue_access and not artist_access and not to_admin_bool(getattr(user, "is_admin", "false")):
         raise HTTPException(403, "No access to this contract")
-    
+
     # For PDF upload contracts, serve the file directly (not redirect, to avoid browser cache)
     if contract["contract_type"] == "pdf_upload":
         pdf_path = contract.get("signed_pdf_path") or contract.get("pdf_file_path")
-        print(f"[PDF DOWNLOAD] Contract {contract_id}: contract_type=pdf_upload, signed_pdf_path={contract.get('signed_pdf_path')}, pdf_file_path={contract.get('pdf_file_path')}, using={pdf_path}")
+        logger.debug(f"[PDF DOWNLOAD] Contract {contract_id}: contract_type=pdf_upload, signed_pdf_path={contract.get('signed_pdf_path')}, pdf_file_path={contract.get('pdf_file_path')}, using={pdf_path}")
         if pdf_path:
             # Resolve file on disk
             resolved = None
@@ -3161,6 +3610,22 @@ def download_contract_pdf(contract_id: int, request: Request, user=Depends(get_c
                 print(f"[PDF DOWNLOAD] Trying: '{candidate}' → exists={exists}" + (f" size={os.path.getsize(candidate)}" if exists else ""))
                 if exists and not resolved:
                     resolved = candidate
+            # Audit fix (May 2026 part 3): defend against a malicious / corrupted
+            # DB value pointing at a file outside UPLOAD_DIR. realpath() resolves
+            # symlinks and ".." segments; anything that doesn't end up under the
+            # expected uploads root is rejected before serving.
+            if resolved:
+                try:
+                    _allowed_root = os.path.realpath(UPLOAD_DIR)
+                    _resolved_abs = os.path.realpath(resolved)
+                    if not (_resolved_abs == _allowed_root or _resolved_abs.startswith(_allowed_root + os.sep)):
+                        logger.error(f"download_contract_pdf: refused path-traversal — resolved={_resolved_abs} not under {_allowed_root}")
+                        raise HTTPException(404, "No PDF file found")
+                except HTTPException:
+                    raise
+                except Exception as _safe_e:
+                    logger.error(f"download_contract_pdf: realpath check failed: {_safe_e}")
+                    raise HTTPException(500, "PDF file could not be served")
             if resolved:
                 from fastapi.responses import FileResponse
                 venue_name = contract.get("venue_name") or "Venue"
@@ -3181,10 +3646,32 @@ def download_contract_pdf(contract_id: int, request: Request, user=Depends(get_c
                     }
                 )
             else:
+                # Audit fix (May 2026 part 5): the previous fallback redirected
+                # to whatever the DB row contained. A poisoned signed_pdf_path
+                # (absolute URL, javascript: scheme, off-site host) would have
+                # bypassed the realpath traversal guard above and turned this
+                # endpoint into an open redirect. Now we only redirect when the
+                # value is an app-local relative path AND it doesn't escape
+                # UPLOAD_DIR — otherwise we surface a 404.
+                _safe_redirect = None
+                try:
+                    _pdf_path_str = (pdf_path or "").strip()
+                    if (_pdf_path_str
+                            and not _pdf_path_str.startswith("//")
+                            and ":" not in _pdf_path_str.split("/")[0]  # rejects 'http:', 'javascript:', etc.
+                            and "\\" not in _pdf_path_str):
+                        _rel = _pdf_path_str.lstrip("/")
+                        _candidate_abs = os.path.realpath(os.path.join(".", _rel))
+                        _allowed_root = os.path.realpath(UPLOAD_DIR)
+                        if _candidate_abs == _allowed_root or _candidate_abs.startswith(_allowed_root + os.sep):
+                            _safe_redirect = "/" + _rel
+                except Exception:
+                    _safe_redirect = None
+                if _safe_redirect:
+                    logger.warning(f"PDF file not found on disk for contract {contract_id}; redirecting to static path {_safe_redirect}")
+                    from fastapi.responses import RedirectResponse
+                    return RedirectResponse(url=_safe_redirect)
                 logger.warning(f"PDF file not found for contract {contract_id}: tried {pdf_path}")
-                # Fall back to redirect in case static server can find it
-                from fastapi.responses import RedirectResponse
-                return RedirectResponse(url=pdf_path)
         raise HTTPException(404, "No PDF file found")
     
     body = contract.get("rendered_body", "") or ""
@@ -3258,12 +3745,22 @@ def download_contract_pdf(contract_id: int, request: Request, user=Depends(get_c
 
 @router.get("/api/gig-contracts/{contract_id}/debug-pdf")
 def debug_contract_pdf(contract_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Diagnostic endpoint — shows file paths and sizes for a contract's PDFs"""
+    """Diagnostic endpoint — shows file paths and sizes for a contract's PDFs.
+
+    Audit fix (May 2026 part 10): admin-only. Previously any authenticated
+    user could poll any contract_id and get back full server filesystem
+    paths (signed_pdf_path_db, pdf_file_path_db, server_cwd, file sizes,
+    modified times) — information disclosure about internal storage
+    layout. Now gated to admin.
+    """
+    from backend.utils import to_admin_bool
+    if not to_admin_bool(getattr(user, "is_admin", None)):
+        raise HTTPException(403, "Admin only")
     contract = db.execute(
         text("SELECT id, contract_type, signed_pdf_path, pdf_file_path, status, venue_signature_name, venue_signature_date FROM gig_contracts WHERE id = :cid"),
         {"cid": contract_id}
     ).mappings().first()
-    
+
     if not contract:
         return {"error": "Contract not found"}
     

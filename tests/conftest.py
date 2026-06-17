@@ -43,6 +43,8 @@ def db():
             email VARCHAR UNIQUE NOT NULL,
             password_hash VARCHAR NOT NULL,
             role VARCHAR DEFAULT 'user',
+            phone VARCHAR,
+            sms_carrier VARCHAR,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             account_locked BOOLEAN DEFAULT 0,
             failed_login_attempts INTEGER DEFAULT 0
@@ -127,7 +129,17 @@ def db():
             venue_charge_cents INTEGER NOT NULL,
             artist_payout_cents INTEGER NOT NULL,
             commission_cents INTEGER NOT NULL,
+            credit_card_fee_cents INTEGER DEFAULT 0,
+            payment_method_type VARCHAR,
+            transaction_type VARCHAR DEFAULT 'single',
             status VARCHAR DEFAULT 'pending',
+            scheduled_process_at DATETIME,
+            processed_at DATETIME,
+            parent_transaction_id INTEGER,
+            stripe_payment_intent_id VARCHAR,
+            stripe_transfer_id VARCHAR,
+            external_transaction_id VARCHAR,
+            notes TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (gig_id) REFERENCES gigs(id)
         )
@@ -140,8 +152,19 @@ def db():
             venue_id INTEGER NOT NULL,
             artist_id INTEGER NOT NULL,
             contract_type TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
             rendered_body TEXT,
+            filled_fields TEXT,
+            pdf_file_path TEXT,
+            signed_pdf_path TEXT,
+            status TEXT DEFAULT 'pending',
+            artist_signature_name TEXT,
+            artist_signature_date TIMESTAMP,
+            artist_signature_ip TEXT,
+            venue_signature_name TEXT,
+            venue_signature_date TIMESTAMP,
+            venue_signature_ip TEXT,
+            hold_expires_at TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (gig_id) REFERENCES gigs(id)
         )
     """))
@@ -164,6 +187,71 @@ def db():
             entity_id INTEGER NOT NULL,
             role VARCHAR DEFAULT 'member',
             FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """))
+    # Tables touched by gig_cleanup.delete_gig_completely / cleanup_gig_records.
+    # Minimal schemas (only the columns the cleanup queries actually reference);
+    # production schemas are richer but the tests don't exercise the extras.
+    session.execute(text("""
+        CREATE TABLE gig_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gig_id INTEGER NOT NULL,
+            sender_user_id INTEGER NOT NULL,
+            sender_type TEXT NOT NULL,
+            sender_name TEXT NOT NULL DEFAULT '',
+            body TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    session.execute(text("""
+        CREATE TABLE gig_email_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gig_id INTEGER NOT NULL,
+            venue_id INTEGER,
+            notification_key TEXT NOT NULL,
+            sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    session.execute(text("""
+        CREATE TABLE public_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            event_data TEXT,
+            gig_id INTEGER,
+            city TEXT, state TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    session.execute(text("""
+        CREATE TABLE gig_waitlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gig_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
+            notified INTEGER DEFAULT 0,
+            notified_at DATETIME,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    session.execute(text("""
+        CREATE TABLE waitlist_offered (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gig_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            offer_token TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    session.execute(text("""
+        CREATE TABLE artist_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gig_id INTEGER NOT NULL,
+            venue_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
+            reviewer_user_id INTEGER NOT NULL,
+            rating INTEGER,
+            review_text TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """))
     session.commit()

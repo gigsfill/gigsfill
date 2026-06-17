@@ -140,6 +140,12 @@ async function initUserDropdown() {
     const inviteLink = (userVenues.length > 0 && !isArtistPage)
       ? '<a href="#" onclick="openInviteArtistsModal(event)">Invite Artists</a>\n'
       : '';
+    // Part 10p: My Invites — track sent invitations across all venues you control.
+    // Show on every venue-side page (including the artist tracker, since the
+    // user-as-venue can still navigate to it from any page).
+    const myInvitesLink = (userVenues.length > 0)
+      ? '<a href="/app/my-invites.html">My Invites</a>\n'
+      : '';
     
     // Create dropdown HTML
     const dropdown = document.createElement('div');
@@ -156,6 +162,7 @@ async function initUserDropdown() {
         <a href="#" onclick="openFeedbackModal(event)">Feedback</a>
         <a href="#" onclick="openRecommendModal(event)">Recommend GigsFill</a>
         ${inviteLink}
+        ${myInvitesLink}
         <div class="divider"></div>
         <a href="#" onclick="userDropdownSignOut(event)">Sign Out</a>
       </div>
@@ -446,31 +453,25 @@ function injectGlobalModals() {
       </div>
     </div>
 
-    <!-- INVITE ARTISTS MODAL -->
+    <!-- INVITE ARTISTS MODAL (part 10p: multi-venue) -->
     <div class="gf-modal-overlay" id="inviteArtistsModal" onclick="if(event.target===this)closeInviteArtistsModal()">
-      <div class="gf-modal" style="max-width:540px;">
+      <div class="gf-modal" style="max-width:600px;">
         <div class="gf-modal-header">
           <h2>Invite Artists to GigsFill</h2>
           <button class="gf-modal-close" onclick="closeInviteArtistsModal()">&times;</button>
         </div>
         <div class="gf-modal-body">
           <p style="color:#9ca3af;font-size:0.85rem;margin:0 0 16px;line-height:1.5;">
-            Invite artists you work with to join GigsFill. They'll receive an email letting them know your venue is using GigsFill for booking.
+            Invite artists to join GigsFill. They'll get one email mentioning every venue you select below. After signup (or login, if they already have an account) they'll be asked whether to request preferred-artist status at the venues you picked &mdash; one click instead of three.
           </p>
 
-          <div id="invVenueSelectWrap" style="display:none;margin-bottom:16px;">
-            <label for="invVenueSelect">Sending from Venue</label>
-            <select id="invVenueSelect" style="width:100%;"></select>
+          <label style="margin-bottom:8px;">Inviting from <span id="invVenuesCount" style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;font-size:0.78rem;"></span></label>
+          <div id="invVenuesList" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:10px 12px;max-height:160px;overflow-y:auto;margin-bottom:4px;">
+            <div style="color:#6b7280;font-size:0.8rem;">Loading your venues&hellip;</div>
           </div>
-
-          <label>Send as</label>
-          <div style="display:flex;gap:12px;margin-bottom:16px;">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem;color:#d1d5db;font-weight:400;text-transform:none;letter-spacing:0;">
-              <input type="radio" name="invSendAs" value="venue" checked style="accent-color:#06b6d4;"> <span id="invVenueNameLabel">Venue name</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem;color:#d1d5db;font-weight:400;text-transform:none;letter-spacing:0;">
-              <input type="radio" name="invSendAs" value="personal" style="accent-color:#06b6d4;"> <span id="invPersonalNameLabel">Your name</span>
-            </label>
+          <div style="display:flex;gap:8px;margin-bottom:14px;">
+            <button type="button" onclick="_invToggleAllVenues(true)" style="background:transparent;border:1px solid rgba(124,107,255,0.4);color:#a78bfa;font-size:0.7rem;padding:3px 10px;border-radius:4px;cursor:pointer;">Select all</button>
+            <button type="button" onclick="_invToggleAllVenues(false)" style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:#9ca3af;font-size:0.7rem;padding:3px 10px;border-radius:4px;cursor:pointer;">Select none</button>
           </div>
 
           <label for="invEmails">Email Addresses</label>
@@ -527,24 +528,32 @@ async function submitHelpTicket() {
   status.textContent = '';
   
   const userInfo = window._currentUserInfo || {};
-  
+
   try {
-    const response = await fetch('/api/support/ticket', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        category,
-        subject,
-        description,
-        user_id: userInfo.id,
-        user_email: userInfo.email,
-        user_name: userInfo.name
-      })
-    });
-    
-    if (!response.ok) throw new Error('Failed to submit');
-    
+    const payload = {
+      category, subject, description,
+      user_id: userInfo.id,
+      user_email: userInfo.email,
+      user_name: userInfo.name
+    };
+    // Use apiPostSafe so users see the real backend `detail` message
+    // (rate limit, missing field, etc.) instead of a generic "Failed".
+    if (typeof window.apiPostSafe === 'function') {
+      await window.apiPostSafe('/api/support/ticket', payload);
+    } else {
+      const response = await fetch('/api/support/ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        let detail = `Failed to submit (${response.status})`;
+        try { const j = await response.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+        throw new Error(detail);
+      }
+    }
+
     status.textContent = '✓ Ticket submitted! We\'ll get back to you soon.';
     status.style.color = '#22c55e';
     btn.textContent = 'OK';
@@ -552,7 +561,7 @@ async function submitHelpTicket() {
     btn.onclick = () => closeHelpModal();
   } catch (error) {
     console.error('Error submitting help ticket:', error);
-    status.textContent = 'Failed to submit. Please try again.';
+    status.textContent = (error && error.message) || 'Failed to submit. Please try again.';
     status.style.color = '#ef4444';
     btn.disabled = false;
     btn.textContent = 'Submit';
@@ -597,21 +606,27 @@ async function submitFeedback() {
   const userInfo = window._currentUserInfo || {};
 
   try {
-    const response = await fetch('/api/support/ticket', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        category: 'Feedback',
-        subject,
-        description,
-        user_id: userInfo.id,
-        user_email: userInfo.email,
-        user_name: userInfo.name
-      })
-    });
-
-    if (!response.ok) throw new Error('Failed to submit');
+    const payload = {
+      category: 'Feedback', subject, description,
+      user_id: userInfo.id,
+      user_email: userInfo.email,
+      user_name: userInfo.name
+    };
+    if (typeof window.apiPostSafe === 'function') {
+      await window.apiPostSafe('/api/support/ticket', payload);
+    } else {
+      const response = await fetch('/api/support/ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        let detail = `Failed to send (${response.status})`;
+        try { const j = await response.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+        throw new Error(detail);
+      }
+    }
 
     status.textContent = '✓ Thanks! Your feedback is in front of us.';
     status.style.color = '#22c55e';
@@ -620,7 +635,7 @@ async function submitFeedback() {
     btn.onclick = () => closeFeedbackModal();
   } catch (error) {
     console.error('Error submitting feedback:', error);
-    status.textContent = 'Failed to send. Please try again.';
+    status.textContent = (error && error.message) || 'Failed to send. Please try again.';
     status.style.color = '#ef4444';
     btn.disabled = false;
     btn.textContent = 'Send Feedback';
@@ -748,51 +763,67 @@ function _updateInviteEmailCount() {
   if (el) {
     const n = emails.length;
     el.textContent = n === 0 ? '0 emails entered' : n === 1 ? '1 email entered' : n + ' emails entered';
-    el.style.color = n > 50 ? '#ef4444' : '#6b7280';
+    // Amber (not red) over 50 — part 10p removed the hard limit. The color
+    // just hints "that's a lot, double-check" without implying a cap.
+    el.style.color = n > 50 ? '#f59e0b' : '#6b7280';
   }
+}
+
+function _invToggleAllVenues(checked) {
+  document.querySelectorAll('#invVenuesList input[type="checkbox"]').forEach(cb => { cb.checked = checked; });
+  _updateInviteVenueCount();
+}
+
+function _updateInviteVenueCount() {
+  const el = document.getElementById('invVenuesCount');
+  if (!el) return;
+  const total = document.querySelectorAll('#invVenuesList input[type="checkbox"]').length;
+  const sel = document.querySelectorAll('#invVenuesList input[type="checkbox"]:checked').length;
+  el.textContent = '(' + sel + ' of ' + total + ' selected)';
 }
 
 function openInviteArtistsModal(event) {
   if (event) event.preventDefault();
   document.querySelector('.user-dropdown')?.classList.remove('open');
-  
-  const info = window._currentUserInfo || {};
-  const venues = info.venues || [];
-  
-  // Populate venue selector
-  const wrap = document.getElementById('invVenueSelectWrap');
-  const sel = document.getElementById('invVenueSelect');
-  if (venues.length > 1 && sel) {
-    sel.innerHTML = venues.map(v => '<option value="' + v.id + '">' + escapeHtml(v.venue_name || v.name || 'Venue') + '</option>').join('');
-    wrap.style.display = '';
-    sel.onchange = function() {
-      const opt = sel.options[sel.selectedIndex];
-      document.getElementById('invVenueNameLabel').textContent = opt.textContent;
-    };
-  } else if (sel && venues.length === 1) {
-    sel.innerHTML = '<option value="' + venues[0].id + '">' + escapeHtml(venues[0].venue_name || venues[0].name || 'Venue') + '</option>';
-    wrap.style.display = 'none';
-  }
-  
-  // Set labels
-  if (venues.length > 0) {
-    document.getElementById('invVenueNameLabel').textContent = venues[0].venue_name || venues[0].name || 'Venue name';
-  }
-  document.getElementById('invPersonalNameLabel').textContent = info.name || 'Your name';
-  
-  // Reset fields
+
+  const list = document.getElementById('invVenuesList');
+  list.innerHTML = '<div style="color:#6b7280;font-size:0.8rem;">Loading your venues&hellip;</div>';
+
+  // Reset rest of the form
   document.getElementById('invEmails').value = '';
   document.getElementById('invMessage').value = '';
   document.getElementById('invStatus').textContent = '';
   document.getElementById('invSubmitBtn').disabled = false;
   document.getElementById('invSubmitBtn').textContent = 'Send Invitations';
+  document.getElementById('invSubmitBtn').onclick = submitArtistInvitations;
   _updateInviteEmailCount();
-  
-  // Live email count
-  const emailsEl = document.getElementById('invEmails');
-  emailsEl.oninput = _updateInviteEmailCount;
-  
+  document.getElementById('invEmails').oninput = _updateInviteEmailCount;
+
   document.getElementById('inviteArtistsModal').classList.add('open');
+
+  // Fetch venues the current user controls — owner OR member via entity_users.
+  fetch('/api/my/venues', { credentials: 'include' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('Could not load your venues')))
+    .then(venues => {
+      if (!Array.isArray(venues) || venues.length === 0) {
+        list.innerHTML = '<div style="color:#f59e0b;font-size:0.8rem;">You don\'t control any venues yet, so there\'s no venue context to invite from. Create or join a venue first.</div>';
+        document.getElementById('invSubmitBtn').disabled = true;
+        return;
+      }
+      list.innerHTML = venues.map(v => {
+        const vid = parseInt(v.id, 10) || 0;
+        const name = escapeHtml(v.venue_name || v.name || 'Venue');
+        const loc = (v.city || v.state) ? ' <span style="color:#6b7280;font-size:0.75rem;">' + escapeHtml([v.city, v.state].filter(Boolean).join(', ')) + '</span>' : '';
+        return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:4px 0;font-size:0.85rem;color:#e5e7eb;font-weight:400;text-transform:none;letter-spacing:0;">' +
+          '<input type="checkbox" class="inv-venue-cb" value="' + vid + '" checked onchange="_updateInviteVenueCount()" style="accent-color:#06b6d4;width:14px;height:14px;cursor:pointer;">' +
+          '<span><strong style="color:#fff;">' + name + '</strong>' + loc + '</span>' +
+          '</label>';
+      }).join('');
+      _updateInviteVenueCount();
+    })
+    .catch(err => {
+      list.innerHTML = '<div style="color:#ef4444;font-size:0.8rem;">' + escapeHtml(err.message || 'Could not load your venues.') + '</div>';
+    });
 }
 
 function closeInviteArtistsModal() {
@@ -804,67 +835,60 @@ async function submitArtistInvitations() {
   const message = (document.getElementById('invMessage')?.value || '').trim();
   const status = document.getElementById('invStatus');
   const btn = document.getElementById('invSubmitBtn');
-  const sel = document.getElementById('invVenueSelect');
-  const sendAs = document.querySelector('input[name="invSendAs"]:checked')?.value || 'venue';
-  
+  const venueIds = Array.from(document.querySelectorAll('#invVenuesList input.inv-venue-cb:checked'))
+    .map(cb => parseInt(cb.value, 10)).filter(n => n > 0);
+
   if (emails.length === 0) {
     status.textContent = 'Please enter at least one valid email address.';
     status.style.color = '#ef4444';
     return;
   }
-  if (emails.length > 50) {
-    status.textContent = 'Maximum 50 emails at a time. Please send in batches.';
+  if (venueIds.length === 0) {
+    status.textContent = 'Select at least one venue to invite from.';
     status.style.color = '#ef4444';
     return;
   }
-  
-  const venueId = sel ? sel.value : '';
-  if (!venueId) {
-    status.textContent = 'No venue selected.';
-    status.style.color = '#ef4444';
-    return;
-  }
-  
-  const info = window._currentUserInfo || {};
-  
+
   btn.disabled = true;
   btn.textContent = 'Sending ' + emails.length + ' invitation' + (emails.length > 1 ? 's' : '') + '...';
   status.textContent = '';
-  
+
   try {
-    const response = await fetch('/api/venues/' + venueId + '/invite-artists', {
+    const response = await fetch('/api/me/invite-artists', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
         emails: emails.join(','),
+        venue_ids: venueIds,
         message: message,
-        user_id: info.id,
-        inviter_name: info.name,
-        send_as: sendAs
       })
     });
-    
+
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to send');
+      throw new Error(err.detail || ('Failed to send (HTTP ' + response.status + ')'));
     }
-    
+
     const result = await response.json();
-    
-    let msg = '✓ ' + result.message;
-    status.textContent = msg;
-    status.style.color = '#22c55e';
-    btn.textContent = 'Sent!';
-    
-    // Refresh invited artists tracker if on venue email center page
-    if (typeof loadInvitedArtists === 'function') {
-      loadInvitedArtists(venueId);
-    }
-    
-    btn.textContent = 'OK';
+
+    // Build a friendly summary
+    const parts = [];
+    if (result.sent_count > 0) parts.push('✓ ' + result.sent_count + ' invitation' + (result.sent_count === 1 ? '' : 's') + ' sent across ' + result.venues + ' venue' + (result.venues === 1 ? '' : 's'));
+    if (result.bounced_count > 0) parts.push(result.bounced_count + ' bounced');
+    if (result.skipped_already_pending_count > 0) parts.push(result.skipped_already_pending_count + ' skipped (already invited within 24h)');
+    if (result.invalid_count > 0) parts.push(result.invalid_count + ' invalid email' + (result.invalid_count === 1 ? '' : 's'));
+    status.innerHTML = parts.join('<br>');
+    status.style.color = result.sent_count > 0 ? '#22c55e' : '#f59e0b';
+
+    btn.textContent = 'Done';
     btn.disabled = false;
     btn.onclick = () => closeInviteArtistsModal();
+
+    // Refresh any per-venue tracker if visible
+    if (typeof loadInvitedArtists === 'function') {
+      venueIds.forEach(vid => { try { loadInvitedArtists(vid); } catch(_) {} });
+    }
   } catch (error) {
     console.error('Error inviting artists:', error);
     status.textContent = error.message || 'Failed to send invitations. Please try again.';
@@ -873,3 +897,159 @@ async function submitArtistInvitations() {
     btn.textContent = 'Send Invitations';
   }
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part 10p: Pending-artist-invite popup
+// ─────────────────────────────────────────────────────────────────────────────
+// On every authenticated page load, ask the backend whether the current user
+// has an unconsumed artist-invitation token. If yes, show a modal listing the
+// inviter's venues with pre-checked checkboxes for venues where the user isn't
+// already preferred. Skipped or accepted → token row stamped `preferred_requested_at`
+// so the popup never reappears for that token.
+(function _pendingArtistInvitePopup() {
+  // Don't fire on signup / login / static pages — those have their own banners.
+  const skip = ['/app/index.html', '/app/signup-new.html', '/app/verify-email.html', '/app/legal.html'];
+  if (skip.some(p => window.location.pathname.endsWith(p))) return;
+  // Don't fire twice per page load (e.g. if the user-dropdown script gets included twice)
+  if (window._pendingInviteHookFired) return;
+  window._pendingInviteHookFired = true;
+
+  function _showPopup(inv) {
+    // Build the modal HTML
+    const inviter = String(inv.inviter_name || 'A venue').replace(/</g,'&lt;');
+    const venues = inv.venues || [];
+    const eligible = venues.filter(v => !v.already_preferred && !['pending','denied','revoked','banned'].includes(v.preferred_status || ''));
+    // If every venue is already preferred → friendly "nothing to do" + dismiss
+    if (eligible.length === 0) {
+      const msg = venues.length === 0
+        ? 'Nothing to request.'
+        : 'You\'re already a preferred artist (or have a pending request) at every venue ' + inviter + ' invited you for — no action needed.';
+      _renderTokenPopup({
+        title: '🎶 You\'re all set!',
+        bodyHtml: '<p style="margin:0 0 16px;font-size:14px;line-height:1.6;color:#d1d5db;">' + msg + '</p>',
+        primaryLabel: 'Got it',
+        showSecondary: false,
+        onPrimary: () => _dismissToken(inv.token).then(_closePopup),
+      });
+      return;
+    }
+    const rows = venues.map(v => {
+      const vid = parseInt(v.venue_id, 10) || 0;
+      const nameSafe = String(v.venue_name || 'Venue').replace(/</g,'&lt;');
+      if (v.already_preferred) {
+        return '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;background:rgba(34,197,94,0.06);font-size:0.85rem;color:#86efac;cursor:default;">' +
+          '<span style="width:14px;text-align:center;">✓</span>' +
+          '<span><strong>' + nameSafe + '</strong> <span style="color:#6b7280;font-size:0.75rem;">already preferred</span></span>' +
+          '</label>';
+      }
+      if (['pending','denied','revoked'].includes(v.preferred_status || '')) {
+        const stat = v.preferred_status === 'pending' ? 'request pending' : (v.preferred_status === 'denied' ? 'previously denied' : 'previously revoked');
+        return '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;background:rgba(245,158,11,0.06);font-size:0.85rem;color:#fbbf24;cursor:default;">' +
+          '<span style="width:14px;text-align:center;">!</span>' +
+          '<span><strong>' + nameSafe + '</strong> <span style="color:#9ca3af;font-size:0.75rem;">' + stat + ' — skip</span></span>' +
+          '</label>';
+      }
+      return '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;background:rgba(6,182,212,0.06);font-size:0.85rem;color:#e5e7eb;cursor:pointer;">' +
+        '<input type="checkbox" class="_inv-pop-cb" value="' + vid + '" checked style="accent-color:#06b6d4;width:14px;height:14px;cursor:pointer;">' +
+        '<span><strong>' + nameSafe + '</strong></span>' +
+        '</label>';
+    }).join('');
+    _renderTokenPopup({
+      title: '🎶 Request Preferred Status',
+      bodyHtml:
+        '<p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#d1d5db;">' +
+        '<strong>' + inviter + '</strong> invited you to GigsFill. Want to request preferred-artist status at the venues below in one click?</p>' +
+        '<div style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto;margin-bottom:16px;">' + rows + '</div>' +
+        '<p style="margin:0;font-size:11px;color:#6b7280;line-height:1.5;">Preferred artists can book gigs at a venue directly without venue approval. You can always request later from your profile.</p>',
+      primaryLabel: 'Request Preferred Status',
+      secondaryLabel: 'Maybe later',
+      showSecondary: true,
+      onPrimary: () => {
+        const vids = Array.from(document.querySelectorAll('._inv-pop-cb:checked')).map(cb => parseInt(cb.value, 10)).filter(n => n > 0);
+        if (vids.length === 0) { _dismissToken(inv.token).then(_closePopup); return; }
+        const btn = document.getElementById('_invPopPrimary');
+        if (btn) { btn.disabled = true; btn.textContent = 'Requesting…'; }
+        fetch('/api/artist-invitations/' + encodeURIComponent(inv.token) + '/accept-preferred', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ venue_ids: vids })
+        })
+          .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(new Error(b.detail || 'Request failed'))))
+          .then(res => {
+            const parts = [];
+            if ((res.requested || []).length > 0) parts.push('✓ Requested at ' + res.requested.length + ' venue' + (res.requested.length === 1 ? '' : 's'));
+            if ((res.skipped_already_preferred || []).length > 0) parts.push((res.skipped_already_preferred.length) + ' already preferred');
+            const msg = parts.join(' · ') || 'Done';
+            _renderTokenPopup({
+              title: '🎉 Done!',
+              bodyHtml: '<p style="margin:0;font-size:14px;color:#86efac;">' + msg + '</p><p style="margin:12px 0 0;font-size:13px;color:#9ca3af;line-height:1.5;">Each venue will get a notification and email about your request.</p>',
+              primaryLabel: 'OK',
+              showSecondary: false,
+              onPrimary: _closePopup,
+            });
+          })
+          .catch(err => {
+            if (btn) { btn.disabled = false; btn.textContent = 'Request Preferred Status'; }
+            const errEl = document.getElementById('_invPopErr');
+            if (errEl) { errEl.textContent = err.message || 'Request failed'; errEl.style.display = 'block'; }
+          });
+      },
+      onSecondary: () => _dismissToken(inv.token).then(_closePopup),
+    });
+  }
+
+  function _renderTokenPopup({ title, bodyHtml, primaryLabel, secondaryLabel, showSecondary, onPrimary, onSecondary }) {
+    _closePopup();
+    const overlay = document.createElement('div');
+    overlay.id = '_inviteTokenOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#1a1a2e;border:1px solid rgba(124,107,255,0.3);border-radius:10px;padding:24px 28px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.5);';
+    card.innerHTML =
+      '<h2 style="margin:0 0 16px;font-size:1.1rem;font-weight:700;color:#fff;">' + title + '</h2>' +
+      '<div>' + bodyHtml + '</div>' +
+      '<div id="_invPopErr" style="display:none;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;font-size:0.8rem;padding:8px 12px;border-radius:4px;margin-top:12px;"></div>' +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">' +
+        (showSecondary ? '<button id="_invPopSecondary" style="background:transparent;border:1px solid rgba(255,255,255,0.2);color:#d1d5db;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:0.85rem;">' + (secondaryLabel || 'Cancel') + '</button>' : '') +
+        '<button id="_invPopPrimary" style="background:#06b6d4;border:none;color:#fff;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600;">' + primaryLabel + '</button>' +
+      '</div>';
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    document.getElementById('_invPopPrimary').onclick = onPrimary;
+    if (showSecondary) document.getElementById('_invPopSecondary').onclick = onSecondary;
+  }
+  function _closePopup() {
+    const el = document.getElementById('_inviteTokenOverlay');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+  function _dismissToken(token) {
+    return fetch('/api/artist-invitations/' + encodeURIComponent(token) + '/dismiss', {
+      method: 'POST', credentials: 'include'
+    }).catch(() => {});
+  }
+
+  // Kick off the check. Wait for the user-dropdown's auth load so we know
+  // who the user is. If /api/me returns 401 (not logged in) this no-ops.
+  function _checkPending() {
+    // Don't fire for venue users — invitations are artist-only and the popup
+    // doesn't apply. Use /api/me/pending-artist-invite which returns
+    // {pending: false} for users without a matching invite anyway, but we
+    // can short-circuit on the role too.
+    fetch('/api/me/pending-artist-invite', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d || !d.pending || !d.token) return;
+        return fetch('/api/artist-invitations/by-token/' + encodeURIComponent(d.token), { credentials: 'include' })
+          .then(r => r.ok ? r.json() : null)
+          .then(inv => { if (inv) _showPopup(inv); });
+      })
+      .catch(() => {});
+  }
+  // Defer a tick so the rest of the dropdown init can finish first.
+  if (document.readyState === 'complete') {
+    setTimeout(_checkPending, 300);
+  } else {
+    window.addEventListener('load', () => setTimeout(_checkPending, 300));
+  }
+})();

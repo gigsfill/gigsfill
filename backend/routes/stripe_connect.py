@@ -102,10 +102,13 @@ def create_venue_setup_intent(venue_id: int, user=Depends(get_current_user), db=
     customer_id = settings["stripe_customer_id"] if settings and settings.get("stripe_customer_id") else None
     
     if not customer_id:
-        # Create Stripe Customer
+        # Create Stripe Customer.
+        # Audit fix (May 2026 part 8): idempotency key prevents orphan Customer
+        # creation on concurrent setup-payment-method clicks.
         customer = stripe.Customer.create(
             name=venue["venue_name"],
-            metadata={"venue_id": str(venue_id), "platform": "gigsfill"}
+            metadata={"venue_id": str(venue_id), "platform": "gigsfill"},
+            idempotency_key=f"venue_customer_create_{venue_id}",
         )
         customer_id = customer.id
         
@@ -320,9 +323,15 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
     ).mappings().first()
     
     account_id = settings["stripe_connect_account_id"] if settings and settings.get("stripe_connect_account_id") else None
-    
+
     if not account_id:
-        # Create Express account
+        # Audit fix (May 2026 part 8): pass an idempotency key to Stripe so
+        # two concurrent "Connect" clicks (multi-tab, double-click) don't
+        # create two Express accounts (KYC-quota-burning + orphan in Stripe
+        # if only one gets persisted). The key is artist-scoped so the
+        # second click reuses the first call's account.
+        import uuid as _uuid_acct
+        _acct_idem = f"artist_connect_create_{artist_id}"
         account = stripe.Account.create(
             type="express",
             country="US",
@@ -332,10 +341,11 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
                 "transfers": {"requested": True},
             },
             business_type="individual",
-            metadata={"artist_id": str(artist_id), "platform": "gigsfill"}
+            metadata={"artist_id": str(artist_id), "platform": "gigsfill"},
+            idempotency_key=_acct_idem,
         )
         account_id = account.id
-        
+
         # Upsert entity_payment_settings
         db.execute(
             text("""
@@ -347,11 +357,22 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
         )
         db.commit()
     
-    # Create onboarding link
+    # Create onboarding link.
+    # Audit fix (May 2026 part 5): pull from platform_settings.site_url with
+    # legacy base_url fallback so staging / custom-domain deploys route
+    # artists back to themselves after onboarding instead of production.
+    _su = (
+        db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='site_url'")).scalar()
+        or db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='base_url'")).scalar()
+        or "https://gigsfill.com"
+    )
+    _su = _su.rstrip("/") if _su else "https://gigsfill.com"
+    if "127.0.0.1" in _su or "localhost" in _su:
+        _su = "https://gigsfill.com"
     account_link = stripe.AccountLink.create(
         account=account_id,
-        refresh_url=f"https://gigsfill.com/app/artist-book-gigs.html?artist_id={artist_id}&tab=payments&stripe_refresh=1",
-        return_url=f"https://gigsfill.com/app/artist-book-gigs.html?artist_id={artist_id}&tab=payments&stripe_return=1",
+        refresh_url=f"{_su}/app/artist-book-gigs.html?artist_id={artist_id}&tab=payments&stripe_refresh=1",
+        return_url=f"{_su}/app/artist-book-gigs.html?artist_id={artist_id}&tab=payments&stripe_return=1",
         type="account_onboarding",
     )
     
@@ -442,20 +463,39 @@ def charge_booking(data: dict, user=Depends(get_current_user), db=Depends(get_db
     slot_id = data.get("slot_id")  # Optional - for multi-slot
     venue_id = data.get("venue_id")
     artist_id = data.get("artist_id")
-    amount_cents = data.get("amount_cents")  # Gig pay in cents
-    
-    if not all([gig_id, venue_id, artist_id, amount_cents]):
+
+    if not all([gig_id, venue_id, artist_id]):
         raise HTTPException(400, "Missing required fields")
 
     # ── Safety guard: verify gig is actually booked by this artist ───────────
     # Prevents phantom charges on open/unbooked gigs and duplicate charges.
     from sqlalchemy import text as _cbt
     _gig_check = db.execute(
-        _cbt("SELECT id, venue_id FROM gigs WHERE id = :gid AND venue_id = :vid"),
+        _cbt("SELECT id, venue_id, pay FROM gigs WHERE id = :gid AND venue_id = :vid"),
         {"gid": gig_id, "vid": venue_id}
     ).mappings().first()
     if not _gig_check:
         raise HTTPException(404, "Gig not found for this venue")
+
+    # ── Recompute amount_cents server-side from canonical sources ───────────
+    # Never trust client-supplied amount_cents — derive from slot pay (or gig pay
+    # for single-slot) and apply the per-artist preferred-status override via
+    # _get_effective_pay (which filters status='approved').
+    from backend.routes.gigs import _get_effective_pay as _cb_eff_pay
+    _slot_pay = None
+    if slot_id:
+        _sr = db.execute(
+            _cbt("SELECT pay FROM gig_slots WHERE id = :sid AND gig_id = :gid AND artist_id = :aid AND status = 'booked'"),
+            {"sid": slot_id, "gid": gig_id, "aid": artist_id}
+        ).mappings().first()
+        if _sr:
+            _slot_pay = float(_sr.get("pay") or 0)
+    if _slot_pay is None:
+        _slot_pay = float(_gig_check.get("pay") or 0)
+    _server_pay = _cb_eff_pay(db, venue_id, artist_id, _slot_pay)
+    amount_cents = int(round(float(_server_pay) * 100))
+    if amount_cents <= 0:
+        raise HTTPException(400, "Computed amount is zero — cannot charge")
 
     _artist_booked = db.execute(
         _cbt("""
@@ -584,22 +624,32 @@ def charge_booking(data: dict, user=Depends(get_current_user), db=Depends(get_db
     artist_user = db.execute(text("SELECT user_id FROM artists WHERE id = :aid"), {"aid": artist_id}).mappings().first()
     
     # Record transaction
+    # Bug fix (Jun 2026): the INSERT previously omitted artist_id and
+    # transaction_type, leaving payout_scheduler._transfer_to_artists()
+    # to fall back to legacy artist-routing — which could pay the wrong
+    # artist on multi-user accounts. Both columns are now written
+    # explicitly so the scheduler can key off them directly.
     tx_status = 'charged' if payments_live else 'test'
     db.execute(
         text("""
-            INSERT INTO transactions 
-                (gig_id, from_user_id, to_user_id, amount_cents, venue_charge_cents, artist_payout_cents, 
-                 commission_cents, credit_card_fee_cents, payment_method_type, status, 
-                 stripe_payment_intent_id, scheduled_process_at, created_at, notes)
-            VALUES 
-                (:gig_id, :from_uid, :to_uid, :amount, :venue_charge, :artist_payout,
-                 :commission, :cc_fee, 'stripe', :status,
-                 :pi_id, :scheduled, :now, :notes)
+            INSERT INTO transactions
+                (gig_id, from_user_id, to_user_id, artist_id, amount_cents,
+                 venue_charge_cents, artist_payout_cents, commission_cents,
+                 credit_card_fee_cents, payment_method_type, transaction_type,
+                 status, stripe_payment_intent_id, scheduled_process_at,
+                 created_at, notes)
+            VALUES
+                (:gig_id, :from_uid, :to_uid, :artist_id, :amount,
+                 :venue_charge, :artist_payout, :commission,
+                 :cc_fee, 'stripe', 'single',
+                 :status, :pi_id, :scheduled,
+                 :now, :notes)
         """),
         {
             "gig_id": gig_id,
             "from_uid": venue_user["user_id"] if venue_user else 0,
             "to_uid": artist_user["user_id"] if artist_user else 0,
+            "artist_id": artist_id,
             "amount": amount_cents,
             "venue_charge": venue_charge_cents,
             "artist_payout": artist_payout_cents,
@@ -733,9 +783,12 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
             raise HTTPException(404, "No booked artist or slot found for this gig")
         artist_id = slot_row["artist_id"]
         pay_dollars = float(slot_row.get("pay") or 0)
-        # Apply venue's preferred-artist pay override (My Artists tab)
+        # Apply venue's preferred-artist pay override (My Artists tab).
+        # Override only applies when the artist is currently 'approved' — a revoked
+        # or denied row still carries the old override columns, but shouldn't change
+        # the amount we book a cancellation transaction for.
         override_row = db.execute(
-            text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"),
+            text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid AND status = 'approved'"),
             {"vid": venue_id, "aid": artist_id}
         ).mappings().first()
         if override_row and override_row.get("pay_dollars_override") is not None:
@@ -1042,10 +1095,11 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
     if not venue_check:
         raise HTTPException(403, "Not authorized")
     
-    # Effective pay: use venue's preferred-artist pay override (My Artists) if higher than stored amount
+    # Effective pay: use venue's preferred-artist pay override (My Artists) if higher than stored amount.
+    # Only apply override when relationship is 'approved'.
     amount_cents = txn.get("amount_cents") or 0
     override_row = db.execute(
-        text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"),
+        text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid AND status = 'approved'"),
         {"vid": venue_id, "aid": txn.get("aid") or txn.get("artist_id")}
     ).mappings().first()
     if override_row and override_row.get("pay_dollars_override") is not None:
@@ -1823,10 +1877,68 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
         raise HTTPException(400, "Invalid webhook signature")
 
     event_type = _webhook_get(event, "type")
-    logger.info(f"Stripe webhook: {event_type}")
+    event_id   = _webhook_get(event, "id")
+    logger.info(f"Stripe webhook: {event_type} (id={event_id})")
 
     # Use direct SQLite for writes (same pattern as payout_scheduler)
     conn = _webhook_sqlite_conn()
+
+    # Audit fix (May 2026 part 5+6): idempotency by event_id. Stripe documents
+    # webhooks as at-least-once — every redelivery used to re-run the full
+    # handler: charge.refunded re-appended notes, charge.dispute.created
+    # re-suspended the venue + re-alerted admin, account.updated re-zeroed
+    # the artist's onboarding flag while they were mid-recovery. We
+    # short-circuit on duplicate event_id.
+    #
+    # Audit fix (May 2026 part 6): ORDER FIX — we now only CHECK for the
+    # duplicate row up front. The INSERT happens AFTER the handler block
+    # below commits successfully. Previously the INSERT happened before
+    # the handler ran, so if the handler crashed mid-flight Stripe's retry
+    # delivered the same event_id, our check found it, short-circuited as
+    # "duplicate", and the event was permanently dropped (venue never
+    # suspended, admin never alerted, etc.).
+    # Audit fix (May 2026 part 9): race-free dedup via atomic INSERT OR IGNORE.
+    # The earlier "SELECT-then-INSERT-at-end" pattern had a window where two
+    # concurrent retries of the same event_id (Stripe's at-least-once delivery
+    # under net hiccups) both passed the SELECT check and both ran the handler
+    # before either INSERT landed — leading to double-applied side effects
+    # (double refund, double dispute notification, double payout-cancel).
+    # Now: INSERT first; only proceed if WE created the row. If the handler
+    # raises, DELETE our row so Stripe's retry can re-process. If the row
+    # already existed, short-circuit.
+    _webhook_dedup_skip = False
+    _webhook_event_owned = False
+    if event_id:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT,
+                    received_at TEXT
+                )
+            """)
+            conn.commit()
+            _res = conn.execute(
+                "INSERT OR IGNORE INTO stripe_webhook_events (id, event_type, received_at) "
+                "VALUES (?, ?, datetime('now'))",
+                (event_id, event_type)
+            )
+            conn.commit()
+            _rc = 0
+            try:
+                _rc = _res.rowcount or 0
+            except Exception:
+                _rc = 0
+            if _rc == 0:
+                logger.info(f"Webhook duplicate event_id {event_id} — short-circuit OK")
+                return {"received": True, "duplicate": True}
+            _webhook_event_owned = True
+        except Exception as _ie:
+            # Don't let idempotency-bookkeeping failures block real event
+            # processing — Stripe will retry; better to potentially double-
+            # apply once than to drop a critical webhook.
+            logger.warning(f"Webhook idempotency check failed (proceeding): {_ie}")
+            _webhook_dedup_skip = True
 
     try:
 
@@ -1949,6 +2061,39 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                         The artist payout of <strong>${clawback_cents/100:.2f}</strong>
                         may be clawed back by Stripe. Review immediately in the Stripe dashboard.</p>
                         <p><a href="https://dashboard.stripe.com/disputes/{dispute_id}">View dispute in Stripe →</a></p>""")
+
+                    # Audit fix (May 2026 part 9): notify venue + artist via
+                    # in-app notification. Both parties have skin in the
+                    # dispute outcome — silently flagging the txn while
+                    # leaving them in the dark caused support escalations.
+                    # Fans out across entity_users (multi-user accounts).
+                    try:
+                        from backend.db import SessionLocal as _SLD
+                        from backend.services.notification_service import create_notification as _cnd
+                        from backend.utils import get_all_entity_users as _gaeu2
+                        _ndb = _SLD()
+                        try:
+                            if txn["artist_id"]:
+                                for _u in _gaeu2(_ndb, "artist", txn["artist_id"]):
+                                    _cnd(_ndb, _u["user_id"], 'dispute_opened',
+                                         f"Dispute opened — {txn['venue_name']}",
+                                         (f"The venue {txn['venue_name']} has opened a payment "
+                                          f"dispute on your {txn['date']} gig. Your payout of "
+                                          f"${clawback_cents/100:.2f} may be reversed depending "
+                                          f"on the dispute outcome. We'll notify you when resolved."),
+                                         gig_id=txn["gig_id"], artist_id=txn["artist_id"])
+                            for _u in _gaeu2(_ndb, "venue", txn["venue_id"]):
+                                _cnd(_ndb, _u["user_id"], 'dispute_opened',
+                                     "Payment dispute received",
+                                     (f"We received a chargeback notification on your gig on "
+                                      f"{txn['date']}. Your account is suspended pending "
+                                      f"resolution. Reach out to support if this was filed in error."),
+                                     gig_id=txn["gig_id"], venue_id=txn["venue_id"])
+                            _ndb.commit()
+                        finally:
+                            _ndb.close()
+                    except Exception as _dne:
+                        logger.warning(f"Dispute notification fan-out failed for txn {txn['id']}: {_dne}")
                 else:
                     conn.commit()
                     _wh_admin_alert(conn, f"Chargeback Filed — Transaction Not Found",
@@ -2122,7 +2267,61 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                         except Exception as _ane:
                             logger.warning(f"Webhook account.updated: artist-notify error: {_ane}")
                     else:
-                        logger.info(f"Webhook account.updated: Connect account {connect_account_id} not matched to any artist (may be a venue or platform account)")
+                        # Audit fix (May 2026 part 6): the prior code only
+                        # looked for artist Connect accounts. Affiliate Connect
+                        # accounts live in the same entity_payment_settings
+                        # table but under `affiliate_stripe_connect_account_id`
+                        # with entity_type='user'. Without this branch, a
+                        # restricted affiliate account silently kept
+                        # `affiliate_stripe_connect_onboarding_complete=1` and
+                        # the next quarterly sweep fired Transfer.create against
+                        # a dead destination.
+                        aff_row = conn.execute("""
+                            SELECT eps.entity_id as user_id, u.email,
+                                   u.first_name, u.last_name
+                            FROM entity_payment_settings eps
+                            LEFT JOIN users u ON u.id = eps.entity_id
+                            WHERE eps.entity_type = 'user'
+                              AND eps.affiliate_stripe_connect_account_id = ?
+                            LIMIT 1
+                        """, (connect_account_id,)).fetchone()
+                        if aff_row:
+                            aff_name = f"{aff_row['first_name'] or ''} {aff_row['last_name'] or ''}".strip() or aff_row["email"] or "Affiliate"
+                            logger.warning(f"Webhook account.updated: AFFILIATE Connect account {connect_account_id} payouts disabled (reason: {disabled_reason}) — user {aff_row['user_id']} {aff_name}")
+                            conn.execute("""
+                                UPDATE entity_payment_settings
+                                SET affiliate_stripe_connect_onboarding_complete = 0,
+                                    updated_at = datetime('now')
+                                WHERE entity_type = 'user'
+                                  AND affiliate_stripe_connect_account_id = ?
+                            """, (connect_account_id,))
+                            conn.commit()
+                            _wh_admin_alert(conn, f"Affiliate Stripe Account Restricted — {aff_name}",
+                                f"""<p>An affiliate's Stripe Connect account has been restricted or deactivated by Stripe.</p>
+                                <ul>
+                                <li><strong>Affiliate:</strong> {aff_name} (user_id {aff_row['user_id']})</li>
+                                <li><strong>Connect Account:</strong> {connect_account_id}</li>
+                                <li><strong>Payouts Enabled:</strong> {payouts_enabled}</li>
+                                <li><strong>Disabled Reason:</strong> {disabled_reason or 'N/A'}</li>
+                                </ul>
+                                <p>⚠️ The next quarterly affiliate payout sweep will fail for this affiliate until they reconnect.
+                                Their onboarding flag has been reset so the Payments tab will re-prompt.</p>
+                                <p><a href="https://dashboard.stripe.com/connect/accounts/{connect_account_id}">View account in Stripe →</a></p>""")
+                            try:
+                                smtp_settings = _wh_smtp_settings(conn)
+                                if smtp_settings and smtp_settings.get("smtp_username") and aff_row["email"]:
+                                    _wh_send_email(smtp_settings, aff_row["email"],
+                                        "Action needed — your GigsFill affiliate payout account is restricted",
+                                        f"""<p>Hi {aff_name},</p>
+                                        <p>Stripe has placed a restriction on your affiliate payout account, which means GigsFill can't send your referral earnings until it's resolved.</p>
+                                        <p><strong>Reason:</strong> {disabled_reason or 'See Stripe dashboard for details'}</p>
+                                        <p>To fix this, please reconnect your affiliate payout account from your User Profile's Affiliates tab. You'll be guided through any verification Stripe is requiring.</p>
+                                        <p>If you don't fix this, your next quarterly payout will fail.</p>
+                                        <p>— The GigsFill Team</p>""")
+                            except Exception as _afne:
+                                logger.warning(f"Webhook account.updated: affiliate-notify error: {_afne}")
+                        else:
+                            logger.info(f"Webhook account.updated: Connect account {connect_account_id} not matched to any artist or affiliate (may be a venue or platform account)")
 
             except Exception as e:
                 logger.error(f"Webhook account.updated error: {e}")
@@ -2171,15 +2370,58 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                                 notes = COALESCE(notes || ' | ', '') || ?
                             WHERE id = ?
                         """, (new_status, note, txn["id"]))
+                        # Audit fix (May 2026 part 5): on FULL refund, cancel
+                        # any still-scheduled artist_payout children.
+                        # Previously this only flipped the parent — the next
+                        # hourly payout sweep would then transfer artist
+                        # payouts on a charge that was already refunded.
+                        # Mirrors the in-process cancel loop in
+                        # admin_payments.refund_payment.
+                        cancelled_kids = 0
+                        if is_full:
+                            _kid_note = f"Auto-cancelled by webhook (parent refund {charge_id} synced)"
+                            # Audit fix (May 2026 part 7): widen status filter
+                            # beyond 'scheduled' — children stuck in
+                            # pending_transfer / charge_retry / test on a
+                            # full-refunded parent must also be cancelled,
+                            # otherwise admin reconcile views show "pending
+                            # payout" rows for already-refunded charges.
+                            _res = conn.execute("""
+                                UPDATE transactions
+                                SET status = 'payment_cancelled',
+                                    notes = COALESCE(notes || ' | ', '') || ?
+                                WHERE parent_transaction_id = ?
+                                  AND status IN ('scheduled','pending_transfer','charge_retry','test')
+                            """, (_kid_note, txn["id"]))
+                            try:
+                                cancelled_kids = _res.rowcount or 0
+                            except Exception:
+                                cancelled_kids = 0
                         conn.commit()
-                        logger.info(f"Webhook charge.refunded: txn {txn['id']} synced ({'full' if is_full else 'partial'})")
+                        logger.info(f"Webhook charge.refunded: txn {txn['id']} synced ({'full' if is_full else 'partial'}), cancelled_kids={cancelled_kids}")
+                        # Audit fix (May 2026 part 9): on FULL refund claw back any
+                        # affiliate earnings that already accrued from this txn.
+                        # Partial refunds leave the accrual intact (the platform still
+                        # earned commission on the un-refunded portion).
+                        if is_full:
+                            try:
+                                from backend.routes.affiliate import claw_back_affiliate_earnings
+                                from backend.db import SessionLocal as _SL
+                                _aff_db = _SL()
+                                try:
+                                    claw_back_affiliate_earnings(_aff_db, txn["id"], reason="charge.refunded webhook")
+                                finally:
+                                    _aff_db.close()
+                            except Exception as _ace:
+                                logger.warning(f"Affiliate clawback (refund webhook) error txn {txn['id']}: {_ace}")
                         _wh_admin_alert(conn,
                             f"Refund synced — {txn['venue_name']}",
                             f"<p>Stripe refund detected and DB synced.</p>"
                             f"<ul><li>Txn: #{txn['id']}</li>"
                             f"<li>Venue: {txn['venue_name']}</li>"
                             f"<li>Refunded: ${amount_refunded/100:.2f} of ${amount_total/100:.2f}</li>"
-                            f"<li>New status: {new_status}</li></ul>")
+                            f"<li>New status: {new_status}</li>"
+                            f"<li>Child payouts cancelled: {cancelled_kids}</li></ul>")
                     else:
                         logger.info(f"Webhook charge.refunded: PI {pi_id} — no matching transaction (may be unrelated)")
             except Exception as e:
@@ -2276,18 +2518,81 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                                 notes = COALESCE(notes || ' | ', '') || ?
                             WHERE id = ?
                         """, (new_status, f"Dispute closed: {dispute_status} — synced from webhook", txn["id"]))
+                        # Audit fix (May 2026 part 9): on DISPUTE LOST the venue's
+                        # bank reversed the charge — claw back affiliate earnings
+                        # AND cancel any child artist_payout rows that haven't
+                        # transferred yet. Children already in 'transferred'/'paid'
+                        # are money out the door — admin must reverse_transfer
+                        # individually via Tier-3.
+                        clawback_children = 0
+                        if new_status == "dispute_lost":
+                            _kid_note = f"Auto-cancelled: parent txn #{txn['id']} dispute lost"
+                            _res = conn.execute("""
+                                UPDATE transactions
+                                SET status = 'payment_cancelled',
+                                    notes = COALESCE(notes || ' | ', '') || ?
+                                WHERE parent_transaction_id = ?
+                                  AND status IN ('scheduled','pending_transfer','charge_retry','test')
+                            """, (_kid_note, txn["id"]))
+                            try:
+                                clawback_children = _res.rowcount or 0
+                            except Exception:
+                                clawback_children = 0
                         conn.commit()
-                        logger.info(f"Webhook charge.dispute.closed: txn {txn['id']} → {new_status}")
+                        if new_status == "dispute_lost":
+                            try:
+                                from backend.routes.affiliate import claw_back_affiliate_earnings
+                                from backend.db import SessionLocal as _SL
+                                _aff_db = _SL()
+                                try:
+                                    claw_back_affiliate_earnings(_aff_db, txn["id"], reason="charge.dispute.closed lost")
+                                finally:
+                                    _aff_db.close()
+                            except Exception as _ace:
+                                logger.warning(f"Affiliate clawback (dispute lost) error txn {txn['id']}: {_ace}")
+                        logger.info(f"Webhook charge.dispute.closed: txn {txn['id']} → {new_status} (children cancelled={clawback_children})")
                         _wh_admin_alert(conn,
                             f"Dispute closed — {txn['venue_name']} ({dispute_status})",
                             f"<p>Stripe dispute on txn #{txn['id']} closed: <strong>{dispute_status}</strong>.</p>"
-                            f"<p>Status updated to <code>{new_status}</code>.</p>")
+                            f"<p>Status updated to <code>{new_status}</code>.</p>"
+                            + (f"<p>Cancelled <strong>{clawback_children}</strong> pending child payout(s).</p>" if clawback_children else "")
+                            + ("<p>Any already-transferred child payouts need manual reverse_transfer in Admin → Payments.</p>" if new_status == "dispute_lost" else ""))
             except Exception as e:
                 logger.error(f"Webhook charge.dispute.closed error: {e}")
 
         else:
             logger.info(f"Stripe webhook: unhandled event type '{event_type}' — ignored")
 
+        # Audit fix (May 2026 part 9): event_id is now INSERTed atomically at
+        # the TOP of the handler (race-free). The post-block insert was for
+        # the older SELECT-then-INSERT pattern and is no longer needed — left
+        # as a defensive no-op for safety if upfront insert was skipped due
+        # to a sqlite hiccup.
+        if event_id and _webhook_dedup_skip:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO stripe_webhook_events (id, event_type, received_at) VALUES (?, ?, datetime('now'))",
+                    (event_id, event_type)
+                )
+                conn.commit()
+            except Exception as _wde:
+                logger.warning(f"Webhook idempotency post-insert failed (Stripe may retry): {_wde}")
+
+    except Exception as _herr:
+        # Audit fix (May 2026 part 9): if the handler block raised AND we
+        # claimed the event_id at the top, release it so Stripe's retry can
+        # actually re-process — otherwise the row blocks future retries and
+        # the event silently dies (the very bug part-6 was trying to fix).
+        if event_id and _webhook_event_owned:
+            try:
+                conn.execute(
+                    "DELETE FROM stripe_webhook_events WHERE id = ?",
+                    (event_id,)
+                )
+                conn.commit()
+            except Exception:
+                pass
+        raise
     finally:
         conn.close()
 
@@ -2333,10 +2638,15 @@ def get_artist_earnings_summary(artist_id: int, user=Depends(get_current_user), 
     earned_this_year = (row["total"] or 0) / 100
 
     # Pending (upcoming)
+    # Audit fix (May 2026 part 9): 'transferred' previously appeared in BOTH
+    # total_earned (above, paid+transferred) AND pending_payout — every
+    # in-flight payout double-counted in the KPI tiles. Since 'transferred'
+    # now means "dest_payment succeeded on Stripe" (the artist sees Paid in
+    # their Express dashboard), it belongs in earned, not pending.
     row = db.execute(text(f"""
         SELECT COALESCE(SUM(t.artist_payout_cents),0) as total
         FROM transactions t JOIN gigs g ON t.gig_id = g.id
-        WHERE {base_where} AND t.status IN ('scheduled','charged','pending','pending_transfer','transferred','test')
+        WHERE {base_where} AND t.status IN ('scheduled','charged','pending','pending_transfer','test')
     """), {"aid": artist_id}).mappings().first()
     pending_payout = (row["total"] or 0) / 100
 
