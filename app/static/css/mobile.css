@@ -207,12 +207,17 @@
     font-size: 0.85rem !important;
   }
 
-  /* ── Invite / Entity Users ── */
+  /* ── Invite / Entity Users ──
+     Action column widened so Resend + Delete fit on one line on phones
+     too (was 60px which forced wrapping). Email collapses to 1fr and
+     truncates via .inv-email's ellipsis. */
   .inv-table-header, .inv-row {
-    grid-template-columns: 1fr 80px 80px 60px !important;
+    grid-template-columns: 1fr 90px 80px 180px !important;
     gap: 4px !important;
     font-size: 0.75rem !important;
   }
+  .inv-table-header > div:last-child,
+  .inv-row > div:last-child { white-space: nowrap !important; }
   .inv-stats {
     flex-wrap: wrap !important;
   }
