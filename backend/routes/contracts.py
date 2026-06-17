@@ -298,8 +298,28 @@ def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int) -> st
     artist_styles       = _ce(artist.get("styles") or "")
 
     gig_date = _ce(gig["date"] or "")
-    start_time = _ce(format_time_12hr(gig.get("start_time", "")))
-    end_time = _ce(format_time_12hr(gig.get("end_time", "")))
+    # Performance Time must reflect THIS artist's specific slot, not the
+    # umbrella gig start/end (multi-slot: 7-9 + 9-11 would otherwise read
+    # as "7-11" on the contract — wrong for the 7-9 booker). For single-
+    # slot gigs the slot times equal the gig times so the lookup is a
+    # harmless echo. Same pattern as the door-deal lookup in
+    # _get_effective_pay_str above.
+    _slot_times = db.execute(
+        text("""SELECT start_time, end_time
+                FROM gig_slots
+                WHERE gig_id = :gid AND artist_id = :aid
+                  AND status IN ('booked','pending_contract','awaiting_venue_contract')
+                ORDER BY slot_number ASC LIMIT 1"""),
+        {"gid": gig.get("id"), "aid": artist_id}
+    ).mappings().first()
+    if _slot_times and _slot_times.get("start_time"):
+        eff_start = _slot_times.get("start_time")
+        eff_end   = _slot_times.get("end_time") or gig.get("end_time", "")
+    else:
+        eff_start = gig.get("start_time", "")
+        eff_end   = gig.get("end_time", "")
+    start_time = _ce(format_time_12hr(eff_start))
+    end_time   = _ce(format_time_12hr(eff_end))
     # Door-aware pay line. `_get_effective_pay_str` returns content built
     # from numeric fields only — safe to interpolate without escaping.
     pay_str = _get_effective_pay_str(db, gig, venue_id, artist_id)
@@ -811,8 +831,21 @@ def create_gig_contract(gig_id: int, request: Request, user=Depends(get_current_
                 "venue_city": venue_data["city"] if venue_data else "",
                 "venue_state": venue_data["state"] if venue_data else "",
                 "gig_date": gig_data["date"] if gig_data else "",
-                "gig_start_time": format_time_12hr(gig_data["start_time"]) if gig_data else "",
-                "gig_end_time": format_time_12hr(gig_data["end_time"]) if gig_data else "",
+                # Slot-aware times — see generate_auto_contract for rationale.
+                # Multi-slot gig + per-artist contract → use THIS artist's
+                # slot start/end so the contract doesn't span the umbrella.
+                "gig_start_time": format_time_12hr(
+                    (db.execute(text("""SELECT start_time FROM gig_slots WHERE gig_id = :gid AND artist_id = :aid
+                                         AND status IN ('booked','pending_contract','awaiting_venue_contract')
+                                         ORDER BY slot_number ASC LIMIT 1"""),
+                                {"gid": gig_id, "aid": artist_id}).scalar()) or (gig_data["start_time"] if gig_data else "")
+                ),
+                "gig_end_time": format_time_12hr(
+                    (db.execute(text("""SELECT end_time FROM gig_slots WHERE gig_id = :gid AND artist_id = :aid
+                                         AND status IN ('booked','pending_contract','awaiting_venue_contract')
+                                         ORDER BY slot_number ASC LIMIT 1"""),
+                                {"gid": gig_id, "aid": artist_id}).scalar()) or (gig_data["end_time"] if gig_data else "")
+                ),
                 # Door-aware: _get_effective_pay_str returns the door split
                 # terms ("$X guarantee + Y% of door receipts") when this
                 # artist's slot has deal_type='door'; otherwise the flat

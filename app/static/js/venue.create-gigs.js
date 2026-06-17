@@ -2745,9 +2745,15 @@ async function renderCalendar() {
 
     } else if (gig.id && gig.status === "open") {
       // OPEN GIG - EDIT MODE (or read-only if past)
-      // For multi-slot: if any slot is booked, show booked view not edit form
+      // For multi-slot: if any slot has activity (booked or any contract
+      // state), show booked view rather than the editable form. The
+      // 'awaiting_venue_contract' state was previously missing and would
+      // wrongly land in the editable path → templates picker would
+      // appear → applying a template would clobber the slot the artist
+      // just signed for.
       const _hasBookedSlot = (gig.slots || []).some(s =>
-        s.status === 'booked' || s.status === 'pending_contract'
+        s.status === 'booked' || s.status === 'pending_contract' ||
+        s.status === 'awaiting_venue_contract'
       );
       if (_hasBookedSlot) {
         await _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, deleteBtn, saveBtn, cancelGigBtn);
@@ -2779,7 +2785,16 @@ async function renderCalendar() {
         }
         
         modalTitle.textContent = "Edit Gig";
-        
+
+        // Show Templates picker here — this branch fires when the gig
+        // is `open` AND NO slot is in flight (no 'booked', no
+        // 'pending_contract', no 'awaiting_venue_contract'). Applying
+        // a template only overwrites unbooked slot config, so it's
+        // safe. Once any slot moves into a contract flow we fall into
+        // openBookedGigEdit instead, which keeps the row hidden.
+        const _tplRowEdit = document.getElementById('gigTemplatesRow');
+        if (_tplRowEdit) _tplRowEdit.style.display = 'flex';
+
         // Show the modal-section
         const modalSection = document.querySelector('.modal-section');
         if (modalSection) {
@@ -3287,13 +3302,16 @@ async function renderCalendar() {
     const modalSection = document.querySelector('.modal-section');
     const modalTitle = document.getElementById('modalTitle');
 
-    // Surface the templates picker (top-right of the modal) in edit mode
-    // too. The confirm-replace dialog inside applyTemplate's click handler
-    // (search "Apply template?" in this file) already gates the actual
-    // replacement, so picking a template while editing prompts the venue
-    // before overwriting the slot configuration.
+    // Templates picker INTENTIONALLY hidden here. This path runs when
+    // the gig has at least one slot booked / pending_contract /
+    // awaiting_venue_contract — things are already in motion and
+    // applying a template would overwrite the very slot config the
+    // booked artists agreed to. Templates row reveal lives only in
+    // the "fully-open" edit branch (around line 2790) and in the
+    // brand-new CREATE branch (around line 3170). Keeping the hide
+    // explicit here so a future re-flow doesn't accidentally re-show.
     const _tplRow = document.getElementById('gigTemplatesRow');
-    if (_tplRow) _tplRow.style.display = 'flex';
+    if (_tplRow) _tplRow.style.display = 'none';
 
     // Show the modal section (slot builder + title live in there)
     if (modalSection) modalSection.style.display = 'block';
