@@ -727,12 +727,21 @@
          table below lists every email sent via that flow, with a Resend
          button per row. -->
     <div class="content-card" style="margin-bottom:16px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap;">
         <h3 style="margin:0;font-size:0.85rem;color:var(--text);">Recommend GigsFill — Emails Sent</h3>
-        <button onclick="openRecommendModal(event)" id="affRecommendToggle"
-          style="padding:6px 16px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.4);border-radius:6px;color:var(--cyan);font-size:0.78rem;cursor:pointer;font-weight:600;">
-          Recommend GigsFill
-        </button>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <!-- Search filters the table below. The handler also lives in
+               user-affiliate.js; placing the input here (vs inside the
+               table render output) keeps focus across re-renders + puts
+               the control next to the action button per the user ask. -->
+          <input id="affEmailsSearchInput" type="search" placeholder="Search emails…"
+            oninput="affEmailsSearch(this.value)"
+            style="padding:6px 10px;background:#0f1116;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.74rem;width:180px;">
+          <button onclick="openRecommendModal(event)" id="affRecommendToggle"
+            style="padding:6px 16px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.4);border-radius:6px;color:var(--cyan);font-size:0.78rem;cursor:pointer;font-weight:600;">
+            Recommend GigsFill
+          </button>
+        </div>
       </div>
 
       <!-- Sent emails list -->
@@ -1141,7 +1150,7 @@
   <script src="/app/static/js/gf-modals.js?v=6"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/user-profile.js?v=3"></script>
-  <script src="/app/static/js/user-affiliate.js?v=5"></script>
+  <script src="/app/static/js/user-affiliate.js?v=6"></script>
   <script src="/app/static/js/user-availability.js?v=5"></script>
   
 

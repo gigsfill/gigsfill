@@ -404,11 +404,11 @@ function _renderAffEmails() {
     ? '<tr><td colspan="5" style="padding:14px 8px;color:var(--text-gray);font-size:0.78rem;text-align:center;">No matches for "' + esc(q) + '"</td></tr>'
     : '';
 
+  // Search input lives in the static section header (user-profile.html)
+  // next to the "Recommend GigsFill" button — not inside this render
+  // output. That way the input survives re-renders (no focus loss) and
+  // matches the layout the user asked for.
   el.innerHTML = `
-    <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:6px;">
-      <input id="affEmailsSearchInput" type="search" placeholder="Search emails…" value="${esc(_affEmails.q || '')}" oninput="affEmailsSearch(this.value)"
-        style="padding:4px 10px;background:#0f1116;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.72rem;width:180px;">
-    </div>
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr style="border-bottom:1px solid var(--border);">
         ${th('recipient_name', 'Recipient')}
