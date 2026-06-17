@@ -28,6 +28,8 @@ Endpoint:
         access: venue only
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
@@ -35,6 +37,7 @@ from backend.db import get_db
 from backend.routes.auth import get_current_user
 from backend.utils import check_venue_access
 
+logger = logging.getLogger("gigsfill.door_settle")
 router = APIRouter()
 
 
@@ -144,6 +147,18 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
     delta_cents = max(0, final_pay_cents - int(slot["guarantee_cents"] or 0))
 
     db.commit()
+
+    # Audit log — every settle is a financial event. If a venue later
+    # disputes "I never settled that gig," this gives operators the full
+    # picture without grep'ing prod logs.
+    logger.info(
+        "[SETTLE] gig_id=%s slot_id=%s venue_id=%s artist_id=%s by_user=%s "
+        "receipts=%dc guarantee=%sc door_pct=%s%% final_pay=%dc "
+        "txn_updated=%d via_platform=%s off_platform_due=%dc",
+        gig_id, slot_id, slot["venue_id"], slot["artist_id"], user.id,
+        int(receipts), slot["guarantee_cents"] or 0, slot["door_pct"] or 0,
+        final_pay_cents, txn_updated_count, settled_via_platform, delta_cents,
+    )
 
     response = {
         "ok": True,

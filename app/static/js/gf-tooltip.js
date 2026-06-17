@@ -135,6 +135,31 @@
     if (!activeTarget.contains(e.relatedTarget)) hide();
   });
 
+  // A11y + mobile: also surface tooltips when the trigger is keyboard-
+  // focused (so screen-reader / keyboard users get the contextual help
+  // their mouse-only counterparts see) and on first touch (so phone
+  // users can tap to read, since hover doesn't exist on touch). A
+  // second tap or any outside tap dismisses.
+  document.addEventListener('focusin', (e) => {
+    const t = e.target.closest('[data-tooltip], [title]');
+    if (!t) return;
+    if (t === activeTarget) return;
+    show(t);
+  });
+  document.addEventListener('focusout', (e) => {
+    if (!activeTarget) return;
+    if (!activeTarget.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('touchstart', (e) => {
+    const t = e.target.closest('[data-tooltip], [title]');
+    if (!t) {
+      if (activeTarget) hide();
+      return;
+    }
+    if (t === activeTarget) { hide(); return; }
+    show(t);
+  }, { passive: true });
+
   // Hide on scroll / resize / Escape so tooltips never linger stale.
   window.addEventListener('scroll', hide, true);
   window.addEventListener('resize', hide);

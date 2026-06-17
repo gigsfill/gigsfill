@@ -949,7 +949,16 @@ def _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz):
             (utcnow_naive().isoformat(), f"Payment failed: {reason}", venue_id)
         )
         conn.commit()
-        logger.error(f"Txn {txn_id}: FAILED final ({new_attempts}/{MAX_CHARGE_ATTEMPTS}) - {reason}, venue {venue_id} suspended")
+        # Observability: include gig_id, artist_id, and dollar amount so an
+        # operator scanning the error log can immediately tell whether this
+        # is a $50 minor failure or a $5k high-stakes one — and which gig
+        # and artist were affected.
+        _amount_str = f"${(txn['amount_cents'] or 0)/100:.2f}"
+        logger.error(
+            f"Txn {txn_id}: FAILED final ({new_attempts}/{MAX_CHARGE_ATTEMPTS}) "
+            f"amount={_amount_str} gig_id={txn.get('gig_id')} artist_id={txn.get('artist_id')} "
+            f"venue_id={venue_id} reason={reason} — venue suspended"
+        )
         _send_charge_failed_email(conn, txn, reason)
         _send_venue_suspended_email(conn, venue_id, reason)
         # Audit fix (May 2026 part 10): notify the artist if a fully_signed

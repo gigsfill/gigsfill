@@ -937,13 +937,17 @@
     gap: 6px;
     /* Greyed-out neutral look when door split is INACTIVE so the active
        pay pill on the left reads as the "current" option. Switches to
-       bright green when .is-on is toggled by the JS. */
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+       bright green when .is-on is toggled by the JS.
+       A11y fix (Jun 2026): old color/opacity gave a 1.8:1 text contrast
+       ratio — fails WCAG 1.4.3 AA (4.5:1 minimum). New values give ~5:1
+       which is readable AND still visually muted next to the bright
+       green pay pill. */
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.30);
     border-radius: 4px;
     padding: 3px 8px;
-    color: rgba(255, 255, 255, 0.45);
-    opacity: 0.75;
+    color: rgba(255, 255, 255, 0.78);
+    opacity: 1;
     font-weight: 600;
     font-size: 0.78rem;
     line-height: 1.2;
@@ -1081,6 +1085,66 @@
   .header-pill-purple:hover {
     background: rgba(168, 85, 247, 0.22);
     border-color: rgba(168, 85, 247, 0.65);
+  }
+
+  /* A11y: restore a visible focus ring on every form control that the
+     site's earlier `outline: none` reset stripped. Uses :focus-visible
+     so mouse clicks don't surround the field with a ring, but keyboard
+     focus + screen-reader-driven focus always do. WCAG 2.4.7. */
+  .modal-clean input:focus-visible,
+  .modal-clean select:focus-visible,
+  .modal-clean textarea:focus-visible {
+    outline: 2px solid #06b6d4;
+    outline-offset: 2px;
+  }
+  /* The remove-slot X button — bumped padding so the tap target meets
+     WCAG 2.5.5 AAA / Apple HIG (44pt) more closely than the prior
+     1px×7px (which measured ~15×16px and was effectively impossible
+     to tap reliably on touch devices). */
+  #slotList .remove-slot-btn {
+    min-width: 36px;
+    min-height: 32px;
+    padding: 6px 11px !important;
+    font-size: 0.95rem !important;
+  }
+  #slotList .remove-slot-btn:focus-visible {
+    outline: 2px solid #06b6d4;
+    outline-offset: 2px;
+  }
+
+  /* Mobile: gig modal blocks horizontal scrolling. Two issues addressed:
+     1) Slot header row was flex-wrap:nowrap which overflows on 390px
+        phones — allow wrapping below 600px so the X button can drop to
+        a second line instead of clipping.
+     2) Modal max-width wasn't responsive to viewport, leaving 540px+
+        modal on 375-390px phones. Clamp to 100vw - 16px on small
+        screens so the modal always fits.
+     3) Door inputs row uses invisible spacers (44+6+96+...) to align
+        under the pay pill above — on phones this wastes the whole
+        viewport. Left-align the inputs row on small screens. */
+  @media (max-width: 600px) {
+    #gigModal .modal.modal-clean {
+      max-width: calc(100vw - 16px);
+      width: calc(100vw - 16px);
+    }
+    #slotList .slot-row > div:first-child {
+      flex-wrap: wrap !important;
+    }
+    #slotList .slot-door-row {
+      justify-content: flex-start !important;
+    }
+    #slotList .slot-door-row > [aria-hidden="true"] {
+      display: none !important;
+    }
+  }
+
+  /* Reduced motion: respect users who set prefers-reduced-motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
   }
 
   /* Slot metadata sub-row — single dense line of pill toggles that mirrors
@@ -2867,7 +2931,7 @@
 </style>
 
 <div class="modal-overlay hidden" id="gigModal">
-  <div class="modal modal-clean">
+  <div class="modal modal-clean" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
 
     <!-- Header: title on the left, templates UI floated right.
          Templates are CREATE-mode only (hidden when editing — see
@@ -2880,12 +2944,14 @@
              rest of the modal's pill vocabulary. Save → green (positive
              action). Load → purple (matches the slot Type/lineup pill family). -->
         <button type="button" id="saveTemplateBtn" class="header-pill header-pill-green"
-          data-tooltip="Save the current slot configuration as a reusable template">
-          💾 Save as Template
+          data-tooltip="Save the current slot configuration as a reusable template"
+          aria-label="Save as Template">
+          <span aria-hidden="true">💾 </span>Save as Template
         </button>
         <button type="button" id="loadTemplateBtn" class="header-pill header-pill-purple"
-          data-tooltip="Open a saved template to apply to this gig">
-          📋 Load a Template
+          data-tooltip="Open a saved template to apply to this gig"
+          aria-label="Load a Template">
+          <span aria-hidden="true">📋 </span>Load a Template
         </button>
       </div>
     </div>
@@ -2984,7 +3050,7 @@
         <!-- Templates row moved to the modal header (upper-right). It's
              create-mode only — when editing an existing gig the JS hides
              #gigTemplatesRow. -->
-        <div id="slotError" style="display:none; color:#ef4444; font-size:0.75rem; margin-top:6px;"></div>
+        <div id="slotError" role="alert" aria-live="polite" aria-atomic="true" style="display:none; color:#ef4444; font-size:0.75rem; margin-top:6px;"></div>
       </div>
       
       
@@ -3123,8 +3189,8 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=13"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=156"></script>
-<script src="/app/static/js/gf-tooltip.js?v=1"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=157"></script>
+<script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
 

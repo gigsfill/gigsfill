@@ -33,7 +33,31 @@ router = APIRouter()
 _TIN_KEY = os.environ.get("TIN_ENCRYPTION_KEY", "gigsfill-tin-key-change-in-production-2024")
 _LEGACY_DEFAULT_KEY = "gigsfill-tin-key-change-in-production-2024"
 
+
+def _assert_strong_tin_key():
+    """Hard-fail in production if TIN_ENCRYPTION_KEY is missing or weak.
+    Called from every encrypt/decrypt path so a misconfigured production
+    deploy can't silently keep operating with the published-weak default
+    (which is publicly known and trivially decrypts any TIN in the DB).
+    In dev (GIGSFILL_ENV=development) we still tolerate the default so
+    local testing without a real key works.
+    """
+    env = (os.environ.get("GIGSFILL_ENV") or "").lower()
+    if env == "development":
+        return
+    if (not _TIN_KEY) or _TIN_KEY == _LEGACY_DEFAULT_KEY or len(_TIN_KEY) < 32:
+        raise RuntimeError(
+            "TIN_ENCRYPTION_KEY is missing, too short (<32 chars), or still set to "
+            "the documented-weak default. Set a real random 32+ byte secret in "
+            "/opt/gigsfill/.env before reading or writing any W-9 / TIN data. "
+            "(Once W-9 data exists this key MUST NEVER be changed — set it before "
+            "the first row is written.) Set GIGSFILL_ENV=development to bypass "
+            "this check during local testing."
+        )
+
+
 def _fernet():
+    _assert_strong_tin_key()
     from cryptography.fernet import Fernet
     digest = hashlib.sha256(_TIN_KEY.encode()).digest()
     return Fernet(base64.urlsafe_b64encode(digest))

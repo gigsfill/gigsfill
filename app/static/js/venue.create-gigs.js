@@ -561,7 +561,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 aria-pressed="${dealType === 'door' ? 'true' : 'false'}"
                 aria-label="Toggle Door Split pay">
             <input type="checkbox" class="slot-door-checkbox" ${dealType === 'door' ? 'checked' : ''}>
-            <span class="slot-door-toggle-text">🎯 Door Split</span>
+            <span class="slot-door-toggle-text"><span aria-hidden="true">🎯 </span>Door Split</span>
           </span>
         </span>
         <button type="button" class="remove-slot-btn" style="
@@ -670,7 +670,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // phase + preventDefault on the pay-amount input click so it doesn't
     // simultaneously select/edit the still-greyed value mid-toggle.
     if (payPill && doorToggle) {
-      payPill.addEventListener('click', (e) => {
+      const _flipDoorOff = (e) => {
         if (!doorToggle.checked) return; // already flat → normal behavior
         e.preventDefault();
         e.stopPropagation();
@@ -678,7 +678,34 @@ document.addEventListener("DOMContentLoaded", async () => {
         _applyDoorState();
         const amt = row.querySelector('.slot-pay-amount');
         if (amt) { amt.focus(); amt.select(); }
-      }, true);
+      };
+      payPill.addEventListener('click', _flipDoorOff, true);
+      // A11y: keyboard users couldn't reach this flip-back without the
+      // mouse. When door is on we make the pill keyboard-focusable + add
+      // Space/Enter handling. When door is off we revert tabindex/role
+      // so the pay pill isn't a tab stop in its normal state.
+      const _syncPayPillA11y = () => {
+        if (!payPill) return;
+        if (doorToggle.checked) {
+          payPill.setAttribute('role', 'button');
+          payPill.setAttribute('tabindex', '0');
+          payPill.setAttribute('aria-label', 'Switch back to flat pay (turns Door Split off)');
+        } else {
+          payPill.removeAttribute('role');
+          payPill.removeAttribute('tabindex');
+          payPill.removeAttribute('aria-label');
+        }
+      };
+      const _origApply = _applyDoorState;
+      // Wrap so the a11y attrs stay in sync with the visual state.
+      _syncPayPillA11y();
+      doorToggle.addEventListener('change', _syncPayPillA11y);
+      payPill.addEventListener('keydown', (e) => {
+        if (!doorToggle.checked) return;
+        if (e.key === ' ' || e.key === 'Enter') {
+          _flipDoorOff(e);
+        }
+      });
     }
 
     // ATM-style auto-format for the guarantee input + select-all on click,
