@@ -253,8 +253,8 @@ function displayArtists() {
                        class="recipient-checkbox" 
                        ${isSelected ? 'checked' : ''}
                        onclick="event.stopPropagation(); toggleArtist(${artist.artist_id})">
-                <span class="artist-name">${artistName}</span>
-                <span class="artist-email">${artistEmail}</span>
+                <span class="artist-name">${escapeHtmlLocal(artistName)}</span>
+                <span class="artist-email">${escapeHtmlLocal(artistEmail)}</span>
             </div>
         `;
     }).join('');
@@ -609,8 +609,8 @@ function displayEmailHistory() {
         return `
             <div class="history-item" onclick="openEmailDetail(${originalIdx})">
                 <div class="history-sent">${sentDisplay}</div>
-                <div class="history-artist">${artistDisplay}</div>
-                <div class="history-subject">${subjectDisplay}</div>
+                <div class="history-artist">${escapeHtmlLocal(artistDisplay)}</div>
+                <div class="history-subject">${escapeHtmlLocal(subjectDisplay)}</div>
                 <button type="button" class="btn"
                         id="del-email-${email.id}"
                         onclick="event.stopPropagation(); requestDeleteEmailHistory(${email.id});"
@@ -799,8 +799,31 @@ function openEmailDetail(index) {
             <div style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">Subject:</div>
             <div style="font-size: 0.85rem; color: var(--text-white);">${esc(email.subject)}</div>
         </div>
-        <div class="modal-body">${email.body}</div>
+        <div class="modal-body" id="emailDetailBodyHost"></div>
     `;
+
+    // Audit fix (May 2026 part 8): render the email body inside a SANDBOXED
+    // iframe — `email.body` is the user-typed HTML that was sent. Previously
+    // this was injected as `${email.body}` into the host page's innerHTML,
+    // so any script tags or event handlers in the body executed inside the
+    // venue's session (self-XSS, but a multi-user-account team member could
+    // plant content). The sandbox attribute below allows ONLY same-origin
+    // resource references (images) — no scripts, no forms, no parent access.
+    const _emailHost = document.getElementById('emailDetailBodyHost');
+    if (_emailHost) {
+        const _iframe = document.createElement('iframe');
+        _iframe.setAttribute('sandbox', 'allow-same-origin');
+        _iframe.style.cssText = 'width:100%;min-height:400px;border:0;background:#fff;';
+        _emailHost.appendChild(_iframe);
+        try {
+            const _doc = _iframe.contentDocument || _iframe.contentWindow.document;
+            _doc.open();
+            _doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;margin:14px;color:#222;}</style></head><body>' + (email.body || '') + '</body></html>');
+            _doc.close();
+        } catch (_e) {
+            _emailHost.textContent = '[email body could not be displayed]';
+        }
+    }
 
     document.getElementById('emailDetailModal').classList.remove('hidden');
 }
@@ -893,18 +916,32 @@ async function loadInvitedArtists(venueId) {
             return;
         }
         
-        // Render rows
+        // Render rows. Part 10p added new statuses: bounced, preferred_requested,
+        // preferred_approved, preferred_denied, declined. Bounce shows the SMTP
+        // reason inline so the venue user knows the address was bad.
+        const STATUS_BADGES = {
+            pending:             '<span class="inv-status-badge pending">Pending</span>',
+            signed_up:           '<span class="inv-status-badge signed-up">✓ Signed Up</span>',
+            preferred_requested: '<span class="inv-status-badge" style="background:rgba(124,107,255,0.15);color:#a78bfa;border:1px solid rgba(124,107,255,0.3);">Preferred Requested</span>',
+            preferred_approved:  '<span class="inv-status-badge signed-up">✓ Preferred</span>',
+            preferred_denied:    '<span class="inv-status-badge" style="background:rgba(239,68,68,0.15);color:#fca5a5;border:1px solid rgba(239,68,68,0.3);">Preferred Denied</span>',
+            bounced:             '<span class="inv-status-badge" style="background:rgba(239,68,68,0.18);color:#fca5a5;border:1px solid rgba(239,68,68,0.45);">⚠ Bounced</span>',
+            declined:            '<span class="inv-status-badge" style="background:rgba(156,163,175,0.15);color:#d1d5db;border:1px solid rgba(156,163,175,0.3);">Declined</span>',
+            expired:             '<span class="inv-status-badge" style="background:rgba(107,114,128,0.12);color:#9ca3af;border:1px solid rgba(107,114,128,0.3);">Expired</span>',
+        };
         list.innerHTML = data.invitations.map(inv => {
             const date = inv.sent_at ? formatInvDate(inv.sent_at) : '—';
-            const isSignedUp = inv.status === 'signed_up';
-            const statusBadge = isSignedUp
-                ? '<span class="inv-status-badge signed-up">✓ Signed Up</span>'
-                : '<span class="inv-status-badge pending">Pending</span>';
-            
+            const status = inv.status || 'pending';
+            const isSignedUp = status === 'signed_up' || status === 'preferred_requested' || status === 'preferred_approved';
+            const statusBadge = STATUS_BADGES[status] || STATUS_BADGES.pending;
+
             let actionHtml = '';
             if (isSignedUp) {
                 const suDate = inv.signed_up_at ? formatInvDate(inv.signed_up_at) : '';
                 actionHtml = suDate ? '<span style="font-size:0.72rem;color:#22c55e;">' + suDate + '</span>' : '—';
+            } else if (status === 'declined') {
+                actionHtml = '<span style="font-size:0.72rem;color:#9ca3af;">No follow-up</span>'
+                    + ' <button class="inv-delete-btn" onclick="deleteInvitation(' + inv.id + ', this)" title="Remove from tracker" style="margin-left:6px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;font-weight:500;">Delete</button>';
             } else {
                 const resentNote = inv.resent_count > 0
                     ? ' <span style="font-size:0.65rem;color:#6b7280;">(×' + inv.resent_count + ')</span>'
@@ -912,12 +949,17 @@ async function loadInvitedArtists(venueId) {
                 actionHtml = '<button class="inv-resend-btn" onclick="resendInvitation(' + inv.id + ', this)">Resend</button>' + resentNote
                     + ' <button class="inv-delete-btn" onclick="deleteInvitation(' + inv.id + ', this)" title="Delete this invitation" style="margin-left:6px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;font-weight:500;">Delete</button>';
             }
-            
+
+            const bounceLine = (status === 'bounced' && inv.bounce_reason)
+                ? '<div style="grid-column:1/-1;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:5px 10px;border-radius:4px;font-size:0.72rem;margin-top:6px;">⚠ ' + escapeHtmlLocal(inv.bounce_reason) + '</div>'
+                : '';
+
             return '<div class="inv-row">' +
                 '<div class="inv-email" title="' + escapeAttr(inv.email) + '">' + escapeHtmlLocal(inv.email) + '</div>' +
                 '<div>' + statusBadge + '</div>' +
                 '<div class="inv-date">' + date + '</div>' +
                 '<div>' + actionHtml + '</div>' +
+                bounceLine +
                 '</div>';
         }).join('');
         

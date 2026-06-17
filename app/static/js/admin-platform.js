@@ -424,8 +424,86 @@ window._adminConfirm = function(opts) {
       set('supportSmtpServer',     d.support_smtp_server);
       set('supportSmtpPort',       d.support_smtp_port);
       set('adminAlertEmail',       d.admin_alert_email);
+      set('farBookingAlertMiles',  d.far_booking_alert_miles);
+      // Rate limits — integer requests/minute per IP. See backend/rate_limiter.py
+      // for the callable getters that read these live (30s TTL, plus immediate
+      // invalidation on PUT in admin.py).
+      set('rateLogin',         d.rate_login);
+      set('rateSignup',        d.rate_signup);
+      set('ratePasswordReset', d.rate_password_reset);
+      set('rateSupport',       d.rate_support);
+      set('rateEmailSend',     d.rate_email_send);
+      set('rateAffTrack',      d.rate_aff_track);
+      // Part 10p Phase 3: bounce-check fields. Password is masked as dots from
+      // the API so we don't overwrite the real value with the mask on next save —
+      // the PUT endpoint skips any value starting with "•".
+      const cb = document.getElementById('bounceCheckEnabled');
+      if (cb) cb.checked = !!d.bounce_check_enabled;
+      set('bounceImapServer',   d.bounce_check_imap_server);
+      set('bounceImapPort',     d.bounce_check_imap_port);
+      set('bounceImapUsername', d.bounce_check_imap_username);
+      set('bounceImapPassword', d.bounce_check_imap_password);
+      // Show "last run" status line if the scheduler has ever polled
+      const statusEl = document.getElementById('bounceCheckStatus');
+      if (statusEl) {
+        if (d.bounce_check_last_run_at) {
+          statusEl.textContent = 'Last poll: ' + d.bounce_check_last_run_at + ' — ' + (d.bounce_check_last_result || 'n/a');
+        } else {
+          statusEl.textContent = 'Never polled. Click "Test & Poll Now" to verify your IMAP config.';
+        }
+      }
     } catch (e) { console.error('loadEmailSettings:', e); }
   }
+
+  // Part 10p Phase 3: manual trigger for the bounce-inbox poll. Hits the same
+  // code path the scheduler runs every 30 minutes; result is shown inline.
+  window.bounceCheckTestNow = async function () {
+    const statusEl = document.getElementById('bounceCheckStatus');
+    if (statusEl) {
+      statusEl.style.color = 'var(--text-gray)';
+      statusEl.textContent = 'Saving settings…';
+    }
+    // Race fix: a user may toggle the enable checkbox or type IMAP creds and
+    // immediately click Test before autoSaveSettings's debounced PUT has flushed.
+    // Force a save NOW so the server tests against the values currently in the
+    // form, not the last-saved snapshot.
+    try {
+      if (typeof window.autoSaveSettings === 'function') {
+        await window.autoSaveSettings();
+      }
+    } catch (_) { /* non-fatal — try the test anyway */ }
+    if (statusEl) statusEl.textContent = 'Polling IMAP…';
+    try {
+      const r = await fetch('/api/admin/bounce-check/run-now', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(b.detail || ('HTTP ' + r.status));
+      }
+      const d = await r.json();
+      if (statusEl) {
+        if (d.reason === 'disabled') {
+          statusEl.style.color = '#fbbf24';
+          statusEl.textContent = 'Bounce polling is disabled — flip the checkbox above to enable.';
+        } else if (d.reason && d.reason !== 'disabled') {
+          statusEl.style.color = '#ef4444';
+          statusEl.textContent = '✗ ' + d.reason;
+        } else {
+          statusEl.style.color = '#22c55e';
+          statusEl.textContent = `✓ Scanned ${d.scanned}, bounced ${d.bounced}, skipped ${d.skipped}, errors ${d.errors}.`;
+        }
+      }
+      // Refresh "last run" timestamp from the freshly-written settings
+      setTimeout(loadEmailSettings, 200);
+    } catch (err) {
+      if (statusEl) {
+        statusEl.style.color = '#ef4444';
+        statusEl.textContent = '✗ ' + (err.message || 'Test failed');
+      }
+    }
+  };
 
   window.autoSaveSettings = async function () {
     const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
@@ -442,6 +520,40 @@ window._adminConfirm = function(opts) {
       support_smtp_port:        get('supportSmtpPort'),
       admin_alert_email:        get('adminAlertEmail'),
     };
+    const _farMi = get('farBookingAlertMiles');
+    if (_farMi !== '') payload.far_booking_alert_miles = _farMi;
+    // Rate limits — only include if the field has a value. The PUT endpoint
+    // rejects non-positive-integers with a 400, so an empty field stays untouched.
+    [
+      ['rateLogin',         'rate_login'],
+      ['rateSignup',        'rate_signup'],
+      ['ratePasswordReset', 'rate_password_reset'],
+      ['rateSupport',       'rate_support'],
+      ['rateEmailSend',     'rate_email_send'],
+      ['rateAffTrack',      'rate_aff_track'],
+    ].forEach(([id, key]) => {
+      const v = get(id);
+      if (v !== '') payload[key] = v;
+    });
+    // Part 10p Phase 3: bounce-check fields. Checkbox always sends true/false;
+    // text fields only sent when non-blank (so blanking a field doesn't wipe
+    // the stored value unintentionally — clear via empty string explicitly if
+    // the user actually clears it).
+    const cb = document.getElementById('bounceCheckEnabled');
+    if (cb) payload.bounce_check_enabled = cb.checked ? 'true' : 'false';
+    [
+      ['bounceImapServer',   'bounce_check_imap_server'],
+      ['bounceImapPort',     'bounce_check_imap_port'],
+      ['bounceImapUsername', 'bounce_check_imap_username'],
+      ['bounceImapPassword', 'bounce_check_imap_password'],
+    ].forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const v = el.value || '';
+      // Never overwrite the real password with the masked placeholder dots.
+      if (key === 'bounce_check_imap_password' && v.startsWith('•')) return;
+      payload[key] = v;
+    });
     try {
       await fetch('/api/admin/settings', {
         method: 'PUT', credentials: 'include',

@@ -167,7 +167,12 @@
       // as a warning so admin knows to click "Export All" manually.
       try {
         const data = await r.json();
-        if (data && data.exported === false) {
+        // Audit fix (May 2026 part 5): the backend returns `{ok:true, exported:<int>}`
+        // on success and `{ok:true, export_error:<str>}` on failure (no `exported`
+        // key at all). The previous `data.exported === false` literally never
+        // matched, so admins silently lost the post-deploy template sync warning.
+        // Check for the actual signal: presence of `export_error`.
+        if (data && data.export_error) {
           window._adminToast(
             data.export_error || 'Saved to DB, but auto-export failed. Click "Export All" to retry.',
             'rgba(245,158,11,0.85)'

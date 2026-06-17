@@ -102,13 +102,49 @@ def notify_gig_booked(db, gig_details: dict, gig_id: int, venue_id: int, artist_
             {"gid": gig_id}
         ).scalar() or 0
         if total_slots > 1:
+            # Audit fix (May 2026 part 6): include awaiting_venue_contract + pending_venue_approval
             sn = db.execute(_t(
                 "SELECT slot_number FROM gig_slots "
-                "WHERE gig_id = :gid AND artist_id = :aid AND status IN ('booked','pending_contract') "
+                "WHERE gig_id = :gid AND artist_id = :aid "
+                "AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') "
                 "ORDER BY slot_number LIMIT 1"
             ), {"gid": gig_id, "aid": artist_id}).scalar()
             if sn:
                 slot_suffix = f". Slot {sn}"
+    except Exception:
+        pass
+
+    # Far-away-booking notice (May 2026 part 10h). Mirrors the email notices in
+    # email_dispatch.send_booking_emails — if the artist and venue are farther
+    # apart than far_booking_alert_miles, append a heads-up to the Activity
+    # Center notification for both sides. Booking is never blocked; this is
+    # purely informational. Computed once and reused for all entity_users.
+    far_artist_suffix = ""   # appended to the artist-side notification
+    far_venue_suffix  = ""   # appended to the venue-side notification
+    try:
+        threshold = float(db.execute(_t(
+            "SELECT COALESCE(setting_value,'50') FROM platform_settings WHERE setting_key='far_booking_alert_miles'"
+        )).scalar() or 50)
+        ag = db.execute(_t("SELECT latitude, longitude, city, state FROM artists WHERE id = :aid"),
+                        {"aid": artist_id}).mappings().first()
+        vg = db.execute(_t("SELECT latitude, longitude, city, state FROM venues WHERE id = :vid"),
+                        {"vid": venue_id}).mappings().first()
+        if ag and vg and None not in (ag["latitude"], ag["longitude"], vg["latitude"], vg["longitude"]):
+            import math
+            R = 3959.0
+            p1, p2 = math.radians(ag["latitude"]), math.radians(vg["latitude"])
+            dphi = math.radians(vg["latitude"] - ag["latitude"])
+            dlmb = math.radians(vg["longitude"] - ag["longitude"])
+            a = math.sin(dphi/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dlmb/2)**2
+            dist = R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            if dist > threshold:
+                mi = int(round(dist))
+                v_loc = ", ".join([p for p in [vg.get("city"), vg.get("state")] if p]) or "the venue area"
+                a_loc = ", ".join([p for p in [ag.get("city"), ag.get("state")] if p]) or "out of the area"
+                far_artist_suffix = (f" ⚠️ Note: this venue is in {v_loc}, ~{mi} mi away — "
+                                     f"make sure you can perform in person.")
+                far_venue_suffix  = (f" ⚠️ Note: {artist_name} is based in {a_loc}, ~{mi} mi away "
+                                     f"(booked via your open-gig window). Cancel from the gig if this looks wrong.")
     except Exception:
         pass
 
@@ -122,12 +158,14 @@ def notify_gig_booked(db, gig_details: dict, gig_id: int, venue_id: int, artist_
     for u in artist_users:
         uid = u["user_id"]
         if uid in shared_ids:
+            # Same human owns both sides — show the venue-side framing + the
+            # venue suffix (they're the one who needs the "artist is far" heads-up).
             create_notification(db, uid, "gig_booked", "Gig Booked",
-                f"Your artist {artist_name} booked your venue {venue_name} on {date} at {time_str}{slot_suffix}",
+                f"Your artist {artist_name} booked your venue {venue_name} on {date} at {time_str}{slot_suffix}{far_venue_suffix}",
                 gig_id=gig_id, venue_id=venue_id, artist_id=artist_id)
         else:
             create_notification(db, uid, "gig_booked", "Gig Booked",
-                f"You booked a gig at {venue_name} on {date} at {time_str}{slot_suffix}",
+                f"You booked a gig at {venue_name} on {date} at {time_str}{slot_suffix}{far_artist_suffix}",
                 gig_id=gig_id, venue_id=venue_id, artist_id=artist_id)
 
     for u in venue_users:
@@ -135,7 +173,7 @@ def notify_gig_booked(db, gig_details: dict, gig_id: int, venue_id: int, artist_
         if uid in shared_ids:
             continue  # already notified above
         create_notification(db, uid, "gig_booked", "Gig Booked",
-            f"{artist_name} booked your gig on {date} at {time_str}{slot_suffix}",
+            f"{artist_name} booked your gig on {date} at {time_str}{slot_suffix}{far_venue_suffix}",
             gig_id=gig_id, venue_id=venue_id, artist_id=artist_id)
 
 
@@ -148,26 +186,41 @@ def notify_gig_edited(db, gig_id: int, venue_id: int, venue_name: str, date: str
     from backend.utils import get_all_entity_users
     from sqlalchemy import text
 
-    # Find all booked artists on this gig (single-slot + multi-slot)
+    # Find all booked artists on this gig (single-slot + multi-slot).
+    # Audit fix (May 2026 part 8): include all in-flight contract states.
+    # Previously only `gs.status='booked'` slot rows were notified — artists
+    # mid-contract (pending_contract, awaiting_venue_contract, pending_venue_approval)
+    # didn't get edited-gig notifications even though their booking was directly
+    # affected by the venue's change.
     booked_artists = db.execute(text("""
         SELECT DISTINCT a.id as artist_id, a.name as artist_name
         FROM artists a
         WHERE a.id IN (
             SELECT artist_id FROM gigs WHERE id = :gid AND artist_id IS NOT NULL
             UNION
-            SELECT artist_id FROM gig_slots WHERE gig_id = :gid AND status = 'booked' AND artist_id IS NOT NULL
+            SELECT artist_id FROM gig_slots
+            WHERE gig_id = :gid
+              AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+              AND artist_id IS NOT NULL
         )
     """), {"gid": gig_id}).mappings().all()
 
     # Check if multi-slot so we can include slot time per artist
     is_multi = True  # all gigs use slots
 
+    # Audit fix (May 2026 part 4): dedupe by user_id across all booked
+    # artists on this gig. A user who owns multiple booked acts (or who
+    # owns both an artist AND the venue) used to receive one notification
+    # per artist for a single edit. Now they get one combined notification.
+    notified_user_ids = set()
     for row in booked_artists:
         slot_suffix = ""
         if is_multi:
+            # Audit fix (May 2026 part 8): include in-flight states for slot lookup.
             slot = db.execute(text("""
                 SELECT slot_number, start_time, end_time FROM gig_slots
-                WHERE gig_id = :gid AND artist_id = :aid AND status = 'booked'
+                WHERE gig_id = :gid AND artist_id = :aid
+                  AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                 LIMIT 1
             """), {"gid": gig_id, "aid": row["artist_id"]}).mappings().first()
             if slot:
@@ -179,6 +232,9 @@ def notify_gig_edited(db, gig_id: int, venue_id: int, venue_name: str, date: str
 
         artist_users = get_all_entity_users(db, "artist", row["artist_id"])
         for u in artist_users:
+            if u["user_id"] in notified_user_ids:
+                continue
+            notified_user_ids.add(u["user_id"])
             create_notification(
                 db, u["user_id"], "gig_edited", "Gig Updated",
                 f"{venue_name} updated your gig on {date}.{slot_suffix}",
@@ -219,29 +275,48 @@ def notify_gig_cancelled(db, gig_details: dict, gig_id: int, venue_id: int,
         artist_msg = f"You cancelled your gig at {venue_name} on {date}.{slot_suffix}"
         venue_msg = f"{artist_name} cancelled gig at {venue_name} on {date}.{slot_suffix}"
     
-    if artist_user_id == venue_user_id and artist_user_id:
-        # Same user — one combined notification
+    # Audit fix (May 2026 part 5): fan out to ALL entity_users (owner + team
+    # members) on both sides instead of just the primary user_id. Previously
+    # multi-user artist/venue accounts only delivered notifications to the
+    # owner — team members managing the booking would miss the cancellation.
+    # Dedupe in case the same user_id appears on both sides (owns artist AND
+    # has access to venue).
+    from backend.utils import get_all_entity_users
+    try:
+        artist_users = get_all_entity_users(db, 'artist', artist_id) if artist_id else []
+    except Exception:
+        artist_users = [{"user_id": artist_user_id}] if artist_user_id else []
+    try:
+        venue_users = get_all_entity_users(db, 'venue', venue_id) if venue_id else []
+    except Exception:
+        venue_users = [{"user_id": venue_user_id}] if venue_user_id else []
+    artist_uids = {u["user_id"] for u in artist_users if u.get("user_id")}
+    venue_uids = {u["user_id"] for u in venue_users if u.get("user_id")}
+    overlap = artist_uids & venue_uids
+    artist_only = artist_uids - overlap
+    venue_only = venue_uids - overlap
+
+    for uid in overlap:
         create_notification(
-            db, artist_user_id, "gig_cancelled", "Gig Cancelled",
+            db, uid, "gig_cancelled", "Gig Cancelled",
             f"{artist_name} cancelled gig at {venue_name} on {date}.{slot_suffix}",
             gig_id=gig_id, venue_id=venue_id, artist_id=artist_id,
             cancellation_reason=cancellation_reason
         )
-    else:
-        if artist_user_id:
-            create_notification(
-                db, artist_user_id, "gig_cancelled", "Gig Cancelled",
-                artist_msg,
-                gig_id=gig_id, venue_id=venue_id, artist_id=artist_id,
-                cancellation_reason=cancellation_reason
-            )
-        if venue_user_id:
-            create_notification(
-                db, venue_user_id, "gig_cancelled", "Gig Cancelled",
-                venue_msg,
-                gig_id=gig_id, venue_id=venue_id, artist_id=artist_id,
-                cancellation_reason=cancellation_reason
-            )
+    for uid in artist_only:
+        create_notification(
+            db, uid, "gig_cancelled", "Gig Cancelled",
+            artist_msg,
+            gig_id=gig_id, venue_id=venue_id, artist_id=artist_id,
+            cancellation_reason=cancellation_reason
+        )
+    for uid in venue_only:
+        create_notification(
+            db, uid, "gig_cancelled", "Gig Cancelled",
+            venue_msg,
+            gig_id=gig_id, venue_id=venue_id, artist_id=artist_id,
+            cancellation_reason=cancellation_reason
+        )
 
 
 def notify_all_entity_users_cancelled(db, gig_details: dict, gig_id: int,

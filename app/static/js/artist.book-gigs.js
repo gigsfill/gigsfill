@@ -821,8 +821,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         <div id="approved-list" class="venue-list" style="display: none; margin-bottom: 16px; padding-left: 12px;">
           ${approved.length ? approved.map(v => `
             <div style="padding: 6px 0;">
-              <a href="/app/venue-profile.html?venue_id=${v.venue_id}" target="_blank" style="color: var(--accent-cyan);">
-                ${v.venue_name}
+              <a href="/app/venue-profile.html?venue_id=${parseInt(v.venue_id, 10) || 0}" target="_blank" style="color: var(--accent-cyan);">
+                ${(typeof esc === 'function' ? esc(v.venue_name) : String(v.venue_name || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])))}
               </a>
             </div>
           `).join("") : "<em style='color: var(--text-muted);'>None</em>"}
@@ -837,8 +837,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         <div id="pending-list" class="venue-list" style="display: none; margin-bottom: 16px; padding-left: 12px;">
           ${pending.length ? pending.map(v => `
             <div style="padding: 6px 0;">
-              <a href="/app/venue-profile.html?venue_id=${v.venue_id}" target="_blank" style="color: var(--accent-cyan);">
-                ${v.venue_name}
+              <a href="/app/venue-profile.html?venue_id=${parseInt(v.venue_id, 10) || 0}" target="_blank" style="color: var(--accent-cyan);">
+                ${(typeof esc === 'function' ? esc(v.venue_name) : String(v.venue_name || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])))}
               </a>
             </div>
           `).join("") : "<em style='color: var(--text-muted);'>None</em>"}
@@ -853,8 +853,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         <div id="denied-list" class="venue-list" style="display: none; margin-bottom: 16px; padding-left: 12px;">
           ${denied.length ? denied.map(v => `
             <div style="padding: 6px 0;">
-              <a href="/app/venue-profile.html?venue_id=${v.venue_id}" target="_blank" style="color: var(--accent-cyan);">
-                ${v.venue_name}
+              <a href="/app/venue-profile.html?venue_id=${parseInt(v.venue_id, 10) || 0}" target="_blank" style="color: var(--accent-cyan);">
+                ${(typeof esc === 'function' ? esc(v.venue_name) : String(v.venue_name || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])))}
               </a>
             </div>
           `).join("") : "<em style='color: var(--text-muted);'>None</em>"}
@@ -1012,6 +1012,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             e.stopPropagation();
             openGigModal(g);
           };
+          if (typeof window.attachGigHoverCard === 'function') {
+            window.attachGigHoverCard(div, g);
+          }
           gigsContainer.appendChild(div);
         });
         
@@ -1152,22 +1155,45 @@ document.addEventListener("DOMContentLoaded", async () => {
         const slots = g.slots || [];
         const isMulti = slots.length > 1;
         const effectivePay = getEffectivePay(g);
+        // Door-deal aware formatter — returns "$60.00" for flat or
+        // "$50.00 guarantee + 20% of door" for door split.
+        const _fmt = window.formatPaySummary || ((s) => `$${parseFloat(s && s.pay || 0).toFixed(2)}`);
         if (isMulti) {
           if (gigClass === 'booked-mine') {
             const mySlot = slots.find(s => parseInt(s.artist_id) === parseInt(artistId));
-            const myPay = (mySlot && parseFloat(mySlot.pay)) || effectivePay;
-            payDisplay = myPay > 0 ? `$${myPay.toFixed(2)}` : '—';
+            if (mySlot && (mySlot.pay_summary || mySlot.deal_type === 'door' || mySlot.pay)) {
+              payDisplay = _fmt(mySlot);
+            } else {
+              const myPay = effectivePay;
+              payDisplay = myPay > 0 ? `$${myPay.toFixed(2)}` : '—';
+            }
           } else {
+            // For mixed slots, show range based on flat-equivalent pay (door
+            // floors at guarantee). A row that mixes door + flat reads as a
+            // range so the artist sees "from $40 to $50 guarantee + 20% of door"
+            // wouldn't fit — we keep range view but tag door rows in the modal.
             const pays = slots.map(s => parseFloat(s.pay) || 0).filter(p => p > 0);
             if (pays.length) {
               const min = Math.min(...pays), max = Math.max(...pays);
               payDisplay = (min === max) ? `$${min.toFixed(2)}` : `$${min.toFixed(2)} – $${max.toFixed(2)}`;
+              // If any slot is a door deal, add a 🎯 hint so the artist
+              // knows the row isn't flat-pay across the board.
+              if (slots.some(s => window.hasDoorDeal && window.hasDoorDeal(s))) {
+                payDisplay = `${payDisplay} 🎯`;
+              }
             }
           }
         } else if (effectivePay > 0) {
-          payDisplay = effectivePay > (parseFloat(g.pay) || 0)
-            ? `<span style="color:#a855f7;">$${effectivePay.toFixed(2)}</span>`
-            : `$${effectivePay.toFixed(2)}`;
+          // Single-slot path. If the gig's only slot is a door deal, render
+          // the deal terms; otherwise the override-aware effective pay.
+          const onlySlot = slots[0];
+          if (onlySlot && window.hasDoorDeal && window.hasDoorDeal(onlySlot)) {
+            payDisplay = _fmt(onlySlot);
+          } else {
+            payDisplay = effectivePay > (parseFloat(g.pay) || 0)
+              ? `<span style="color:#a855f7;">$${effectivePay.toFixed(2)}</span>`
+              : `$${effectivePay.toFixed(2)}`;
+          }
         }
       }
 
@@ -1510,18 +1536,12 @@ document.addEventListener("DOMContentLoaded", async () => {
           slotCancelOverlay.classList.add('hidden');
           cancelSlotBtn.disabled = true; cancelSlotBtn.textContent = 'Cancelling...';
           try {
-            const res = await fetch(`/api/gigs/${data.id}/slots/${slotId}/cancel`, {
-              method: 'DELETE', headers: {'Content-Type':'application/json'}, credentials: 'include',
-              body: JSON.stringify({ cancelled_by: 'artist', cancellation_reason: reason })
+            // Audit fix (May 2026 part 4): migrated to window.apiDeleteSafe
+            // — same error-surfacing behavior as the manual try/catch
+            // (parses FastAPI's {detail: "..."} body), less code.
+            await window.apiDeleteSafe(`/api/gigs/${data.id}/slots/${slotId}/cancel`, {
+              cancelled_by: 'artist', cancellation_reason: reason
             });
-            if (!res.ok) {
-              // FIX (May 2026 audit #7): surface FastAPI's {detail} body so the
-              // artist sees the real reason (auth, server error, etc.) instead
-              // of a silent button-reset. Mirrors the venue path.
-              let detail = `HTTP ${res.status}`;
-              try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch(_) {}
-              throw new Error(detail);
-            }
             overlay.classList.add("hidden");
             await loadGigs(); await loadMyGigs();
             if (window.myVenuesRedesign) { await myVenuesRedesign.loadVenues(); myVenuesRedesign.render(); }
@@ -1552,18 +1572,11 @@ document.addEventListener("DOMContentLoaded", async () => {
           const reason = cancelReason.value.trim() || "No reason provided";
           confirmBtn.disabled = true; confirmBtn.textContent = 'Cancelling...';
           try {
-            const resp = await fetch(`/api/gigs/${data.id}/cancel`, {
-              method: "DELETE", headers: {"Content-Type":"application/json"}, credentials: "include",
-              body: JSON.stringify({ cancelled_by: "artist", cancellation_reason: reason, artist_id: parseInt(artistId) })
+            // Audit fix (May 2026 part 4): migrated to window.apiDeleteSafe.
+            await window.apiDeleteSafe(`/api/gigs/${data.id}/cancel`, {
+              cancelled_by: "artist", cancellation_reason: reason,
+              artist_id: parseInt(artistId)
             });
-            if (!resp.ok) {
-              // Audit fix (May 2026): surface FastAPI's {detail} body so the
-              // artist sees the real reason. Slot-cancel sibling above was
-              // upgraded earlier — this whole-gig path was missed.
-              let detail = `HTTP ${resp.status}`;
-              try { const j = await resp.json(); if (j && j.detail) detail = j.detail; } catch(_) {}
-              throw new Error(detail);
-            }
             cancelModal.classList.add("hidden");
             await loadGigs(); await loadMyGigs();
             await new Promise(r => setTimeout(r, 200));
@@ -1594,18 +1607,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       btn.addEventListener('click', async () => {
         btn.disabled = true; btn.textContent = 'Leaving…';
         try {
-          const res = await fetch(`/api/gigs/${btn.dataset.gigId}/waitlist?artist_id=${btn.dataset.artistId}`,
-            { method: 'DELETE', credentials: 'include' });
-          if (!res.ok) {
-            // Audit fix (May 2026): surface FastAPI's {detail} so the artist
-            // sees why leaving the waitlist failed (e.g. authz issue) instead
-            // of a silent button reset.
-            let detail = `HTTP ${res.status}`;
-            try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch(_) {}
-            showStyledModal('Could Not Leave Waitlist',
-              `<p style="color:#ef4444;">${detail}</p>`,
-              [{text:'OK',style:'ghost'}]);
-            return;
+          // Audit fix (May 2026 part 5): use apiDeleteSafe so FastAPI's {detail}
+          // surfaces consistently (matches the rest of the migration to safe
+          // helpers). Falls back to raw fetch when api-globals isn't loaded.
+          if (typeof window.apiDeleteSafe === 'function') {
+            await window.apiDeleteSafe(`/api/gigs/${btn.dataset.gigId}/waitlist?artist_id=${btn.dataset.artistId}`);
+          } else {
+            const res = await fetch(`/api/gigs/${btn.dataset.gigId}/waitlist?artist_id=${btn.dataset.artistId}`,
+              { method: 'DELETE', credentials: 'include' });
+            if (!res.ok) {
+              let detail = `HTTP ${res.status}`;
+              try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch(_) {}
+              throw new Error(detail);
+            }
           }
           overlay.classList.add('hidden');
           await loadGigs(); renderCalendar();
@@ -1818,19 +1832,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    autocompleteDiv.innerHTML = matches.map(venue => `
-      <div style="
-        padding: 10px 12px;
-        cursor: pointer;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-        transition: background 0.2s;
-      "
-      onmouseover="this.style.background='rgba(255,255,255,0.08)'"
-      onmouseout="this.style.background='transparent'"
-      onclick="selectVenue('${venue.replace(/'/g, "\\'")}')">
-        ${venue}
-      </div>
-    `).join('');
+    // Audit fix (May 2026 part 8): DOM-build with addEventListener (matching
+    // public-gigs autocomplete fix from part 7). Previous escape was bypassed
+    // by backslash-in-name.
+    autocompleteDiv.innerHTML = '';
+    matches.forEach(venue => {
+      const opt = document.createElement('div');
+      opt.style.cssText = 'padding: 10px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;';
+      opt.textContent = venue;
+      opt.addEventListener('mouseover', () => { opt.style.background = 'rgba(255,255,255,0.08)'; });
+      opt.addEventListener('mouseout',  () => { opt.style.background = 'transparent'; });
+      opt.addEventListener('click', () => { window.selectVenue(venue); });
+      autocompleteDiv.appendChild(opt);
+    });
 
     autocompleteDiv.style.display = 'block';
   });
@@ -2890,7 +2904,11 @@ function showWaitlistError(msg, gigId) {
     const banner = document.createElement('div');
     banner.id = 'waitlistErrorBanner';
     banner.style.cssText = 'background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:10px 14px;margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;';
-    banner.innerHTML = `<span style="color:#ef4444;font-size:0.85rem;">⚠️ ${msg}</span><button onclick="this.parentElement.remove()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:1.1rem;padding:0;">×</button>`;
+    // Audit fix (May 2026 part 6): escape msg — defense-in-depth even though
+    // it comes from FastAPI server-controlled detail strings, the field could
+    // include user-controlled fragments (venue/artist names in some errors).
+    const _esc_msg = String(msg||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    banner.innerHTML = `<span style="color:#ef4444;font-size:0.85rem;">⚠️ ${_esc_msg}</span><button onclick="this.parentElement.remove()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:1.1rem;padding:0;">×</button>`;
     body.appendChild(banner);
   }
 }
@@ -2917,29 +2935,26 @@ window.joinWaitlist = async function(gigId, artistId) {
 };
 
 window.leaveWaitlist = async function(gigId, artistId) {
+  // Audit fix (May 2026 part 4): migrated to window.apiDeleteSafe so
+  // backend `{"detail": "..."}` errors surface in the error modal
+  // instead of the generic "Failed to leave waitlist". Same UI shape on
+  // success — the error path now shows the actual reason.
   try {
-    const res = await fetch(`/api/gigs/${gigId}/waitlist?artist_id=${artistId}`, {
-      method: 'DELETE', credentials: 'include'
-    });
-    if (res.ok) {
-      // Close modal and refresh
-      const _ov = document.getElementById('modalOverlay');
-      if (_ov) _ov.classList.add('hidden');
-      // Immediately remove from local waitlist set so bubble updates at once
-      if (window._myWaitlistGigIds) window._myWaitlistGigIds.delete(gigId);
-      if (typeof renderCalendar === 'function') renderCalendar();
-      if (typeof loadGigs === 'function') await loadGigs();
-      if (typeof renderCalendar === 'function') renderCalendar();
-      if (typeof window.loadArtistWaitlists === 'function') window.loadArtistWaitlists();
-    } else {
-      if (typeof showStyledModal === 'function') {
-        showStyledModal('Error', '<p style="color:#ef4444;text-align:center;">Failed to leave waitlist — please try again.</p>', [{text:'OK',style:'ghost'}]);
-      } else { alert('Failed to leave waitlist — please try again'); }
-    }
-  } catch(e) {
+    await window.apiDeleteSafe(`/api/gigs/${gigId}/waitlist?artist_id=${artistId}`);
+    const _ov = document.getElementById('modalOverlay');
+    if (_ov) _ov.classList.add('hidden');
+    if (window._myWaitlistGigIds) window._myWaitlistGigIds.delete(gigId);
+    if (typeof renderCalendar === 'function') renderCalendar();
+    if (typeof loadGigs === 'function') await loadGigs();
+    if (typeof renderCalendar === 'function') renderCalendar();
+    if (typeof window.loadArtistWaitlists === 'function') window.loadArtistWaitlists();
+  } catch (e) {
+    const msg = (e && e.message) || 'Something went wrong. Please try again.';
     if (typeof showStyledModal === 'function') {
-      showStyledModal('Error', '<p style="color:#ef4444;text-align:center;">Something went wrong. Please try again.</p>', [{text:'OK',style:'ghost'}]);
-    } else { alert('Error leaving waitlist'); }
+      showStyledModal('Error',
+        `<p style="color:#ef4444;text-align:center;">${msg}</p>`,
+        [{ text: 'OK', style: 'ghost' }]);
+    } else { alert(msg); }
   }
 };
 

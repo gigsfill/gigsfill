@@ -236,7 +236,14 @@
         fetch('/api/admin/payments/search?' + params.toString(), { credentials: 'include' }),
         fetch('/api/admin/payments/stats?'  + statsParams.toString(), { credentials: 'include' }),
       ]);
-      if (!searchRes.ok) throw new Error('HTTP ' + searchRes.status);
+      if (!searchRes.ok) {
+        // Audit fix (May 2026 part 5): surface FastAPI's {detail} body instead
+        // of a bare "HTTP 500". Admin payments errors often mean expired
+        // session, role drift, or a malformed filter — the detail explains it.
+        let _detail = 'HTTP ' + searchRes.status;
+        try { const _j = await searchRes.json(); if (_j && _j.detail) _detail = _j.detail; } catch (_) {}
+        throw new Error(_detail);
+      }
       const data  = await searchRes.json();
       const stats = statsRes.ok ? await statsRes.json() : null;
       apTotal = data.total || 0;
@@ -264,10 +271,17 @@
       const amount = r.venue_charge_cents || r.amount_cents || 0;
       const isChild = r.parent_transaction_id != null;
       const indent = isChild ? '↳&nbsp;' : '';
-      const venueSafe  = r.venue_name  ? r.venue_name.replace(/'/g, "\\'") : '';
-      const artistSafe = r.artist_name ? r.artist_name.replace(/'/g, "\\'") : '';
-      const venue  = r.venue_name  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterVenue(${r.venue_id}, '${esc(venueSafe)}')" style="color:var(--cyan);text-decoration:none;">${esc(r.venue_name)}</a>` : '—';
-      const artist = r.artist_name ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterArtist(${r.artist_id || 'null'}, '${esc(artistSafe)}')" style="color:#a78bfa;text-decoration:none;">${esc(r.artist_name)}</a>` : '—';
+      // Audit fix (May 2026 part 7): also escape backslashes — a trailing `\`
+      // in a venue/artist name would otherwise escape the inline JS string's
+      // closing apostrophe and let attacker code follow. Wrap with both
+      // backslash AND apostrophe escapes for the JS-string-in-HTML-attr context.
+      const _jsAttr = s => String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const venueSafe  = _jsAttr(r.venue_name  || '');
+      const artistSafe = _jsAttr(r.artist_name || '');
+      const _vid_safe = (r.venue_id  != null) ? parseInt(r.venue_id,  10) || 0 : 0;
+      const _aid_safe = (r.artist_id != null) ? parseInt(r.artist_id, 10) || 0 : 'null';
+      const venue  = r.venue_name  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterVenue(${_vid_safe}, '${esc(venueSafe)}')" style="color:var(--cyan);text-decoration:none;">${esc(r.venue_name)}</a>` : '—';
+      const artist = r.artist_name ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterArtist(${_aid_safe}, '${esc(artistSafe)}')" style="color:#a78bfa;text-decoration:none;">${esc(r.artist_name)}</a>` : '—';
       const stripeRef = r.stripe_payment_intent_id || r.stripe_transfer_id || '';
       const stripeBadge = stripeRef
         ? `<a href="https://dashboard.stripe.com/${stripeRef.startsWith('pi_') ? 'payments/' : 'connect/transfers/'}${esc(stripeRef)}" target="_blank" onclick="event.stopPropagation()" style="font-family:monospace;font-size:0.65rem;color:#94a3b8;text-decoration:none;border-bottom:1px dashed rgba(148,163,184,0.4);" title="Open in Stripe Dashboard">${esc(stripeRef.slice(0,16))}…</a>`
@@ -361,7 +375,14 @@
       return cached;
     }
     const res = await fetch('/api/admin/payments/' + txnId, { credentials: 'include' });
-    if (!res.ok) throw new Error('Could not load transaction #' + txnId);
+    if (!res.ok) {
+      // Audit fix (May 2026 part 3): surface FastAPI's {detail: "..."} body
+      // so the admin sees the real reason (e.g. "Transaction not found")
+      // instead of a bare "HTTP 404".
+      let _detail = '';
+      try { const _j = await res.json(); _detail = _j && _j.detail ? _j.detail : ''; } catch (_) {}
+      throw new Error(_detail || ('Could not load transaction #' + txnId + ' (HTTP ' + res.status + ')'));
+    }
     const data = await res.json();
     window._apLastDetail = data;
     return data;
@@ -511,6 +532,14 @@
       if (!json.dry_run) { apReload(); window.apShowDetail(txnId); }
     } catch (e) {
       const msg = (e && e.message) || 'Network error';
+      // Audit fix (May 2026 part 7): on a 409 ("status changed during this
+      // request"), auto-reload the table + re-open the detail modal so the
+      // admin sees the new state without an extra refresh click. Easy to miss
+      // a stale 409 when working through a list of reconciliations.
+      if (msg && (msg.includes('status changed') || msg.includes('409'))) {
+        try { apReload(); } catch (_) {}
+        try { window.apShowDetail(txnId); } catch (_) {}
+      }
       if (window.showErrorModal) window.showErrorModal('Refund failed', msg);
       else alert(msg);
     }
@@ -526,7 +555,13 @@
       [{ text: 'Close', style: 'ghost' }], { size: 'xl' });
     try {
       const res = await fetch('/api/admin/payments/' + txnId, { credentials: 'include' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) {
+        // Audit fix (May 2026 part 3): surface FastAPI detail body so the
+        // admin reads the actual reason (404, 422 validation, etc.).
+        let _detail = '';
+        try { const _j = await res.json(); _detail = _j && _j.detail ? _j.detail : ''; } catch (_) {}
+        throw new Error(_detail || ('HTTP ' + res.status));
+      }
       const data = await res.json();
       const t = data.transaction;
       const cell = (label, val) =>

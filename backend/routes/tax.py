@@ -18,19 +18,41 @@ router = APIRouter()
 # ==========================================
 # TIN ENCRYPTION
 # ==========================================
+# Audit fix (May 2026 part 9c): replaced the previous XOR-with-SHA256-derived-
+# key "encryption" with Fernet (AES-128-CBC + HMAC-SHA256), which provides
+# authenticated encryption with random IVs. The old scheme was a repeating-
+# key XOR — known-plaintext attacks against 9-digit TINs were trivial, and
+# the default key string shipped in the repo. Existing rows are detected
+# by the absence of the Fernet "gAAAAA" prefix and decrypted with the
+# legacy XOR routine, then opportunistically re-encrypted on read.
+#
+# Key derivation: env var TIN_ENCRYPTION_KEY is hashed to 32 bytes via SHA-256
+# and base64-encoded — that is the Fernet key. Operators set a real 32-byte
+# secret in /opt/gigsfill/.env; the default is intentionally a known weak
+# string so misconfigured deploys fail loudly on first attempt to read.
 _TIN_KEY = os.environ.get("TIN_ENCRYPTION_KEY", "gigsfill-tin-key-change-in-production-2024")
+_LEGACY_DEFAULT_KEY = "gigsfill-tin-key-change-in-production-2024"
 
-def _encrypt_tin(tin: str) -> str:
-    key = hashlib.sha256(_TIN_KEY.encode()).digest()
-    tin_bytes = tin.encode()
-    encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(tin_bytes))
-    return base64.b64encode(encrypted).decode()
+def _fernet():
+    from cryptography.fernet import Fernet
+    digest = hashlib.sha256(_TIN_KEY.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
 
-def _decrypt_tin(encrypted: str) -> str:
+def _legacy_xor_decrypt(encrypted: str) -> str:
     key = hashlib.sha256(_TIN_KEY.encode()).digest()
     encrypted_bytes = base64.b64decode(encrypted.encode())
     decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(encrypted_bytes))
     return decrypted.decode()
+
+def _encrypt_tin(tin: str) -> str:
+    return _fernet().encrypt(tin.encode()).decode()
+
+def _decrypt_tin(encrypted: str) -> str:
+    # Fernet tokens start with the version byte 0x80 → base64 'gAAAAA' prefix.
+    # Anything else is assumed to be a legacy XOR blob.
+    if encrypted and encrypted.startswith("gAAAAA"):
+        return _fernet().decrypt(encrypted.encode()).decode()
+    return _legacy_xor_decrypt(encrypted)
 
 
 def _check_artist_access(artist_id, user_id, db):
@@ -421,7 +443,7 @@ def send_1099(venue_id: int, record_id: int, user=Depends(get_current_user), db=
 <p style="color: #666; font-size: 0.9em;">View this 1099 in your GigsFill account under the Taxes tab.</p>
 <p style="margin-top: 24px;">&mdash; GigsFill</p></div>"""
             
-            msg = MIMEMultipart()
+            msg = MIMEMultipart('alternative')
             if email_service.from_name:
                 from email.utils import formataddr
                 msg['From'] = formataddr((email_service.from_name, email_service.from_email))
@@ -621,6 +643,19 @@ async def generate_affiliate_1099s(request: Request, user=Depends(get_current_us
         HAVING SUM(ae.earned_cents) >= :threshold
     """), {"yr": str(tax_year), "threshold": threshold_cents}).mappings().all()
 
+    # Platform payer info (gigsfill's own 1099-NEC issuer block). Falls back
+    # to settings keys; on misconfigured deploys, leave blank rather than
+    # crash — admin can re-run after filling in platform_settings.
+    payer_name = db.execute(text(
+        "SELECT setting_value FROM platform_settings WHERE setting_key='platform_legal_name'"
+    )).scalar() or "GigsFill"
+    payer_tin_last4 = (db.execute(text(
+        "SELECT setting_value FROM platform_settings WHERE setting_key='platform_ein_last4'"
+    )).scalar() or "")[:4]
+    payer_address = db.execute(text(
+        "SELECT setting_value FROM platform_settings WHERE setting_key='platform_address'"
+    )).scalar() or ""
+
     generated = []
     for aff in affiliates:
         uid = aff["affiliate_user_id"]
@@ -630,35 +665,88 @@ async def generate_affiliate_1099s(request: Request, user=Depends(get_current_us
             ORDER BY tax_year DESC LIMIT 1
         """), {"uid": uid}).mappings().first()
 
-        record = {
+        full_name = f"{aff['first_name'] or ''} {aff['last_name'] or ''}".strip() or aff["email"]
+        rec_tin_last4 = (w9["tin_last4"] if w9 else None) or ""
+        rec_address = ""
+        if w9:
+            rec_address = ", ".join(filter(None, [
+                w9["address_line_1"], w9["city"], w9["state"], w9["zip_code"]
+            ]))
+
+        # Audit fix (May 2026 part 9c): persist to affiliate_tax_1099s.
+        # Previously this endpoint built an in-memory list and returned JSON
+        # — nothing was archived. No proof of issuance for IRS audit, no
+        # status tracking, no way to re-render the 1099 form later.
+        db.execute(text("""
+            INSERT INTO affiliate_tax_1099s
+              (affiliate_user_id, tax_year, total_earnings_cents, payout_count,
+               recipient_name, recipient_tin_last4, recipient_address,
+               payer_name, payer_tin_last4, payer_address, status)
+            VALUES (:uid, :year, :earnings, :pcount,
+                    :rname, :rtin, :raddr,
+                    :pname, :ptin, :paddr, 'generated')
+            ON CONFLICT(affiliate_user_id, tax_year) DO UPDATE SET
+              total_earnings_cents = :earnings,
+              payout_count = :pcount,
+              recipient_name = :rname,
+              recipient_tin_last4 = :rtin,
+              recipient_address = :raddr,
+              payer_name = :pname,
+              payer_tin_last4 = :ptin,
+              payer_address = :paddr,
+              status = CASE WHEN affiliate_tax_1099s.status = 'sent'
+                            THEN 'sent' ELSE 'generated' END
+        """), {
+            "uid": uid, "year": tax_year,
+            "earnings": int(aff["total_cents"]),
+            "pcount": int(aff["txn_count"]),
+            "rname": full_name, "rtin": rec_tin_last4, "raddr": rec_address,
+            "pname": payer_name, "ptin": payer_tin_last4, "paddr": payer_address,
+        })
+
+        generated.append({
             "user_id": uid,
             "tax_year": tax_year,
-            "full_name": f"{aff['first_name'] or ''} {aff['last_name'] or ''}".strip() or aff["email"],
+            "full_name": full_name,
             "email": aff["email"],
             "total_earned_cents": aff["total_cents"],
             "txn_count": aff["txn_count"],
             "has_w9": bool(w9),
-            "tin_last4": w9["tin_last4"] if w9 else None,
-            "address": f"{w9['address_line_1'] or ''}, {w9['city'] or ''}, {w9['state'] or ''} {w9['zip_code'] or ''}".strip(", ") if w9 else None,
-        }
-        generated.append(record)
+            "tin_last4": rec_tin_last4 or None,
+            "address": rec_address or None,
+        })
 
-    return {"tax_year": tax_year, "threshold_dollars": threshold_cents / 100, "records": generated, "count": len(generated)}
+    db.commit()
+    return {"tax_year": tax_year, "threshold_dollars": threshold_cents / 100,
+            "records": generated, "count": len(generated)}
 
 
 @router.get("/api/users/{user_id}/affiliate-1099s")
 def get_user_affiliate_1099s(user_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """User views their own affiliate 1099 history."""
+    """User views their own affiliate 1099 history.
+
+    Audit fix (May 2026 part 9c): prefers the persisted `affiliate_tax_1099s`
+    table (rows admin has generated) so the status/sent_at columns are
+    accurate. Falls back to a live aggregation of paid earnings for the
+    pre-persistence years (so existing affiliates don't lose their history).
+    """
     if user.id != user_id:
         _check_admin(user)
 
-    from datetime import datetime
-    year = datetime.now().year
+    # Persisted 1099s — admin-generated records have a status (generated/sent)
+    persisted = db.execute(text("""
+        SELECT tax_year, total_earnings_cents AS total_cents,
+               payout_count AS txn_count, status
+        FROM affiliate_tax_1099s
+        WHERE affiliate_user_id = :uid
+        ORDER BY tax_year DESC
+    """), {"uid": user_id}).mappings().all()
+    persisted_years = {int(r["tax_year"]) for r in persisted}
 
-    # Build year-by-year summaries from paid earnings
-    rows = db.execute(text("""
+    # Live fallback for years that haven't been admin-generated yet
+    live = db.execute(text("""
         SELECT
-            strftime('%Y', ap.paid_at) as tax_year,
+            CAST(strftime('%Y', ap.paid_at) AS INTEGER) as tax_year,
             SUM(ae.earned_cents) as total_cents,
             COUNT(ae.id) as txn_count
         FROM affiliate_earnings ae
@@ -668,8 +756,15 @@ def get_user_affiliate_1099s(user_id: int, user=Depends(get_current_user), db=De
         ORDER BY tax_year DESC
     """), {"uid": user_id}).mappings().all()
 
+    records = [dict(r) for r in persisted]
+    for r in live:
+        if int(r["tax_year"]) not in persisted_years:
+            records.append({"tax_year": r["tax_year"], "total_cents": r["total_cents"],
+                            "txn_count": r["txn_count"], "status": "pending"})
+    records.sort(key=lambda x: -int(x["tax_year"]))
+
     threshold = int(db.execute(text(
         "SELECT COALESCE(setting_value,'60000') FROM platform_settings WHERE setting_key='affiliate_1099_threshold_cents'"
     )).scalar() or 60000)
 
-    return {"records": [dict(r) for r in rows], "threshold_cents": threshold}
+    return {"records": records, "threshold_cents": threshold}

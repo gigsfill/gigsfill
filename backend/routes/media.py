@@ -15,11 +15,15 @@ VENUE_UPLOAD_ROOT = "app/static/uploads/venue"
 # FILE UPLOAD SECURITY
 # ============================================
 
-# Allowed file extensions by media type
+# Allowed file extensions by media type.
+# Audio uploads are MP3-only — other formats (wav, m4a, ogg, flac, aac) are
+# generally larger and not consistently supported by the HTML <audio> element
+# across browsers. Artists with non-MP3 files can either convert to MP3 or
+# link the file via the "Add Audio Link" field (SoundCloud / Bandcamp / etc.).
 ALLOWED_EXTENSIONS = {
     "profile": {"jpg", "jpeg", "png", "gif", "webp"},
     "picture": {"jpg", "jpeg", "png", "gif", "webp"},
-    "audio":   {"mp3", "wav", "m4a", "ogg", "flac", "aac"},
+    "audio":   {"mp3"},
     "video":   set(),  # Video is URL-based, no file upload
 }
 
@@ -27,16 +31,18 @@ ALLOWED_EXTENSIONS = {
 ALLOWED_MIME_TYPES = {
     # Images
     "image/jpeg", "image/png", "image/gif", "image/webp",
-    # Audio
-    "audio/mpeg", "audio/wav", "audio/mp4", "audio/ogg", "audio/flac",
-    "audio/aac", "audio/x-m4a", "audio/mp3",
+    # Audio — MP3 only. (Some browsers send audio/mpeg, others audio/mp3.)
+    "audio/mpeg", "audio/mp3",
 }
 
 # Max file sizes in bytes
 MAX_FILE_SIZES = {
     "profile": 10 * 1024 * 1024,   # 10 MB
     "picture": 10 * 1024 * 1024,   # 10 MB
-    "audio":   50 * 1024 * 1024,   # 50 MB
+    # 5 MB is enough for a ~5-minute 128 kbps MP3 demo clip; we surface this
+    # cap to artists in the upload UI so they encode appropriately rather than
+    # uploading a 30-MB master and getting a server rejection.
+    "audio":   5  * 1024 * 1024,   # 5 MB
 }
 
 
@@ -142,6 +148,7 @@ def get_artist_media(artist_id: int):
             "file_path": m.file_path,
             "video_url": m.video_url,
             "display_order": m.display_order,
+            "caption": m.caption,
         }
         for m in rows
     ]
@@ -406,6 +413,7 @@ def get_venue_media(venue_id: int):
             "file_path": m.file_path,
             "video_url": m.video_url,
             "display_order": m.display_order,
+            "caption": m.caption,
         }
         for m in rows
     ]

@@ -9,7 +9,7 @@ from sqlalchemy import text
 import bcrypt
 from datetime import datetime, timedelta
 from backend.utils import utcnow_naive
-from backend.rate_limiter import limiter, RATE_LOGIN, RATE_SIGNUP, RATE_PASSWORD_RESET
+from backend.rate_limiter import limiter, rate_login_limit, rate_signup_limit, rate_password_reset_limit
 
 logger = logging.getLogger("gigsfill.auth")
 
@@ -353,7 +353,7 @@ def _clear_failed_logins(email: str, ip: str = ""):
 # ============================================
 
 @router.post("/api/signup")
-@limiter.limit(RATE_SIGNUP)
+@limiter.limit(rate_signup_limit)
 def signup(request: Request, data: dict, response: Response):
     """Create a new user account with hashed password and auto-create artist/venue profile"""
     from backend.us_cities import find_city
@@ -378,9 +378,18 @@ def signup(request: Request, data: dict, response: Response):
         email = (data.get("email") or "").strip().lower()
         password = data.get("password")
         role = data.get("role")
-        
+
         if not email or not password:
             raise HTTPException(400, "Email and password required")
+
+        # Audit fix (May 2026 part 7): the signup endpoint takes a raw `dict`
+        # so SignupRequest's EmailStr validator is bypassed. Without this
+        # check, `"email":"notanemail"` would be accepted and inserted, then
+        # leak into booking_contact / verification-email recipients / affiliate
+        # records. Apply the minimal RFC-compliant-ish check inline.
+        import re as _re_email
+        if not _re_email.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
+            raise HTTPException(400, "Please enter a valid email address.")
 
         validate_password_or_raise(password)
 
@@ -407,11 +416,50 @@ def signup(request: Request, data: dict, response: Response):
         # but the message is generic — automated enumeration can't distinguish.
         existing = db.query(User).filter(User.email == email).first()
         if existing:
+            # Audit fix (May 2026 part 5): throttle the "account already exists"
+            # email per (email, 24h) so a distributed attacker can't mailbomb
+            # users by spraying signups with their address. The per-IP
+            # RATE_SIGNUP limit doesn't stop this; per-email throttle does.
+            _suppress_alert = False
+            try:
+                _last = db.execute(
+                    text("SELECT signup_collision_last_at FROM users WHERE id = :uid"),
+                    {"uid": existing.id}
+                ).scalar()
+            except Exception:
+                # Column may not exist yet on older deployments; add it lazily.
+                try:
+                    db.execute(text("ALTER TABLE users ADD COLUMN signup_collision_last_at TEXT"))
+                    db.commit()
+                except Exception:
+                    pass
+                _last = None
+            if _last:
+                try:
+                    from datetime import timedelta as _td
+                    _last_dt = _last if not isinstance(_last, str) else datetime.fromisoformat(_last)
+                    if (utcnow_naive() - _last_dt) < _td(hours=24):
+                        _suppress_alert = True
+                except Exception:
+                    pass
+            if not _suppress_alert:
+                try:
+                    db.execute(
+                        text("UPDATE users SET signup_collision_last_at = :now WHERE id = :uid"),
+                        {"now": utcnow_naive(), "uid": existing.id}
+                    )
+                    db.commit()
+                except Exception:
+                    pass
             try:
                 from backend.email_service import EmailService
                 _es = EmailService(db)
-                if _es.enabled:
+                if _es.enabled and not _suppress_alert:
                     _first = existing.first_name or ""
+                    # Audit fix (May 2026 part 5): use the canonical site URL
+                    # from platform_settings so staging/custom-domain deploys
+                    # don't link recipients back to production.
+                    _base = _get_base_url(db)
                     _es._send_raw_email(
                         to_email=existing.email,
                         subject="Someone tried to create a GigsFill account with your email",
@@ -419,8 +467,8 @@ def signup(request: Request, data: dict, response: Response):
                             f"<p>Hi {_first},</p>"
                             f"<p>An account already exists at GigsFill with this email address. "
                             f"Someone just tried to sign up using it.</p>"
-                            f"<p>If this was you, just <a href=\"https://gigsfill.com/login.html\">log in</a> "
-                            f"or <a href=\"https://gigsfill.com/forgot-password.html\">reset your password</a>.</p>"
+                            f"<p>If this was you, just <a href=\"{_base}/app/index.html\">log in</a> "
+                            f"or <a href=\"{_base}/app/index.html#forgot\">reset your password</a>.</p>"
                             f"<p>If it wasn't you, no action is needed — your account is safe.</p>"
                             f"<p>— The GigsFill Team</p>"
                         ),
@@ -484,16 +532,37 @@ def signup(request: Request, data: dict, response: Response):
         db.commit()
         db.refresh(user)
 
-        # Generate unique affiliate code
+        # Generate unique affiliate code.
+        # Audit fix (May 2026 part 10c): catch IntegrityError on the UPDATE
+        # so a SELECT-then-UPDATE race between two parallel signups can't
+        # produce a 500. Loop terminates loudly if all 20 attempts collide
+        # (vanishingly unlikely with 4-byte hex = 4.3B namespace, but
+        # logging the exhaustion makes the bug findable instead of silent).
         import secrets as _sec
-        for _ in range(20):
-            aff_code = "AFF-" + _sec.token_hex(4).upper()
-            exists = db.execute(text("SELECT id FROM users WHERE affiliate_code = :c"), {"c": aff_code}).first()
-            if not exists:
-                db.execute(text("UPDATE users SET affiliate_code = :c WHERE id = :uid"), {"c": aff_code, "uid": user.id})
+        aff_code = None
+        for _attempt in range(20):
+            candidate = "AFF-" + _sec.token_hex(4).upper()
+            exists = db.execute(text("SELECT id FROM users WHERE affiliate_code = :c"), {"c": candidate}).first()
+            if exists:
+                continue
+            try:
+                db.execute(text("UPDATE users SET affiliate_code = :c WHERE id = :uid"), {"c": candidate, "uid": user.id})
                 db.commit()
+                aff_code = candidate
                 break
-        
+            except Exception as _ace:
+                # Unique-index race-loser — another concurrent signup grabbed this code first.
+                db.rollback()
+                logger.info(f"affiliate_code race on signup user {user.id}: {_ace}; retrying")
+                continue
+        if aff_code is None:
+            logger.error(
+                f"affiliate_code generation EXHAUSTED 20 attempts for user {user.id} — "
+                f"user has no code, will not be able to send recommend emails. "
+                f"This should be statistically impossible (4.3B namespace); investigate."
+            )
+
+
 
         # Check if first user - auto-make admin
         # Audit fix (May 2026): write integer 1 (post-migration); SQLAlchemy
@@ -614,27 +683,29 @@ def signup(request: Request, data: dict, response: Response):
             
             # latitude/longitude already set from pre-validation above
             
-            # Check for duplicate venue name + city + state
-            if venue_name and city and state:
-                dup_v = db.execute(text("""
-                    SELECT id FROM venues
-                    WHERE LOWER(venue_name) = LOWER(:n) AND LOWER(city) = LOWER(:c) AND UPPER(state) = UPPER(:s)
-                """), {"n": venue_name, "c": city, "s": state}).first()
-                if dup_v:
-                    db.delete(user)
-                    db.commit()
-                    raise HTTPException(409, f"A venue named '{venue_name}' already exists in {city}, {state}. Log in to that account, or request access from the profile page.")
-
-            # Server-side duplicate guard
-            _dup_v = db.execute(text("""
-                SELECT v.id, v.venue_name, v.city, v.state FROM venues v
-                WHERE LOWER(v.venue_name) = LOWER(:n) AND LOWER(v.city) = LOWER(:c) AND UPPER(v.state) = UPPER(:s)
-                LIMIT 1
-            """), {"n": venue_name, "c": city or "", "s": state or ""}).mappings().first()
-            if _dup_v:
-                # Roll back the user we just created, then raise
-                db.delete(user); db.commit()
-                raise HTTPException(409, f"A venue named '{_dup_v['venue_name']}' already exists in {_dup_v['city']}, {_dup_v['state']}. If this is your venue, use 'Request Access' on the duplicate alert.")
+            # Server-side duplicate guard.
+            # Audit fix (May 2026 part 4): consolidated the two near-identical
+            # duplicate-venue checks that lived here. The first only fired
+            # when all three of (name, city, state) were truthy; the second
+            # always fired. The second strictly dominates the first, so the
+            # first was dead code with diverging copy.
+            if venue_name:
+                _dup_v = db.execute(text("""
+                    SELECT v.id, v.venue_name, v.city, v.state FROM venues v
+                    WHERE LOWER(v.venue_name) = LOWER(:n)
+                      AND LOWER(v.city) = LOWER(:c)
+                      AND UPPER(v.state) = UPPER(:s)
+                    LIMIT 1
+                """), {"n": venue_name, "c": city or "", "s": state or ""}).mappings().first()
+                if _dup_v:
+                    # Roll back the user we just created, then raise.
+                    db.delete(user); db.commit()
+                    raise HTTPException(
+                        409,
+                        f"A venue named '{_dup_v['venue_name']}' already exists "
+                        f"in {_dup_v['city']}, {_dup_v['state']}. If this is your "
+                        f"venue, use 'Request Access' on the duplicate alert."
+                    )
 
             # Create venue profile
             venue = Venue(
@@ -711,9 +782,17 @@ def signup(request: Request, data: dict, response: Response):
                     }
                 )
                 db.commit()
+                _venue_entity_save_failed = False
             except Exception as e:
-                pass  # Don't fail the whole signup if some fields can't be saved
-            
+                # Audit fix (May 2026 part 4): log the failure instead of
+                # silently swallowing, and flag it so the welcome email
+                # downstream knows the entity is half-populated.
+                logger.warning(
+                    f"Signup venue UPDATE failed (some fields may be missing) "
+                    f"for venue {venue.id}: {e}", exc_info=True
+                )
+                _venue_entity_save_failed = True
+
             # Add creator as owner in entity_users
             db.execute(
                 text("""
@@ -725,6 +804,16 @@ def signup(request: Request, data: dict, response: Response):
             db.commit()
 
             # ── Affiliate link: check cookie/param first, then email match ──
+            # Kill switch — if program disabled, skip linking entirely
+            # (audit fix May 2026 part 9c). Cookie still gets deleted below.
+            try:
+                _en = db.execute(text(
+                    "SELECT setting_value FROM platform_settings WHERE setting_key='affiliate_enabled'"
+                )).scalar()
+                _aff_enabled = (_en is None) or (str(_en).lower() in ("true", "1"))
+            except Exception:
+                _aff_enabled = True
+
             try:
                 aff_code = data.get("affiliate_code") or (request.cookies.get("aff_code") or "")
                 # Also check Referer header for ?aff= param as last resort
@@ -734,15 +823,15 @@ def signup(request: Request, data: dict, response: Response):
                     _qs = _up.urlparse(referer).query
                     aff_code = _up.parse_qs(_qs).get("aff", [""])[0]
                 aff_code = aff_code.strip().upper()
-                logger.info(f"Affiliate signup check: aff_code='{aff_code}' user={user.id}")
+                logger.info(f"Affiliate signup check: aff_code='{aff_code}' user={user.id} enabled={_aff_enabled}")
                 affiliate_uid = None
 
-                if aff_code:
+                if _aff_enabled and aff_code:
                     row = db.execute(text("SELECT id FROM users WHERE affiliate_code = :c"), {"c": aff_code}).first()
                     if row and row[0] != user.id:
                         affiliate_uid = row[0]
 
-                if not affiliate_uid:
+                if _aff_enabled and not affiliate_uid:
                     # Match by earliest recommend email to this email address
                     rec = db.execute(text("""
                         SELECT sender_user_id FROM affiliate_recommend_emails
@@ -753,8 +842,34 @@ def signup(request: Request, data: dict, response: Response):
                     if rec:
                         affiliate_uid = rec[0]
 
+                # Audit fix (May 2026 part 9c): block Sybil self-referral —
+                # the sender_user_id != :uid check only blocks self-recommend
+                # FROM the same user account. Two accounts owned by the same
+                # person (A1 sends recommend to A2's future email; A2 then
+                # signs up as a venue) would earn commission. Detect by
+                # matching the recipient_email against the sender's own
+                # email on file: if the affiliate's own email matches the
+                # signup email — or if they share an IP in the signup
+                # collision log — reject the link.
                 if affiliate_uid:
-                    # Read current affiliate settings
+                    _aff_email = db.execute(text(
+                        "SELECT email FROM users WHERE id = :uid"
+                    ), {"uid": affiliate_uid}).scalar()
+                    if _aff_email and str(_aff_email).strip().lower() == email.strip().lower():
+                        logger.warning(
+                            f"Affiliate link refused (self-referral): affiliate user {affiliate_uid} "
+                            f"and signup email {email} are the same."
+                        )
+                        affiliate_uid = None
+
+                if affiliate_uid:
+                    method = "email_click" if aff_code else "email_match"
+
+                    # Audit fix (May 2026 part 9c): rate snapshot still gets
+                    # written to the row, but `_current_rate` now reads LIVE
+                    # from platform_settings on every accrual (see
+                    # affiliate.py:_current_rate). The snapshot here is now
+                    # an audit / fallback record only.
                     def _aff_setting(key, default):
                         r = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key = :k"), {"k": key}).scalar()
                         try: return float(r) if r else default
@@ -763,7 +878,6 @@ def signup(request: Request, data: dict, response: Response):
                     init_rate    = _aff_setting("affiliate_rate_percent", 1.0)
                     reduced_rate = _aff_setting("affiliate_reduced_rate_percent", 0.5)
                     reduced_days = int(_aff_setting("affiliate_reduced_after_days", 365))
-                    method = "email_click" if aff_code else "email_match"
 
                     db.execute(text("""
                         INSERT OR IGNORE INTO affiliate_referrals
@@ -775,21 +889,41 @@ def signup(request: Request, data: dict, response: Response):
             except Exception as _ae:
                 logger.error(f"Affiliate link error on signup: {_ae}")
 
-        # Send welcome email
-        try:
-            email_service = EmailService(db)
-            user_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or email
-            email_service.send_notification_email(
-                user_email=email,
-                user_id=user.id,
-                notification_type="welcome",
-                variables={
-                    "user_name": user_name,
-                    "user_email": email
-                }
+            # Audit fix (May 2026 part 9c): always delete the aff_code cookie
+            # after signup, regardless of whether linking succeeded. Without
+            # this the 90-day cookie persists and a later signup on the same
+            # browser (shared computer; partner's account) gets attributed
+            # to the original affiliate from days/weeks ago — cross-account
+            # attribution leak.
+            try:
+                response.delete_cookie("aff_code", path="/")
+            except Exception:
+                pass
+
+        # Send welcome email — but skip if the venue entity-save failed
+        # silently above. We don't want a "Welcome!" message landing while
+        # the user's venue is missing capacity / pay / amenities.
+        # Audit fix (May 2026 part 4).
+        if locals().get("_venue_entity_save_failed"):
+            logger.warning(
+                f"Skipping welcome email for user {user.id} — venue entity "
+                f"creation didn't fully populate; admin should follow up."
             )
-        except Exception as e:
-            pass  # Don't fail signup if email fails
+        else:
+            try:
+                email_service = EmailService(db)
+                user_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or email
+                email_service.send_notification_email(
+                    user_email=email,
+                    user_id=user.id,
+                    notification_type="welcome",
+                    variables={
+                        "user_name": user_name,
+                        "user_email": email
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Welcome email send failed for user {user.id}: {e}")
 
         # Send email verification (background thread so signup doesn't block on SMTP)
         try:
@@ -828,7 +962,7 @@ def signup(request: Request, data: dict, response: Response):
 # ============================================
 
 @router.post("/api/login")
-@limiter.limit(RATE_LOGIN)
+@limiter.limit(rate_login_limit)
 def login(request: Request, data: LoginRequest, response: Response):
     """Login with email and password, returns signed session cookie"""
     email = data.email.lower().strip()
@@ -946,27 +1080,36 @@ def _get_base_url(db=None) -> str:
     Return the canonical public base URL for this deployment.
     Priority:
       1. GIGSFILL_BASE_URL environment variable
-      2. 'base_url' key in platform_settings table
-      3. Hard-coded production domain as last resort
+      2. 'site_url' key in platform_settings table (the canonical key used everywhere else)
+      3. 'base_url' key in platform_settings table (legacy fallback)
+      4. Hard-coded production domain as last resort
     Never returns localhost or 127.0.0.1.
     """
     url = os.environ.get("GIGSFILL_BASE_URL", "").strip().rstrip("/")
     if url and "127.0.0.1" not in url and "localhost" not in url:
         return url
     if db is not None:
-        try:
-            row = db.execute(
-                text("SELECT setting_value FROM platform_settings WHERE setting_key = 'base_url' LIMIT 1")
-            ).first()
-            if row and row[0] and "127.0.0.1" not in row[0] and "localhost" not in row[0]:
-                return row[0].strip().rstrip("/")
-        except Exception:
-            pass
+        # Audit fix (May 2026 part 5): every other module reads 'site_url'.
+        # auth.py was the only place still reading 'base_url' — admin Settings
+        # writes to 'site_url' so password-reset / verify-email links could
+        # silently fall back to the hardcoded production domain when the
+        # legacy 'base_url' row was missing. Try the canonical key first;
+        # fall back to 'base_url' for older deployments that only have it.
+        for _key in ("site_url", "base_url"):
+            try:
+                row = db.execute(
+                    text("SELECT setting_value FROM platform_settings WHERE setting_key = :k LIMIT 1"),
+                    {"k": _key}
+                ).first()
+                if row and row[0] and "127.0.0.1" not in row[0] and "localhost" not in row[0]:
+                    return row[0].strip().rstrip("/")
+            except Exception:
+                pass
     return "https://gigsfill.com"
 
 
 @router.post("/api/forgot-password")
-@limiter.limit(RATE_PASSWORD_RESET)
+@limiter.limit(rate_password_reset_limit)
 def forgot_password(request: Request, data: dict):
     """Send a password reset email. Always returns success to prevent email enumeration."""
     email = (data.get("email") or "").strip().lower()
@@ -1053,7 +1196,7 @@ def _send_reset_email_direct(db, to_email: str, first_name: str, reset_url: str)
         raise Exception("SMTP not configured")
 
     from email.utils import formataddr as _formataddr
-    msg = MIMEMultipart()
+    msg = MIMEMultipart('alternative')
     msg['From'] = _formataddr((from_name, smtp_email))
     msg['To'] = to_email
     msg['Subject'] = "Reset Your GigsFill Password"
@@ -1098,7 +1241,7 @@ def _send_reset_email_direct(db, to_email: str, first_name: str, reset_url: str)
 
 
 @router.post("/api/reset-password")
-@limiter.limit(RATE_PASSWORD_RESET)
+@limiter.limit(rate_password_reset_limit)
 def reset_password(request: Request, data: dict):
     """Reset password using a signed token from the forgot-password email."""
     token = data.get("token", "")
@@ -1161,11 +1304,17 @@ def reset_password(request: Request, data: dict):
                     text("INSERT INTO used_reset_tokens (jti) VALUES (:j)"),
                     {"j": token_jti}
                 )
-                # Opportunistic prune of jti rows older than the token TTL
+                # Opportunistic prune of jti rows older than the token TTL.
+                # Audit fix (May 2026 part 6): `datetime('now', '-2 hours')` is
+                # SQLite-only and raises a function-not-found on Postgres,
+                # aborting the transaction. The outer try/except caught it but
+                # left the connection poisoned, so `db.commit()` below failed
+                # and the new password was never persisted. Compute the cutoff
+                # in Python and bind as a portable timestamp param.
+                _two_hours_ago = utcnow_naive() - timedelta(hours=2)
                 db.execute(text(
-                    "DELETE FROM used_reset_tokens "
-                    "WHERE used_at < datetime('now', '-2 hours')"
-                ))
+                    "DELETE FROM used_reset_tokens WHERE used_at < :cutoff"
+                ), {"cutoff": _two_hours_ago})
             except Exception as _e:
                 logger.error(f"[H9] failed to record used reset jti={token_jti}: {_e}")
 
@@ -1195,9 +1344,21 @@ VERIFY_TOKEN_MAX_AGE = 72 * 3600  # 72 hours
 
 
 def _ensure_email_verified_column(db):
-    """Add email_verified column to users table if missing (zero-downtime migration)."""
+    """Add email_verified column to users table if missing (zero-downtime migration).
+
+    Audit fix (May 2026 part 6): the canonical declaration is now in
+    `db.py:setup_database()` (via _add_columns), so this is a defensive
+    backstop. The previous SQLite-only PRAGMA path silently failed on
+    Postgres, leaving the column missing and every email-change / verify-email
+    UPDATE crashing with UndefinedColumn → 500."""
     try:
-        cols = [r[1] for r in db.execute(text("PRAGMA table_info(users)")).fetchall()]
+        from backend.db import _IS_POSTGRES
+        if _IS_POSTGRES:
+            cols = [r[0] for r in db.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='users'"
+            )).fetchall()]
+        else:
+            cols = [r[1] for r in db.execute(text("PRAGMA table_info(users)")).fetchall()]
         if "email_verified" not in cols:
             db.execute(text("ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0"))
             db.commit()
@@ -1260,7 +1421,7 @@ def _send_verification_email(db, user_id: int, email: str, first_name: str, base
             logger.warning("_send_verification_email: SMTP not configured, cannot send verify email")
             return
 
-        msg = MIMEMultipart()
+        msg = MIMEMultipart('alternative')
         from email.utils import formataddr
         msg["From"] = formataddr((from_name, smtp_email))
         msg["To"] = email

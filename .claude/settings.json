@@ -156,7 +156,11 @@
       "Bash(sudo -u www-data sqlite3 /opt/gigsfill/backend.db \"SELECT template_key, datetime\\(updated_at\\) as updated FROM email_templates ORDER BY updated_at DESC LIMIT 10;\")",
       "Bash(sudo -u www-data sqlite3 /opt/gigsfill/backend.db \"SELECT COUNT\\(*\\) as preference_rows, COUNT\\(DISTINCT user_id\\) as users_with_prefs FROM email_preferences;\")",
       "Bash(sudo -u www-data sqlite3 /opt/gigsfill/backend.db \"SELECT COUNT\\(*\\) FROM gig_email_log;\")",
-      "Bash(sudo -u www-data sqlite3 /opt/gigsfill/backend.db \"SELECT id, datetime\\(sent_at\\) as sent FROM venue_email_history ORDER BY id DESC LIMIT 3;\")"
+      "Bash(sudo -u www-data sqlite3 /opt/gigsfill/backend.db \"SELECT id, datetime\\(sent_at\\) as sent FROM venue_email_history ORDER BY id DESC LIMIT 3;\")",
+      "Bash(sqlite3 -header -column backend.db \"PRAGMA table_info\\(transactions\\);\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

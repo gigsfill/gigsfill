@@ -4,6 +4,7 @@ from backend.db import get_db
 from backend.routes.auth import get_current_user
 from datetime import datetime
 from backend.utils import utcnow_naive
+from backend.rate_limiter import limiter
 
 router = APIRouter()
 
@@ -253,6 +254,7 @@ def get_venue_public(venue_id: int, db=Depends(get_db)):
                 twitter_url,
                 yelp_url,
                 google_maps_url,
+                social_order,
                 pro_certified
             FROM venues
             WHERE id = :id
@@ -359,7 +361,12 @@ def get_venue_frequency(venue_id: int, db=Depends(get_db)):
 # UPDATE (SAFE AUTOSAVE)
 @router.put("/api/venues/{venue_id}")
 @router.put("/venues/{venue_id}")  # Keep old route for compatibility
-def update_venue(venue_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
+# Audit fix (May 2026 part 3): autosaved on every keystroke (debounced
+# ~600ms in venue.edit.js). A misbehaving client could hammer this without
+# a limit. 60/minute is generous for normal editing but caps abuse.
+@limiter.limit("60/minute")
+def update_venue(venue_id: int, data: dict, request: Request,
+                 user=Depends(get_current_user), db=Depends(get_db)):
     from backend.us_cities import find_city
     
     
@@ -422,6 +429,7 @@ def update_venue(venue_id: int, data: dict, user=Depends(get_current_user), db=D
         "twitter_url": data.get("twitter_url"),
         "yelp_url": data.get("yelp_url"),
         "google_maps_url": data.get("google_maps_url"),
+        "social_order": data.get("social_order"),
         "pro_certified": data.get("pro_certified"),
         "pro_certified_at": data.get("pro_certified_at"),
         "auto_flyers": data.get("auto_flyers"),
@@ -492,6 +500,7 @@ def update_venue(venue_id: int, data: dict, user=Depends(get_current_user), db=D
             twitter_url = COALESCE(:twitter_url, twitter_url),
             yelp_url = COALESCE(:yelp_url, yelp_url),
             google_maps_url = COALESCE(:google_maps_url, google_maps_url),
+            social_order = COALESCE(:social_order, social_order),
             pro_certified = COALESCE(:pro_certified, pro_certified),
             pro_certified_at = COALESCE(:pro_certified_at, pro_certified_at),
             auto_flyers = COALESCE(:auto_flyers, auto_flyers),
@@ -517,13 +526,12 @@ def list_preferred_requests(
     user=Depends(get_current_user),
     db=Depends(get_db)
 ):
-    venue = db.execute(
-        text("SELECT user_id FROM venues WHERE id=:id"),
-        {"id": venue_id}
-    ).mappings().first()
-
-    if not venue or venue["user_id"] != user.id:
-        raise HTTPException(403)
+    # Audit fix (May 2026 part 3): use check_venue_access so venue
+    # managers / bookers added via entity_users can see pending
+    # preferred-artist requests in the UI. Previously this owner-only
+    # check made the requests invisible to staff users.
+    from backend.utils import check_venue_access
+    check_venue_access(db, venue_id, user.id)
 
     rows = db.execute(
         text("""
@@ -778,15 +786,34 @@ def delete_venue(venue_id: int, user=Depends(get_current_user), db=Depends(get_d
     from pathlib import Path
     
     try:
-        # Verify ownership
+        # Verify access. Audit fix (May 2026 part 3): allow the venue
+        # owner OR any entity_user whose role is 'owner' (co-owners).
+        # Lower-privilege roles (manager, booker) cannot delete the venue.
         venue = db.execute(
             text("SELECT user_id FROM venues WHERE id = :vid"),
             {"vid": venue_id}
         ).first()
+        if not venue:
+            raise HTTPException(404, "Venue not found")
+        is_owner = (venue[0] == user.id)
+        if not is_owner:
+            is_co_owner = bool(db.execute(
+                text("""SELECT 1 FROM entity_users
+                        WHERE entity_type = 'venue'
+                          AND entity_id = :vid
+                          AND user_id = :uid
+                          AND role = 'owner'"""),
+                {"vid": venue_id, "uid": user.id}
+            ).first())
+            if not is_co_owner:
+                raise HTTPException(403, "Only the venue owner (or a co-owner) can delete this venue")
         
-        if not venue or venue[0] != user.id:
-            raise HTTPException(403, "Not authorized")
-        
+        # Audit fix (May 2026 part 5): drop the vanity URL so the slug stops
+        # resolving — otherwise resolve_vanity returns an empty profile page.
+        try:
+            db.execute(text("DELETE FROM vanity_urls WHERE entity_type='venue' AND entity_id=:vid"), {"vid": venue_id})
+        except Exception:
+            pass
         # Delete venue (cascades to gigs, media, etc)
         db.execute(text("DELETE FROM venues WHERE id = :vid"), {"vid": venue_id})
         
@@ -996,18 +1023,40 @@ def upload_pro_license(
     ).first()
     if not venue:
         raise HTTPException(403)
-    
-    import os
+
+    import os, re as _re_pro
+    # Audit fix (May 2026 part 8): four security upgrades.
+    # 1. Whitelist `pro_name` to known PRO codes only — prevents path traversal
+    #    via crafted pro_name (was used in the filename construction).
+    # 2. Extension whitelist (was accepting any extension from the filename).
+    # 3. 10 MB size cap (was unlimited → disk exhaustion DoS).
+    # 4. Magic-byte check — file must actually be a PDF, not just .pdf extension.
+    _PRO_ALLOWED = {'ascap', 'bmi', 'sesac', 'gmr', 'other'}
+    _pro_lc = (pro_name or '').strip().lower()
+    if _pro_lc not in _PRO_ALLOWED:
+        raise HTTPException(400, "Invalid PRO name")
+
+    # Read file content + size check
+    content = file.file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(413, "License file too large (max 10 MB)")
+
+    # Extension + magic-byte check (PDFs start with %PDF-)
+    raw_ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
+    if raw_ext != "pdf":
+        raise HTTPException(400, "License must be a PDF file (.pdf)")
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(400, "File content is not a valid PDF")
+
     folder = f"app/static/uploads/venue/{venue_id}/pro_licenses"
     os.makedirs(folder, exist_ok=True)
-    
-    ext = file.filename.split(".")[-1] if "." in file.filename else "pdf"
-    filename = f"{pro_name.lower()}_{uuid.uuid4().hex[:8]}.{ext}"
+
+    filename = f"{_pro_lc}_{uuid.uuid4().hex[:8]}.pdf"
     filepath = f"{folder}/{filename}"
-    
+
     with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
+        buffer.write(content)
+
     web_path = f"/{filepath}"
     now = utcnow_naive().isoformat()
     

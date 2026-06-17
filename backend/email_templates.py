@@ -26,6 +26,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #059669;">You&#39;re Booked!</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, your booking at <strong>{{venue_name}}</strong> is confirmed. Here are the full details:</p>
+{{far_notice_artist}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
 <tbody>
 <tr>
@@ -338,6 +339,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Gig Booked</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> has booked a gig at <strong>{{venue_name}}</strong>.</p>
+{{far_notice_venue}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
 <tr><td style="padding: 20px;">
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
@@ -914,6 +916,73 @@ TEMPLATES = {
 </table>
 </body>
 </html>'''
+    },
+
+    "password_reset": {
+        "subject": "Reset your GigsFill password",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td>
+</tr>
+<tr>
+<td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Reset your password</h1>
+<p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{user_name}},</p>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">We received a request to reset the password for the GigsFill account associated with <strong>{{user_email}}</strong>. Click the button below to choose a new password. This link expires in 1 hour.</p>
+<div style="margin-bottom: 24px;">
+<a href="{{reset_url}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Reset Password</a>
+</div>
+<p style="margin: 0 0 12px 0; font-size: 13px; color: #6b7280;">If the button doesn&#39;t work, copy and paste this URL into your browser:</p>
+<p style="margin: 0 0 24px 0; font-size: 12px; color: #6b7280; word-break: break-all;"><a href="{{reset_url}}" style="color: #1a1a2e;">{{reset_url}}</a></p>
+<p style="margin: 0; font-size: 13px; color: #9ca3af;">If you didn&#39;t request a password reset, you can safely ignore this email &mdash; your password won&#39;t change.</p>
+</td>
+</tr>
+<tr>
+<td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>'''
+    },
+
+    "affiliate_quarterly": {
+        "subject": 'GigsFill Affiliate Earnings — {{quarter}}',
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f8f9fa;"><tr><td style="padding:40px 20px;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding:32px 40px 24px;border-bottom:1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="display:block;">
+</td></tr>
+<tr><td style="padding:32px 40px;">
+<h1 style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111827;">Affiliate Earnings Update</h1>
+<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#4b5563;">Hi {{user_name}},</p>
+<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#4b5563;">{{headline}}</p>
+<p style="margin:0;font-size:13px;color:#6b7280;">View your full earnings breakdown in your affiliate dashboard.</p>
+<div style="text-align:center;margin-top:24px;">
+<a href="https://gigsfill.com/app/user-profile.html?tab=affiliates" style="display:inline-block;background:#06b6d4;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">View Affiliate Dashboard →</a>
+</div>
+</td></tr>
+<tr><td style="padding:24px 40px;background:#f8f9fa;border-top:1px solid #eee;">
+<p style="margin:0;color:#6b7280;font-size:12px;text-align:center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color:#1a1a2e;text-decoration:none;">gigsfill.com</a></p>
+</td></tr>
+</table></td></tr></table></body></html>'''
     },
 
     "welcome": {
@@ -1875,7 +1944,7 @@ TEMPLATES = {
     },
 
     "recommend_gigsfill": {
-        "subject": '{{user_name}} thinks you should check out GigsFill!',
+        "subject": '{{user_name}} thinks your venue will love GigsFill',
         "body": '''<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -1891,14 +1960,14 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 32px 40px;">
-<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">You&#39;ve been recommended! &#127926;</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi{{recipient_greeting}}! <strong>{{user_name}}</strong> is using GigsFill and thought you&#39;d love it too.</p>
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Your venue is invited to GigsFill</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi{{recipient_greeting}}! <strong>{{user_name}}</strong> thought your venue would love GigsFill &mdash; the easiest way to fill open dates with live music.</p>
 {{personal_note}}
-<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">GigsFill connects <strong>musicians</strong> with <strong>venues</strong> to make booking gigs simple, fast, and hassle-free. Whether you&#39;re an artist looking for your next gig or a venue searching for the perfect act - GigsFill has you covered.</p>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">GigsFill helps <strong>venues</strong> book the right artists fast: post an open slot, pick from local talent, sign the contract, and we handle the payment. No commission on a gig that doesn&#39;t happen, and no surprise fees.</p>
 <div style="text-align: center; margin: 32px 0;">
-<a href="https://gigsfill.com" style="display: inline-block; background: #06b6d4; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Check Out GigsFill</a>
+<a href="{{aff_url}}" style="display: inline-block; background: #06b6d4; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Sign Up Your Venue</a>
 </div>
-<p style="margin: 0; font-size: 13px; color: #9ca3af; text-align: center;">Free to sign up &middot; No commitment required</p>
+<p style="margin: 0; font-size: 13px; color: #9ca3af; text-align: center;">Free to sign up &middot; No commitment &middot; Cancel anytime</p>
 </td>
 </tr>
 <tr>

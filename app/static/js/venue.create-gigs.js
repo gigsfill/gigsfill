@@ -473,6 +473,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // ATM-style right-shift on input: extract digits from the typed value,
   // pad to 3, last two are cents, the rest is dollars (with commas).
   // Cursor parks at the right edge so successive digits keep shifting in.
+  // Reused by both the slot-pay-amount pill and the slot-door-guarantee pill.
   function _liveFormatPayAmount(input) {
     const digits = input.value.replace(/\D/g, '').slice(0, 9); // cap so we don't explode on paste
     if (!digits) {
@@ -485,6 +486,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       input.value = dollarsFormatted + '.' + centsPart;
     }
     // setTimeout 0 → after the input event finishes its current frame
+    setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
+  }
+
+  // Percent input: digits only, clamp 0–100, no decimal. Used by .slot-door-pct.
+  function _liveFormatPercent(input) {
+    const digits = input.value.replace(/\D/g, '').slice(0, 3); // up to "100"
+    let n = parseInt(digits || '0', 10);
+    if (n > 100) n = 100;
+    input.value = String(n);
     setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
   }
 
@@ -531,59 +541,50 @@ document.addEventListener("DOMContentLoaded", async () => {
     row.style.cssText = '';
 
     row.innerHTML = `
-      <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-        <span style="font-weight:700; min-width:44px; color:#a855f7; letter-spacing:0.3px; font-size:0.78rem;">Slot ${slotNum}</span>
+      <!-- HEADER ROW: slot N, times, pay, OR, door split toggle, X.
+           Uses flex-wrap:nowrap so the red X never drops to a second line.
+           When door is active the GUARANTEE + % inputs render on a new
+           row below (.slot-door-row), positioned visually under the
+           door bubble for clarity. -->
+      <div style="display:flex; align-items:center; gap:6px; flex-wrap:nowrap;">
+        <span style="font-weight:700; min-width:44px; color:#a855f7; letter-spacing:0.3px; font-size:0.78rem; flex-shrink:0;">Slot ${slotNum}</span>
         <input type="time" class="slot-start" value="${useStart}" style="flex:0 0 auto; width:96px; min-width:0; font-size:0.75rem; padding:2px 5px;">
-        <span style="color:var(--text-muted); font-size:0.68rem;">to</span>
+        <span style="color:var(--text-muted); font-size:0.68rem; flex-shrink:0;">to</span>
         <input type="time" class="slot-end" value="${useEnd}" style="flex:0 0 auto; width:96px; min-width:0; font-size:0.75rem; padding:2px 5px;">
-        <!-- Pay pill — single auto-formatting amount field.
-             User clicks → entire value is selected (focus/click handlers
-             below). User types a digit → ATM-style right-shift: digits
-             "1" "2" "3" "4" become "0.01" "0.12" "1.23" "12.34". No
-             period-typing required; it's auto-inserted. Read site in
-             getSlotData() parses "X,XXX.YY" back to a float. -->
         <span class="slot-pay-pill" title="Slot pay (click and type)">
           <span class="slot-pay-symbol">$</span>
           <input type="text" class="slot-pay-amount" value="${useAmount}" inputmode="decimal" maxlength="12" placeholder="0.00">
         </span>
-        <!-- — OR — divider + Door Split bubble. Clicking the bubble greys out
-             the pay pill (deal_type='door' means door terms drive everything
-             — booking emails, contract pay line, transaction amount).
-             Clicking it again returns to flat pay. -->
-        <span class="slot-deal-sep" style="font-size:0.7rem;color:var(--text-muted);letter-spacing:0.08em;opacity:0.7;user-select:none;white-space:nowrap;">— OR —</span>
-        <label class="slot-door-toggle" style="
-          display:inline-flex; align-items:center; gap:5px;
-          padding:2px 10px; height:22px;
-          border-radius:999px;
-          border:1px solid rgba(34, 197, 94, 0.32);
-          background: rgba(34, 197, 94, 0.06);
-          color: rgba(134, 239, 172, 0.85);
-          font-size:0.72rem; font-weight:600;
-          cursor:pointer; user-select:none; white-space:nowrap;
-          transition: background 0.12s, border-color 0.12s, color 0.12s;
-        " title="Pay artist a guarantee + share of door receipts instead of flat pay">
-          <input type="checkbox" class="slot-door-checkbox" hidden ${dealType === 'door' ? 'checked' : ''}>
-          <span style="line-height:1;">🎯 Door Split</span>
-        </label>
-        <!-- Inline door terms — guarantee + % of door receipts. Shown only
-             when door split is enabled. Persists with the gig save via
-             getSlotData() / backend INSERT INTO gig_slots. -->
-        <span class="slot-door-inputs" style="
-          display:${dealType === 'door' ? 'inline-flex' : 'none'};
-          align-items:center; gap:4px;
-          font-size:0.72rem; color:var(--text-muted);
-        ">
-          <span>Guarantee</span>
-          <span style="color:#22c55e;font-weight:700;">$</span>
-          <input type="number" min="0" step="0.01" class="slot-door-guarantee" value="${(guaranteeCents / 100).toFixed(2)}" style="width:60px;padding:2px 4px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.32);color:#22c55e;border-radius:3px;font-size:0.72rem;font-weight:700;text-align:right;">
-          <span>+</span>
-          <input type="number" min="0" max="100" class="slot-door-pct" value="${doorPct}" style="width:42px;padding:2px 4px;background:rgba(124,107,255,0.08);border:1px solid rgba(124,107,255,0.32);color:#c4b5fd;border-radius:3px;font-size:0.72rem;font-weight:700;text-align:right;">
-          <span>% of door</span>
+        <span class="slot-deal-sep" style="font-size:0.7rem;color:var(--text-muted);letter-spacing:0.08em;opacity:0.7;user-select:none;white-space:nowrap;flex-shrink:0;">— OR —</span>
+        <span class="slot-door-pill${dealType === 'door' ? ' is-on' : ''}" title="Pay artist a guarantee + share of door receipts">
+          <span class="slot-door-toggle-btn" role="button" tabindex="0">
+            <input type="checkbox" class="slot-door-checkbox" ${dealType === 'door' ? 'checked' : ''}>
+            <span class="slot-door-toggle-text">🎯 Door Split</span>
+          </span>
         </span>
         <button type="button" class="remove-slot-btn" style="
           background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#ef4444;
           border-radius:4px; padding:1px 7px; font-size:0.78rem; cursor:pointer; line-height:1.3; flex-shrink:0; margin-left:auto;
         " title="Remove slot">×</button>
+      </div>
+      <!-- DOOR INPUTS ROW: square pill that lines up vertically with the
+           pay pill above. We achieve that with invisible placeholders that
+           mirror the header row's pre-pay-pill spacing (Slot N + start +
+           "to" + end + gaps). Hidden via aria-hidden so screen readers
+           skip them. Labels render in green, user-entered values in white. -->
+      <div class="slot-door-row" style="display:${dealType === 'door' ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:4px;">
+        <span aria-hidden="true" style="min-width:44px; flex-shrink:0; visibility:hidden; font-size:0.78rem; font-weight:700;">Slot ${slotNum}</span>
+        <span aria-hidden="true" style="width:96px; flex-shrink:0; visibility:hidden;">&nbsp;</span>
+        <span aria-hidden="true" style="visibility:hidden; font-size:0.68rem; flex-shrink:0;">to</span>
+        <span aria-hidden="true" style="width:96px; flex-shrink:0; visibility:hidden;">&nbsp;</span>
+        <span class="slot-door-inputs">
+          <span class="slot-door-label-text">Guarantee Pay:</span>
+          <span class="slot-door-symbol">$</span>
+          <input type="text" class="slot-door-guarantee" value="${_formatPayAmount(Math.floor(guaranteeCents / 100), guaranteeCents % 100)}" inputmode="decimal" maxlength="12" placeholder="0.00">
+          <span class="slot-door-plus">+</span>
+          <span class="slot-door-label-text">% of door:</span>
+          <input type="text" class="slot-door-pct" value="${doorPct}" inputmode="numeric" maxlength="3" placeholder="0">
+        </span>
       </div>
       <!-- Two-row meta layout:
              Line 1: [Type ▾]  [Solo][Duo][Trio][Full Band]   (lineup, green)
@@ -619,40 +620,79 @@ document.addEventListener("DOMContentLoaded", async () => {
     const stylesRow = row.querySelector('.slot-styles-row');
     const lineupRow = row.querySelector('.slot-lineup-row');
 
-    // Door Split bubble → grey out the pay pill + reveal guarantee/% inputs.
-    // The pay pill stays in the DOM (so getSlotData can still read a value
-    // even for door deals, where we use guarantee as the "floor" pay).
-    const doorInputs = row.querySelector('.slot-door-inputs');
+    // Door Split bubble → grey out the pay pill + reveal the inputs row
+    // (which sits BELOW the header). Clicking the toggle button flips the
+    // hidden checkbox; clicking the (greyed) pay pill flips door off.
+    const doorRow = row.querySelector('.slot-door-row');
     const doorToggle = row.querySelector('.slot-door-checkbox');
-    const doorToggleLabel = row.querySelector('.slot-door-toggle');
+    const doorPill = row.querySelector('.slot-door-pill');
+    const doorToggleBtn = row.querySelector('.slot-door-toggle-btn');
     const payPill = row.querySelector('.slot-pay-pill');
-    const dealSep = row.querySelector('.slot-deal-sep');
     function _applyDoorState() {
       const on = doorToggle && doorToggle.checked;
-      if (doorInputs) doorInputs.style.display = on ? 'inline-flex' : 'none';
+      if (doorRow) doorRow.style.display = on ? 'flex' : 'none';
       // Grey out the pay pill when door is on — visually communicates that
       // the deal terms (not the pay pill) drive what the artist actually gets.
+      // We keep pointer-events live so the click-to-reactivate-flat handler
+      // below can fire and flip door off in one click.
       if (payPill) {
-        payPill.style.opacity = on ? '0.35' : '';
-        payPill.style.pointerEvents = on ? 'none' : '';
-        payPill.title = on ? 'Pay is driven by Door Split terms below — disable the bubble to use flat pay.' : 'Slot pay (click and type)';
+        payPill.style.opacity = on ? '0.4' : '';
+        payPill.style.cursor = on ? 'pointer' : '';
+        payPill.title = on ? 'Click to switch back to flat pay (turns Door Split off).' : 'Slot pay (click and type)';
       }
-      // Brighten the bubble when active so it reads as "this is on".
-      if (doorToggleLabel) {
-        if (on) {
-          doorToggleLabel.style.background = 'rgba(34, 197, 94, 0.18)';
-          doorToggleLabel.style.borderColor = 'rgba(34, 197, 94, 0.55)';
-          doorToggleLabel.style.color = '#86efac';
-        } else {
-          doorToggleLabel.style.background = 'rgba(34, 197, 94, 0.06)';
-          doorToggleLabel.style.borderColor = 'rgba(34, 197, 94, 0.32)';
-          doorToggleLabel.style.color = 'rgba(134, 239, 172, 0.85)';
-        }
-      }
+      // Brighten the bubble when active (driven by the `.is-on` class so the
+      // CSS rule owns all the colors — keeps the inputs/borders consistent).
+      if (doorPill) doorPill.classList.toggle('is-on', !!on);
     }
-    if (doorToggle) {
-      doorToggle.addEventListener('change', _applyDoorState);
+    if (doorToggleBtn && doorToggle) {
+      doorToggleBtn.addEventListener('click', (e) => {
+        // Only flip when the click is on the toggle area itself — not when
+        // the user clicks one of the inline inputs inside the pill.
+        if (e.target.closest('.slot-door-inputs')) return;
+        doorToggle.checked = !doorToggle.checked;
+        _applyDoorState();
+      });
+      doorToggleBtn.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          doorToggle.checked = !doorToggle.checked;
+          _applyDoorState();
+        }
+      });
       _applyDoorState();
+    }
+    // Click the (greyed) pay pill while door is active → flip back to flat
+    // pay and focus the amount so the user can immediately type. Capture
+    // phase + preventDefault on the pay-amount input click so it doesn't
+    // simultaneously select/edit the still-greyed value mid-toggle.
+    if (payPill && doorToggle) {
+      payPill.addEventListener('click', (e) => {
+        if (!doorToggle.checked) return; // already flat → normal behavior
+        e.preventDefault();
+        e.stopPropagation();
+        doorToggle.checked = false;
+        _applyDoorState();
+        const amt = row.querySelector('.slot-pay-amount');
+        if (amt) { amt.focus(); amt.select(); }
+      }, true);
+    }
+
+    // ATM-style auto-format for the guarantee input + select-all on click,
+    // mirroring the slot-pay-amount pill. The pct input is digits-only,
+    // clamped 0–100, with the same select-all-to-overtype affordance.
+    const doorGuarInput = row.querySelector('.slot-door-guarantee');
+    if (doorGuarInput) {
+      doorGuarInput.addEventListener('input', () => _liveFormatPayAmount(doorGuarInput));
+      const selectAllGuar = () => doorGuarInput.select();
+      doorGuarInput.addEventListener('focus', selectAllGuar);
+      doorGuarInput.addEventListener('click', selectAllGuar);
+    }
+    const doorPctInput = row.querySelector('.slot-door-pct');
+    if (doorPctInput) {
+      doorPctInput.addEventListener('input', () => _liveFormatPercent(doorPctInput));
+      const selectAllPct = () => doorPctInput.select();
+      doorPctInput.addEventListener('focus', selectAllPct);
+      doorPctInput.addEventListener('click', selectAllPct);
     }
     typeSelect.addEventListener('change', () => {
       const isLB = typeSelect.value === 'Live Band';
@@ -890,7 +930,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       // until POST /settle bumps it up with door receipts.
       const doorOn = !!row.querySelector('.slot-door-checkbox')?.checked;
       const dealType = doorOn ? 'door' : 'flat';
-      const guaranteeDollars = parseFloat(row.querySelector('.slot-door-guarantee')?.value || '0') || 0;
+      // Guarantee uses the same ATM-style formatter as slot-pay-amount,
+      // so the input value is "X,XXX.YY" — strip commas before parsing.
+      const guaranteeRaw = (row.querySelector('.slot-door-guarantee')?.value || '0').replace(/,/g, '');
+      const guaranteeDollars = parseFloat(guaranteeRaw) || 0;
       const doorPct = parseInt(row.querySelector('.slot-door-pct')?.value || '0', 10) || 0;
       const guaranteeCents = doorOn ? Math.round(guaranteeDollars * 100) : 0;
       const effectivePay = doorOn ? guaranteeDollars : pay;
@@ -1068,26 +1111,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Templates store the JSON shape that getSlotData() produces, so
   // applying one is just `rebuildSlotsFromTemplate(slots)`.
   const saveTemplateBtn = document.getElementById('saveTemplateBtn');
-  const loadTemplateSelect = document.getElementById('loadTemplateSelect');
-  const deleteTemplateBtn = document.getElementById('deleteTemplateBtn');
+  const loadTemplateBtn  = document.getElementById('loadTemplateBtn');
   let _gigTemplates = []; // populated on first openGigModal
 
   async function refreshGigTemplates() {
-    if (!loadTemplateSelect || !window.venueId) return;
+    if (!window.venueId) return;
     try {
       const data = (window.apiGetSafe
         ? await window.apiGetSafe(`/api/venues/${window.venueId}/gig-templates`)
         : await (await fetch(`/api/venues/${window.venueId}/gig-templates`, { credentials: 'include' })).json());
       _gigTemplates = (data && data.templates) || [];
     } catch (e) { _gigTemplates = []; }
-    // Repaint the dropdown
-    loadTemplateSelect.innerHTML = '<option value="">📋 Use a saved template…</option>';
-    _gigTemplates.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t.id;
-      opt.textContent = `${t.name} (${(t.slots || []).length} slot${(t.slots || []).length === 1 ? '' : 's'})`;
-      loadTemplateSelect.appendChild(opt);
-    });
   }
 
   function applyTemplate(tpl) {
@@ -1105,16 +1139,64 @@ document.addEventListener("DOMContentLoaded", async () => {
     clearSlotError();
   }
 
+  // Site-styled prompt — wraps window.showStyledModal with a text input.
+  // Returns Promise<string|null>. Used in place of the native prompt() so
+  // template-name capture matches the rest of the modal system (dark bg,
+  // purple/cyan accents, etc).
+  function _gfPromptString(title, message, placeholder) {
+    return new Promise(resolve => {
+      const inputId = 'gfPromptInput_' + Math.floor(performance.now());
+      const html = `
+        <p style="margin:0 0 10px 0; color:#cbd5e1; font-size:0.85rem;">${(message || '').replace(/</g,'&lt;')}</p>
+        <input id="${inputId}" type="text" autocomplete="off" spellcheck="false"
+          placeholder="${(placeholder || '').replace(/"/g,'&quot;')}"
+          style="width:100%; background:#0f1116; color:#fff; border:1px solid #333; border-radius:6px; padding:8px 12px; font-size:0.85rem;">
+      `;
+      let _val = null;
+      window.showStyledModal(
+        title,
+        html,
+        [
+          { text: 'Cancel', style: 'ghost', onClick: () => { _val = null; } },
+          { text: 'Save',   style: 'primary', onClick: () => {
+              const el = document.getElementById(inputId);
+              _val = (el && el.value || '').trim() || null;
+            }
+          },
+        ],
+        { size: 'sm', onClose: () => resolve(_val) }
+      );
+      // Focus the input on the next tick so the modal is mounted.
+      setTimeout(() => {
+        const el = document.getElementById(inputId);
+        if (el) {
+          el.focus();
+          el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              _val = el.value.trim() || null;
+              if (window.closeAllModals) window.closeAllModals();
+            }
+          });
+        }
+      }, 50);
+    });
+  }
+
   if (saveTemplateBtn) {
     saveTemplateBtn.addEventListener('click', async () => {
       const slots = getSlotData();
       if (!slots.length) { showSlotError('Add at least one slot before saving.'); return; }
       if (!validateSlots()) return;
-      const name = prompt('Template name (e.g. "Friday Night Live", "Brunch Acoustic"):');
-      if (!name || !name.trim()) return;
+      const name = await _gfPromptString(
+        '💾 Save as Template',
+        'Give this template a name so you can reuse it later.',
+        'e.g. Friday Night Live, Brunch Acoustic'
+      );
+      if (!name) return;
       // Strip per-gig junk (slot_number is recomputed on apply, pay → in payload).
       const payload = {
-        name: name.trim(),
+        name: name,
         slots: slots.map(s => ({
           start_time: s.start_time, end_time: s.end_time, pay: s.pay,
           artist_type: s.artist_type, band_formats: s.band_formats, styles: s.styles
@@ -1137,36 +1219,99 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  if (loadTemplateSelect) {
-    loadTemplateSelect.addEventListener('change', () => {
-      const id = loadTemplateSelect.value;
-      if (!id) { if (deleteTemplateBtn) deleteTemplateBtn.style.display = 'none'; return; }
-      const tpl = _gigTemplates.find(t => String(t.id) === String(id));
-      if (!tpl) return;
-      if (!confirm(`Replace the current slot configuration with template "${tpl.name}"?`)) {
-        loadTemplateSelect.value = '';
-        return;
-      }
-      applyTemplate(tpl);
-      if (deleteTemplateBtn) deleteTemplateBtn.style.display = 'inline-flex';
-    });
+  // Styled template picker — replaces the native <select> dropdown so the
+  // open state matches the site (OS-native option lists couldn't be
+  // reliably styled across browsers). Each row is clickable to apply that
+  // template, with a per-row 🗑 to delete.
+  function _gfShowTemplatePicker() {
+    if (!_gigTemplates.length) {
+      window.showAlert('You haven\'t saved any templates yet. Configure your slots and click "💾 Save as Template" first.', '📋 No Templates Yet');
+      return;
+    }
+    const _esc = (s) => String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const rowsHtml = _gigTemplates.map(t => {
+      const count = (t.slots || []).length;
+      return `
+        <div class="gf-tpl-row" data-tpl-id="${_esc(t.id)}"
+          style="display:flex; align-items:center; justify-content:space-between; gap:10px;
+                 padding:10px 12px; background:#0f1116; border:1px solid #2a2f3a; border-radius:6px;
+                 margin-bottom:6px; cursor:pointer; transition:border-color 0.12s, background 0.12s;"
+          onmouseenter="this.style.borderColor='#06b6d4'; this.style.background='#161a22';"
+          onmouseleave="this.style.borderColor='#2a2f3a'; this.style.background='#0f1116';">
+          <div style="flex:1; min-width:0;">
+            <div style="color:#fff; font-weight:600; font-size:0.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_esc(t.name)}</div>
+            <div style="color:#94a3b8; font-size:0.75rem; margin-top:2px;">${count} slot${count === 1 ? '' : 's'}</div>
+          </div>
+          <button type="button" class="gf-tpl-del" data-tpl-id="${_esc(t.id)}" data-tpl-name="${_esc(t.name)}"
+            style="background:transparent; border:0; color:#fca5a5; font-size:1.05rem; cursor:pointer; padding:4px 8px; line-height:1; border-radius:4px;"
+            title="Delete this template">🗑</button>
+        </div>
+      `;
+    }).join('');
+    const html = `
+      <p style="margin:0 0 12px 0; color:#cbd5e1; font-size:0.85rem;">Pick a template to apply to this gig. Click 🗑 to delete one.</p>
+      <div id="gfTplList" style="max-height:340px; overflow-y:auto;">${rowsHtml}</div>
+    `;
+    window.showStyledModal(
+      '📋 Load a Template',
+      html,
+      [ { text: 'Close', style: 'ghost' } ],
+      { size: 'sm' }
+    );
+    // Delegate row clicks (apply) + delete clicks. Wait a tick so the
+    // modal is in the DOM.
+    setTimeout(() => {
+      const list = document.getElementById('gfTplList');
+      if (!list) return;
+      list.addEventListener('click', async (e) => {
+        const delBtn = e.target.closest('.gf-tpl-del');
+        if (delBtn) {
+          e.stopPropagation();
+          const id   = delBtn.getAttribute('data-tpl-id');
+          const name = delBtn.getAttribute('data-tpl-name');
+          window.showConfirm(
+            '🗑 Delete template?',
+            `Delete template "${name}"? This can't be undone.`,
+            async () => {
+              try {
+                const url = `/api/venues/${window.venueId}/gig-templates/${id}`;
+                if (window.apiDeleteSafe) await window.apiDeleteSafe(url);
+                else await fetch(url, { method: 'DELETE', credentials: 'include' });
+                await refreshGigTemplates();
+                if (window.closeAllModals) window.closeAllModals();
+              } catch (e) {
+                window.showAlert((e && e.message) || 'Failed to delete template', 'Error');
+              }
+            },
+            null,
+            { confirmLabel: 'Delete', confirmStyle: 'danger', tone: 'warning' }
+          );
+          return;
+        }
+        const row = e.target.closest('.gf-tpl-row');
+        if (!row) return;
+        const id = row.getAttribute('data-tpl-id');
+        const tpl = _gigTemplates.find(t => String(t.id) === String(id));
+        if (!tpl) return;
+        window.showConfirm(
+          '📋 Apply template?',
+          `Replace the current slot configuration with template "${tpl.name}"?`,
+          () => {
+            applyTemplate(tpl);
+            if (window.closeAllModals) window.closeAllModals();
+          },
+          null,
+          { confirmLabel: 'Apply', confirmStyle: 'primary', tone: 'warning' }
+        );
+      });
+    }, 30);
   }
 
-  if (deleteTemplateBtn) {
-    deleteTemplateBtn.addEventListener('click', async () => {
-      const id = loadTemplateSelect.value;
-      const tpl = _gigTemplates.find(t => String(t.id) === String(id));
-      if (!tpl) return;
-      if (!confirm(`Delete template "${tpl.name}"? This can't be undone.`)) return;
-      try {
-        const url = `/api/venues/${window.venueId}/gig-templates/${id}`;
-        if (window.apiDeleteSafe) await window.apiDeleteSafe(url);
-        else await fetch(url, { method: 'DELETE', credentials: 'include' });
-        await refreshGigTemplates();
-        deleteTemplateBtn.style.display = 'none';
-      } catch (e) {
-        (typeof showAlert === 'function' ? showAlert : alert)((e && e.message) || 'Failed to delete template');
-      }
+  if (loadTemplateBtn) {
+    loadTemplateBtn.addEventListener('click', () => {
+      _gfShowTemplatePicker();
     });
   }
 
@@ -2050,7 +2195,14 @@ async function renderCalendar() {
     ['_msgArtistBtn','_rateArtistBtn','_venueGigBtnRow','_approveBtn','_denyBtn','editGigBtn'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     // Restore any hidden permanent modal action buttons
     ['saveGig','cancelGig','deleteGig','flyerGigBtn'].forEach(id => { const el = document.getElementById(id); if (el) el.style.removeProperty('display'); });
-  
+
+    // Default: hide the templates row (lives in the modal header). The
+    // CREATE-mode branch below re-enables it. All other branches (edit,
+    // past, cancelled, pending, in-progress, booked) keep it hidden — the
+    // user only has access to templates when creating a NEW gig.
+    const _tplRowDefault = document.getElementById('gigTemplatesRow');
+    if (_tplRowDefault) _tplRowDefault.style.display = 'none';
+
     // Check if gig is in the past: use gig END moment (UTC) so timezone doesn't hide past-gig UI.
     // DB stores date/time as UTC; comparing calendar date to "today" local can be wrong across TZ.
     const now = new Date();
@@ -2823,6 +2975,10 @@ async function renderCalendar() {
     } else {
       // NEW GIG - CREATE MODE
       modalTitle.textContent = "Create Gig";
+      // Templates UI is create-mode-only (sits in the modal header — see
+      // gigsfill-claude-doc.md / venue-create-gigs.html header block).
+      const _tplRow = document.getElementById('gigTemplatesRow');
+      if (_tplRow) _tplRow.style.display = 'flex';
 
       // Always remove blast banner when opening in create mode
       const existingBlastBanner = document.getElementById('venue-blast-banner');
@@ -3226,9 +3382,28 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       // already reflects any per-artist override applied at booking — see
       // _apply_slot_booking. Falls back to gig.pay for legacy rows that
       // pre-date the slot.pay column being populated.
+      //
+      // Door-deal aware: window.formatPaySummary returns "$60.00" for flat
+      // or "$50.00 guarantee + 20% of door" if the slot has deal_type='door'
+      // with non-zero terms. Falls back gracefully when the helper is absent.
       const _slotPayVal = (slot.pay != null && slot.pay !== '') ? slot.pay : gig.pay;
-      const slotPayHtml = (_slotPayVal != null && _slotPayVal !== '')
-        ? `<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(_slotPayVal).toFixed(2)}</span>`
+      let _slotPayStr = '';
+      if (_slotPayVal != null && _slotPayVal !== '') {
+        if (window.formatPaySummary) {
+          // Build a probe object so the helper can see deal columns + pay.
+          _slotPayStr = window.formatPaySummary({
+            pay: _slotPayVal,
+            pay_summary: slot.pay_summary,
+            deal_type: slot.deal_type,
+            door_pct: slot.door_pct,
+            guarantee_cents: slot.guarantee_cents,
+          });
+        } else {
+          _slotPayStr = '$' + parseFloat(_slotPayVal).toFixed(2);
+        }
+      }
+      const slotPayHtml = _slotPayStr
+        ? `<span style="color:#22c55e;font-weight:700;font-size:0.85rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">${_slotPayStr}</span>`
         : '';
 
       // FIX (May 21 2026): hide ✕ when the SLOT itself has started/ended.

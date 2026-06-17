@@ -1,5 +1,15 @@
 import { apiGet, apiPost, apiDelete } from "./api.js";
 
+// Audit fix (May 2026 part 6): HTML-escape helper for user-controlled fields.
+function _na_esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   let allNotifications = [];
   let filteredNotifications = [];
@@ -85,28 +95,32 @@ document.addEventListener("DOMContentLoaded", async () => {
       const timeAgo = getTimeAgo(date);
       const fullDate = date.toLocaleString();
 
-      // Build message with hyperlinks and cancellation reason
-      let enhancedMessage = notif.message;
-      
-      // Add hyperlink to venue name if present
+      // Build message with hyperlinks and cancellation reason.
+      // Audit fix (May 2026 part 6): escape the message first, then substitute
+      // (escaped) venue/artist names with link HTML. IDs are coerced to int.
+      const _vid = parseInt(notif.venue_id, 10) || 0;
+      const _aid = parseInt(notif.artist_id, 10) || 0;
+      let enhancedMessage = _na_esc(notif.message);
+
       if (notif.venue_id && notif.venue_name) {
-        const venueLink = `<a href="/app/venue-profile.html?venue_id=${notif.venue_id}" target="_blank" style="color: var(--accent-cyan); text-decoration: none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${notif.venue_name}</a>`;
-        enhancedMessage = enhancedMessage.replace(notif.venue_name, venueLink);
+        const _vname_esc = _na_esc(notif.venue_name);
+        const venueLink = `<a href="/app/venue-profile.html?venue_id=${_vid}" target="_blank" style="color: var(--accent-cyan); text-decoration: none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${_vname_esc}</a>`;
+        enhancedMessage = enhancedMessage.replace(_vname_esc, venueLink);
       }
-      
-      // Add hyperlink to artist name if present
+
       if (notif.artist_id && notif.artist_name) {
-        const artistLink = `<a href="/app/artist-profile.html?artist_id=${notif.artist_id}" target="_blank" style="color: var(--accent-cyan); text-decoration: none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${notif.artist_name}</a>`;
-        enhancedMessage = enhancedMessage.replace(notif.artist_name, artistLink);
+        const _aname_esc = _na_esc(notif.artist_name);
+        const artistLink = `<a href="/app/artist-profile.html?artist_id=${_aid}" target="_blank" style="color: var(--accent-cyan); text-decoration: none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${_aname_esc}</a>`;
+        enhancedMessage = enhancedMessage.replace(_aname_esc, artistLink);
       }
-      
+
       // Add cancellation reason if this is a cancellation notification
       let cancellationReasonHtml = '';
       if (notif.notification_type === 'gig_cancelled' && notif.cancellation_reason) {
         cancellationReasonHtml = `
           <div style="margin-top: 12px; padding: 12px; background: rgba(239, 68, 68, 0.1); border-left: 3px solid #ef4444; border-radius: 4px;">
             <strong style="color: #ef4444; font-size: 0.85rem;">Cancellation Reason:</strong>
-            <p style="color: var(--text-muted); margin: 4px 0 0 0; font-size: 0.85rem; line-height: 1.5;">${notif.cancellation_reason}</p>
+            <p style="color: var(--text-muted); margin: 4px 0 0 0; font-size: 0.85rem; line-height: 1.5;">${_na_esc(notif.cancellation_reason)}</p>
           </div>
         `;
       }
@@ -131,8 +145,8 @@ document.addEventListener("DOMContentLoaded", async () => {
               <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
                 <span style="font-size: 1.5rem;">${icon}</span>
                 <div style="flex: 1;">
-                  <strong style="color: ${isUnread ? '#3b82f6' : '#ffffff'}; font-size: 1.1rem; display: block;">${notif.title}</strong>
-                  <span style="font-size: 0.75rem; color: var(--text-muted);">${fullDate}</span>
+                  <strong style="color: ${isUnread ? '#3b82f6' : '#ffffff'}; font-size: 1.1rem; display: block;">${_na_esc(notif.title)}</strong>
+                  <span style="font-size: 0.75rem; color: var(--text-muted);">${_na_esc(fullDate)}</span>
                 </div>
                 ${isUnread ? '<span style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;">NEW</span>' : ''}
               </div>
@@ -143,8 +157,8 @@ document.addEventListener("DOMContentLoaded", async () => {
               
               <div style="display: flex; gap: 12px; margin-top: 12px; font-size: 0.8rem; color: var(--text-muted);">
                 <span>⏰ ${timeAgo}</span>
-                ${notif.venue_name ? `<span>🏢 ${notif.venue_name}</span>` : ''}
-                ${notif.artist_name ? `<span>🎤 ${notif.artist_name}</span>` : ''}
+                ${notif.venue_name ? `<span>🏢 ${_na_esc(notif.venue_name)}</span>` : ''}
+                ${notif.artist_name ? `<span>🎤 ${_na_esc(notif.artist_name)}</span>` : ''}
               </div>
             </div>
             

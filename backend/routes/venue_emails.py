@@ -2,7 +2,8 @@
 Venue Email Routes
 Handles venue-to-artist email communications
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+import html as _html
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from datetime import datetime
 from backend.utils import utcnow_naive
@@ -10,8 +11,16 @@ from typing import Optional
 from backend.db import get_db
 from backend.routes.auth import get_current_user
 from backend.email_service import EmailService
+from backend.rate_limiter import limiter
 
 router = APIRouter()
+
+# Audit fix (May 2026 part 2): hard cap on recipients per broadcast and a
+# per-venue rate limit. Earlier this endpoint had neither, so a venue user
+# (or a compromised one) could send to every approved preferred artist
+# with arbitrary HTML in `body` as a phishing vector.
+MAX_BROADCAST_RECIPIENTS = 100
+BROADCAST_RATE = "5/minute"
 
 def check_venue_access(venue_id: int, user_id: int, db) -> bool:
     """Check if user has access to venue (owner OR via entity_users)"""
@@ -26,47 +35,89 @@ def check_venue_access(venue_id: int, user_id: int, db) -> bool:
     return access is not None
 
 @router.post("/api/venues/send-email")
+@limiter.limit(BROADCAST_RATE)
 async def send_venue_email(
     data: dict,
+    request: Request,
     user=Depends(get_current_user),
     db=Depends(get_db)
 ):
-    """Send email from venue to multiple artists"""
-    
+    """Send email from venue to multiple artists.
+
+    Audit fix (May 2026 part 2):
+      - Rate limited (BROADCAST_RATE) so a compromised account can't flood.
+      - Recipients capped at MAX_BROADCAST_RECIPIENTS per call.
+      - Subject + venue_name + body are HTML-escaped before being injected
+        into the template, then only newline → <br> is re-introduced.
+        Previously a venue user could embed arbitrary HTML (script-style
+        phishing payloads) in the body via the {{body}} placeholder.
+    """
     venue_id = data.get('venue_id')
     venue_name = data.get('venue_name')
     artist_ids = data.get('artist_ids', [])
     subject = data.get('subject', '').strip()
     body = data.get('body', '').strip()
-    
+
     # Validation
     if not venue_id or not artist_ids or not subject or not body:
         raise HTTPException(400, "Missing required fields")
-    
+
     if len(artist_ids) == 0:
         raise HTTPException(400, "No recipients selected")
-    
+
+    if len(artist_ids) > MAX_BROADCAST_RECIPIENTS:
+        raise HTTPException(
+            400,
+            f"Too many recipients — broadcasts are limited to {MAX_BROADCAST_RECIPIENTS} artists per send."
+        )
+
     if len(subject) > 200:
         raise HTTPException(400, "Subject too long (max 200 characters)")
-    
+
     if len(body) > 5000:
         raise HTTPException(400, "Message too long (max 5000 characters)")
-    
+
     # Verify user has access to this venue (owner OR entity_users)
     if not check_venue_access(venue_id, user.id, db):
         raise HTTPException(403, "You don't have permission to send emails from this venue")
+
+    # Sanitize text that will be substituted into the HTML email template.
+    # Strip every tag, then re-introduce newline → <br>. The previous code
+    # piped the raw body straight into {{body}}, which let venues author
+    # arbitrary HTML payloads.
+    subject = _html.escape(subject, quote=True)
+    venue_name = _html.escape(venue_name or "", quote=True)
+    body = _html.escape(body, quote=False)
     
-    # Get artist emails
+    # Get artist emails — include every entity_user for each selected artist
+    # (owner + any added bandmates/agents/sound techs), de-duplicated by
+    # email. Audit fix (May 2026 part 4): previously the JOIN only used
+    # `a.user_id`, so multi-user artist accounts only received the bulk
+    # email at the primary user's address — the artist's actual booking
+    # contact (a different entity_user) was missed.
     placeholders = ','.join(f':id{i}' for i in range(len(artist_ids)))
-    query = f"""
-        SELECT u.id, u.email, a.name
-        FROM artists a
-        JOIN users u ON a.user_id = u.id
-        WHERE a.id IN ({placeholders})
-    """
     params = {f'id{i}': aid for i, aid in enumerate(artist_ids)}
-    artist_emails = db.execute(text(query), params).mappings().all()
-    
+    artist_emails_rows = db.execute(text(f"""
+        SELECT DISTINCT u.id, u.email, a.name
+        FROM artists a
+        JOIN users u ON u.id = a.user_id
+        WHERE a.id IN ({placeholders})
+        UNION
+        SELECT DISTINCT u.id, u.email, a.name
+        FROM artists a
+        JOIN entity_users eu
+          ON eu.entity_type = 'artist' AND eu.entity_id = a.id
+        JOIN users u ON u.id = eu.user_id
+        WHERE a.id IN ({placeholders})
+    """), params).mappings().all()
+    # Dedupe by email
+    _seen = set()
+    artist_emails = []
+    for r in artist_emails_rows:
+        if r["email"] and r["email"] not in _seen:
+            _seen.add(r["email"])
+            artist_emails.append(r)
+
     if not artist_emails:
         raise HTTPException(404, "No valid artist emails found")
     

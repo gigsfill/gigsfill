@@ -52,6 +52,9 @@ class Artist(Base):
     twitter_url = Column(Text)
     tiktok_url = Column(Text)
     website_url = Column(Text)
+    # Part 10p (2026-06-16): comma-separated brand keys for the order of
+    # social tiles on the public profile. NULL → use the natural fallback.
+    social_order = Column(Text)
 
     display_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -112,6 +115,7 @@ class Venue(Base):
     twitter_url = Column(Text)
     yelp_url = Column(Text)
     google_maps_url = Column(Text)
+    social_order = Column(Text)
 
     display_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -220,6 +224,7 @@ class ArtistMedia(Base):
     file_path = Column(String)
     video_url = Column(String)
     display_order = Column(Integer, default=0)
+    caption = Column(Text)
 
     artist = relationship("Artist")
 
@@ -235,6 +240,7 @@ class VenueMedia(Base):
     file_path = Column(String)
     video_url = Column(String)
     display_order = Column(Integer, default=0)
+    caption = Column(Text)
 
     venue = relationship("Venue", backref="media")
 

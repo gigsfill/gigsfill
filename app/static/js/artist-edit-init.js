@@ -34,9 +34,8 @@ document.addEventListener('DOMContentLoaded', function(){
     bookGigsBtn.href = `/app/artist-book-gigs.html?artist_id=${artistId}`;
   }
   
-  const profileBtn = document.getElementById("artistProfileBtn");
-  if (profileBtn) {
-    profileBtn.href = `/app/artist-profile.html?artist_id=${artistId}`;
+  if (typeof window.applyVanityToLinks === "function") {
+    window.applyVanityToLinks("artist", artistId, ["#artistProfileBtn"]);
   }
 })();
   

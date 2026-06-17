@@ -58,19 +58,33 @@ def _offer_hours_for_gig(hours_until: float) -> float:
         return 24
 
 
-def _format_deadline(expires_at_utc, db=None):
-    """Format offer expiry time in platform timezone (e.g. '2:43 PM')."""
+def _format_deadline(expires_at_utc, db=None, venue_id=None):
+    """Format offer expiry time in the VENUE's timezone (e.g. '2:43 PM PST').
+
+    Audit fix (May 2026 part 9): previously always rendered in platform tz,
+    so an artist receiving an offer for a CA gig saw the deadline in PT
+    regardless of whether the gig was in NY or LA. Now uses venue tz when
+    venue_id is provided, matching how gig times are displayed elsewhere.
+    """
     try:
         from zoneinfo import ZoneInfo
         from sqlalchemy import text as _tx
-        _tz_str = "America/Los_Angeles"
-        if db:
+        _tz_str = None
+        if db and venue_id:
             try:
-                _tz_str = db.execute(_tx(
-                    "SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'"
-                )).scalar() or "America/Los_Angeles"
+                from backend.utils import get_venue_timezone_str as _gvtz
+                _tz_str = _gvtz(db, venue_id)
             except Exception:
                 pass
+        if not _tz_str:
+            _tz_str = "America/Los_Angeles"
+            if db:
+                try:
+                    _tz_str = db.execute(_tx(
+                        "SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'"
+                    )).scalar() or "America/Los_Angeles"
+                except Exception:
+                    pass
         _tz = ZoneInfo(_tz_str)
         # Ensure expires_at_utc is timezone-aware
         if expires_at_utc.tzinfo is None:
@@ -90,7 +104,13 @@ def _format_deadline(expires_at_utc, db=None):
             return ""
 
 def _get_position(db, gig_id: int, row_id: int) -> int:
-    """Return 1-based position of row_id in the waitlist for gig_id."""
+    """Return 1-based position of row_id in the waitlist for gig_id.
+
+    Audit fix (May 2026 part 9): exclude declined rows from the count.
+    Previously a row with offer_declined=1 still bumped everyone else's
+    position by 1, so an artist behind 3 declines saw themselves as #4
+    when they were really #1 in the queue.
+    """
     our_row = db.execute(
         text("SELECT id FROM gig_waitlist WHERE gig_id = :gid AND id = :rid"),
         {"gid": gig_id, "rid": row_id}
@@ -98,7 +118,9 @@ def _get_position(db, gig_id: int, row_id: int) -> int:
     if not our_row:
         return 1
     pos = db.execute(
-        text("SELECT COUNT(*) FROM gig_waitlist WHERE gig_id = :gid AND id <= :rid"),
+        text("""SELECT COUNT(*) FROM gig_waitlist
+                WHERE gig_id = :gid AND id <= :rid
+                  AND (offer_declined = 0 OR offer_declined IS NULL)"""),
         {"gid": gig_id, "rid": our_row}
     ).scalar()
     return pos or 1
@@ -163,7 +185,8 @@ def join_waitlist(gig_id: int, artist_id: int, user=Depends(get_current_user), d
     if gig["status"] not in ("booked", "pending_contract", "awaiting_venue_contract", "pending_venue_approval"):
         # For multi-slot gigs, also allow waitlist join when some slots are taken
         has_taken_slot = db.execute(
-            text("SELECT 1 FROM gig_slots WHERE gig_id=:gid AND status IN ('booked','pending_contract') LIMIT 1"),
+            # Audit fix (May 2026 part 6): include awaiting_venue_contract + pending_venue_approval
+            text("SELECT 1 FROM gig_slots WHERE gig_id=:gid AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') LIMIT 1"),
             {"gid": gig_id}
         ).first()
         if not has_taken_slot:
@@ -319,7 +342,7 @@ def get_gig_waitlist(venue_id: int, gig_id: int, user=Depends(get_current_user),
             SELECT w.id, w.artist_id, w.created_at, w.notified, w.notified_at,
                    w.offer_sent, w.offer_expires_at, w.offer_declined,
                    a.name as artist_name, a.artist_type,
-                   (SELECT COUNT(*) FROM gig_waitlist w2 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id) as position
+                   (SELECT COUNT(*) FROM gig_waitlist w2 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id AND (w2.offer_declined = 0 OR w2.offer_declined IS NULL)) as position
             FROM gig_waitlist w
             JOIN artists a ON a.id = w.artist_id
             WHERE w.gig_id = :gid
@@ -346,7 +369,7 @@ def get_artist_waitlists(artist_id: int, user=Depends(get_current_user), db=Depe
                    w.offer_sent, w.offer_expires_at,
                    g.date, g.start_time, g.end_time, g.pay, g.title, g.artist_type, g.status,
                    v.venue_name, v.id as venue_id,
-                   (SELECT COUNT(*) FROM gig_waitlist w2 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id) as position,
+                   (SELECT COUNT(*) FROM gig_waitlist w2 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id AND (w2.offer_declined = 0 OR w2.offer_declined IS NULL)) as position,
                    (SELECT COUNT(*) FROM gig_waitlist w3 WHERE w3.gig_id = w.gig_id) as total_waiting,
                    0 as has_offer
             FROM gig_waitlist w
@@ -392,12 +415,24 @@ def get_artist_waitlists(artist_id: int, user=Depends(get_current_user), db=Depe
 
 # ─── OFFER RESPONSE (email deep-link) ─────────────────────────────────────────
 
-@router.get("/api/waitlist/respond")
+@router.api_route("/api/waitlist/respond", methods=["GET", "POST"])
 @limiter.limit("20/minute")
 def respond_to_offer(request: Request, token: str, action: str, db=Depends(get_db)):
     """
     Artist clicks Book or Decline in their email.
     action = "book" or "decline"
+
+    Audit fix (May 2026 part 3): the decline path used to mutate on GET,
+    which meant:
+      - Corporate / antivirus email-scanner pre-fetches accidentally
+        declined offers.
+      - An email forwarded to a malicious party let them torpedo the
+        artist's offer (32-byte token = the only auth).
+    Decline now requires an explicit POST confirmation. A GET without
+    `confirmed=1` renders an "Are you sure?" page; clicking the button
+    POSTs back to this same endpoint to actually execute. Book remains
+    a GET → 302 since it just redirects to a login-gated booking page,
+    so it can't mutate without auth.
     """
     from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -492,6 +527,44 @@ def respond_to_offer(request: Request, token: str, action: str, db=Depends(get_d
         return _splash("🎸", "Gig No Longer Available", "Sorry, this gig has already been filled. Keep an eye out for future openings!", base_url)
 
     if action == "decline":
+        # If the request is a GET, show a confirmation page that POSTs
+        # back to this same endpoint. Email-scanner pre-fetches and
+        # forwarded URLs hit this page, not the mutation path.
+        if request.method == "GET":
+            decline_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Decline waitlist offer · GigsFill</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8f9fa; margin: 0; padding: 40px 20px; color: #1a1a2e; }}
+    .card {{ max-width: 480px; margin: 60px auto; background: #fff; border-radius: 12px;
+            padding: 32px 36px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }}
+    h1 {{ font-size: 1.5rem; margin: 0 0 12px; }}
+    p {{ color: #4b5563; line-height: 1.55; }}
+    .btn {{ display: inline-block; padding: 12px 28px; border: none; border-radius: 6px;
+           font-size: 0.95rem; font-weight: 600; cursor: pointer; text-decoration: none;
+           margin: 6px 4px; }}
+    .btn-decline {{ background: #dc2626; color: #fff; }}
+    .btn-back {{ background: #e5e7eb; color: #1a1a2e; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="font-size: 2.6rem; margin-bottom: 8px;">⏸️</div>
+    <h1>Decline this offer?</h1>
+    <p>Clicking <strong>Decline</strong> will remove you from this waitlist and let the next artist on the list know.</p>
+    <form method="POST" action="/api/waitlist/respond?token={token}&action=decline" style="margin-top: 18px;">
+      <button class="btn btn-decline" type="submit">Yes, decline</button>
+      <a class="btn btn-back" href="{base_url}/app/artist-book-gigs.html">Cancel</a>
+    </form>
+  </div>
+</body>
+</html>"""
+            return HTMLResponse(content=decline_html)
+        # POST → execute the decline below.
         # BUG FIX (May 11 2026): previously this path DELETEd the row. Compare
         # to the in-app DELETE /api/gigs/{id}/waitlist which sets offer_declined=1
         # and explicitly comments "so fire_cancelled_gig_blast skips them."
@@ -755,12 +828,13 @@ def _send_sequential_offer(db, gig_id: int, gig, hours_until: float = 999):
             gig_base_pay = float(_slot_pay or 0) or float(gig.get("pay") or 0)
         except Exception:
             gig_base_pay = float(gig.get("pay") or 0)
-        # Apply per-artist pay override: use MAX(slot_pay, override) only when override is actually set.
+        # Apply per-artist pay override: use MAX(slot_pay, override) only when override is actually set
+        # AND the relationship is approved (revoked/denied still carry the old override columns).
         # If pay_dollars_override IS NULL the venue has not set an override — use slot pay as-is.
         try:
             _ov = db.execute(
                 text("""SELECT pay_dollars_override, pay_cents_override
-                        FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid"""),
+                        FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid AND status='approved'"""),
                 {"vid": gig.get("venue_id"), "aid": entry["artist_id"]}
             ).mappings().first()
             if _ov and _ov["pay_dollars_override"] is not None:
@@ -790,7 +864,7 @@ def _send_sequential_offer(db, gig_id: int, gig, hours_until: float = 999):
             "book_url": book_url,
             "decline_url": decline_url,
             "expires_hours": "30 minutes" if offer_hours < 1 else f"{int(offer_hours)} hour{'s' if offer_hours != 1 else ''}",
-            "offer_deadline": _format_deadline(expires_at, db),
+            "offer_deadline": _format_deadline(expires_at, db, venue_id=gig.get("venue_id")),
             "booking_url": book_url,
             "slots_html": _wl_slots_html,
         }
@@ -821,7 +895,7 @@ def _send_sequential_offer(db, gig_id: int, gig, hours_until: float = 999):
         try:
             from backend.services.notification_service import create_notification
             from backend.services.email_dispatch import format_email_date
-            _deadline_display = _format_deadline(expires_at, db)
+            _deadline_display = _format_deadline(expires_at, db, venue_id=gig.get("venue_id"))
             _deadline_phrase = (
                 f"You have until {_deadline_display} to book it!"
                 if _deadline_display else f"You have {offer_hours} hours to book it!"
@@ -1039,10 +1113,12 @@ def _blast_waitlist_and_nearby(db, gig_id: int, gig, hours_until: float):
         notified_ids = set()
 
         def _get_effective_pay(artist_id):
+            # Override only applies when status='approved' (revoked/denied rows still
+            # carry the override columns from before they lost preferred status).
             try:
                 _ov = db.execute(
                     text("""SELECT COALESCE(pay_dollars_override,0) + COALESCE(pay_cents_override,0)/100.0 as op
-                            FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid"""),
+                            FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid AND status='approved'"""),
                     {"vid": gig.get("venue_id"), "aid": artist_id}
                 ).mappings().first()
                 return max(gig_base_pay, float(_ov["op"] or 0)) if _ov else gig_base_pay
@@ -1101,7 +1177,7 @@ def _blast_waitlist_and_nearby(db, gig_id: int, gig, hours_until: float):
                     "book_url": book_url,
                     "decline_url": decline_url,
                     "expires_hours": "30 minutes" if _blast_offer_hours < 1 else f"{int(_blast_offer_hours)} hour{'s' if _blast_offer_hours != 1 else ''}",
-                    "offer_deadline": _format_deadline(expires_at, db),
+                    "offer_deadline": _format_deadline(expires_at, db, venue_id=gig.get("venue_id")),
                     "booking_url": book_url,
                     "slots_html": _build_open_slots_html(db, gig_id, gig),
                 },

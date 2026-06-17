@@ -195,9 +195,36 @@ def get_template(cursor, template_key):
     return None
 
 
+"""HTML-safe allowlist mirroring backend/email_service.py:_HTML_SAFE_KEYS.
+
+The scheduler's blast loop builds emails that include user-controlled fields
+like artist_name, venue_name, gig_title, cancellation_reason. Without
+html.escape() a venue named `<a href="http://phish.example/">click</a> Bar`
+would render as a live phishing link in every nearby artist's blast email.
+Pre-built HTML the dispatch path assembles (slots_html, venue_address_link,
+far_notice_*, …) must NOT be re-escaped or recipients see literal markup.
+Keep this set in sync with email_service.py._HTML_SAFE_KEYS.
+"""
+_SCHED_HTML_SAFE_KEYS = frozenset({
+    "body",
+    "approve_url", "deny_url", "reset_url", "verify_url", "accept_url",
+    "decline_url", "manage_url", "calendar_url", "profile_url",
+    "stripe_url", "support_url",
+    "waitlist_message", "blast_message", "slot_times_html",
+    "open_slots_html", "artist_list_html", "gig_summary_html",
+    "venue_logo_html", "artist_logo_html",
+    "slots_html",
+    "venue_address_link",
+    "personal_note", "recipient_greeting",
+    "far_notice_artist", "far_notice_venue",
+})
+
+
 def render_template(template_str, variables):
-    """Replace {{variable}} placeholders. Supports {{#var}}...{{/var}} conditional blocks."""
+    """Replace {{variable}} placeholders. Supports {{#var}}...{{/var}} conditional blocks.
+    HTML-escapes every value EXCEPT keys in _SCHED_HTML_SAFE_KEYS."""
     import re
+    import html as _html
     result = template_str
     def _replace_block(m):
         key = m.group(1)
@@ -205,7 +232,9 @@ def render_template(template_str, variables):
         return inner if variables.get(key) else ''
     result = re.sub(r'\{\{#(\w+)\}\}(.*?)\{\{/\1\}\}', _replace_block, result, flags=re.DOTALL)
     for key, value in variables.items():
-        result = result.replace(f"{{{{{key}}}}}", str(value or ''))
+        raw = str(value or '')
+        rendered = raw if key in _SCHED_HTML_SAFE_KEYS else _html.escape(raw, quote=False)
+        result = result.replace(f"{{{{{key}}}}}", rendered)
     return result
 
 
@@ -424,10 +453,28 @@ def process_gig_confirmation(cursor, smtp_config):
                 """, (gig_id, venue_id, target_date_str))
 
 
-def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gig_band_formats, gig_styles):
-    """Build slots_html table rows for scheduler emails."""
+def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gig_band_formats, gig_styles, artist_override_pay=None):
+    """Build slots_html table rows for scheduler emails.
+
+    May 2026 part 10d: matches the indentation hierarchy used by the
+    new-gig blast (gigs.py:_build_gigs_html) — multi-slot gigs get a
+    "Slot N" header indented one level, with the slot's fields indented
+    another level beneath it. Single-slot gigs indent fields one level.
+
+    artist_override_pay: if set (preferred artist with a per-artist pay
+    override), display max(slot_pay, override) so the override wins for
+    each slot. Mirrors gigs.py:_build_slots_html.
+    """
     from backend.services.notification_service import format_time_12hr
-    ROW = '<tr><td style="padding:6px 0;font-size:14px;color:#6b7280;width:130px;">{label}</td><td style="padding:6px 0;font-size:14px;color:{color};font-weight:{weight};">{value}</td></tr>'
+
+    def _row(label, value, color="#111827", weight="500", indent=0):
+        lpad = f"padding:6px 0 6px {indent}px;" if indent else "padding:6px 0;"
+        lw = max(80, 130 - indent)
+        return (f'<tr><td style="{lpad}font-size:14px;color:#6b7280;'
+                f'width:{lw}px;vertical-align:top;">{label}</td>'
+                f'<td style="padding:6px 0;font-size:14px;color:{color};'
+                f'font-weight:{weight};vertical-align:top;">{value}</td></tr>')
+
     SEP = '<tr><td colspan="2" style="padding:4px 0;border-top:1px solid #e5e7eb;"></td></tr>'
     try:
         slots = cursor.execute(
@@ -437,37 +484,40 @@ def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gi
     except Exception:
         slots = []
     if not slots:
-        # Single-gig fallback
-        t_start = format_time_12hr(gig_pay) if False else ''  # unused
-        time_str = ''
-        pay_val = str(gig_pay or '0')
-        atype = gig_artist_type or ''
-        lineup = ', '.join(x.strip() for x in (gig_band_formats or '').split(',') if x.strip())
-        styles = ', '.join(x.strip() for x in (gig_styles or '').split(',') if x.strip())
         return ''  # no slots, template will use start_time/pay/etc directly
+    _multi = len(slots) > 1
+    field_indent = 32 if _multi else 16
     html = ''
     for i, s in enumerate(slots):
         if i > 0:
             html += SEP
+        if _multi:
+            html += ('<tr><td colspan="2" style="padding:8px 0 4px 16px;font-size:14px;'
+                     f'color:#7c6bff;font-weight:700;">Slot {i + 1}</td></tr>')
         t_s = format_time_12hr(s[0] or '')
         t_e = format_time_12hr(s[1] or '')
         time_str = f"{t_s} – {t_e}" if t_e else t_s
-        pay_val = str(s[2] or gig_pay or '0')
+        base_pay = float(s[2] or gig_pay or 0)
+        if artist_override_pay is not None:
+            try:
+                base_pay = max(base_pay, float(artist_override_pay))
+            except Exception:
+                pass
         try:
-            pf = float(pay_val); pay_val = f"{pf:.2f}" if pf != int(pf) else str(int(pf))
+            pay_val = f"{base_pay:.2f}" if base_pay != int(base_pay) else str(int(base_pay))
         except Exception:
-            pass
+            pay_val = str(s[2] or gig_pay or '0')
         atype  = s[3] or gig_artist_type or ''
         lineup = ', '.join(x.strip() for x in (s[4] or gig_band_formats or '').split(',') if x.strip())
         st     = ', '.join(x.strip() for x in (s[5] or gig_styles or '').split(',') if x.strip())
-        html += ROW.format(label="Time",  color="#111827", weight="500", value=time_str)
-        html += ROW.format(label="Pay",   color="#059669", weight="600", value=f"${pay_val}")
+        html += _row("Time", time_str, indent=field_indent)
+        html += _row("Pay",  f"${pay_val}", color="#059669", weight="600", indent=field_indent)
         if atype:
-            html += ROW.format(label="Type",  color="#111827", weight="500", value=atype)
+            html += _row("Type",   atype,  indent=field_indent)
         if lineup:
-            html += ROW.format(label="Lineup", color="#111827", weight="500", value=lineup)
+            html += _row("Lineup", lineup, indent=field_indent)
         if st:
-            html += ROW.format(label="Styles", color="#111827", weight="500", value=st)
+            html += _row("Styles", st,     indent=field_indent)
     return html
 
 
@@ -549,8 +599,24 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
             # Also fires as a catch-up if gig hasn't been notified yet and is still future.
             if time_unit == 'hours':
                 try:
+                    # Audit fix (May 2026 part 9): localize the gig's start
+                    # time in the VENUE's timezone, not the platform tz. A
+                    # venue 3h ahead/behind platform would otherwise have its
+                    # "36h before" window fire 3h early or late.
+                    try:
+                        from backend.utils import get_venue_timezone_str as _gvtz
+                        from backend.db import SessionLocal as _SL2
+                        _vdb = _SL2()
+                        try:
+                            _vtz_str = _gvtz(_vdb, venue_id)
+                        finally:
+                            _vdb.close()
+                        import pytz as _pytz_v
+                        _venue_tz = _pytz_v.timezone(_vtz_str)
+                    except Exception:
+                        _venue_tz = tz
                     gig_dt_naive = datetime.strptime(f"{date} {(start_time or '00:00')[:5]}", "%Y-%m-%d %H:%M")
-                    gig_dt = gig_dt_naive.replace(tzinfo=tz)
+                    gig_dt = gig_dt_naive.replace(tzinfo=_venue_tz)
                     # Primary window: ±2h around target
                     window_start = now_tz + timedelta(hours=time_value - 2.0)
                     window_end   = now_tz + timedelta(hours=time_value + 2.0)
@@ -619,6 +685,7 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                     (venue_id, a_id)
                 ).fetchone()
                 effective_pay = pay  # default to published gig pay
+                override_amt = None
                 if ov_row and ov_row[0] is not None:
                     override_amt = float(ov_row[0]) + float(ov_row[1] or 0) / 100
                     pub_amt = float(pay or 0)
@@ -635,7 +702,7 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                     'title': gig_title or '', 'city': city or '', 'state': state or '',
                     'band_formats': ', '.join(x.strip() for x in (band_formats or '').split(',') if x.strip()),
                     'styles': ', '.join(x.strip() for x in (styles or '').split(',') if x.strip()),
-                    'slots_html': _build_slots_html_for_scheduler(cursor, gig_id, effective_pay, artist_type, band_formats, styles),
+                    'slots_html': _build_slots_html_for_scheduler(cursor, gig_id, effective_pay, artist_type, band_formats, styles, artist_override_pay=override_amt),
                     **venue_vars,
                 }
                 subject = render_template(template['subject'], variables)
@@ -912,7 +979,19 @@ def process_review_requests(cursor, smtp_config):
             from backend.email_service import EmailService
             from backend.services.email_dispatch import format_email_date
             es = EmailService(_db)
-            base_url = "https://gigsfill.com"
+            # Audit fix (May 2026 part 5): pull from platform_settings.site_url
+            # so review-request links don't hardcode gigsfill.com on staging or
+            # custom-domain deploys.
+            try:
+                from sqlalchemy import text as _rv_text
+                _su = _db.execute(_rv_text("SELECT setting_value FROM platform_settings WHERE setting_key='site_url' LIMIT 1")).scalar()
+                if not _su:
+                    _su = _db.execute(_rv_text("SELECT setting_value FROM platform_settings WHERE setting_key='base_url' LIMIT 1")).scalar()
+                base_url = (_su or "https://gigsfill.com").strip().rstrip("/")
+                if "127.0.0.1" in base_url or "localhost" in base_url:
+                    base_url = "https://gigsfill.com"
+            except Exception:
+                base_url = "https://gigsfill.com"
 
             # Find booked gigs whose end_time was >=12h ago, <=7 days ago
             # Use end_time if set, else start_time + 2h as fallback
@@ -1160,7 +1239,17 @@ def run_scheduled_emails():
 
         smtp_config = get_smtp_settings(cursor)
         if not smtp_config['username'] or not smtp_config['password']:
-            logger.warning("[SCHED] SMTP not configured — skipping all email blasts")
+            # Audit fix (May 2026 part 3): elevate to ERROR (was WARNING)
+            # so the gap is visible in journalctl filters that admins use
+            # to look for failures. The previous WARNING blended in with
+            # routine startup noise — operators didn't notice when blasts
+            # had been silently skipped for hours.
+            logger.error(
+                "[SCHED] SMTP NOT CONFIGURED — all hourly email blasts "
+                "(gig confirmations, open-gig notifications, blasts) are "
+                "being SKIPPED. Configure SMTP in admin settings."
+            )
+            print("[SCHED][ERROR] SMTP not configured — email blasts skipped", flush=True)
             return
 
         def _run(fn, label):
@@ -1255,15 +1344,57 @@ def _run_wal_checkpoint(force: bool = False):
         logger.warning(f"WAL checkpoint failed: {e}")
 
 
+def _run_audit_table_prune():
+    """Audit fix (May 2026 part 9): keep ledger/audit-style tables from growing
+    unbounded over time. Tables we sweep:
+      - stripe_webhook_events: 90 days
+      - pending_approval_tokens: 30 days
+      - admin_audit_log: 365 days (long retention, but not infinite)
+      - gig_email_log: 180 days
+    None of these are read for current-state decisions past their window — they
+    exist for forensic / replay-debug. Past their TTL they're just bloat.
+    """
+    try:
+        conn = _raw_db_conn()
+        try:
+            _prunes = [
+                ("stripe_webhook_events", "received_at", 90),
+                ("pending_approval_tokens", "created_at", 30),
+                ("gig_email_log", "sent_at", 180),
+                ("admin_audit_log", "created_at", 365),
+            ]
+            for tbl, col, days in _prunes:
+                try:
+                    cur = conn.execute(
+                        f"DELETE FROM {tbl} WHERE {col} <= datetime('now', '-{days} days')"
+                    )
+                    try:
+                        rc = cur.rowcount or 0
+                    except Exception:
+                        rc = 0
+                    if rc:
+                        logger.info(f"[PRUNE] {tbl}: deleted {rc} row(s) older than {days}d")
+                except Exception as _pe:
+                    # Table may not exist on a given deployment — log and keep going
+                    logger.debug(f"[PRUNE] {tbl} skipped: {_pe}")
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Audit-table prune failed: {e}")
+
+
 def _run_contract_hold_cleanup():
     """Release gigs stuck in pending_contract/awaiting_venue_contract past their 48h hold expiry."""
     try:
         from backend.db import SessionLocal as _SL
         _db = _SL()
         try:
-            from backend.routes.contracts import cleanup_expired_holds
-            from fastapi import Request as _Req
-            result = cleanup_expired_holds(_db)
+            # Audit fix (May 2026 part 2): the HTTP endpoint is now admin-
+            # gated. The scheduler bypasses that by calling the underlying
+            # implementation directly with a raw DB session.
+            from backend.routes.contracts import _cleanup_expired_holds_impl
+            result = _cleanup_expired_holds_impl(_db)
             # FIX (May 2026): cleanup_expired_holds() returns {"released_count": N, "released_gig_ids": [...]}
             # Previously this read result.get("released", 0) which always returned 0,
             # so the log said "released 0" even when N > 0.
@@ -1277,8 +1408,10 @@ def _run_contract_hold_cleanup():
 
 
 def _scheduler_loop():
-    """Background loop — email blasts every hour, waitlist expiry every 10 minutes"""
+    """Background loop — email blasts every hour, waitlist expiry every 10 minutes,
+    bounce-inbox poll every 30 minutes when enabled."""
     last_email_run = 0
+    last_bounce_run = 0
     while True:
         now = time.time()
 
@@ -1287,6 +1420,15 @@ def _scheduler_loop():
             process_waitlist_expirations()
         except Exception as e:
             logger.error(f"Waitlist expiry check error: {e}")
+
+        # Bounce inbox poll: every 30 minutes when bounce_check_enabled. No-op
+        # when disabled — the function reads the flag itself and returns fast.
+        if now - last_bounce_run >= 1800:
+            try:
+                process_bounce_inbox()
+            except Exception as e:
+                logger.error(f"Bounce inbox poll error: {e}")
+            last_bounce_run = time.time()
 
         # Full email blast run: once per hour
         if now - last_email_run >= 3600:
@@ -1297,6 +1439,7 @@ def _scheduler_loop():
             _run_contract_hold_cleanup()
             _run_started_gig_waitlist_cleanup()
             _run_wal_checkpoint()
+            _run_audit_table_prune()
             last_email_run = time.time()
 
         time.sleep(600)  # check every 10 minutes
@@ -1331,3 +1474,380 @@ def start_scheduler():
     thread.start()
     print("✅ Email notification scheduler started (runs every hour)", flush=True)
     logger.info("✅ Email notification scheduler started (runs every hour)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Part 10p Phase 3: Async bounce detection (IMAP DSN polling)
+# ─────────────────────────────────────────────────────────────────────────────
+# Synchronous SMTP refusals (mailbox unknown at submit time) are caught in
+# routes/me.py:invite_artists_multi_venue. But many bounces are asynchronous —
+# the recipient's MX accepts the message, then the destination MTA rejects it
+# and a Delivery Status Notification (DSN) gets sent back to the envelope
+# sender. This function polls the platform email inbox via IMAP, reads UNSEEN
+# DSN messages, extracts the failed recipient, and marks any matching
+# artist_invitations rows status='bounced'.
+#
+# Settings (in platform_settings):
+#   bounce_check_enabled       — 'true' to run; 'false' (default) to skip
+#   bounce_check_imap_server   — required when enabled
+#   bounce_check_imap_port     — defaults to 993 (IMAP SSL)
+#   bounce_check_imap_username — defaults to platform_email
+#   bounce_check_imap_password — defaults to platform_email_password
+#   bounce_check_last_run_at   — timestamp written by the scheduler
+#   bounce_check_last_result   — summary written by the scheduler
+#
+# Cadence: every 30 minutes from the main scheduler loop.
+
+def _bounce_check_settings(cursor):
+    """Read bounce-check settings from platform_settings. Falls back to the
+    platform_email/password for IMAP credentials when blank."""
+    cursor.execute(
+        "SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ("
+        "'bounce_check_enabled','bounce_check_imap_server','bounce_check_imap_port',"
+        "'bounce_check_imap_username','bounce_check_imap_password',"
+        "'platform_email','platform_email_password')"
+    )
+    s = {r[0]: r[1] for r in cursor.fetchall()}
+    enabled = str(s.get('bounce_check_enabled') or 'false').lower() in ('true', '1', 'yes')
+    return {
+        "enabled": enabled,
+        "server": (s.get('bounce_check_imap_server') or '').strip(),
+        "port": int((s.get('bounce_check_imap_port') or '993').strip() or 993),
+        "username": (s.get('bounce_check_imap_username') or '').strip() or (s.get('platform_email') or '').strip(),
+        "password": (s.get('bounce_check_imap_password') or '').strip() or (s.get('platform_email_password') or '').strip(),
+    }
+
+
+def _save_bounce_check_result(cursor, summary):
+    """Write last_run_at + last_result so the admin UI can show 'last polled X minutes ago'.
+
+    Uses UPDATE-then-INSERT-then-UPDATE pattern so two concurrent calls don't
+    both hit INSERT and crash on the setting_key UNIQUE constraint (mirrors the
+    same pattern in admin.py:update_settings). The keys are seeded at startup
+    in db.py:default_settings so the INSERT path is rarely hit in practice.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    for key, val in [('bounce_check_last_run_at', now), ('bounce_check_last_result', summary)]:
+        cursor.execute(
+            "UPDATE platform_settings SET setting_value = ? WHERE setting_key = ?",
+            (val, key),
+        )
+        if cursor.rowcount == 0:
+            try:
+                cursor.execute(
+                    "INSERT INTO platform_settings (setting_key, setting_value) VALUES (?, ?)",
+                    (key, val),
+                )
+            except Exception:
+                # Race-loser: another concurrent run-now beat us to the INSERT.
+                # Convert to an UPDATE so the result is still recorded.
+                cursor.execute(
+                    "UPDATE platform_settings SET setting_value = ? WHERE setting_key = ?",
+                    (val, key),
+                )
+
+
+def _parse_dsn_failed_recipients(raw_message_bytes):
+    """Return a list of (email_address, diagnostic) tuples extracted from a DSN
+    message, or [] if not a parseable DSN. Handles the standard RFC 3464 layout
+    (multipart/report with message/delivery-status part) and several common
+    non-standard formats from Gmail/Outlook/Postfix MAILER-DAEMON.
+    """
+    import email as _email
+    import re
+    msg = _email.message_from_bytes(raw_message_bytes)
+    results = []
+
+    # Standard: walk for message/delivery-status part. message/delivery-status is
+    # itself a message/* container — get_payload(decode=True) returns None for it.
+    # Use as_bytes() to grab the raw subpart text, then parse the blank-line-
+    # separated per-recipient blocks per RFC 3464.
+    for part in msg.walk():
+        ctype = (part.get_content_type() or '').lower()
+        if ctype != 'message/delivery-status':
+            continue
+        # Two ways to get the inner text:
+        #   1) part.as_bytes() includes the outer Content-Type header — strip it
+        #   2) iterate part.get_payload() (a list of Message objects) and read
+        #      each one's headers as a Message. This is the cleaner path.
+        try:
+            inner_messages = part.get_payload()  # list of Message objects
+        except Exception:
+            inner_messages = []
+        if isinstance(inner_messages, list):
+            # First Message is the per-message status; rest are per-recipient.
+            for sub in inner_messages[1:]:
+                try:
+                    recipient = sub.get('Final-Recipient', '') or sub.get('Original-Recipient', '')
+                    action    = (sub.get('Action', '') or '').strip().lower()
+                    diag      = sub.get('Diagnostic-Code', '') or sub.get('Status', '')
+                except Exception:
+                    continue
+                if action not in ('failed', 'failure'):
+                    continue
+                # Final-Recipient: rfc822; addr@example.com — strip the type prefix
+                m = re.search(r';\s*(\S+)', recipient or '')
+                if not m:
+                    continue
+                addr = m.group(1).strip().strip('<>').lower()
+                addr = re.split(r'[\s,;]', addr)[0]
+                if '@' not in addr:
+                    continue
+                # Diagnostic-Code: smtp; 550 ... — keep the readable tail
+                diag_text = re.sub(r'^\s*\w+\s*;\s*', '', str(diag or '').strip())[:240] or 'Delivery failed (DSN reported)'
+                results.append((addr, diag_text))
+        if not results:
+            # Fallback: regex the raw as_string() in case get_payload() didn't
+            # parse cleanly (some senders produce malformed DSNs).
+            try:
+                text = part.as_string()
+            except Exception:
+                text = ''
+            blocks = re.split(r'\r?\n\r?\n', text)
+            for block in blocks[1:]:
+                recip_match = re.search(r'Final-Recipient:\s*(?:rfc822|x400)?\s*;\s*(\S+)', block, re.IGNORECASE)
+                action_match = re.search(r'Action:\s*(\S+)', block, re.IGNORECASE)
+                diag_match  = re.search(r'Diagnostic-Code:\s*(?:smtp;\s*)?(.+)', block, re.IGNORECASE)
+                if recip_match and action_match and action_match.group(1).lower() in ('failed', 'failure'):
+                    addr = recip_match.group(1).strip().strip('<>').lower()
+                    addr = re.split(r'[\s,;]', addr)[0]
+                    diag = (diag_match.group(1).strip()[:240] if diag_match else 'Delivery failed (DSN reported)')
+                    if '@' in addr:
+                        results.append((addr, diag))
+        if results:
+            return results
+
+    # Fallback: scan the body text for common phrases — handles non-standard
+    # MAILER-DAEMON formats that don't include a delivery-status part.
+    # IMPORTANT: also filter out the message's own sender/return-path addresses
+    # so a quoted-back "From: us@gigsfill.com" in the DSN body doesn't get
+    # marked as a failed recipient. The platform_email + several common
+    # provider sender patterns are always excluded.
+    if not results:
+        body_text = ''
+        for part in msg.walk():
+            ctype = (part.get_content_type() or '').lower()
+            if ctype in ('text/plain', 'text/html'):
+                try:
+                    payload = part.get_payload(decode=True) or b''
+                    body_text += payload.decode('utf-8', errors='replace') + '\n'
+                except Exception:
+                    pass
+
+        # Build an exclusion set: the message's own From/Reply-To/Return-Path
+        # headers (so we never mark ourselves as bounced) plus boilerplate
+        # daemon addresses.
+        exclude = set()
+        for hdr in ('From', 'Reply-To', 'Return-Path', 'Sender', 'Errors-To'):
+            v = msg.get(hdr) or ''
+            for m in re.finditer(r'[\w.+\-]+@[\w.\-]+', v):
+                exclude.add(m.group(0).lower())
+        # Daemon addresses that frequently appear in bounce bodies.
+        exclude.update({'mailer-daemon@', 'postmaster@', 'noreply@', 'no-reply@'})
+
+        def _is_excluded(addr):
+            a = addr.lower()
+            if a in exclude:
+                return True
+            # Prefix-only entries (e.g. "mailer-daemon@") match by startswith
+            return any(p.endswith('@') and a.startswith(p) for p in exclude)
+
+        # Multiple patterns to cover common bouncer formats:
+        #   1. Code/keyword BEFORE address: "550 ... <addr@x>" (Gmail style)
+        #   2. Same but for "user unknown / no such user" keywords
+        #   3. Address in <> with parenthetical diagnostic
+        #   4. Address BEFORE code: "<addr@x>: ... 550" (Postfix/Sendmail style)
+        for pat in (
+            r'(?:permanent failure|550|554)[\s\S]{0,80}?(?:<)?([\w.+\-]+@[\w.\-]+)(?:>)?',
+            r'(?:Recipient address rejected|user unknown|no such user)[\s\S]{0,80}?([\w.+\-]+@[\w.\-]+)',
+            r'<([\w.+\-]+@[\w.\-]+)>\s*\(.*?:\s*(.{1,200}?)[\.\n]',
+            r'<([\w.+\-]+@[\w.\-]+)>:[\s\S]{0,200}?(?:550|554|user unknown|no such user|address rejected|mailbox unavailable|recipient does not exist)',
+        ):
+            for m in re.finditer(pat, body_text, re.IGNORECASE):
+                addr = m.group(1).strip().lower()
+                if _is_excluded(addr):
+                    continue
+                results.append((addr, 'Delivery permanently failed (parsed from bounce body)'))
+        # De-dup
+        seen = set(); deduped = []
+        for a, d in results:
+            if a not in seen and '@' in a:
+                seen.add(a); deduped.append((a, d))
+        results = deduped
+
+    return results
+
+
+def _is_dsn_message(msg_headers):
+    """Heuristic — is this an UNSEEN message we should treat as a bounce?
+    Looks at From, Subject, Content-Type. Avoids accidentally flagging
+    legitimate user replies."""
+    frm = (msg_headers.get('From') or '').lower()
+    subj = (msg_headers.get('Subject') or '').lower()
+    ctype = (msg_headers.get('Content-Type') or '').lower()
+    if 'multipart/report' in ctype and 'delivery-status' in ctype:
+        return True
+    if any(k in frm for k in ('mailer-daemon', 'postmaster', 'mail delivery system', 'mail delivery subsystem')):
+        return True
+    if any(k in subj for k in (
+        'undeliverable', 'undelivered mail', 'delivery status notification',
+        'mail delivery failed', 'failure notice', 'returned mail',
+        'delivery failure', 'message not delivered',
+    )):
+        return True
+    return False
+
+
+def process_bounce_inbox(conn=None):
+    """One pass over the bounce inbox. Safe to run repeatedly. No-op when
+    bounce_check_enabled is false.
+
+    Returns a dict {scanned, bounced, errors, skipped} for logging / admin UI.
+    """
+    import imaplib
+    from email.parser import BytesParser
+    from email.policy import default as _default_policy
+
+    own_conn = conn is None
+    if own_conn:
+        from backend.db import get_db_connection
+        conn = get_db_connection()
+    cursor = conn.cursor()
+
+    summary = {"scanned": 0, "bounced": 0, "errors": 0, "skipped": 0, "reason": None}
+    try:
+        settings = _bounce_check_settings(cursor)
+        if not settings["enabled"]:
+            summary["reason"] = "disabled"
+            return summary
+        if not settings["server"] or not settings["username"] or not settings["password"]:
+            summary["reason"] = "missing IMAP server/username/password — configure in Admin → Email Settings"
+            _save_bounce_check_result(cursor, summary["reason"])
+            conn.commit()
+            return summary
+
+        logger.info(f"[BOUNCE] Connecting to IMAP {settings['server']}:{settings['port']} as {settings['username']}")
+        # IMAP4_SSL accepts a timeout kwarg on Python 3.9+
+        try:
+            M = imaplib.IMAP4_SSL(settings["server"], settings["port"], timeout=15)
+        except TypeError:
+            # Older Python — no timeout kwarg
+            import socket as _sock
+            _sock.setdefaulttimeout(15)
+            M = imaplib.IMAP4_SSL(settings["server"], settings["port"])
+
+        try:
+            M.login(settings["username"], settings["password"])
+        except Exception as _le:
+            summary["errors"] += 1
+            summary["reason"] = f"IMAP login failed: {str(_le)[:160]}"
+            _save_bounce_check_result(cursor, summary["reason"])
+            conn.commit()
+            try: M.logout()
+            except Exception: pass
+            return summary
+
+        try:
+            M.select("INBOX")
+            # Only UNSEEN messages — once we mark them Seen they don't come back.
+            typ, data = M.search(None, '(UNSEEN)')
+            if typ != 'OK':
+                summary["reason"] = f"IMAP SEARCH failed: {typ}"
+                _save_bounce_check_result(cursor, summary["reason"])
+                conn.commit()
+                return summary
+            ids = (data[0] or b'').split()
+            logger.info(f"[BOUNCE] Found {len(ids)} unseen messages")
+
+            for msg_id in ids:
+                summary["scanned"] += 1
+                try:
+                    # Fetch headers first to filter cheaply
+                    typ, hdr_data = M.fetch(msg_id, '(BODY.PEEK[HEADER])')
+                    if typ != 'OK' or not hdr_data:
+                        summary["skipped"] += 1
+                        continue
+                    raw_hdr = hdr_data[0][1] if isinstance(hdr_data[0], tuple) else hdr_data[0]
+                    msg_headers = BytesParser(policy=_default_policy).parsebytes(raw_hdr)
+                    if not _is_dsn_message(msg_headers):
+                        summary["skipped"] += 1
+                        # Leave non-DSN as UNSEEN so the human can still read it
+                        continue
+
+                    # Real DSN — fetch full body
+                    typ, body_data = M.fetch(msg_id, '(BODY.PEEK[])')
+                    if typ != 'OK' or not body_data:
+                        summary["skipped"] += 1
+                        continue
+                    raw_full = body_data[0][1] if isinstance(body_data[0], tuple) else body_data[0]
+
+                    recips = _parse_dsn_failed_recipients(raw_full)
+                    if not recips:
+                        # Couldn't parse — mark Seen but don't update any rows
+                        M.store(msg_id, '+FLAGS', '\\Seen')
+                        summary["skipped"] += 1
+                        logger.info(f"[BOUNCE] msg_id={msg_id} parsed no failed recipients; marking Seen")
+                        continue
+
+                    # Update artist_invitations rows. Only touch rows sent in the
+                    # last 30 days that are still in a "could-still-bounce" state.
+                    matched_any = False
+                    for addr, diag in recips:
+                        # Only flip 'pending' rows to 'bounced'. Don't touch:
+                        #   - signed_up / preferred_*: invitee already moved
+                        #     forward — a late bounce of the original invite is
+                        #     irrelevant and would corrupt the state machine
+                        #   - declined / expired / already-bounced: terminal states
+                        cursor.execute("""
+                            SELECT id FROM artist_invitations
+                            WHERE LOWER(invited_email) = LOWER(?)
+                              AND status = 'pending'
+                              AND sent_at > datetime('now', '-30 days')
+                            ORDER BY id DESC
+                        """, (addr,))
+                        rows = cursor.fetchall()
+                        if not rows:
+                            continue
+                        for r in rows:
+                            cursor.execute("""
+                                UPDATE artist_invitations
+                                SET status = 'bounced',
+                                    bounce_reason = ?
+                                WHERE id = ?
+                            """, (f"Async bounce: {diag}"[:480], r[0]))
+                            summary["bounced"] += 1
+                            matched_any = True
+                            logger.info(f"[BOUNCE] Marked artist_invitations.id={r[0]} email={addr} bounced")
+                    # Always mark Seen so we don't reprocess on next poll
+                    M.store(msg_id, '+FLAGS', '\\Seen')
+                    if not matched_any:
+                        logger.info(f"[BOUNCE] DSN parsed but no matching pending invitation rows for: {[a for a,_ in recips]}")
+                except Exception as _per_msg_e:
+                    summary["errors"] += 1
+                    logger.warning(f"[BOUNCE] error processing msg_id={msg_id}: {_per_msg_e}")
+            conn.commit()
+        finally:
+            try: M.close()
+            except Exception: pass
+            try: M.logout()
+            except Exception: pass
+
+        result_summary = f"{summary['scanned']} scanned, {summary['bounced']} bounced, {summary['skipped']} skipped, {summary['errors']} errors"
+        _save_bounce_check_result(cursor, result_summary)
+        conn.commit()
+        logger.info(f"[BOUNCE] Done — {result_summary}")
+        return summary
+    except Exception as e:
+        logger.error(f"[BOUNCE] Fatal error: {e}", exc_info=True)
+        summary["reason"] = f"fatal: {str(e)[:200]}"
+        try:
+            _save_bounce_check_result(cursor, summary["reason"])
+            conn.commit()
+        except Exception:
+            pass
+        return summary
+    finally:
+        if own_conn:
+            try: conn.close()
+            except Exception: pass

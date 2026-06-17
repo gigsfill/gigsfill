@@ -63,7 +63,7 @@ function _renderAvailabilityUI(container, artistId, blackouts) {
           <input type="text" id="blackoutReason_${artistId}" placeholder="e.g. Tour, Vacation"
             maxlength="200" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
         </div>
-        <button onclick="addBlackout(${artistId})" class="btn primary" style="white-space:nowrap;">
+        <button onclick="addBlackout(${artistId})" class="btn primary btn-uniform" style="white-space:nowrap;">
           + Block Dates
         </button>
       </div>
@@ -92,7 +92,7 @@ function _renderBlackoutList(blackouts, artistId) {
           ${b.reason ? `<div style="font-size:0.72rem;color:var(--text-gray);margin-top:2px;">${esc(b.reason)}</div>` : ''}
         </div>
         <div style="display:flex;gap:6px;">
-          <button onclick="editBlackout(${artistId}, ${b.id}, '${b.blackout_start}', '${b.blackout_end}', '${esc(b.reason||'').replace(/'/g,"\\'")}')"
+          <button onclick="editBlackout(${parseInt(artistId,10)||0}, ${parseInt(b.id,10)||0}, ${(window.jsAttr||JSON.stringify)(b.blackout_start||'')}, ${(window.jsAttr||JSON.stringify)(b.blackout_end||'')}, ${(window.jsAttr||JSON.stringify)(b.reason||'')})"
             style="background:rgba(99,91,255,0.1);border:1px solid rgba(99,91,255,0.3);color:#635bff;
                    border-radius:6px;padding:4px 10px;font-size:0.75rem;cursor:pointer;">
             Edit

@@ -1,6 +1,27 @@
 // v015 FIX - CLEAR YOUR BROWSER CACHE!
 // v73: My Venues Redesign - Preferred & Denied Only
 
+// Audit fix (May 2026 part 7): HTML/attr escape helpers. Same pattern as
+// my-artists.js — venue names and locations were interpolated raw into
+// innerHTML and inline onclick string args, which is an XSS sink.
+function _mv_esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function _mv_attr(s) {
+  return String(s == null ? '' : s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, '\\&#39;')
+    .replace(/"/g, '\\&quot;')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 class MyVenuesRedesign {
   constructor() {
     this.venues = [];
@@ -58,7 +79,10 @@ class MyVenuesRedesign {
       pastGigs: 0,
       preferred: 0,
       pending: 0,
-      denied: 0
+      denied: 0,
+      revoked: 0,
+      nonPreferred: 0,
+      banned: 0
     };
 
     const today = new Date();
@@ -89,8 +113,13 @@ class MyVenuesRedesign {
       }
       
       if (status === 'pending') stats.pending++;
-      // v73: Include 'revoked' in denied count
-      if (status === 'denied' || status === 'revoked') stats.denied++;
+      if (status === 'denied') stats.denied++;
+      // Part 10j: 'revoked' is its own bubble — only count those WITH gigs
+      // (a venue we're no longer preferred at but have history with).
+      if (status === 'revoked' && ((v.gigs_count || (v.gigs ? v.gigs.length : 0)) > 0)) stats.revoked++;
+      // Part 10k: 'normal' = gigs at venue but no preferred relationship → Non-Preferred.
+      if (status === 'normal' && ((v.gigs_count || (v.gigs ? v.gigs.length : 0)) > 0)) stats.nonPreferred++;
+      if (status === 'banned') stats.banned++;
     });
 
     return stats;
@@ -199,16 +228,19 @@ class MyVenuesRedesign {
       ) return true;
     
       if (this.activeFilters.has('pending') && status === 'pending') return true;
-    
-      // v73: Include 'revoked' in denied filter
-      if (
-        this.activeFilters.has('denied') &&
-        (status === 'denied' || status === 'revoked')
-      ) return true;
-    
+
+      if (this.activeFilters.has('denied') && status === 'denied') return true;
+
+      // Part 10j: revoked is its own filter; only show revoked venues with gigs.
+      if (this.activeFilters.has('revoked') && status === 'revoked' && gigsCount > 0) return true;
+
+      // Part 10k: non-preferred (played without preferred status) + banned.
+      if (this.activeFilters.has('nonPreferred') && status === 'normal' && gigsCount > 0) return true;
+      if (this.activeFilters.has('banned') && status === 'banned') return true;
+
       // Show all venues with gigs for pastGigs filter
       if (this.activeFilters.has('pastGigs') && gigsCount > 0) return true;
-    
+
       return false;
     });
     
@@ -272,21 +304,31 @@ class MyVenuesRedesign {
       <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.75rem; flex-wrap: wrap;">
         <h2 style="margin: 0; font-size: 1rem; white-space: nowrap;">My Venues</h2>
         
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
           <div class="stat-bubble" onclick="myVenuesRedesign.toggleFilter('preferred')" style="background: ${isActive('preferred') ? 'rgba(34, 197, 94, 0.3)' : 'rgba(34, 197, 94, 0.1)'}; border: 2px solid ${isActive('preferred') ? '#22c55e' : 'rgba(34, 197, 94, 0.3)'}; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: all 0.2s; box-shadow: ${isActive('preferred') ? '0 0 12px rgba(34, 197, 94, 0.5)' : 'none'};">
             <span style="font-size: 0.9rem; font-weight: 600; color: #22c55e;">${stats.preferred}</span>
-            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">Preferred</span>
-          </div>
-          
-          <div class="stat-bubble" onclick="myVenuesRedesign.toggleFilter('denied')" style="background: ${isActive('denied') ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.1)'}; border: 2px solid ${isActive('denied') ? '#ef4444' : 'rgba(239, 68, 68, 0.3)'}; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: all 0.2s; box-shadow: ${isActive('denied') ? '0 0 12px rgba(239, 68, 68, 0.5)' : 'none'};">
-            <span style="font-size: 0.9rem; font-weight: 600; color: #ef4444;">${stats.denied}</span>
-            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">Denied</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">Preferred Venues</span>
           </div>
 
-          <div class="stat-bubble" onclick="myVenuesRedesign.toggleFilter('pastGigs')" style="background: ${isActive('pastGigs') ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.1)'}; border: 2px solid ${isActive('pastGigs') ? '#3b82f6' : 'rgba(59, 130, 246, 0.3)'}; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: all 0.2s; box-shadow: ${isActive('pastGigs') ? '0 0 12px rgba(59, 130, 246, 0.5)' : 'none'};">
-            <span style="font-size: 0.9rem; font-weight: 600; color: #3b82f6;">${stats.pastGigs || 0}</span>
-            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">Past Gigs</span>
+          ${stats.revoked > 0 ? `<div class="stat-bubble" onclick="myVenuesRedesign.toggleFilter('revoked')" style="background: ${isActive('revoked') ? 'rgba(245, 158, 11, 0.3)' : 'rgba(245, 158, 11, 0.1)'}; border: 2px solid ${isActive('revoked') ? '#f59e0b' : 'rgba(245, 158, 11, 0.3)'}; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: all 0.2s; box-shadow: ${isActive('revoked') ? '0 0 12px rgba(245, 158, 11, 0.5)' : 'none'};" title="Venues where your preferred status was revoked but you have past gigs">
+            <span style="font-size: 0.9rem; font-weight: 600; color: #f59e0b;">${stats.revoked}</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">Preferred Status Revoked</span>
+          </div>` : ''}
+
+          <div class="stat-bubble" onclick="myVenuesRedesign.toggleFilter('denied')" style="background: ${isActive('denied') ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.1)'}; border: 2px solid ${isActive('denied') ? '#ef4444' : 'rgba(239, 68, 68, 0.3)'}; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: all 0.2s; box-shadow: ${isActive('denied') ? '0 0 12px rgba(239, 68, 68, 0.5)' : 'none'};">
+            <span style="font-size: 0.9rem; font-weight: 600; color: #ef4444;">${stats.denied}</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">Preferred Status Denied</span>
           </div>
+
+          ${stats.nonPreferred > 0 ? `<div class="stat-bubble" onclick="myVenuesRedesign.toggleFilter('nonPreferred')" style="background: ${isActive('nonPreferred') ? 'rgba(56, 189, 248, 0.3)' : 'rgba(56, 189, 248, 0.1)'}; border: 2px solid ${isActive('nonPreferred') ? '#38bdf8' : 'rgba(56, 189, 248, 0.3)'}; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: all 0.2s; box-shadow: ${isActive('nonPreferred') ? '0 0 12px rgba(56, 189, 248, 0.5)' : 'none'};" title="Venues where you played a gig without being a preferred artist">
+            <span style="font-size: 0.9rem; font-weight: 600; color: #38bdf8;">${stats.nonPreferred}</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">Non-Preferred Venues</span>
+          </div>` : ''}
+
+          ${stats.banned > 0 ? `<div class="stat-bubble" onclick="myVenuesRedesign.toggleFilter('banned')" style="background: ${isActive('banned') ? 'rgba(127,29,29,0.4)' : 'rgba(127,29,29,0.15)'}; border: 2px solid ${isActive('banned') ? '#ef4444' : 'rgba(239,68,68,0.3)'}; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: all 0.2s; box-shadow: ${isActive('banned') ? '0 0 12px rgba(239,68,68,0.4)' : 'none'};" title="Venues that have banned you from booking">
+            <span style="font-size: 0.9rem; font-weight: 600; color: #fca5a5;">${stats.banned}</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">🚫 Banned Venues</span>
+          </div>` : ''}
         </div>
       </div>
 
@@ -340,6 +382,12 @@ class MyVenuesRedesign {
       statusBadge = '<span style="background: rgba(249, 115, 22, 0.2); border: 1px solid rgba(249, 115, 22, 0.5); color: #f97316; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">Pending</span>';
     } else if (status === 'denied') {
       statusBadge = '<span style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">Denied</span>';
+    } else if (status === 'revoked') {
+      statusBadge = '<span style="background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.5); color: #f59e0b; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">Preferred Status Revoked</span>';
+    } else if (status === 'banned') {
+      statusBadge = '<span style="background: rgba(127,29,29,0.3); border: 1px solid rgba(239,68,68,0.5); color: #fca5a5; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">🚫 Banned</span>';
+    } else if (status === 'normal') {
+      statusBadge = '<span style="background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.5); color: #38bdf8; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">Non-Preferred</span>';
     }
     
     // Waitlist badge (shown instead of or in addition to status badge)
@@ -349,21 +397,32 @@ class MyVenuesRedesign {
       statusBadge = `<span style="background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.5); color: #a78bfa; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">⏳ Waitlisted (${pos} of ${total})</span>`;
     }
 
-    // Pay and frequency: use override if set, otherwise venue default
+    // Pay and frequency: use override if set, otherwise venue default.
+    // Only meaningful for actively-preferred ('approved') venues — for revoked/denied/
+    // banned/non-preferred, the per-artist terms don't apply, so we hide the chip.
     const payD = (venue.pay_dollars_override != null) ? venue.pay_dollars_override : (venue.venue_default_pay_dollars || 0);
     const payC = String((venue.pay_cents_override != null) ? venue.pay_cents_override : (venue.venue_default_pay_cents || 0)).padStart(2, '0');
     const freqD = (venue.frequency_days_override != null) ? venue.frequency_days_override : (venue.venue_default_freq_days || 0);
+    const showPayChip = (status === 'approved');
 
+    // Audit fix (May 2026 part 7): escape every user-controlled field.
+    const _vid_safe = parseInt(venueId, 10) || 0;
+    const _vname_h = _mv_esc(venueName || 'Unknown Venue');
+    const _vcity_h = _mv_esc(venue.city || '');
+    const _vstate_h = _mv_esc(venue.state || '');
     return `
       <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 8px;">
         <div style="display: grid; grid-template-columns: minmax(100px, 1fr) auto auto; align-items: center; gap: 10px;">
-          <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-            <a href="/app/venue-profile.html?venue_id=${venueId}" target="_blank" onclick="event.stopPropagation()" style="font-weight: 600; font-size: 0.9rem; color: #7c6bff; text-decoration: none; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${venueName || 'Unknown Venue'}</a>
-            <span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">${venue.city || ''}, ${venue.state || ''}</span>
-            ${hasGigs ? `<span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">${gigsCount} gig${gigsCount !== 1 ? 's' : ''}</span>` : ''}
-            ${venue.avg_rating ? `<span title="${venue.avg_rating}/5 from ${venue.review_count} review${venue.review_count !== 1 ? 's' : ''}" style="font-size:0.75rem; color:#f59e0b; white-space:nowrap; cursor:default;">★ ${parseFloat(venue.avg_rating).toFixed(1)}<span style="color:var(--text-muted); margin-left:2px;">(${venue.review_count})</span></span>` : ''}
+          <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+              <a href="/app/venue-profile.html?venue_id=${_vid_safe}" target="_blank" style="font-weight: 600; font-size: 0.9rem; color: #7c6bff; text-decoration: none; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${_vname_h}</a>
+              <span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">${_vcity_h}, ${_vstate_h}</span>
+              ${hasGigs ? `<span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">${gigsCount} gig${gigsCount !== 1 ? 's' : ''}</span>` : ''}
+              ${venue.avg_rating ? `<span title="${venue.avg_rating}/5 from ${venue.review_count} review${venue.review_count !== 1 ? 's' : ''}" style="font-size:0.75rem; color:#f59e0b; white-space:nowrap; cursor:default;">★ ${parseFloat(venue.avg_rating).toFixed(1)}<span style="color:var(--text-muted); margin-left:2px;">(${venue.review_count})</span></span>` : ''}
+            </div>
+            <span onclick="myVenuesRedesign.openPastGigsModal(${_vid_safe}, '${_mv_attr(venueName || 'Venue')}')" style="font-size: 0.68rem; color: #3b82f6; white-space: nowrap; cursor: pointer; width: fit-content;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'" title="View your past gigs at this venue">📅 Past Gigs ›</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 12px; background: rgba(99,91,255,0.08); border: 1px solid rgba(99,91,255,0.2); border-radius: 6px; padding: 5px 12px; white-space: nowrap;">
+          ${showPayChip ? `<div onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 12px; background: rgba(99,91,255,0.08); border: 1px solid rgba(99,91,255,0.2); border-radius: 6px; padding: 5px 12px; white-space: nowrap;">
             <div style="display: flex; align-items: center; gap: 4px;">
               <span style="font-size: 0.75rem; color: var(--text-muted);">Pay:</span>
               <span style="font-size: 0.8rem; color: #e2e8f0; font-weight: 500;">$${payD}.${payC}</span>
@@ -373,8 +432,8 @@ class MyVenuesRedesign {
               <span style="font-size: 0.75rem; color: var(--text-muted);">Frequency:</span>
               <span style="font-size: 0.8rem; color: #e2e8f0; font-weight: 500;">1 per ${freqD} days</span>
             </div>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
+          </div>` : '<div></div>'}
+          <div onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
             ${_buildRateVenueBtn(venue, venueId, venueName)}
             ${statusBadge}
           </div>
@@ -405,7 +464,7 @@ class MyVenuesRedesign {
           `;
         })() : ''}
         ${hasGigs && filteredGigs.length > 0 ? `
-          <div style="margin-top: 6px; margin-left: 20px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.08);">
+          <div onclick="event.stopPropagation()" style="margin-top: 6px; margin-left: 20px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.08);">
             ${(() => {
               const page = this.gigPages[venueId] || 1;
               const totalPages = Math.ceil(filteredGigs.length / this.GIGS_PER_PAGE);
@@ -417,7 +476,21 @@ class MyVenuesRedesign {
                   const dateStr = new Date(parseInt(year), parseInt(month) - 1, parseInt(day)).toLocaleDateString();
                   const gigStart = formatTime12Hour(gig.start_time);
                   const gigEnd = formatTime12Hour(gig.end_time);
-                  const payAmt = gig.effective_pay != null ? parseFloat(gig.effective_pay).toFixed(2) : (gig.pay != null ? parseFloat(gig.pay).toFixed(2) : null);
+                  // Door-deal aware: prefer the artist's specific slot's
+                  // pay_summary if this is a door split, else fall back to
+                  // the effective/listed pay. window.formatPaySummary +
+                  // hasDoorDeal live in api-globals.js.
+                  let payDisp;
+                  const _doorSlot = (gig.slots || []).find(s => window.hasDoorDeal && window.hasDoorDeal(s));
+                  if (_doorSlot && window.formatPaySummary) {
+                    payDisp = window.formatPaySummary(_doorSlot);
+                  } else if (gig.effective_pay != null) {
+                    payDisp = '$' + parseFloat(gig.effective_pay).toFixed(2);
+                  } else if (gig.pay != null) {
+                    payDisp = '$' + parseFloat(gig.pay).toFixed(2);
+                  } else {
+                    payDisp = null;
+                  }
                   const gigIcon = ({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'}[gig.artist_type] || '🎵');
                   return `
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:5px 8px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); border-radius:5px; margin-bottom:4px;">
@@ -426,10 +499,10 @@ class MyVenuesRedesign {
                         <span style="color:rgba(255,255,255,0.3);">|</span>
                         <span style="white-space:nowrap;">${gigStart} – ${gigEnd}</span>
                         <span style="color:rgba(255,255,255,0.3);">|</span>
-                        <span style="color:#f87171; font-weight:600; white-space:nowrap;">${gigIcon} Booked${payAmt ? ' • $' + payAmt : ''}</span>
+                        <span style="color:#f87171; font-weight:600; white-space:nowrap;">${gigIcon} Booked${payDisp ? ' • ' + payDisp : ''}</span>
                       </div>
                       <span style="display:flex;gap:4px;flex-shrink:0;align-items:center;">
-                        <span onclick="event.stopPropagation(); typeof openMessageModal === 'function' && openMessageModal(${gig.id}, '${venue.venue_name ? venue.venue_name.replace(/'/g,'') : 'Venue'}')" style="font-size:0.7rem; color:#06b6d4; cursor:pointer; white-space:nowrap; padding:2px 7px; border-radius:4px; border:1px solid rgba(6,182,212,0.25); transition:background 0.15s;" onmouseover="this.style.background='rgba(6,182,212,0.12)'" onmouseout="this.style.background='none'" title="Message Venue">Message Venue</span>
+                        <span onclick="event.stopPropagation(); typeof openMessageModal === 'function' && openMessageModal(${parseInt(gig.id,10)||0}, '${_mv_attr(venue.venue_name || 'Venue')}')" style="font-size:0.7rem; color:#06b6d4; cursor:pointer; white-space:nowrap; padding:2px 7px; border-radius:4px; border:1px solid rgba(6,182,212,0.25); transition:background 0.15s;" onmouseover="this.style.background='rgba(6,182,212,0.12)'" onmouseout="this.style.background='none'" title="Message Venue">Message Venue</span>
                         <span class="gig-flyer-btn" data-gig-id="${gig.id}" style="font-size:0.7rem; color:#c4b5fd; cursor:pointer; white-space:nowrap; padding:2px 6px; border-radius:4px; transition:background 0.15s;" onmouseover="this.style.background='rgba(139,92,246,0.2)'" onmouseout="this.style.background='none'" title="View Event Flyer">🎨 Flyer</span>
                       </span>
                     </div>
@@ -464,11 +537,168 @@ class MyVenuesRedesign {
     this.render();
   }
 
+  // ── Past Gigs modal (artist side) — mirror of venue My Artists modal ─────
+  _pgArtistId() {
+    return new URLSearchParams(window.location.search).get('artist_id');
+  }
+
+  async openPastGigsModal(venueId, venueName) {
+    const aid = this._pgArtistId();
+    this._pg = { venueId, venueName, artistId: aid, gigs: [], sortCol: 'date', sortDir: -1, page: 1 };
+    let overlay = document.getElementById('pastGigsOverlayV');
+    if (overlay) overlay.remove();
+    overlay = document.createElement('div');
+    overlay.id = 'pastGigsOverlayV';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.innerHTML = `
+      <div style="background:#1a1f2e;border:1px solid #2a3040;border-radius:14px;width:100%;max-width:820px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid #2a3040;">
+          <div style="font-size:1.05rem;font-weight:700;color:#e2e8f0;">Past Gigs — ${_mv_esc(venueName)}</div>
+          <button onclick="document.getElementById('pastGigsOverlayV').remove()" style="background:transparent;border:none;color:#94a3b8;font-size:1.3rem;cursor:pointer;line-height:1;">✕</button>
+        </div>
+        <div id="pastGigsBodyV" style="overflow:auto;padding:16px 24px 24px;">
+          <div style="text-align:center;color:#94a3b8;padding:30px;font-size:0.85rem;">Loading…</div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    try {
+      const r = await fetch(`/api/artists/${aid}/venues/${venueId}/past-gigs`, { credentials: 'include' });
+      const d = r.ok ? await r.json() : { gigs: [] };
+      this._pg.gigs = d.gigs || [];
+    } catch (e) { this._pg.gigs = []; }
+    this._renderPastGigs();
+  }
+
+  _sortPastGigs() {
+    const { sortCol, sortDir } = this._pg;
+    const val = (g) => {
+      if (sortCol === 'date') return (g.date || '') + (g.start_time || '');
+      if (sortCol === 'time') return g.start_time || '';
+      if (sortCol === 'pay') return Number(g.pay || 0);
+      if (sortCol === 'status') return (g.status || '').toLowerCase();
+      return '';
+    };
+    this._pg.gigs.sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (va < vb) return -1 * this._pg.sortDir;
+      if (va > vb) return 1 * this._pg.sortDir;
+      return 0;
+    });
+  }
+
+  setPastGigsSort(col) {
+    if (this._pg.sortCol === col) this._pg.sortDir *= -1;
+    else { this._pg.sortCol = col; this._pg.sortDir = (col === 'date' ? -1 : 1); }
+    this._pg.page = 1;
+    this._renderPastGigs();
+  }
+
+  setPastGigsPage(p) {
+    const totalPages = Math.max(1, Math.ceil(this._pg.gigs.length / 10));
+    this._pg.page = Math.min(Math.max(1, p), totalPages);
+    this._renderPastGigs();
+  }
+
+  async savePastGigNote(gigId, el) {
+    const notes = el.value;
+    const g = this._pg.gigs.find(x => x.gig_id === gigId);
+    if (g) g.notes = notes;
+    try {
+      await fetch(`/api/artists/${this._pg.artistId}/gigs/${gigId}/venue-note/${this._pg.venueId}`, {
+        method: 'PUT', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes })
+      });
+      el.style.borderColor = 'rgba(34,197,94,0.5)';
+      setTimeout(() => { el.style.borderColor = 'rgba(255,255,255,0.12)'; }, 1200);
+    } catch (e) { console.error('save note failed', e); }
+  }
+
+  _renderPastGigs() {
+    const body = document.getElementById('pastGigsBodyV');
+    if (!body || !this._pg) return;
+    const PER_PAGE = 10;
+    const fmtTime = (t) => {
+      if (!t) return '';
+      const p = String(t).split(':'); let h = parseInt(p[0]); const m = p[1] || '00';
+      const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${m} ${ap}`;
+    };
+    const fmtDate = (d) => {
+      if (!d) return '';
+      const [y, mo, da] = String(d).split('-');
+      return new Date(parseInt(y), parseInt(mo) - 1, parseInt(da)).toLocaleDateString();
+    };
+    const statusPill = (s) => {
+      const map = {
+        'Booked':   ['#22c55e', 'rgba(34,197,94,0.15)'],
+        'Cancelled':['#ef4444', 'rgba(239,68,68,0.15)'],
+        'Contract Pending': ['#f59e0b', 'rgba(245,158,11,0.15)'],
+      };
+      const [c, bg] = map[s] || ['#94a3b8', 'rgba(148,163,184,0.15)'];
+      return `<span style="color:${c};background:${bg};padding:2px 8px;border-radius:4px;font-size:0.72rem;font-weight:600;white-space:nowrap;">${_mv_esc(s)}</span>`;
+    };
+
+    if (!this._pg.gigs.length) {
+      body.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:30px;font-size:0.85rem;">No past gigs at this venue yet.</div>';
+      return;
+    }
+
+    this._sortPastGigs();
+    const total = this._pg.gigs.length;
+    const totalPages = Math.ceil(total / PER_PAGE);
+    const page = Math.min(this._pg.page, totalPages);
+    const start = (page - 1) * PER_PAGE;
+    const pageGigs = this._pg.gigs.slice(start, start + PER_PAGE);
+
+    const arrow = (col) => this._pg.sortCol === col ? (this._pg.sortDir === 1 ? ' ▲' : ' ▼') : '';
+    const th = (col, label, align) => `<th onclick="myVenuesRedesign.setPastGigsSort('${col}')" style="text-align:${align||'left'};padding:8px 10px;font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.03em;cursor:pointer;user-select:none;white-space:nowrap;border-bottom:1px solid #2a3040;">${label}${arrow(col)}</th>`;
+
+    const vName = _mv_attr(this._pg.venueName);
+    const rows = pageGigs.map(g => `
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+        <td style="padding:8px 10px;font-size:0.82rem;color:#e2e8f0;white-space:nowrap;vertical-align:top;font-weight:600;">${fmtDate(g.date)}</td>
+        <td style="padding:8px 10px;font-size:0.8rem;color:#cbd5e1;white-space:nowrap;vertical-align:top;">${fmtTime(g.start_time)} – ${fmtTime(g.end_time)}</td>
+        <td style="padding:8px 10px;font-size:0.8rem;color:#22c55e;font-weight:600;white-space:nowrap;text-align:right;vertical-align:top;">${g.pay_summary || (window.hasDoorDeal && window.hasDoorDeal(g) && window.formatPaySummary ? window.formatPaySummary(g) : '$'+(Number(g.pay)||0).toFixed(2))}</td>
+        <td style="padding:8px 10px;vertical-align:top;">${statusPill(g.status)}</td>
+        <td style="padding:8px 10px;vertical-align:top;min-width:160px;">
+          <textarea oninput="this.style.height='auto';this.style.height=(this.scrollHeight)+'px';" onblur="myVenuesRedesign.savePastGigNote(${g.gig_id}, this)" placeholder="Add a note…" style="width:100%;min-height:30px;resize:none;overflow:hidden;background:rgba(21,27,40,0.8);border:1px solid rgba(255,255,255,0.12);border-radius:5px;color:#e2e8f0;font-size:0.78rem;padding:5px 7px;font-family:inherit;line-height:1.4;">${_mv_esc(g.notes || '')}</textarea>
+        </td>
+        <td style="padding:8px 10px;vertical-align:top;white-space:nowrap;">
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <span onclick="typeof openMessageModal==='function' && openMessageModal(${parseInt(g.gig_id,10)||0}, '${vName}')" style="font-size:0.7rem;color:#06b6d4;cursor:pointer;padding:3px 8px;border:1px solid rgba(6,182,212,0.3);border-radius:4px;text-align:center;" title="Message Venue">Message</span>
+            <span class="gig-flyer-btn" data-gig-id="${parseInt(g.gig_id,10)||0}" style="font-size:0.7rem;color:#c4b5fd;cursor:pointer;padding:3px 8px;border:1px solid rgba(139,92,246,0.3);border-radius:4px;text-align:center;" title="View Event Flyer">🎨 Flyer</span>
+          </div>
+        </td>
+      </tr>`).join('');
+
+    body.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          ${th('date', 'Date')}
+          ${th('time', 'Time')}
+          ${th('pay', 'Pay', 'right')}
+          ${th('status', 'Status')}
+          <th style="text-align:left;padding:8px 10px;font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.03em;border-bottom:1px solid #2a3040;">Notes</th>
+          <th style="text-align:left;padding:8px 10px;font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.03em;border-bottom:1px solid #2a3040;">Actions</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${totalPages > 1 ? `
+        <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:14px;">
+          <button onclick="myVenuesRedesign.setPastGigsPage(${page - 1})" ${page <= 1 ? 'disabled' : ''} style="padding:4px 12px;font-size:0.78rem;background:${page <= 1 ? 'transparent' : 'rgba(99,91,255,0.15)'};border:1px solid ${page <= 1 ? 'rgba(255,255,255,0.1)' : 'rgba(99,91,255,0.3)'};border-radius:5px;color:${page <= 1 ? '#64748b' : '#a78bfa'};cursor:${page <= 1 ? 'default' : 'pointer'};">‹ Prev</button>
+          <span style="font-size:0.78rem;color:#94a3b8;">Page ${page} of ${totalPages} · ${total} gigs</span>
+          <button onclick="myVenuesRedesign.setPastGigsPage(${page + 1})" ${page >= totalPages ? 'disabled' : ''} style="padding:4px 12px;font-size:0.78rem;background:${page >= totalPages ? 'transparent' : 'rgba(99,91,255,0.15)'};border:1px solid ${page >= totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(99,91,255,0.3)'};border-radius:5px;color:${page >= totalPages ? '#64748b' : '#a78bfa'};cursor:${page >= totalPages ? 'default' : 'pointer'};">Next ›</button>
+        </div>` : `<div style="margin-top:12px;font-size:0.75rem;color:#64748b;text-align:right;">${total} gig${total !== 1 ? 's' : ''}</div>`}
+    `;
+    body.querySelectorAll('textarea').forEach(t => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; });
+  }
+
   showGigDetails(gigId) {
     // Find gig in existing data
     let gig = null;
     const searchId = parseInt(gigId, 10);
-    
+
     for (const venue of this.venues) {
       if (venue.gigs) {
         gig = venue.gigs.find(g => parseInt(g.id, 10) === searchId);
@@ -553,12 +783,18 @@ function _buildRateVenueBtn(venue, venueId, venueName) {
   const rating = hasReview ? venue.my_review.rating : 0;
   const reviewText = hasReview ? (venue.my_review.review_text || '') : '';
   const safeName = (venueName || 'Venue').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  const safeText = reviewText.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const label = hasReview ? '✏️ Edit Review' : '⭐ Rate Venue';
   const style = hasReview
     ? 'padding:3px 10px;font-size:0.72rem;border-radius:4px;cursor:pointer;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);color:#f59e0b;white-space:nowrap;'
     : 'padding:3px 10px;font-size:0.72rem;border-radius:4px;cursor:pointer;background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.3);color:#06b6d4;white-space:nowrap;';
-  return '<button onclick="event.stopPropagation(); openVenueRateModal(' + venueId + ', \'' + safeName + '\', ' + artistId + ', ' + rating + ', \'' + safeText + '\', this)" style="' + style + '">' + label + '</button>';
+  // Audit fix (May 2026 part 8): jsAttr (JSON.stringify-based) produces a
+  // valid JS string literal that is also HTML-attribute-safe — no `"` or `'`
+  // breakouts possible. Previous escape only handled `\` and `'`, missed `"`.
+  const _jsa = window.jsAttr || JSON.stringify;
+  const _vid = parseInt(venueId, 10) || 0;
+  const _aid = parseInt(artistId, 10) || 0;
+  const _rating = parseInt(rating, 10) || 0;
+  return '<button onclick="event.stopPropagation(); openVenueRateModal(' + _vid + ', ' + _jsa(venueName) + ', ' + _aid + ', ' + _rating + ', ' + _jsa(reviewText) + ', this)" style="' + style + '">' + label + '</button>';
 }
 
 
@@ -612,9 +848,12 @@ window.openVenueRateModal = function(venueId, venueName, artistId, existingRatin
               triggerBtn.style.background = 'rgba(6,182,212,0.1)';
               triggerBtn.style.border = '1px solid rgba(6,182,212,0.3)';
               triggerBtn.style.color = '#06b6d4';
-              const safeName3 = (venueName || '').replace(/'/g, "\\'");
+              // Audit fix (May 2026 part 8): jsAttr handles \, ', ", control chars.
+              const _jsa = window.jsAttr || JSON.stringify;
+              const _vid = parseInt(venueId, 10) || 0;
+              const _aid = parseInt(artistId, 10) || 0;
               triggerBtn.setAttribute('onclick',
-                "event.stopPropagation(); openVenueRateModal(" + venueId + ", '" + safeName3 + "', " + artistId + ", 0, '', this)");
+                "event.stopPropagation(); openVenueRateModal(" + _vid + ", " + _jsa(venueName || '') + ", " + _aid + ", 0, '', this)");
             }
             setTimeout(() => { if (window.closeAllModals) window.closeAllModals(); }, 1200);
           } catch (e) {
@@ -655,10 +894,13 @@ window.openVenueRateModal = function(venueId, venueName, artistId, existingRatin
               triggerBtn.style.background = 'rgba(245,158,11,0.12)';
               triggerBtn.style.border = '1px solid rgba(245,158,11,0.35)';
               triggerBtn.style.color = '#f59e0b';
-              const safeText = reviewText.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-              const safeName2 = (venueName || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+              // Audit fix (May 2026 part 8): jsAttr handles \, ', ", control chars.
+              const _jsa = window.jsAttr || JSON.stringify;
+              const _vid = parseInt(venueId, 10) || 0;
+              const _aid = parseInt(artistId, 10) || 0;
+              const _sel = parseInt(selected, 10) || 0;
               triggerBtn.setAttribute('onclick',
-                'event.stopPropagation(); openVenueRateModal(' + venueId + ', \'' + safeName2 + '\', ' + artistId + ', ' + selected + ', \'' + safeText + '\', this)');
+                'event.stopPropagation(); openVenueRateModal(' + _vid + ', ' + _jsa(venueName || '') + ', ' + _aid + ', ' + _sel + ', ' + _jsa(reviewText) + ', this)');
             }
             setTimeout(() => { if (window.closeAllModals) window.closeAllModals(); }, 1200);
           } catch (e) {

@@ -85,6 +85,13 @@ async function renderRatingSummary(containerId, artistId) {
     const res = await fetch(`/api/artists/${artistId}/reviews/summary`, { credentials: 'include' });
     const data = await res.json();
 
+    // Mirror the venue Reviews-tab badge ("Reviews (N)") on the artist tab —
+    // sits inside the Reviews tab button on artist-profile.html.
+    const tabBadge = document.getElementById('reviewsBadge');
+    if (tabBadge) {
+      tabBadge.textContent = data.review_count > 0 ? `(${data.review_count})` : '';
+    }
+
     if (!data.review_count) {
       container.innerHTML = `<div style="color:var(--text-gray);font-size:0.8rem;">No reviews yet</div>`;
       return;

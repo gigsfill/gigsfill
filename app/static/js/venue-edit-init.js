@@ -67,12 +67,14 @@ document.addEventListener('DOMContentLoaded', function() {
   if (!venueId) return;
 
   const create = document.getElementById("createGigsBtn");
-  const profile = document.getElementById("venueProfileBtn");
   const email = document.getElementById("emailCenterBtn");
 
   if (create) create.href = `/app/venue-create-gigs.html?venue_id=${venueId}`;
-  if (profile) profile.href = `/app/venue-profile.html?venue_id=${venueId}`;
   if (email) email.href = `/app/venue-email-center.html?venue_id=${venueId}`;
+
+  if (typeof window.applyVanityToLinks === "function") {
+    window.applyVanityToLinks("venue", venueId, ["#venueProfileBtn"]);
+  }
 })();
 
 // === Additional Block (Phase 5 pass 2) ===

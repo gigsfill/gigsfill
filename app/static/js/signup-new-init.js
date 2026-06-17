@@ -7,6 +7,80 @@ let selectedRole = window.selectedRole || '';
 
 console.log('[SIGNUP v3] Script loaded');
 
+// ── Part 10p: Artist-invitation token hook ──────────────────────────────────
+// When the page is loaded as /app/signup-new.html?invite=<token>, the
+// invitation backend tells us (a) the invitee's email, so we can prefill it
+// and lock the field — only THAT email may consume the token; and (b)
+// whether the invitee is already a GigsFill user, in which case we redirect
+// to login (?invite=<token> is carried through so the post-login popup
+// finds them). We also force-select the 'artist' role, since invitations
+// are artist-only.
+(function _consumeInviteToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('invite');
+    if (!token) return;
+    fetch('/api/artist-invitations/by-token/' + encodeURIComponent(token), { credentials: 'include' })
+      .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(new Error(b.detail || 'Invitation not found'))))
+      .then(inv => {
+        // Existing user → redirect to login page (carries the token through)
+        if (inv.is_existing_user) {
+          window.location.replace('/app/index.html?invite=' + encodeURIComponent(token));
+          return;
+        }
+        // Stash token globally so the signup POST can pick it up if needed
+        window._inviteToken = token;
+        window._inviteData = inv;
+        // Auto-select artist role
+        if (typeof selectRole === 'function') {
+          try { selectRole('artist'); } catch (_) {}
+        }
+        // Prefill + lock email
+        const emailEl = document.getElementById('email');
+        if (emailEl && inv.invited_email) {
+          emailEl.value = inv.invited_email;
+          emailEl.readOnly = true;
+          emailEl.style.background = 'rgba(124,107,255,0.08)';
+          emailEl.title = 'Pre-filled from your invitation';
+        }
+        // Banner: "You've been invited by X to join GigsFill"
+        const inviter = inv.inviter_name || 'A venue';
+        const venueNames = (inv.venues || []).map(v => v.venue_name).filter(Boolean);
+        let venuesPhrase = venueNames.length === 0 ? 'their venue'
+          : venueNames.length === 1 ? venueNames[0]
+          : venueNames.length === 2 ? (venueNames[0] + ' and ' + venueNames[1])
+          : (venueNames.slice(0, -1).join(', ') + ', and ' + venueNames[venueNames.length - 1]);
+        const banner = document.createElement('div');
+        banner.style.cssText = 'background:rgba(6,182,212,0.10);border:1px solid rgba(6,182,212,0.35);border-radius:6px;padding:12px 14px;margin:14px 0;font-size:13px;color:#a5f3fc;line-height:1.5;';
+        const escHtml = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        banner.innerHTML = '🎶 <strong>' + escHtml(inviter) + '</strong> from <strong>' + escHtml(venuesPhrase) + '</strong> invited you to join GigsFill. After signup we\'ll ask whether to request preferred-artist status at ' + (venueNames.length > 1 ? 'all of these venues' : 'this venue') + ' in one click.';
+        // Insert the banner above the form's first step
+        document.addEventListener('DOMContentLoaded', () => {
+          const target = document.querySelector('.signup-card, .signup-container, form, .role-grid');
+          if (target && target.parentNode) target.parentNode.insertBefore(banner, target);
+          else document.body.insertBefore(banner, document.body.firstChild);
+        });
+        if (document.readyState !== 'loading') {
+          const target = document.querySelector('.signup-card, .signup-container, form, .role-grid');
+          if (target && target.parentNode) target.parentNode.insertBefore(banner, target);
+        }
+      })
+      .catch(err => {
+        // Show an inline error if the token is invalid/expired — don't block signup,
+        // just let the user proceed without prefill.
+        console.warn('[SIGNUP] Invitation token problem:', err);
+        const banner = document.createElement('div');
+        banner.style.cssText = 'background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:10px 14px;margin:14px 0;font-size:13px;color:#fde68a;';
+        banner.textContent = '⚠️ The invitation link is invalid or has expired. You can still create an account below.';
+        document.addEventListener('DOMContentLoaded', () => {
+          document.body.insertBefore(banner, document.body.firstChild);
+        });
+      });
+  } catch (e) {
+    console.warn('[SIGNUP] token handler error', e);
+  }
+})();
+
 function selectRole(role) {
   console.log('[SIGNUP] selectRole called with:', role);
   selectedRole = role;
@@ -71,18 +145,24 @@ async function nextStep() {
     const lastName = document.getElementById('lastName').value;
     const email = document.getElementById('email').value;
     const password = document.getElementById('password').value;
+    const passwordConfirm = (document.getElementById('passwordConfirm') || { value: '' }).value;
     const phone = document.getElementById('phone').value;
-    
+
     if (!firstName || !lastName || !email || !password || !phone) {
       showError('Please fill in all required fields');
       return;
     }
-    
+
     if (password.length < 6) {
       showError('Password must be at least 6 characters');
       return;
     }
-    
+
+    if (passwordConfirm !== password) {
+      showError("Passwords don't match — re-enter the same password in both fields.");
+      return;
+    }
+
     if (!email.includes('@')) {
       showError('Please enter a valid email address');
       return;
@@ -422,8 +502,21 @@ async function completeSignup() {
     });
     
     if (!res.ok) {
-      const error = await res.text();
-      throw new Error(error);
+      // Parse FastAPI's { "detail": "..." } body when present; fall back
+      // to raw text. Don't show the user a literal JSON blob.
+      let msg = 'Signup failed. Please try again.';
+      try {
+        const body = await res.json();
+        if (body && body.detail) {
+          msg = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+        }
+      } catch (_) {
+        try {
+          const txt = await res.text();
+          if (txt) msg = txt;
+        } catch (_) { /* keep default */ }
+      }
+      throw new Error(msg);
     }
     
     // Success - fetch /api/me to get entity IDs and redirect to the right dashboard
@@ -468,7 +561,7 @@ async function completeSignup() {
     console.error('Signup error:', error);
     const signupBtn = document.querySelector('button[onclick*="completeSignup"]');
     if (signupBtn) { signupBtn.disabled = false; signupBtn.textContent = 'Create Account 🎉'; }
-    showError('Signup failed: ' + error.message);
+    showError(error.message || 'Signup failed. Please try again.');
   }
 }
 
@@ -503,6 +596,60 @@ document.addEventListener('DOMContentLoaded', function(){
     initCityAutocomplete({inputId:'artistCity', stateId:'artistState'});
     initCityAutocomplete({inputId:'venueCity', stateId:'venueState'});
   }
+
+  // Audit fix (May 2026 part 4): live password-strength meter + match
+  // checker on the signup form. Wire here so the input elements exist.
+  const _pw = document.getElementById('password');
+  const _pwc = document.getElementById('passwordConfirm');
+  const _bar = document.getElementById('passwordStrengthBar');
+  const _strengthWrap = document.getElementById('passwordStrength');
+  const _strengthLabel = document.getElementById('passwordStrengthLabel');
+  const _matchMsg = document.getElementById('passwordMatchMsg');
+
+  function _scorePassword(p) {
+    if (!p) return { score: 0, label: '' };
+    let score = 0;
+    if (p.length >= 6) score++;
+    if (p.length >= 10) score++;
+    if (/[A-Z]/.test(p) && /[a-z]/.test(p)) score++;
+    if (/\d/.test(p)) score++;
+    if (/[^A-Za-z0-9]/.test(p)) score++;
+    const labels = ['Very weak', 'Weak', 'OK', 'Strong', 'Very strong', 'Excellent'];
+    return { score, label: labels[Math.min(score, labels.length - 1)] };
+  }
+  function _renderStrength() {
+    if (!_pw || !_bar) return;
+    const v = _pw.value || '';
+    if (!v) {
+      _strengthWrap.style.display = 'none';
+      _strengthLabel.style.display = 'none';
+      return;
+    }
+    _strengthWrap.style.display = '';
+    _strengthLabel.style.display = '';
+    const { score, label } = _scorePassword(v);
+    const pct = Math.min(100, Math.round((score / 5) * 100));
+    const colors = ['#ef4444', '#f59e0b', '#facc15', '#a3e635', '#22c55e', '#10b981'];
+    _bar.style.width = pct + '%';
+    _bar.style.background = colors[Math.min(score, colors.length - 1)];
+    _strengthLabel.textContent = `Strength: ${label}`;
+  }
+  function _renderMatch() {
+    if (!_pwc || !_matchMsg) return;
+    const a = _pw && _pw.value || '';
+    const b = _pwc.value || '';
+    if (!b) { _matchMsg.style.display = 'none'; return; }
+    _matchMsg.style.display = '';
+    if (a === b) {
+      _matchMsg.textContent = '✓ Passwords match';
+      _matchMsg.style.color = '#22c55e';
+    } else {
+      _matchMsg.textContent = "✗ Passwords don't match yet";
+      _matchMsg.style.color = '#ef4444';
+    }
+  }
+  if (_pw)  _pw.addEventListener('input',  () => { _renderStrength(); _renderMatch(); });
+  if (_pwc) _pwc.addEventListener('input', _renderMatch);
 });
 
 // Phase 2 migration: duplicate entity modal — was an inline-styled

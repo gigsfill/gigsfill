@@ -43,11 +43,15 @@
       ov.id = 'feModalOverlay';
       ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:30000;display:flex;align-items:center;justify-content:center;';
       const confirmColor = opts.danger ? '#ef4444' : '#8b5cf6';
+      // Audit fix (May 2026 part 7): escape title + message (textContent
+      // via the existing `esc` helper) so a venue-controlled template/flyer
+      // name containing `<img onerror=...>` doesn't execute when the delete
+      // confirm modal opens.
       ov.innerHTML = `
         <div style="background:var(--card,#1a1f2e);border:1px solid var(--border,#2d3548);border-radius:12px;padding:24px;width:90%;max-width:400px;">
-          <h3 style="margin:0 0 8px;font-size:1rem;color:#e2e8f0;">${opts.title || 'Confirm'}</h3>
-          ${opts.message ? `<p style="margin:0 0 16px;font-size:0.85rem;color:var(--text-gray,#94a3b8);">${opts.message}</p>` : ''}
-          ${opts.input ? `<input id="feModalInput" type="text" value="${esc(opts.value || '')}" placeholder="${esc(opts.placeholder || '')}" 
+          <h3 style="margin:0 0 8px;font-size:1rem;color:#e2e8f0;">${esc(opts.title || 'Confirm')}</h3>
+          ${opts.message ? `<p style="margin:0 0 16px;font-size:0.85rem;color:var(--text-gray,#94a3b8);white-space:pre-line;">${esc(opts.message)}</p>` : ''}
+          ${opts.input ? `<input id="feModalInput" type="text" value="${esc(opts.value || '')}" placeholder="${esc(opts.placeholder || '')}"
             style="width:100%;padding:8px 12px;font-size:0.85rem;background:#151b28;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e8f0;margin-bottom:16px;box-sizing:border-box;" autofocus>` : ''}
           <div style="display:flex;justify-content:flex-end;gap:8px;">
             <button id="feModalCancel" style="padding:7px 16px;font-size:0.8rem;border-radius:6px;border:1px solid var(--border,#2d3548);background:transparent;color:var(--text-gray,#94a3b8);cursor:pointer;">${opts.cancelText || 'Cancel'}</button>
@@ -126,39 +130,63 @@
     <!-- Sidebar -->
     <div id="flyerSidebar" style="width:340px;flex-shrink:0;border-left:1px solid var(--border,#2d3548);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;">
       
-      <!-- AUTO-CREATE FLYERS (venue mode only — hidden in admin mode) -->
-      <div id="flyerSettingsSection" class="fe-section">
-        <div class="fe-label">Auto-Create Flyers</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <input type="checkbox" id="flyerAutoCreate" style="accent-color:#8b5cf6;" onchange="FE.toggleAutoFlyers(this.checked)">
-          <span style="font-size:0.72rem;color:var(--text-gray,#94a3b8);">Show a flyer on all booked gigs</span>
-        </div>
-        <div id="flyerSettingsTemplateRow" style="display:none;">
-          <div style="font-size:0.68rem;color:var(--text-gray,#64748b);margin-bottom:4px;">Which template to use for all gigs:</div>
-          <select id="flyerSiteDefault" onchange="FE.setSiteDefault(this.value)" style="width:100%;" class="fe-select">
-            <option value="">&#11088; Default Template</option>
-          </select>
-          <div style="font-size:0.62rem;color:var(--text-gray,#64748b);margin-top:4px;font-style:italic;">Individually saved gig flyers always override this.</div>
-        </div>
-      </div>
+      <!-- TEMPLATE-RELATED CLUSTER: visually grouped (subtle tint) so the
+           default-template / saved-templates / previous-flyer choices read
+           as one "where do I start from?" panel. Inside, the Default
+           Template sits alone above a solid divider, then the two "load
+           an existing flyer" methods sit together separated by — OR —. -->
+      <div class="fe-template-group">
 
-      <!-- TEMPLATES -->
-      <div class="fe-section">
-        <div class="fe-label">Templates</div>
-        <select id="flyerTemplateSelect" onchange="FE.onTemplateSelect(this.value)" style="width:100%;" class="fe-select">
-          <option value="">Load Template</option>
-        </select>
-      </div>
+        <!-- DEFAULT TEMPLATE section: Auto-Create checkbox + site-default picker -->
+        <div id="flyerSettingsSection" class="fe-section fe-template-default-section">
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;"
+                 title="Unchecked means gigs will not have a flyer unless you specifically create one.">
+            <input type="checkbox" id="flyerAutoCreate" style="accent-color:#8b5cf6;" onchange="FE.toggleAutoFlyers(this.checked)">
+            <span style="font-size:0.72rem;color:var(--text-gray,#94a3b8);">Show a flyer on all booked gigs?</span>
+          </label>
+          <div id="flyerSettingsTemplateRow" style="display:none;">
+            <div class="fe-label">Default Template</div>
+            <div style="font-size:0.68rem;color:var(--text-gray,#64748b);margin-bottom:4px;">Which template to use for all gigs?</div>
+            <select id="flyerSiteDefault" onchange="FE.setSiteDefault(this.value)" style="width:100%;" class="fe-select">
+              <option value="">&#11088; Default Template</option>
+            </select>
+            <div style="font-size:0.62rem;color:var(--text-gray,#64748b);margin-top:4px;font-style:italic;">(Individually saved gig flyers always override this)</div>
+          </div>
+        </div>
 
-      <!-- LOAD FROM PREVIOUS FLYER (venue mode only — hidden in admin mode) -->
-      <div id="flyerPrevSection" class="fe-section">
-        <div class="fe-label">Load From Previous Flyer</div>
-        <select id="flyerRecentDropdown" onchange="FE.loadPrevious(this.value); this.value='';" class="fe-select" style="width:100%;margin-bottom:6px;">
-          <option value="">— Recent Flyers —</option>
-        </select>
-        <input type="text" id="flyerPrevSearch" placeholder="Search by name, artist, date..." oninput="FE.searchPrevious()" class="fe-input" style="width:100%;margin-bottom:6px;">
-        <div id="flyerPrevResults" style="max-height:120px;overflow-y:auto;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(0,0,0,0.15);"></div>
-        <div style="font-size:0.62rem;color:var(--text-gray,#64748b);margin-top:4px;font-style:italic;">Flyers stored for 1 year.</div>
+        <!-- LOAD subgroup: two ways to load an existing flyer, joined by — OR — -->
+        <div class="fe-template-load-block">
+
+          <!-- LOAD STORED TEMPLATES -->
+          <div class="fe-section fe-template-load-section">
+            <div class="fe-label">Load Stored Templates</div>
+            <select id="flyerTemplateSelect" onchange="FE.onTemplateSelect(this.value)" style="width:100%;" class="fe-select">
+              <option value="">Load Template</option>
+            </select>
+            <!-- Visual thumbnail grid populated by renderTemplateThumbs()
+                 after loadTemplateDropdown(). Lets the user browse stored
+                 templates visually instead of guessing from names. -->
+            <div id="flyerTemplateThumbs" style="margin-top:8px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;"></div>
+          </div>
+
+          <div class="fe-or-separator">— — OR — —</div>
+
+          <!-- LOAD TEMPLATE FROM PREVIOUS FLYER (venue mode only — hidden in admin mode) -->
+          <div id="flyerPrevSection" class="fe-section fe-template-load-section fe-section-template-end">
+            <div class="fe-label">Load Template From Previous Flyer</div>
+            <select id="flyerRecentDropdown" onchange="FE.loadPrevious(this.value); this.value='';" class="fe-select" style="width:100%;margin-bottom:6px;">
+              <option value="">— Recent Flyers —</option>
+            </select>
+            <!-- Mirrors the template thumbnail grid above — shows the 3
+                 most recently saved previous flyers visually. -->
+            <div id="flyerPrevThumbs" style="margin-bottom:6px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;"></div>
+            <input type="text" id="flyerPrevSearch" placeholder="Search by name, artist, date..." oninput="FE.searchPrevious()" class="fe-input" style="width:100%;margin-bottom:6px;">
+            <div id="flyerPrevResults" style="max-height:120px;overflow-y:auto;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(0,0,0,0.15);"></div>
+            <div style="font-size:0.62rem;color:var(--text-gray,#64748b);margin-top:4px;font-style:italic;">(Flyers stored for 1 year)</div>
+          </div>
+
+        </div>
+
       </div>
 
 
@@ -261,13 +289,22 @@
           <button onclick="FE.copySelected()" class="fe-btn fe-sq" title="Copy (Ctrl+C)">📋</button>
           <button onclick="FE.cutSelected()" class="fe-btn fe-sq" title="Cut (Ctrl+X)">✂</button>
           <button onclick="FE.pasteClipboard()" class="fe-btn fe-sq" title="Paste (Ctrl+V)">📎</button>
-          <button onclick="FE.centerOnCanvas()" class="fe-btn fe-sq" title="Center on Canvas">⊞</button>
           <span style="width:1px;background:rgba(255,255,255,0.1);margin:0 2px;"></span>
           <button onclick="FE.layer('bringForward')" class="fe-btn fe-sq" title="Forward">↑</button>
           <button onclick="FE.layer('sendBackwards')" class="fe-btn fe-sq" title="Backward">↓</button>
           <button onclick="FE.layer('bringToFront')" class="fe-btn fe-sq" title="Front">⤒</button>
           <button onclick="FE.layer('sendToBack')" class="fe-btn fe-sq" title="Back">⤓</button>
           <button onclick="FE.deleteSelected()" class="fe-btn fe-sq" style="color:#ef4444;margin-left:auto;" title="Delete">🗑</button>
+        </div>
+        <!-- Nudge / center row — moves the selected object by 10px in
+             the chosen direction, or snaps it to the canvas center. -->
+        <div style="display:flex;gap:3px;margin-top:6px;align-items:center;">
+          <span class="fe-mini" style="margin-right:4px;">Move:</span>
+          <button onclick="FE.nudgeSelected(-10, 0)" class="fe-btn fe-sq" title="Move left">←</button>
+          <button onclick="FE.nudgeSelected(10, 0)"  class="fe-btn fe-sq" title="Move right">→</button>
+          <button onclick="FE.nudgeSelected(0, -10)" class="fe-btn fe-sq" title="Move up">↑</button>
+          <button onclick="FE.nudgeSelected(0, 10)"  class="fe-btn fe-sq" title="Move down">↓</button>
+          <button onclick="FE.centerOnCanvas()" class="fe-btn fe-sq" title="Center on canvas">⊕</button>
         </div>
       </div>
 
@@ -308,9 +345,10 @@
     </div>
     <div style="position:relative;display:inline-block;">
       <button onclick="FE.toggleExport()" class="fe-action" style="--ac:34,197,94;">⬇ Export ▾</button>
-      <div id="flyerExportMenu" style="display:none;position:absolute;bottom:100%;left:0;background:var(--card,#1a1f2e);border:1px solid var(--border,#2d3548);border-radius:8px;padding:4px;margin-bottom:4px;min-width:150px;z-index:10;">
-        <div onclick="FE.exportAs('png')" class="fe-export-opt">PNG (High Quality)</div>
+      <div id="flyerExportMenu" style="display:none;position:absolute;bottom:100%;left:0;background:var(--card,#1a1f2e);border:1px solid var(--border,#2d3548);border-radius:8px;padding:4px;margin-bottom:4px;min-width:180px;z-index:10;">
+        <div onclick="FE.exportAs('png')" class="fe-export-opt">PNG (Web / Social)</div>
         <div onclick="FE.exportAs('jpg')" class="fe-export-opt">JPG (Smaller File)</div>
+        <div onclick="FE.exportAs('png-print')" class="fe-export-opt">PNG (Print Quality, 2×)</div>
         <div onclick="FE.exportAs('pdf')" class="fe-export-opt">PDF (Print Ready)</div>
       </div>
     </div>
@@ -329,6 +367,41 @@
         if (m && !e.target.closest('#'+id) && !e.target.closest('[onclick*="toggle"]')) m.style.display = 'none';
       });
     });
+
+    // Drag-and-drop image upload onto the canvas. The drop zone is the
+    // canvas wrap's PARENT (so the user can drop on the surrounding
+    // padding too, not only the canvas pixels). Visual cue: cyan glow
+    // on dragover. Files that aren't images are silently ignored.
+    const dropZone = document.querySelector('#flyerCanvasWrap')?.parentElement;
+    if (dropZone) {
+      const originalShadow = dropZone.style.boxShadow;
+      const setHover = (on) => {
+        dropZone.style.boxShadow = on
+          ? 'inset 0 0 0 3px rgba(6,182,212,0.65)'
+          : originalShadow || '';
+      };
+      ['dragenter', 'dragover'].forEach((ev) => {
+        dropZone.addEventListener(ev, (e) => {
+          if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+          e.preventDefault(); e.stopPropagation();
+          setHover(true);
+        });
+      });
+      ['dragleave', 'dragend'].forEach((ev) => {
+        dropZone.addEventListener(ev, (e) => {
+          // Only un-highlight when leaving the dropzone entirely, not on child transitions
+          if (ev === 'dragleave' && dropZone.contains(e.relatedTarget)) return;
+          setHover(false);
+        });
+      });
+      dropZone.addEventListener('drop', (e) => {
+        if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+        e.preventDefault(); e.stopPropagation();
+        setHover(false);
+        const files = Array.from(e.dataTransfer.files).filter(f => f.type && f.type.startsWith('image/'));
+        files.forEach((f) => _addImageFile(f));
+      });
+    }
     if (!document.getElementById('flyerEditorCSS')) {
       const s = document.createElement('style'); s.id = 'flyerEditorCSS';
       s.textContent = `
@@ -336,6 +409,38 @@
         .fe-tab.active{background:rgba(139,92,246,0.2);color:#a78bfa;border-color:rgba(139,92,246,0.4);}
         .fe-section{padding:10px 14px;border-bottom:1px solid var(--border,#2d3548);}
         .fe-label{font-size:0.68rem;font-weight:700;color:var(--cyan,#06b6d4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+        /* Visual cluster for the "where do I start from?" sections. The
+           Default Template section sits alone above a solid divider, then
+           the two "load existing flyer" methods sit together separated by
+           a centered "— — OR — —" instead of a line. */
+        .fe-template-group{
+          background:linear-gradient(180deg, rgba(139,92,246,0.05) 0%, rgba(139,92,246,0.02) 100%);
+          border-left:2px solid rgba(139,92,246,0.35);
+          border-bottom:3px solid rgba(139,92,246,0.45);
+          box-shadow:0 4px 14px rgba(0,0,0,0.18) inset;
+        }
+        /* Clear the default 2px white-translucent border-bottom on
+           sections so we can control the dividers explicitly. */
+        .fe-template-group .fe-section{border-bottom:none !important;margin-bottom:0;}
+        /* Solid line under the Default Template section. */
+        .fe-template-group .fe-template-default-section{
+          border-bottom:1px solid rgba(139,92,246,0.45) !important;
+        }
+        /* The "load existing flyer" subgroup: stored templates + previous
+           flyer feel like one block. No divider between them — just the OR. */
+        .fe-template-load-block{padding:0;}
+        .fe-template-load-section{padding-top:6px;padding-bottom:6px;}
+        .fe-or-separator{
+          text-align:left;
+          padding-left:14px;
+          font-size:0.68rem;
+          font-weight:700;
+          letter-spacing:.18em;
+          color:var(--text-gray,#94a3b8);
+          padding-top:4px;
+          padding-bottom:6px;
+          user-select:none;
+        }
         .fe-btn{padding:5px 8px;font-size:0.72rem;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:#cbd5e1;cursor:pointer;transition:all .12s;white-space:nowrap;text-align:center;}
         .fe-btn:hover{background:rgba(139,92,246,0.2);border-color:rgba(139,92,246,0.4);color:#e2d9f3;}
         .fe-btn.active{background:rgba(139,92,246,0.3);border-color:rgba(139,92,246,0.5);color:#c4b5fd;}
@@ -641,11 +746,18 @@
 
   function initCanvas() {
     const preset = SIZE_PRESETS[currentPreset];
-    const scale = CANVAS_DISPLAY_HEIGHT / preset.h;
+    // Fit the canvas inside a fixed max-bounding-box so it never bursts
+    // out of the modal column and never gets so big that 4:5 looks huge.
+    // 520 max height keeps portrait/square at the same size they were
+    // before; 600 max width keeps Facebook Event (16:9) on-screen.
+    const MAX_H = 520;
+    const MAX_W = 600;
+    const scale = Math.min(MAX_H / preset.h, MAX_W / preset.w);
     const dw = Math.round(preset.w * scale);
+    const dh = Math.round(preset.h * scale);
     if (canvas) canvas.dispose();
     canvas = new fabric.Canvas('flyerCanvas', {
-      width: dw, height: CANVAS_DISPLAY_HEIGHT,
+      width: dw, height: dh,
       backgroundColor: '#0a0a14', preserveObjectStacking: true,
       uniScaleTransform: false,
       uniformScaling: false,
@@ -662,9 +774,141 @@
     canvas.on('selection:updated', () => { updateProps(); refreshLayers(); });
     canvas.on('selection:cleared', () => { hideProps(); refreshLayers(); });
     canvas.on('object:modified', () => { updateProps(); refreshLayers(); keepBorderOnTop(); });
-    canvas.on('object:moving', () => { keepBorderOnTop(); });
+    canvas.on('object:moving', (e) => { keepBorderOnTop(); applySnapGuides(e); });
+    canvas.on('object:modified', () => { clearSnapGuides(); });
+    canvas.on('mouse:up', () => { clearSnapGuides(); });
+    canvas.on('selection:cleared', () => { clearSnapGuides(); });
     canvas.on('object:removed', refreshLayers);
+    // Auto-shrink text as the user types. Fires every keystroke inside
+    // an editing Textbox — keeps long content from busting out of its box.
+    canvas.on('text:changed', (e) => {
+      if (e && e.target) { try { autoFitText(e.target); } catch (_) {} }
+    });
     initUndoRedo();
+  }
+
+  /* Auto-shrink a Textbox's font size when the text would wrap onto more
+     lines than the original placeholder expected. Long artist names that
+     used to bust out of their box now shrink to fit. The first time we
+     run this on an object we cache its original fontSize as the upper
+     bound so subsequent shorter text re-grows back up. */
+  function autoFitText(obj) {
+    if (!obj || !canvas) return;
+    if (!obj.type || !obj.type.toLowerCase().includes('text')) return;
+    if (typeof obj.initDimensions !== 'function') return;
+    if (obj._origFontSize == null) obj._origFontSize = obj.fontSize;
+    if (obj._origLineCount == null) {
+      // Capture the natural line count at the original font size — that's
+      // the budget we won't exceed when fitting longer text in.
+      obj._origLineCount = Math.max(1, (obj._textLines || [obj.text || '']).length);
+    }
+    const expected = Math.max(obj._origLineCount, (obj.text || '').split('\n').length);
+    // Try to grow back up to the original size first.
+    obj.set('fontSize', obj._origFontSize);
+    obj.initDimensions();
+    let fs = obj._origFontSize;
+    const MIN = 8;
+    let attempts = 0;
+    while (obj._textLines && obj._textLines.length > expected && fs > MIN && attempts < 40) {
+      fs *= 0.92;
+      obj.set('fontSize', fs);
+      obj.initDimensions();
+      attempts++;
+    }
+  }
+
+  /* =========================================================
+     SNAP GUIDES (Figma/Canva-style alignment lines while dragging)
+     ========================================================= */
+  const SNAP_THRESHOLD = 6;   // px tolerance for "this edge matches"
+  let _activeGuides = [];
+
+  // Compute 6 reference lines for an object (or the canvas itself):
+  // left / right / centerX (vertical guides) and top / bottom / centerY.
+  function _objectGuides(obj) {
+    const b = obj.getBoundingRect(true);
+    return {
+      v: [b.left, b.left + b.width / 2, b.left + b.width],   // vertical lines (x values)
+      h: [b.top,  b.top  + b.height / 2, b.top  + b.height], // horizontal lines (y values)
+    };
+  }
+
+  function applySnapGuides(e) {
+    if (!canvas || !e || !e.target) return;
+    const moving = e.target;
+    if (moving._isBg || moving._isBgColor || moving._isBorder || moving._isDarkOverlay) {
+      clearSnapGuides(); return;
+    }
+    // Collect candidate guide lines from canvas edges + every OTHER object
+    const targets = { v: [0, canvas.width / 2, canvas.width],
+                      h: [0, canvas.height / 2, canvas.height] };
+    canvas.getObjects().forEach((o) => {
+      if (o === moving) return;
+      if (o._isBorder || o._isDarkOverlay) return;
+      const g = _objectGuides(o);
+      g.v.forEach((x) => targets.v.push(x));
+      g.h.forEach((y) => targets.h.push(y));
+    });
+
+    const m = _objectGuides(moving);
+    let snapX = null, snapY = null;
+    let snapXLine = null, snapYLine = null;
+
+    // For each of the 3 vertical lines (left, centerX, right) on the
+    // moving object, find the closest target line within threshold.
+    m.v.forEach((x, idx) => {
+      targets.v.forEach((tx) => {
+        const d = Math.abs(tx - x);
+        if (d <= SNAP_THRESHOLD && (snapX === null || d < Math.abs(snapX))) {
+          snapX = tx - x;       // delta to add to moving object's left
+          snapXLine = tx;       // where to draw the guide
+        }
+      });
+    });
+    m.h.forEach((y, idx) => {
+      targets.h.forEach((ty) => {
+        const d = Math.abs(ty - y);
+        if (d <= SNAP_THRESHOLD && (snapY === null || d < Math.abs(snapY))) {
+          snapY = ty - y;
+          snapYLine = ty;
+        }
+      });
+    });
+
+    // Apply the snap by nudging the moving object's left/top by the delta.
+    if (snapX !== null) moving.set({ left: (moving.left || 0) + snapX });
+    if (snapY !== null) moving.set({ top:  (moving.top  || 0) + snapY });
+    if (snapX !== null || snapY !== null) moving.setCoords();
+
+    // Draw the visible guide lines on the upper canvas (above objects).
+    drawSnapGuides(snapXLine, snapYLine);
+  }
+
+  function drawSnapGuides(xLine, yLine) {
+    if (!canvas) return;
+    clearSnapGuides();
+    const ctx = canvas.contextTop;
+    if (!ctx) return;
+    ctx.save();
+    ctx.strokeStyle = '#06b6d4';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    if (xLine != null) {
+      ctx.beginPath(); ctx.moveTo(xLine + 0.5, 0); ctx.lineTo(xLine + 0.5, canvas.height); ctx.stroke();
+      _activeGuides.push({ kind: 'v', pos: xLine });
+    }
+    if (yLine != null) {
+      ctx.beginPath(); ctx.moveTo(0, yLine + 0.5); ctx.lineTo(canvas.width, yLine + 0.5); ctx.stroke();
+      _activeGuides.push({ kind: 'h', pos: yLine });
+    }
+    ctx.restore();
+  }
+
+  function clearSnapGuides() {
+    if (!canvas) return;
+    _activeGuides = [];
+    // Clearing the upper-canvas context is the standard Fabric pattern.
+    canvas.clearContext(canvas.contextTop);
   }
 
   function attachZoneRender(rect) {
@@ -688,8 +932,8 @@
     };
   }
 
-  function loadCanvasData(data, hydrateVars) {
-    if (!canvas || !data) return;
+  function loadCanvasData(data, hydrateVars, doneCb) {
+    if (!canvas || !data) { if (doneCb) doneCb(); return; }
     _undoPaused = true;
     try {
       const json = typeof data === 'string' ? JSON.parse(data) : data;
@@ -729,8 +973,9 @@
         syncBorderUI();
         canvas.renderAll();
         _undoPaused = false;
+        if (doneCb) doneCb();
       }, reviver);
-    } catch(e) { console.error('loadCanvas:', e); _undoPaused = false; }
+    } catch(e) { console.error('loadCanvas:', e); _undoPaused = false; if (doneCb) doneCb(); }
   }
 
   function hydrateTemplateVars() {
@@ -936,6 +1181,13 @@
         obj.set('text', locVal);
       }
     });
+    // After hydrating template variables with real gig data, shrink any
+    // text objects that would overflow (long artist name, etc.).
+    canvas.getObjects().forEach((o) => {
+      if (o && o.type && o.type.toLowerCase().includes('text')) {
+        try { autoFitText(o); } catch (_) {}
+      }
+    });
     canvas.renderAll();
   }
 
@@ -1012,6 +1264,7 @@
       if (img && img.width > 0 && canvas) {
         const sc = Math.max(cw / img.width, ch / img.height);
         img.set({ scaleX: sc, scaleY: sc, originX:'left', originY:'top', opacity: 0.40 });
+        img._isBg = true;  // flag for fit-on-resize logic
         canvas.add(img);
         canvas.sendToBack(img);
       }
@@ -1215,7 +1468,61 @@
         sel.value = '__default__';
       }
       // If activeTemplateId is null (gig has its own saved flyer), leave sel on "Load Template"
+
+      // Render the visual thumbnail grid — show the 3 most-recent
+      // templates so the strip stays compact. The dropdown above lists
+      // everything for users who want the full picker.
+      const tplsAll = [];
+      if (venueDefault) tplsAll.push(venueDefault);
+      tplsAll.push(...others);
+      // Newest first (by updated_at when present, else by id).
+      tplsAll.sort((a, b) => {
+        const ka = a.updated_at || a.created_at || a.id || 0;
+        const kb = b.updated_at || b.created_at || b.id || 0;
+        return String(kb).localeCompare(String(ka));
+      });
+      renderTemplateThumbs(tplsAll.slice(0, 3), toSelect);
     } catch(e) { console.error('[FlyerEditor] loadTemplateDropdown error:', e); }
+  }
+
+  /* Render a small thumbnail grid for stored templates. Click a thumbnail
+     to load that template (same as selecting it in the dropdown). The
+     currently-loaded template is highlighted with a cyan border. */
+  function renderTemplateThumbs(templates, activeId) {
+    const wrap = document.getElementById('flyerTemplateThumbs');
+    if (!wrap) return;
+    if (!templates || !templates.length) { wrap.innerHTML = ''; return; }
+    const activeStr = activeId != null ? String(activeId) : '';
+    wrap.innerHTML = templates.map((t) => {
+      const id = String(t.id);
+      const isActive = id === activeStr;
+      const nameEsc = (t.name || 'Untitled').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const thumb = (t.thumbnail_data && /^data:image\//.test(t.thumbnail_data))
+        ? `<img src="${t.thumbnail_data}" alt="" style="display:block;width:100%;height:60px;object-fit:cover;background:#0a0a14;">`
+        : `<div style="height:60px;background:linear-gradient(135deg,#1a1f2e,#0a0a14);display:flex;align-items:center;justify-content:center;color:#475569;font-size:1.4rem;">🎵</div>`;
+      const border = isActive ? '2px solid var(--cyan,#06b6d4)' : '1px solid rgba(255,255,255,0.08)';
+      return `
+        <div class="fe-tpl-thumb" data-template-id="${id}" title="${nameEsc}"
+             style="cursor:pointer;border:${border};border-radius:6px;overflow:hidden;background:#0a0a14;">
+          ${thumb}
+          <div style="font-size:0.62rem;color:#cbd5e1;padding:3px 5px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nameEsc}</div>
+        </div>`;
+    }).join('');
+    // Wire clicks
+    wrap.querySelectorAll('.fe-tpl-thumb').forEach((el) => {
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-template-id');
+        if (id) onTemplateSelect(id);
+      });
+      el.addEventListener('mouseover', () => {
+        if (!el.style.borderColor.includes('182, 212'))  // not active
+          el.style.borderColor = 'rgba(139,92,246,0.55)';
+      });
+      el.addEventListener('mouseout', () => {
+        if (!el.classList.contains('active'))
+          el.style.borderColor = '';
+      });
+    });
   }
 
   async function loadAdminTemplateDropdown() {
@@ -1262,7 +1569,8 @@
       if (r.ok) {
         const tpl = await r.json();
         currentFlyer = tpl;
-        loadCanvasData(tpl.canvas_data, false);
+        applyTemplatePreset(tpl);
+        loadCanvasData(tpl.canvas_data, false, () => { refreshLayers(); syncBorderUI(); });
         const isDefault = tpl.name.toLowerCase() === 'default template';
         if (del) { del.style.display = isDefault ? 'none' : ''; del.dataset.templateId = val; del.dataset.templateName = tpl.name; }
         setStatus(`"${tpl.name}" loaded`, '#67e8f9');
@@ -1414,7 +1722,8 @@
         if (siteR.ok) {
           const siteTpl = await siteR.json();
           if (siteTpl.canvas_data && siteTpl.canvas_data !== '{}') {
-            loadCanvasData(siteTpl.canvas_data, false);
+            applyTemplatePreset(siteTpl);
+            loadCanvasData(siteTpl.canvas_data, false, () => { refreshLayers(); syncBorderUI(); });
             setStatus('"Default Template" loaded', '#67e8f9');
             setFileTitle('Default Template'); markClean();
             _loaded = true;
@@ -1435,7 +1744,10 @@
             setStatus('Template has no content yet', '#f59e0b');
             return;
           }
-          loadCanvasData(tpl.canvas_data, false);
+          // Sync sidebar (canvas size preset) to whatever the template
+          // was authored at, then load the design.
+          applyTemplatePreset(tpl);
+          loadCanvasData(tpl.canvas_data, false, () => { refreshLayers(); syncBorderUI(); });
           if (del) { del.style.display = ''; del.dataset.templateId = val; del.dataset.templateName = tpl.name || 'Untitled'; }
           if (delFlyer) delFlyer.style.display = 'none';
           currentFlyer = null;
@@ -1502,7 +1814,16 @@
           width:SIZE_PRESETS[currentPreset].w, height:SIZE_PRESETS[currentPreset].h
         })
       });
-      if (!r.ok) throw new Error(await r.text());
+      if (!r.ok) {
+        // Audit fix (May 2026 part 5): parse JSON {detail} body instead of
+        // returning a raw HTML 500 page. Previously a wall of HTML landed in
+        // the status bar; admins couldn't see the actual error.
+        let _detail = `HTTP ${r.status}`;
+        try { const _j = await r.json(); if (_j && _j.detail) _detail = _j.detail; } catch (_) {
+          try { _detail = (await r.text()).slice(0, 200); } catch (_) {}
+        }
+        throw new Error(_detail);
+      }
       setStatus('✓ Template saved', '#22c55e');
       setFileTitle(name); markClean();
       loadTemplateDropdown();
@@ -1518,11 +1839,22 @@
     const ok = await feModal({ title:'Delete Template', message:`Are you sure you want to permanently delete the template:\n\n"${tname}"?`, confirmText:'Delete', danger:true });
     if (!ok) return;
     try {
-      await fetch(`/api/venues/${venueId}/flyers/${tid}`, {method:'DELETE',credentials:'include'});
+      // Audit fix (May 2026 part 5): check res.ok and surface {detail}.
+      // Previously a 403 silently "succeeded" — admin saw the template
+      // greyed out but it was still in the DB.
+      const _dr = await fetch(`/api/venues/${venueId}/flyers/${tid}`, {method:'DELETE',credentials:'include'});
+      if (!_dr.ok) {
+        let _detail = `HTTP ${_dr.status}`;
+        try { const _j = await _dr.json(); if (_j && _j.detail) _detail = _j.detail; } catch (_) {}
+        setStatus(`✗ Delete failed: ${_detail}`, '#ef4444');
+        return;
+      }
       btn.style.display = 'none';
       setStatus(`"${tname}" deleted`, '#f97316');
       loadTemplateDropdown();
-    } catch(e) {}
+    } catch(e) {
+      setStatus(`✗ Delete failed: ${(e && e.message) || 'network error'}`, '#ef4444');
+    }
   }
 
   async function deleteCurrentFlyer() {
@@ -1531,7 +1863,15 @@
     const ok = await feModal({ title:'Delete Flyer', message:`Are you sure you want to permanently delete the flyer:\n\n"${fname}"?`, confirmText:'Delete', danger:true });
     if (!ok) return;
     try {
-      await fetch(`/api/venues/${venueId}/flyers/${currentFlyer.id}`, {method:'DELETE',credentials:'include'});
+      // Audit fix (May 2026 part 5): same as deleteCurrentTemplate — surface
+      // failures instead of treating any response as success.
+      const _dr2 = await fetch(`/api/venues/${venueId}/flyers/${currentFlyer.id}`, {method:'DELETE',credentials:'include'});
+      if (!_dr2.ok) {
+        let _detail = `HTTP ${_dr2.status}`;
+        try { const _j = await _dr2.json(); if (_j && _j.detail) _detail = _j.detail; } catch (_) {}
+        setStatus(`✗ Delete failed: ${_detail}`, '#ef4444');
+        return;
+      }
       currentFlyer = null;
       const delBtn = document.getElementById('flyerDeleteFlyerBtn');
       if (delBtn) delBtn.style.display = 'none';
@@ -1554,15 +1894,49 @@
       const flyers = await r.json();
       // Deduplicate by name — keep most recent (first in list)
       const seen = new Set();
-      flyers.slice(0,30).forEach(f => {
+      const deduped = [];
+      flyers.slice(0, 30).forEach(f => {
         if (seen.has(f.name)) return;
         seen.add(f.name);
+        deduped.push(f);
         const opt = document.createElement('option');
         opt.value = f.id;
         opt.textContent = f.name;
         sel.appendChild(opt);
       });
+      // Mirror the same visual thumbnail strip: top 3 most-recent flyers.
+      renderPrevFlyerThumbs(deduped.slice(0, 3));
     } catch(e) {}
+  }
+
+  /* Thumbnail strip for "Load Template From Previous Flyer" — same idea
+     as renderTemplateThumbs but uses the venue's recent saved-flyer
+     records. Click a thumbnail = load that flyer (same as loadPrevious). */
+  function renderPrevFlyerThumbs(flyers) {
+    const wrap = document.getElementById('flyerPrevThumbs');
+    if (!wrap) return;
+    if (!flyers || !flyers.length) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = flyers.map((f) => {
+      const id = String(f.id);
+      const nameEsc = (f.name || 'Untitled').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const thumb = (f.thumbnail_data && /^data:image\//.test(f.thumbnail_data))
+        ? `<img src="${f.thumbnail_data}" alt="" style="display:block;width:100%;height:60px;object-fit:cover;background:#0a0a14;">`
+        : `<div style="height:60px;background:linear-gradient(135deg,#1a1f2e,#0a0a14);display:flex;align-items:center;justify-content:center;color:#475569;font-size:1.4rem;">🎵</div>`;
+      return `
+        <div class="fe-prev-thumb" data-flyer-id="${id}" title="${nameEsc}"
+             style="cursor:pointer;border:1px solid rgba(255,255,255,0.08);border-radius:6px;overflow:hidden;background:#0a0a14;">
+          ${thumb}
+          <div style="font-size:0.62rem;color:#cbd5e1;padding:3px 5px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nameEsc}</div>
+        </div>`;
+    }).join('');
+    wrap.querySelectorAll('.fe-prev-thumb').forEach((el) => {
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-flyer-id');
+        if (id) loadPrevious(id);
+      });
+      el.addEventListener('mouseover', () => { el.style.borderColor = 'rgba(139,92,246,0.55)'; });
+      el.addEventListener('mouseout',  () => { el.style.borderColor = ''; });
+    });
   }
 
   /* =========================================================
@@ -1595,7 +1969,10 @@
       const r = await fetch(`/api/venues/${venueId}/flyers/${flyerId}`, {credentials:'include'});
       if (!r.ok) return;
       const flyer = await r.json();
-      loadCanvasData(flyer.canvas_data);
+      // Sync sidebar (canvas size preset) to whatever the previous flyer
+      // was authored at, then load the design.
+      applyTemplatePreset(flyer);
+      loadCanvasData(flyer.canvas_data, false, () => { refreshLayers(); syncBorderUI(); });
       setStatus(`"${flyer.name || 'Untitled'}" loaded — use Save to keep changes`, '#67e8f9');
       setFileTitle(flyer.name || 'Untitled'); markClean();
       updateNameDisplay(flyer.name);
@@ -1605,6 +1982,14 @@
       // Hide Delete Template button — user loaded a flyer, not a template
       const delTpl = document.getElementById('flyerDeleteTplBtn');
       if (delTpl) delTpl.style.display = 'none';
+      // Clear the "previous flyers" search UI so the result list doesn't
+      // sit there stranded after the user has loaded their pick.
+      const searchInput = document.getElementById('flyerPrevSearch');
+      if (searchInput) searchInput.value = '';
+      const resultsBox = document.getElementById('flyerPrevResults');
+      if (resultsBox) resultsBox.innerHTML = '';
+      const recentSel = document.getElementById('flyerRecentDropdown');
+      if (recentSel) recentSel.value = '';
     } catch(e) {}
   }
 
@@ -1626,12 +2011,32 @@
   function addLine() { if(!canvas)return; const s=canvas._scale;
     canvas.add(new fabric.Line([canvas.width*0.2,canvas.height/2,canvas.width*0.8,canvas.height/2],{stroke:'#ffffff',strokeWidth:2*s}));
     canvas.setActiveObject(canvas.getObjects().pop());canvas.renderAll(); }
-  function handleImageUpload(input) { if(!input.files?.[0]||!canvas)return;
-    const reader=new FileReader(); reader.onload=e=>{fabric.Image.fromURL(e.target.result,img=>{
-      const sc=Math.min(canvas.width*0.6/img.width,canvas.height*0.4/img.height,1);
-      img.set({left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',scaleX:sc,scaleY:sc});
-      canvas.add(img);canvas.setActiveObject(img);canvas.renderAll();});};
-    reader.readAsDataURL(input.files[0]);input.value=''; }
+  function handleImageUpload(input) {
+    if(!input.files?.[0]||!canvas) return;
+    _addImageFile(input.files[0]);
+    input.value='';
+  }
+
+  // Add a File-typed image to the canvas — used by both the file picker
+  // and the drag-and-drop handler on the canvas wrap.
+  function _addImageFile(file) {
+    if (!canvas || !file || !file.type || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      fabric.Image.fromURL(e.target.result, (img) => {
+        if (!img || !canvas) return;
+        const sc = Math.min(canvas.width * 0.6 / img.width,
+                            canvas.height * 0.4 / img.height, 1);
+        img.set({
+          left: canvas.width / 2, top: canvas.height / 2,
+          originX: 'center', originY: 'center',
+          scaleX: sc, scaleY: sc,
+        });
+        canvas.add(img); canvas.setActiveObject(img); canvas.renderAll();
+      });
+    };
+    reader.readAsDataURL(file);
+  }
 
   /* =========================================================
      BACKGROUND
@@ -1809,11 +2214,185 @@
     obj.setCoords(); canvas.renderAll();
   }
 
+  /* Move the currently-selected object by (dx, dy) pixels. Used by the
+     ← → ↑ ↓ buttons in the properties panel for fine-grained positioning. */
+  function nudgeSelected(dx, dy) {
+    const obj = canvas?.getActiveObject(); if (!obj) return;
+    obj.set({ left: (obj.left || 0) + dx, top: (obj.top || 0) + dy });
+    obj.setCoords();
+    canvas.renderAll();
+  }
+
   /* =========================================================
      SIZE
      ========================================================= */
-  function changeSize(preset){currentPreset=preset;const json=getCanvasJSON();initCanvas();
-    if(json&&json!=='{}'&&json!=='{"objects":[]}')loadCanvasData(json);else loadDefaultTemplate();}
+  /* When loading a saved template/flyer, switch the canvas to the size
+     preset that template was authored at (and sync the sidebar dropdown
+     so the UI matches). Returns true if a size change happened. */
+  function applyTemplatePreset(tpl) {
+    if (!tpl) return false;
+    let preset = tpl.size_preset;
+    // Fallback: infer from width/height if size_preset is missing.
+    if (!preset && tpl.width && tpl.height) {
+      for (const [k, v] of Object.entries(SIZE_PRESETS)) {
+        if (v.w === tpl.width && v.h === tpl.height) { preset = k; break; }
+      }
+    }
+    if (!preset || !SIZE_PRESETS[preset] || preset === currentPreset) return false;
+    currentPreset = preset;
+    const sel = document.getElementById('flyerSizePreset');
+    if (sel) sel.value = preset;
+    // Re-init the canvas at the new size BEFORE the template's JSON
+    // gets loaded — otherwise the JSON would be drawn at the wrong
+    // dimensions and we'd be back to the "stretched / off-canvas" bug.
+    initCanvas();
+    return true;
+  }
+
+  function changeSize(preset) {
+    // Dispose canvas, init at new size, reload JSON (objects come back
+    // at their old coordinates). After the load callback fires, do two
+    // targeted fixups — re-fit the border to the new canvas dimensions
+    // and proportionally reposition any non-background images so a
+    // centered logo stays centered, a top-right image stays top-right,
+    // etc. Both are wrapped in try/catch so a bug here can never blank
+    // the canvas — the design was already restored by loadCanvasData.
+    const oldW = canvas ? canvas.width  : 0;
+    const oldH = canvas ? canvas.height : 0;
+    currentPreset = preset;
+    const json = getCanvasJSON();
+    initCanvas();
+    if (json && json !== '{}' && json !== '{"objects":[]}') {
+      loadCanvasData(json, true, () => {
+        try { refitBorderToCanvas(); } catch (e) { console.error('refit border:', e); }
+        try { repositionImagesProportionally(oldW, oldH); }
+        catch (e) { console.error('reposition images:', e); }
+        canvas && canvas.renderAll();
+      });
+    } else {
+      loadDefaultTemplate();
+    }
+  }
+
+  /* Re-draw the border (4 edge rects) at the new canvas dimensions.
+     Pulls the existing color + thickness from the rects we just loaded,
+     then calls updateBorder() to wipe + redraw flush to the new edges. */
+  function refitBorderToCanvas() {
+    if (!canvas) return;
+    const borders = canvas.getObjects().filter((o) => o._isBorder);
+    if (!borders.length) return;
+    const first = borders[0];
+    const color = first.fill || '#ffffff';
+    const thickness = Math.min(first.width || 12, first.height || 12);
+    const colorInput = document.getElementById('flyerBorderColor');
+    const thickInput = document.getElementById('flyerBorderThickness');
+    if (colorInput) colorInput.value = color;
+    if (thickInput) thickInput.value = thickness;
+    updateBorder();
+  }
+
+  /* Maintain the relative position of each non-background image when
+     the canvas size changes. A logo at 50% from the left, 10% from the
+     top on the old canvas → same 50% / 10% on the new canvas. Skips
+     full-bleed images (those re-fill via the background logic). */
+  function repositionImagesProportionally(oldW, oldH) {
+    if (!canvas || !oldW || !oldH) return;
+    const newW = canvas.width, newH = canvas.height;
+    if (newW === oldW && newH === oldH) return;
+    canvas.getObjects().forEach((o) => {
+      if (o.type !== 'image') return;
+      if (o._isBg || o._isBgColor) return;
+      const b = o.getBoundingRect(true);
+      const cx = b.left + b.width / 2;
+      const cy = b.top  + b.height / 2;
+      const newCx = (cx / oldW) * newW;
+      const newCy = (cy / oldH) * newH;
+      o.setPositionByOrigin({ x: newCx, y: newCy }, 'center', 'center');
+      o.setCoords();
+    });
+  }
+
+  /* Re-fit existing objects into the new canvas size. Two-step algorithm:
+       1. Backgrounds, borders, and dark overlays stretch to fill the new
+          canvas edge-to-edge (they were doing that on the old canvas).
+       2. Everything else is scaled uniformly by the smaller of
+          (newW/oldW, newH/oldH) — so the design fits the more
+          constraining axis — then translated so its bounding box is
+          centered in the new canvas.
+     Result: a flyer designed for 4:5 still reads correctly at 16:9 with
+     content centered, no clipping. */
+  function fitObjectsToCanvas(oldW, oldH) {
+    if (!canvas || !oldW || !oldH) return;
+    const newW = canvas.width;
+    const newH = canvas.height;
+    if (newW === oldW && newH === oldH) return;
+    const objs = canvas.getObjects();
+    if (!objs.length) return;
+
+    const isFullBleed = (o) =>
+      o._isBg || o._isBgColor || o._isBorder || o._isDarkOverlay;
+
+    // 1) Stretch full-bleed objects to the new canvas. For images use
+    // aspect-preserving "cover" fit (same as loadDefaultTemplate) so the
+    // background photo doesn't get distorted.
+    objs.forEach((o) => {
+      if (!isFullBleed(o)) return;
+      if (o.type === 'image' && o.width && o.height) {
+        const sc = Math.max(newW / o.width, newH / o.height);
+        o.set({
+          left: 0, top: 0, originX: 'left', originY: 'top',
+          scaleX: sc, scaleY: sc,
+        });
+      } else {
+        o.set({
+          left: 0, top: 0, originX: 'left', originY: 'top',
+          width: newW, height: newH, scaleX: 1, scaleY: 1,
+        });
+      }
+      o.setCoords();
+    });
+
+    // 2) Scale and center content (everything that isn't full-bleed).
+    const content = objs.filter((o) => !isFullBleed(o));
+    if (!content.length) { canvas.renderAll(); return; }
+
+    const fit = Math.min(newW / oldW, newH / oldH);
+    if (!isFinite(fit) || fit <= 0) { canvas.renderAll(); return; }
+
+    // Scale coords + dimensions for each content object.
+    content.forEach((o) => {
+      o.left = (o.left || 0) * fit;
+      o.top  = (o.top  || 0) * fit;
+      o.scaleX = (o.scaleX || 1) * fit;
+      o.scaleY = (o.scaleY || 1) * fit;
+      if (o.fontSize)    o.fontSize    = o.fontSize    * fit;
+      if (o.strokeWidth) o.strokeWidth = o.strokeWidth * fit;
+      o.setCoords();
+    });
+
+    // Compute the scaled bounding box and translate to center it.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    content.forEach((o) => {
+      const b = o.getBoundingRect(true);
+      if (b.left < minX) minX = b.left;
+      if (b.top  < minY) minY = b.top;
+      if (b.left + b.width  > maxX) maxX = b.left + b.width;
+      if (b.top  + b.height > maxY) maxY = b.top  + b.height;
+    });
+    const bboxCx = (minX + maxX) / 2;
+    const bboxCy = (minY + maxY) / 2;
+    const dx = newW / 2 - bboxCx;
+    const dy = newH / 2 - bboxCy;
+    if (isFinite(dx) && isFinite(dy)) {
+      content.forEach((o) => {
+        o.left = (o.left || 0) + dx;
+        o.top  = (o.top  || 0) + dy;
+        o.setCoords();
+      });
+    }
+
+    canvas.renderAll();
+  }
 
   /* =========================================================
      SAVE
@@ -2197,12 +2776,35 @@
      EXPORT
      ========================================================= */
   function toggleExport(){const m=document.getElementById('flyerExportMenu');if(m)m.style.display=m.style.display==='block'?'none':'block';}
-  function exportAs(format){document.getElementById('flyerExportMenu').style.display='none';if(!canvas)return;
-    const mult=canvas._realWidth/canvas.width;const name=currentFlyer?.name||buildFlyerName();
-    canvas.discardActiveObject();canvas.renderAll();
-    if(format==='png')dl(canvas.toDataURL({format:'png',multiplier:mult}),name+'.png');
-    else if(format==='jpg')dl(canvas.toDataURL({format:'jpeg',quality:0.92,multiplier:mult}),name+'.jpg');
-    else if(format==='pdf')exportPDF(name,mult);}
+  function exportAs(format){
+    document.getElementById('flyerExportMenu').style.display='none';
+    if(!canvas)return;
+    // Base multiplier brings the small display canvas back up to the
+    // preset's real dimensions (1080×1350 etc. — fine for social).
+    const baseMult = canvas._realWidth / canvas.width;
+    // For print quality, target ~2× real dimensions but cap the longest
+    // output edge at 3000 px. The original 3× multiplier produced 5000+
+    // px outputs that ran out of canvas memory on some browsers.
+    const longestDisplay = Math.max(canvas.width, canvas.height);
+    const maxLongSidePx = 3000;
+    const capMult = maxLongSidePx / longestDisplay;
+    const printMult = Math.min(baseMult * 2, capMult);
+    const name = currentFlyer?.name || buildFlyerName();
+    canvas.discardActiveObject(); canvas.renderAll();
+    const safeExport = (opts, ext, label) => {
+      try {
+        const url = canvas.toDataURL(opts);
+        dl(url, name + ext);
+      } catch (err) {
+        console.error('[FlyerEditor] export ' + label + ' failed:', err);
+        setStatus('Export failed — try a smaller canvas size or PNG (Web)', '#ef4444');
+      }
+    };
+    if (format === 'png')        safeExport({format:'png',  multiplier:baseMult},                      '.png',       'PNG');
+    else if (format === 'jpg')   safeExport({format:'jpeg', quality:0.92, multiplier:baseMult},        '.jpg',       'JPG');
+    else if (format === 'png-print') safeExport({format:'png', multiplier:printMult},                  '_print.png', 'PNG print');
+    else if (format === 'pdf')   exportPDF(name, baseMult);
+  }
   function dl(u,f){const a=document.createElement('a');a.href=u;a.download=f;document.body.appendChild(a);a.click();document.body.removeChild(a);}
   async function exportPDF(name,mult){if(typeof window.jspdf==='undefined')await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
     const{jsPDF}=window.jspdf;const rw=canvas._realWidth,rh=canvas._realHeight;
@@ -2437,7 +3039,7 @@
     setBgColor, handleBgUpload, clearBgImage, toggleBorder, updateBorder,
     setProp, setFontSize, setTextStroke, setStrokeWidth, setAlign,
     toggleBold, toggleItalic, toggleUnderline, setOpacity,
-    layer, deleteSelected, copySelected, cutSelected, pasteClipboard, centerOnCanvas, changeSize,
+    layer, deleteSelected, copySelected, cutSelected, pasteClipboard, centerOnCanvas, nudgeSelected, changeSize,
     onTemplateSelect, saveAsDefaultTemplate, saveAsNewTemplate, deleteCurrentTemplate, deleteCurrentFlyer, loadDefaultTemplate, setSiteDefault, toggleAutoFlyers,
     saveAsAdminDefault, saveAsNewAdminTemplate, deleteAdminTemplate,
     searchPrevious, loadPrevious,

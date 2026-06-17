@@ -7,6 +7,7 @@ from datetime import date
 from backend.utils import utcnow_naive
 from backend.db import get_db
 from backend.routes.auth import get_current_user
+from backend.rate_limiter import limiter
 
 router = APIRouter()
 
@@ -517,6 +518,26 @@ def get_settings(admin=Depends(check_admin), db=Depends(get_db)):
         'signups_enabled': settings.get('signups_enabled', True),
         'maintenance_mode': settings.get('maintenance_mode', False),
         'maintenance_message': settings.get('maintenance_message', ''),
+        # Distance (miles) beyond which a booking triggers a "far-away artist"
+        # heads-up to the venue + a soft notice on the artist's confirmation.
+        'far_booking_alert_miles': int(settings.get('far_booking_alert_miles', 50)) if settings.get('far_booking_alert_miles') else 50,
+        # Rate limits (integer requests/minute per IP). Defaults mirror
+        # backend/rate_limiter.py:_DEFAULTS so the form populates with the
+        # live values instead of greyed-out placeholders.
+        'rate_login':          int(settings.get('rate_login', 5))           if settings.get('rate_login')          else 5,
+        'rate_signup':         int(settings.get('rate_signup', 3))          if settings.get('rate_signup')         else 3,
+        'rate_password_reset': int(settings.get('rate_password_reset', 3))  if settings.get('rate_password_reset') else 3,
+        'rate_support':        int(settings.get('rate_support', 2))         if settings.get('rate_support')        else 2,
+        'rate_email_send':     int(settings.get('rate_email_send', 10))     if settings.get('rate_email_send')     else 10,
+        'rate_aff_track':      int(settings.get('rate_aff_track', 30))      if settings.get('rate_aff_track')      else 30,
+        # Part 10p Phase 3: bounce-check (password masked like the other SMTP secrets)
+        'bounce_check_enabled':       str(settings.get('bounce_check_enabled', False)).lower() in ('true', '1', 'yes'),
+        'bounce_check_imap_server':   settings.get('bounce_check_imap_server', ''),
+        'bounce_check_imap_port':     int(settings.get('bounce_check_imap_port', 993)) if settings.get('bounce_check_imap_port') else 993,
+        'bounce_check_imap_username': settings.get('bounce_check_imap_username', ''),
+        'bounce_check_imap_password': _mask(settings.get('bounce_check_imap_password', '')),
+        'bounce_check_last_run_at':   settings.get('bounce_check_last_run_at', ''),
+        'bounce_check_last_result':   settings.get('bounce_check_last_result', ''),
     }
 
 @router.put("/api/admin/settings")
@@ -541,20 +562,53 @@ async def update_settings(request: Request, admin=Depends(check_admin), db=Depen
         'signups_enabled': 'signups_enabled',
         'maintenance_mode': 'maintenance_mode',
         'maintenance_message': 'maintenance_message',
+        'far_booking_alert_miles': 'far_booking_alert_miles',
+        # Rate limits (integer requests/minute) — see backend/rate_limiter.py for
+        # the callable getters that read these live. invalidate_cache() below
+        # forces immediate re-read instead of waiting for the 30s TTL.
+        'rate_login':          'rate_login',
+        'rate_signup':         'rate_signup',
+        'rate_password_reset': 'rate_password_reset',
+        'rate_support':        'rate_support',
+        'rate_email_send':     'rate_email_send',
+        'rate_aff_track':      'rate_aff_track',
+        # Part 10p Phase 3: async bounce-check via IMAP (settings only;
+        # actual polling happens in the scheduler).
+        'bounce_check_enabled':       'bounce_check_enabled',
+        'bounce_check_imap_server':   'bounce_check_imap_server',
+        'bounce_check_imap_port':     'bounce_check_imap_port',
+        'bounce_check_imap_username': 'bounce_check_imap_username',
+        'bounce_check_imap_password': 'bounce_check_imap_password',
     }
-    
-    SENSITIVE_KEYS = {'platform_email_password', 'support_email_password'}
+    _RATE_KEYS = {'rate_login','rate_signup','rate_password_reset','rate_support','rate_email_send','rate_aff_track'}
+
+    # bounce_check_imap_password is treated same as the other email passwords —
+    # never echoed back to the frontend in GET, masked in audit log on PUT.
+    SENSITIVE_KEYS = {'platform_email_password', 'support_email_password', 'bounce_check_imap_password'}
     # Audit fix (May 2026): capture before-state for the audit log so a
     # future incident can answer "what did the platform_fee look like
     # before admin X changed it on date Y?"
     _audit_before = {}
     _audit_after  = {}
+    _rate_keys_changed = False
     for frontend_key, db_key in key_mapping.items():
         if frontend_key in data:
             value = data[frontend_key]
             # Skip masked placeholder values — don't overwrite real password with mask
             if db_key in SENSITIVE_KEYS and str(value).startswith("•"):
                 continue
+            # Validate rate-limit settings — must be a positive integer. Reject
+            # garbage rather than silently storing it (the rate_limiter falls
+            # back to defaults on a parse miss, but the admin should know).
+            if db_key in _RATE_KEYS:
+                try:
+                    _n = int(str(value).strip())
+                    if _n < 1 or _n > 100000:
+                        raise ValueError("out of range")
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{db_key} must be a positive integer (requests per minute)")
+                value = _n
+                _rate_keys_changed = True
             value_str = str(value) if not isinstance(value, bool) else ('true' if value else 'false')
 
             existing = db.execute(
@@ -571,16 +625,27 @@ async def update_settings(request: Request, admin=Depends(check_admin), db=Depen
             elif not existing:
                 _audit_after[db_key] = _after_val
 
+            # Audit fix (May 2026 part 7): SELECT-then-INSERT is racy. Two
+            # concurrent admin PUTs creating the same new key both hit the
+            # INSERT branch and the loser raises IntegrityError on the
+            # `setting_key UNIQUE` constraint → 500 to the user. Use upsert.
             if existing:
                 db.execute(
                     text("UPDATE platform_settings SET setting_value = :val WHERE setting_key = :key"),
                     {"val": value_str, "key": db_key}
                 )
             else:
-                db.execute(
-                    text("INSERT INTO platform_settings (setting_key, setting_value) VALUES (:key, :val)"),
-                    {"key": db_key, "val": value_str}
-                )
+                try:
+                    db.execute(
+                        text("INSERT INTO platform_settings (setting_key, setting_value) VALUES (:key, :val)"),
+                        {"key": db_key, "val": value_str}
+                    )
+                except Exception:
+                    # Loser of the race — convert to an UPDATE.
+                    db.execute(
+                        text("UPDATE platform_settings SET setting_value = :val WHERE setting_key = :key"),
+                        {"val": value_str, "key": db_key}
+                    )
 
     db.commit()
 
@@ -588,7 +653,37 @@ async def update_settings(request: Request, admin=Depends(check_admin), db=Depen
         from backend.utils import log_admin_action
         log_admin_action(db, admin, "update_settings", target_table="platform_settings",
                          before=_audit_before, after=_audit_after, request=request)
+
+    # Invalidate the rate-limiter cache so admins see their new limits take
+    # effect immediately instead of waiting up to 30s for the TTL to expire.
+    if _rate_keys_changed:
+        try:
+            from backend.rate_limiter import invalidate_cache as _rl_invalidate
+            _rl_invalidate()
+        except Exception:
+            pass
+
     return {"ok": True}
+
+
+@router.post("/api/admin/bounce-check/run-now")
+def bounce_check_run_now(admin=Depends(check_admin), db=Depends(get_db)):
+    """Run the bounce-inbox poll synchronously and return the result. Used by
+    the 'Test Connection' button in Admin → Email Settings → Bounce Detection.
+
+    The scheduler runs this same function every 30 minutes when enabled, but
+    this endpoint lets the admin verify their IMAP config without waiting.
+    """
+    from backend.scheduler import process_bounce_inbox
+    from backend.db import get_db_connection
+    conn = get_db_connection()
+    try:
+        result = process_bounce_inbox(conn)
+        return {"ok": True, **result}
+    finally:
+        try: conn.close()
+        except Exception: pass
+
 
 @router.get("/api/email-templates")
 def get_email_templates(admin=Depends(check_admin), db=Depends(get_db)):
@@ -649,24 +744,52 @@ async def update_email_template(request: Request, admin=Depends(check_admin), db
 
         db.commit()
 
+        # Audit fix (May 2026 part 5): the audit row used to store the
+        # full HTML body (multi-KB per template × frequent edits =
+        # ballooning admin_audit_log table). Keep the subject in full
+        # but store a length + truncated preview of the body. The full
+        # body lives in `email_templates.body` already; the audit just
+        # needs to record "was edited" + key metadata for the trail.
+        def _trunc(s, n=400):
+            s = s or ""
+            return s if len(s) <= n else s[:n] + f"… (+{len(s) - n} chars)"
         from backend.utils import log_admin_action
         log_admin_action(
             db, admin, "update_email_template",
             target_table="email_templates", target_id=template_type,
-            before=(dict(before_row) if before_row else None),
-            after={"subject": new_subject, "body": new_body},
+            before={
+                "subject": (before_row["subject"] if before_row else None),
+                "body_len": len(before_row["body"] or "") if before_row else 0,
+                "body_preview": _trunc(before_row["body"]) if before_row else None,
+            } if before_row else None,
+            after={
+                "subject": new_subject,
+                "body_len": len(new_body or ""),
+                "body_preview": _trunc(new_body),
+            },
             request=request,
         )
-        return {"ok": True}
+
+        # Audit fix (May 2026 part 2): auto-export to disk so admin edits
+        # survive the next deploy (run_migration repopulates DB from file).
+        # If the disk write fails (permission, full disk), surface it as
+        # a soft warning — the DB write already succeeded.
+        ok, info = _export_email_templates_to_disk(db)
+        if not ok:
+            return {"ok": True, "export_error": str(info)}
+        return {"ok": True, "exported": info}
     except Exception as e:
         db.rollback()
         raise HTTPException(500, "Operation failed. Please try again.")
 
-@router.get("/api/email-templates/export")
-def export_email_templates(admin=Depends(check_admin), db=Depends(get_db)):
-    """Export all email templates from DB back to backend/email_templates.py on disk"""
+def _export_email_templates_to_disk(db):
+    """Internal helper: re-generate backend/email_templates.py from the DB.
+    Returns (ok: bool, count_or_message). Called by the public export
+    endpoint AND by update_email_template's auto-export. Audit fix
+    (May 2026 part 2): admin PUTs were only writing to DB, so on the
+    next deploy the file-side TEMPLATES dict would overwrite all admin
+    edits via run_migration(). Now every PUT triggers this sync."""
     from pathlib import Path
-    
     try:
         # Read all templates from DB
         try:
@@ -681,29 +804,28 @@ def export_email_templates(admin=Depends(check_admin), db=Depends(get_db)):
         if not rows:
             raise HTTPException(400, "No templates found in database")
         
-        # Build TEMPLATES dict entries
+        # Audit fix (May 2026 part 5): use repr() so Python handles all
+        # escaping deterministically. The previous hand-rolled escape only
+        # touched `\` and `'''`, so:
+        #   - A body ending in `'` produced four consecutive quotes
+        #     (`''''...'''`), a SyntaxError on next import → service crash.
+        #   - A body containing `'''` was silently corrupted to `' ' '`
+        #     (mangled output) instead of escaping.
+        # repr() handles quotes, backslashes, newlines, and unicode cleanly
+        # and yields a valid Python string literal in all cases.
         template_entries = []
         for row in rows:
             key = row[0]
             subject = row[1] or ""
             body = row[2] or ""
-            
-            # Escape subject for single-quoted string
-            subject_escaped = subject.replace("\\", "\\\\").replace("'", "\\'")
-            
-            # For body, use triple quotes — just need to escape any ''' inside
-            body_escaped = body.replace("\\", "\\\\")
-            # Use a unique delimiter if body contains '''
-            if "'''" in body_escaped:
-                body_escaped = body_escaped.replace("'''", "' ' '")
-            
+
             template_entries.append(
-                f'    "{key}": {{\n'
-                f"        \"subject\": '{subject_escaped}',\n"
-                f"        \"body\": '''{body_escaped}'''\n"
+                f'    {repr(str(key))}: {{\n'
+                f"        \"subject\": {repr(subject)},\n"
+                f"        \"body\": {repr(body)}\n"
                 f'    }}'
             )
-        
+
         templates_block = ",\n\n".join(template_entries)
         
         # Generate complete file
@@ -749,9 +871,14 @@ def run_migration():
         """)
         conn.commit()
     
-    # Check columns
-    cursor.execute("PRAGMA table_info(email_templates)")
-    columns = [col[1] for col in cursor.fetchall()]
+    # Check columns.
+    # Audit fix (May 2026 part 6): branch on _IS_POSTGRES; PRAGMA is SQLite-only.
+    if _IS_POSTGRES:
+        cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='email_templates'")
+        columns = [col[0] for col in cursor.fetchall()]
+    else:
+        cursor.execute("PRAGMA table_info(email_templates)")
+        columns = [col[1] for col in cursor.fetchall()]
     key_column = 'notification_type' if 'notification_type' in columns else 'template_key'
     
     for notification_type, template in TEMPLATES.items():
@@ -787,12 +914,20 @@ if __name__ == "__main__":
         email_templates_path = Path(__file__).parent.parent / "email_templates.py"
         with open(email_templates_path, 'w', encoding='utf-8') as f:
             f.write(python_code)
-        
-        return {"status": "ok", "message": f"Exported {len(rows)} templates to backend/email_templates.py", "count": len(rows)}
-    except HTTPException:
-        raise
+
+        return (True, len(rows))
     except Exception as e:
-        raise HTTPException(500, "Operation failed. Please try again.")
+        logger.warning(f"_export_email_templates_to_disk failed: {e}", exc_info=True)
+        return (False, str(e))
+
+
+@router.get("/api/email-templates/export")
+def export_email_templates(admin=Depends(check_admin), db=Depends(get_db)):
+    """Manual trigger for the file-export helper above."""
+    ok, info = _export_email_templates_to_disk(db)
+    if not ok:
+        raise HTTPException(500, f"Operation failed: {info}")
+    return {"status": "ok", "message": f"Exported {info} templates to backend/email_templates.py", "count": info}
 
 # ==========================================
 # PAYMENT SETTINGS
@@ -1339,8 +1474,18 @@ def _recalculate_venue_pending_transactions(db, venue_id, is_free_trial):
         logging.getLogger("gigsfill.admin").warning(f"Error recalculating transactions for venue {venue_id}: {e}")
 
 @router.delete("/api/admin/venue-payment-overrides/{venue_id}")
-def remove_venue_payment_override(venue_id: int, admin=Depends(check_admin), db=Depends(get_db)):
-    """Remove payment override for a venue (re-enable payments)"""
+def remove_venue_payment_override(venue_id: int, request: Request, admin=Depends(check_admin), db=Depends(get_db)):
+    """Remove payment override for a venue (re-enable payments).
+
+    Audit fix (May 2026 part 3): writes an admin_audit_log row so this
+    destructive path (re-enables payments + re-adds venue fees to
+    pending transactions) leaves a trail. Toggle endpoint already logged;
+    this DELETE was missed.
+    """
+    before = db.execute(
+        text("SELECT * FROM venue_payment_overrides WHERE venue_id = :vid"),
+        {"vid": venue_id}
+    ).mappings().first()
     db.execute(
         text("DELETE FROM venue_payment_overrides WHERE venue_id = :vid"),
         {"vid": venue_id}
@@ -1348,6 +1493,16 @@ def remove_venue_payment_override(venue_id: int, admin=Depends(check_admin), db=
     db.commit()
     # Re-enable means free trial OFF — recalculate to add venue fee back
     _recalculate_venue_pending_transactions(db, venue_id, False)
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "remove_venue_payment_override",
+            target_table="venue_payment_overrides", target_id=venue_id,
+            before=(dict(before) if before else None), after=None,
+            request=request,
+        )
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -1406,15 +1561,41 @@ def get_support_tickets(admin=Depends(check_admin), db=Depends(get_db)):
 
 @router.put("/api/admin/support-tickets/{ticket_id}")
 async def update_support_ticket(ticket_id: int, request: Request, admin=Depends(check_admin), db=Depends(get_db)):
-    """Update a support ticket status"""
+    """Update a support ticket status.
+
+    Audit fix (May 2026 part 3): admin status changes are now audited.
+    """
     data = await request.json()
     status = data.get("status", "open")
-    
+
+    # Audit fix (May 2026 part 7): validate status against the allowed enum.
+    # Previously the body was written raw — admin could set arbitrary strings
+    # ("foo") that downstream filters silently mistreated as open or skipped.
+    _ALLOWED_TICKET_STATUSES = ('open', 'pending', 'closed')
+    if status not in _ALLOWED_TICKET_STATUSES:
+        raise HTTPException(400, f"status must be one of: {', '.join(_ALLOWED_TICKET_STATUSES)}")
+
+    before = db.execute(
+        text("SELECT status FROM support_tickets WHERE id = :tid"),
+        {"tid": ticket_id}
+    ).mappings().first()
+
     db.execute(
         text("UPDATE support_tickets SET status = :status WHERE id = :tid"),
         {"status": status, "tid": ticket_id}
     )
     db.commit()
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "update_support_ticket",
+            target_table="support_tickets", target_id=ticket_id,
+            before=(dict(before) if before else None),
+            after={"status": status},
+            request=request,
+        )
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -1541,7 +1722,19 @@ async def reply_to_ticket(ticket_id: int, request: Request, admin=Depends(check_
                 from backend.routes.auth import _SECRET_KEY
                 token_msg = f"support-{ticket_id}-{(user_email or '').lower().strip()}"
                 ticket_token = hmac.new(_SECRET_KEY.encode(), token_msg.encode(), hashlib.sha256).hexdigest()[:32]
-                reply_url = f"https://gigsfill.com/app/support-ticket.html?id={ticket_id}&token={ticket_token}"
+                # Audit fix (May 2026 part 5): pull from platform_settings.site_url
+                # so staging / custom-domain deploys email users a link that points
+                # back at the same deploy, not production.
+                try:
+                    _su = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='site_url'")).scalar()
+                    if not _su:
+                        _su = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='base_url'")).scalar()
+                    _base = (_su or "https://gigsfill.com").rstrip("/")
+                    if "127.0.0.1" in _base or "localhost" in _base:
+                        _base = "https://gigsfill.com"
+                except Exception:
+                    _base = "https://gigsfill.com"
+                reply_url = f"{_base}/app/support-ticket.html?id={ticket_id}&token={ticket_token}"
                 
                 # Build thread HTML for email
                 thread_html = ""
@@ -1592,7 +1785,21 @@ async def reply_to_ticket(ticket_id: int, request: Request, admin=Depends(check_
                     _db.close()
         except Exception as e:
             logging.getLogger("gigsfill.admin").error(f"Support reply email failed: {e}")
-    
+
+    # Audit fix (May 2026 part 3): log the admin reply. Replies email
+    # the user; admin doing so without a trail was the gap.
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "support_ticket_reply",
+            target_table="support_tickets", target_id=ticket_id,
+            before=None,
+            after={"reply_length": len(body), "email_sent": email_sent},
+            request=request,
+        )
+    except Exception:
+        pass
+
     return {"ok": True, "email_sent": email_sent}
 
 
@@ -1849,6 +2056,8 @@ async def upsert_admin_default_template(request: Request, admin=Depends(check_ad
         ORDER BY updated_at DESC LIMIT 1
     """)).fetchone()
 
+    # Audit fix (May 2026 part 3): log admin flyer-template mutations
+    from backend.utils import log_admin_action
     if existing:
         db.execute(text("""
             UPDATE flyers SET canvas_data = :canvas, thumbnail_data = :thumb,
@@ -1859,6 +2068,15 @@ async def upsert_admin_default_template(request: Request, admin=Depends(check_ad
                "preset": body.get("size_preset", "instagram_post"),
                "w": body.get("width", 1080), "h": body.get("height", 1350)})
         db.commit()
+        try:
+            log_admin_action(
+                db, admin, "update_admin_default_flyer_template",
+                target_table="flyers", target_id=existing[0],
+                before=None, after={"size_preset": body.get("size_preset")},
+                request=request,
+            )
+        except Exception:
+            pass
         return {"id": existing[0], "message": "Site default template updated"}
     else:
         result = db.execute(text("""
@@ -1869,6 +2087,15 @@ async def upsert_admin_default_template(request: Request, admin=Depends(check_ad
                "preset": body.get("size_preset", "instagram_post"),
                "w": body.get("width", 1080), "h": body.get("height", 1350)})
         db.commit()
+        try:
+            log_admin_action(
+                db, admin, "create_admin_default_flyer_template",
+                target_table="flyers", target_id=result.lastrowid,
+                before=None, after={"name": tpl_name, "size_preset": body.get("size_preset")},
+                request=request,
+            )
+        except Exception:
+            pass
         return {"id": result.lastrowid, "message": "Site default template created"}
 
 @router.post("/api/admin/flyers/templates")
@@ -1887,6 +2114,18 @@ async def create_admin_template(request: Request, admin=Depends(check_admin), db
            "preset": body.get("size_preset", "instagram_post"),
            "w": body.get("width", 1080), "h": body.get("height", 1350)})
     db.commit()
+    # Audit fix (May 2026 part 3)
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "create_admin_flyer_template",
+            target_table="flyers", target_id=result.lastrowid,
+            before=None,
+            after={"name": body.get("name"), "size_preset": body.get("size_preset")},
+            request=request,
+        )
+    except Exception:
+        pass
     return {"id": result.lastrowid, "message": "Admin template created"}
 
 @router.put("/api/admin/flyers/templates/{tpl_id}")
@@ -1910,10 +2149,23 @@ async def update_admin_template(tpl_id: int, request: Request, admin=Depends(che
             params[key] = val
     db.execute(text(f"UPDATE flyers SET {', '.join(fields)} WHERE id = :fid"), params)
     db.commit()
+    # Audit fix (May 2026 part 3)
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "update_admin_flyer_template",
+            target_table="flyers", target_id=tpl_id,
+            before=None,
+            after={k: v for k, v in params.items()
+                   if k not in ("canvas_data", "thumbnail_data")},
+            request=request,
+        )
+    except Exception:
+        pass
     return {"message": "Template updated"}
 
 @router.delete("/api/admin/flyers/templates/{tpl_id}")
-def delete_admin_template(tpl_id: int, admin=Depends(check_admin), db=Depends(get_db)):
+def delete_admin_template(tpl_id: int, request: Request, admin=Depends(check_admin), db=Depends(get_db)):
     existing = db.execute(text(
         "SELECT id, name FROM flyers WHERE id = :id AND venue_id IS NULL AND is_template = 1"
     ), {"id": tpl_id}).fetchone()
@@ -1923,6 +2175,17 @@ def delete_admin_template(tpl_id: int, admin=Depends(check_admin), db=Depends(ge
         raise HTTPException(400, "Cannot delete the site-wide Default Template — overwrite it instead")
     db.execute(text("DELETE FROM flyers WHERE id = :id"), {"id": tpl_id})
     db.commit()
+    # Audit fix (May 2026 part 3)
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "delete_admin_flyer_template",
+            target_table="flyers", target_id=tpl_id,
+            before={"name": existing[1]}, after=None,
+            request=request,
+        )
+    except Exception:
+        pass
     return {"message": "Template deleted"}
 
 
@@ -2004,11 +2267,28 @@ def get_logs(
 
 
 @router.delete("/api/admin/logs/clear")
-def clear_log_buffer(admin=Depends(check_admin)):
-    """Clear the in-memory log buffer"""
+def clear_log_buffer(request: Request, admin=Depends(check_admin), db=Depends(get_db)):
+    """Clear the in-memory log buffer.
+
+    Audit fix (May 2026 part 5): also record an admin_action_log row so we
+    have an immutable trail of who wiped the buffer (and from where) — this
+    was previously a quiet endpoint with no audit at all, so a rogue admin
+    could clear logs to cover their tracks."""
     try:
         from backend.log_buffer import log_buffer
+        _before_size = len(getattr(log_buffer, "buf", []) or [])
         log_buffer.clear()
+        try:
+            from backend.utils import log_admin_action
+            log_admin_action(
+                db, admin, "clear_log_buffer",
+                target_table="log_buffer", target_id=None,
+                before={"buffer_size": _before_size},
+                after={"buffer_size": 0},
+                request=request
+            )
+        except Exception as _le:
+            logger.warning(f"clear_log_buffer: audit-log write failed: {_le}")
         return {"ok": True}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -2182,6 +2462,21 @@ _PROTECTED_TABLES = {
     # referrals/earnings/payouts via DB tools, bypassing delete_referral /
     # payout reversal endpoints that validate state.
     "affiliate_referrals", "affiliate_earnings", "affiliate_payouts",
+    # Audit fix (May 2026 part 5): the audit log itself MUST be uneditable
+    # from the admin DB browser — a compromised or rogue admin could otherwise
+    # `DELETE FROM admin_audit_log` to erase their own trail. The user-
+    # management surfaces (entity_users, entity_invitations) should go through
+    # the dedicated endpoints which enforce permissions / re-invite flows.
+    # vanity_urls is reserved-name-checked at the endpoint; allowing raw edits
+    # would let an admin hijack public profiles. email_templates has an
+    # auto-export-to-disk side effect (`_export_email_templates_to_disk`) — raw
+    # DB writes wouldn't trigger the export, so the file/DB would silently
+    # diverge.
+    "admin_audit_log", "entity_users", "entity_invitations",
+    "vanity_urls", "email_templates",
+    # Idempotency tables — admin writes here could silently drop dedup state
+    # and let a duplicate webhook or approval link replay.
+    "stripe_webhook_events", "pending_approval_tokens",
 }
 
 
@@ -2346,7 +2641,10 @@ def export_table_csv(
 
 # ── SMTP TEST ENDPOINT ──────────────────────────────────────────────────────
 @router.post("/api/admin/test-smtp")
-def test_smtp(data: dict, admin=Depends(check_admin), db=Depends(get_db)):
+# Audit fix (May 2026 part 5): cap test-smtp at 10/hour. Admin can script
+# this with arbitrary `to` addresses → blasts Gmail's per-recipient cap.
+@limiter.limit("10/hour")
+def test_smtp(data: dict, request: Request, admin=Depends(check_admin), db=Depends(get_db)):
     """
     Admin utility: send a test email to verify SMTP is configured correctly.
     Body: { "to": "email@example.com" }
@@ -2380,7 +2678,7 @@ def test_smtp(data: dict, admin=Depends(check_admin), db=Depends(get_db)):
         return {"ok": False, "error": "SMTP not configured — platform_email or platform_email_password missing from platform_settings"}
 
     try:
-        msg = MIMEMultipart()
+        msg = MIMEMultipart('alternative')
         msg["From"]    = formataddr((from_name, smtp_email))
         msg["To"]      = to_email
         msg["Subject"] = "GigsFill SMTP Test"
@@ -2400,6 +2698,19 @@ def test_smtp(data: dict, admin=Depends(check_admin), db=Depends(get_db)):
                 s.login(smtp_email, smtp_password)
                 s.send_message(msg)
 
+        # Audit fix (May 2026 part 5): log every test-smtp call so abuse
+        # is traceable (admin-controlled recipient + arbitrary body).
+        try:
+            from backend.utils import log_admin_action
+            log_admin_action(
+                db, admin, "test_smtp",
+                target_table="platform_settings", target_id=None,
+                before=None,
+                after={"recipient": to_email, "smtp_server": smtp_server, "smtp_port": smtp_port},
+                request=request,
+            )
+        except Exception:
+            pass
         return {"ok": True, "message": f"Test email sent to {to_email} via {smtp_server}:{smtp_port}"}
 
     except Exception as e:

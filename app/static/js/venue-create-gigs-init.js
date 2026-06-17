@@ -22,11 +22,12 @@
   }
 
   // Header links
-  document.getElementById("venueProfileBtn").href =
-    `/app/venue-profile.html?venue_id=${venueId}`;
-
   document.getElementById("venueEditBtn").href =
     `/app/venue-edit.html?venue_id=${venueId}`;
+
+  if (typeof window.applyVanityToLinks === "function") {
+    window.applyVanityToLinks("venue", venueId, ["#venueProfileBtn"]);
+  }
 
   // Wire iCal export link
   const venueIcalBtn = document.getElementById("venueIcalBtn");

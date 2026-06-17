@@ -351,8 +351,13 @@ function searchAffVenues(q) {
       const venues = await r.json();
       if (!res) return;
       if (!venues.length) { res.innerHTML = '<div style="font-size:0.72rem;color:var(--text-gray);padding:4px 0;">No results</div>'; return; }
+      // Audit fix (May 2026 part 8): use jsAttr for the inline onclick arg —
+      // esc() HTML-encoded the apostrophe but the HTML parser decoded it back
+      // before JS parsed the string, breaking the JS string literal on names
+      // containing apostrophes.
+      const _jsa = window.jsAttr || JSON.stringify;
       res.innerHTML = venues.map(v => `
-        <div onclick="selectAffVenue(${v.id},'${esc(v.venue_name)}')"
+        <div onclick="selectAffVenue(${parseInt(v.id, 10) || 0},${_jsa(v.venue_name)})"
           style="padding:5px 8px;font-size:0.75rem;cursor:pointer;border-radius:4px;background:rgba(255,255,255,0.04);margin-bottom:2px;display:flex;justify-content:space-between;align-items:center;"
           onmouseover="this.style.background='rgba(6,182,212,0.12)'" onmouseout="this.style.background='rgba(255,255,255,0.04)'">
           <span>${esc(v.venue_name)} <span style="font-size:0.68rem;color:var(--text-gray);">${esc(v.city||'')}${v.state?', '+esc(v.state):''}</span></span>

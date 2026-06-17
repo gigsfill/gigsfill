@@ -30,9 +30,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  const btn = document.getElementById("artistProfileBtn");
-  if (btn) {
-    btn.href = `/app/artist-profile.html?artist_id=${artistId}`;
+  if (typeof window.applyVanityToLinks === "function") {
+    window.applyVanityToLinks("artist", artistId, ["#artistProfileBtn"]);
   }
   
   const editBtn = document.getElementById("artistEditBtn");
@@ -105,9 +104,8 @@ window.checkArtistPaymentMethod = checkArtistPaymentMethod;
     return;
   }
 
-  const btn = document.getElementById("artistProfileBtn");
-  if (btn) {
-    btn.href = `/app/artist-profile.html?artist_id=${artistId}`;
+  if (typeof window.applyVanityToLinks === "function") {
+    window.applyVanityToLinks("artist", artistId, ["#artistProfileBtn"]);
   }
   
   const editBtn = document.getElementById("artistEditBtn");
@@ -403,20 +401,26 @@ function renderArtistContracts() {
       statusBadge = '<span style="font-size:0.7rem; padding:2px 8px; border-radius:4px; background:rgba(239,68,68,0.15); color:#ef4444; white-space:nowrap;">Cancelled</span>';
     }
     
+    // Audit fix (May 2026 part 8): escape every interpolated field; clamp ids;
+    // restrict PDF href to relative or https URLs.
+    const _ec = (typeof esc === 'function' ? esc : s => String(s||'').replace(/[<>&"']/g, ch => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[ch])));
+    const _ea = (typeof escAttr === 'function' ? escAttr : _ec);
+    const _cid = parseInt(c.id, 10) || 0;
+    const _isSafePdf = u => { const t = String(u||'').trim(); return t.startsWith('/') || /^https?:\/\//i.test(t); };
     let downloadBtn = '';
-    if (c.signed_pdf_path) {
-      downloadBtn = `<a href="${c.signed_pdf_path}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
-    } else if (c.pdf_file_path) {
-      downloadBtn = `<a href="${c.pdf_file_path}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
+    if (c.signed_pdf_path && _isSafePdf(c.signed_pdf_path)) {
+      downloadBtn = `<a href="${_ea(c.signed_pdf_path)}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
+    } else if (c.pdf_file_path && _isSafePdf(c.pdf_file_path)) {
+      downloadBtn = `<a href="${_ea(c.pdf_file_path)}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
     } else {
-      downloadBtn = `<a href="#" onclick="downloadArtistContract(${c.id});return false;" style="color:var(--cyan); font-size:0.75rem; cursor:pointer;">Download</a>`;
+      downloadBtn = `<a href="#" onclick="downloadArtistContract(${_cid});return false;" style="color:var(--cyan); font-size:0.75rem; cursor:pointer;">Download</a>`;
     }
-    
+
     tableHtml += `
       <tr style="border-bottom:1px solid var(--border);">
-        <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; max-width:280px;" title="${displayName}">${displayName}</td>
-        <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray);">${venueName}</td>
-        <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray); white-space:nowrap;">${fmtDate}</td>
+        <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; max-width:280px;" title="${_ea(displayName)}">${_ec(displayName)}</td>
+        <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray);">${_ec(venueName)}</td>
+        <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray); white-space:nowrap;">${_ec(fmtDate)}</td>
         <td style="padding:10px 12px;">${statusBadge}</td>
         <td style="padding:10px 12px; text-align:right;">${downloadBtn}</td>
       </tr>`;

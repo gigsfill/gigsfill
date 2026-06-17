@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>My Invites · GigsFill</title>
+  <link rel="stylesheet" href="/app/static/css/gigsfill.css">
+  <link rel="stylesheet" href="/app/static/css/modals.css">
+  <style>
+    :root {
+      --bg: #0a0a14;
+      --card: #1a1a2e;
+      --border: rgba(255,255,255,0.08);
+      --text: #e5e7eb;
+      --text-muted: #9ca3af;
+      --cyan: #06b6d4;
+    }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    main { max-width: 920px; margin: 28px auto; padding: 0 20px; }
+    h1 { margin: 0 0 6px; font-size: 1.4rem; }
+    .lead { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 18px; line-height: 1.5; }
+    .filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+    .chip { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-muted); padding: 4px 12px; border-radius: 14px; font-size: 0.75rem; cursor: pointer; user-select: none; }
+    .chip.active { background: rgba(6,182,212,0.18); border-color: rgba(6,182,212,0.5); color: var(--cyan); }
+    .empty { background: rgba(255,255,255,0.03); border: 1px dashed var(--border); border-radius: 8px; padding: 40px 20px; text-align: center; color: var(--text-muted); }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; }
+    .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+    .email { font-weight: 600; color: #fff; word-break: break-all; }
+    .when { color: var(--text-muted); font-size: 0.75rem; white-space: nowrap; }
+    .venue-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 12px; font-size: 0.7rem; font-weight: 500; line-height: 1.4; }
+    .pill-pending { background: rgba(249,115,22,0.15); color: #fdba74; border: 1px solid rgba(249,115,22,0.3); }
+    .pill-signed_up { background: rgba(56,189,248,0.15); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.3); }
+    .pill-preferred_requested { background: rgba(124,107,255,0.15); color: #a78bfa; border: 1px solid rgba(124,107,255,0.3); }
+    .pill-preferred_approved { background: rgba(34,197,94,0.15); color: #86efac; border: 1px solid rgba(34,197,94,0.3); }
+    .pill-preferred_denied { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+    .pill-declined { background: rgba(156,163,175,0.15); color: #d1d5db; border: 1px solid rgba(156,163,175,0.3); }
+    .pill-bounced { background: rgba(239,68,68,0.18); color: #fca5a5; border: 1px solid rgba(239,68,68,0.45); }
+    .pill-expired { background: rgba(107,114,128,0.12); color: #9ca3af; border: 1px solid rgba(107,114,128,0.3); }
+    .actions { margin-top: 8px; display: flex; gap: 8px; }
+    .btn { background: transparent; border: 1px solid rgba(124,107,255,0.4); color: #a78bfa; padding: 4px 11px; border-radius: 4px; font-size: 0.72rem; cursor: pointer; }
+    .btn:hover { background: rgba(124,107,255,0.1); }
+    .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+    .bounce-msg { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; padding: 6px 10px; border-radius: 4px; font-size: 0.72rem; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <header style="background:var(--card);border-bottom:1px solid var(--border);padding:10px 20px;">
+    <div style="max-width:920px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;">
+      <a href="/app/user-profile.html" style="color:#fff;text-decoration:none;font-weight:700;letter-spacing:0.1em;">GIGSFILL</a>
+      <div class="header-actions" style="display:flex;align-items:center;gap:14px;"></div>
+    </div>
+  </header>
+  <main>
+    <h1>My Invites</h1>
+    <p class="lead">Every artist invitation you've sent across all of your venues. Filter by status using the chips. Click "Resend" to send the email again (24-hour cooldown per invite).</p>
+    <div class="filters" id="filters">
+      <div class="chip active" data-f="all">All</div>
+      <div class="chip" data-f="pending">Pending</div>
+      <div class="chip" data-f="signed_up">Signed up</div>
+      <div class="chip" data-f="preferred_requested">Preferred Requested</div>
+      <div class="chip" data-f="preferred_approved">Preferred Approved</div>
+      <div class="chip" data-f="preferred_denied">Preferred Denied</div>
+      <div class="chip" data-f="bounced">Bounced</div>
+      <div class="chip" data-f="declined">Declined</div>
+    </div>
+    <div id="list" class="empty">Loading…</div>
+  </main>
+  <script src="/app/static/js/auth.guard.js"></script>
+  <script src="/app/static/js/user-dropdown.js?v=6"></script>
+  <script src="/app/static/js/my-invites.js?v=2"></script>
+<script src="/app/static/js/gf-tooltip.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+/* Hover preview card for calendar gig bubbles.
+   Anchored next to the bubble by gig-hover-card.js (position:absolute via
+   inline left/top). Dark theme matching the rest of the app. The card is
+   interactive (pointer-events: auto) so users can click into the venue /
+   address links — the JS holds the card open while the mouse is on it. */
+.gf-gig-hover-card {
+  position: absolute;
+  z-index: 9000;
+  pointer-events: auto;
+  background: #151b28;
+  color: var(--text, #e4e7eb);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  transition: opacity 120ms ease-out;
+  max-width: 320px;
+}
+
+/* Header line: "Booked — Fridays Past" or "Open". */
+.gf-gig-hover-card .gf-ghc-header {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--cyan, #06b6d4);
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+.gf-gig-hover-card .gf-ghc-open-header {
+  color: #34d399;
+}
+/* Artist name inside the header — link once the slug is resolved. */
+.gf-gig-hover-card .gf-ghc-artist-anchor {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(6, 182, 212, 0.55);
+  cursor: pointer;
+}
+.gf-gig-hover-card .gf-ghc-artist-anchor:hover {
+  border-bottom-style: solid;
+  color: #67e8f9;
+}
+
+/* Date / time block. */
+.gf-gig-hover-card .gf-ghc-dt {
+  margin-bottom: 8px;
+}
+.gf-gig-hover-card .gf-ghc-date {
+  color: var(--text, #e4e7eb);
+  font-weight: 600;
+}
+.gf-gig-hover-card .gf-ghc-time {
+  color: var(--text-gray, #94a3b8);
+}
+
+/* Venue + address (clickable). */
+.gf-gig-hover-card .gf-ghc-loc {
+  margin-bottom: 6px;
+}
+.gf-gig-hover-card .gf-ghc-venue {
+  font-weight: 600;
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+.gf-gig-hover-card .gf-ghc-addr {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.gf-gig-hover-card .gf-ghc-maplink {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(6, 182, 212, 0.55);
+  cursor: pointer;
+}
+.gf-gig-hover-card .gf-ghc-maplink:hover {
+  color: var(--cyan, #06b6d4);
+  border-bottom-style: solid;
+}
+
+.gf-gig-hover-card .gf-ghc-dim {
+  color: var(--text-gray, #94a3b8);
+}
+
+/* Badge row at the bottom. */
+.gf-gig-hover-card .gf-ghc-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.gf-gig-hover-card .gf-ghc-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.gf-gig-hover-card .gf-ghc-open {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.08);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+.gf-gig-hover-card .gf-ghc-cancel {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.35);
+}

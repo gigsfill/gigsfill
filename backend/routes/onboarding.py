@@ -20,6 +20,12 @@ def _check_entity_access(db, user, entity_type, entity_id):
                            AND eu.entity_id = :eid AND eu.user_id = :uid)
             )
         """), {"eid": entity_id, "uid": user.id}).fetchone()
+    elif entity_type == 'affiliate':
+        # Affiliates are users themselves — entity_id is the user_id and only
+        # the user can access their own affiliate checklist.
+        if int(entity_id) != int(user.id):
+            raise HTTPException(403, "Access denied")
+        return
     else:
         row = db.execute(text("""
             SELECT a.id FROM artists a
@@ -91,6 +97,27 @@ ARTIST_TASKS = [
     },
 ]
 
+# ── Affiliate checklist items ─────────────────────────────────────────
+# Triggered when a user has at least one affiliate_referrals row pointing at
+# them (i.e. a venue signed up via their link or was manually linked). Both
+# tasks are mandatory for IRS/Stripe compliance — affiliate cannot receive
+# payouts without Stripe Connect, and we can't 1099 them without a W-9.
+
+AFFILIATE_TASKS = [
+    {
+        "key": "stripe_setup",
+        "title": "Set up Stripe",
+        "description": "Connect Stripe so we can pay your quarterly affiliate commissions directly to your bank account.",
+        "mandatory": True,
+    },
+    {
+        "key": "w9_filed",
+        "title": "File W-9",
+        "description": "Affiliate commissions are reportable income. We need a W-9 on file to issue payouts and a 1099 at year-end.",
+        "mandatory": True,
+    },
+]
+
 
 def _check_venue_mandatory(db, entity_id, task_key):
     """Check if a mandatory venue task is actually complete"""
@@ -135,14 +162,70 @@ def _check_artist_mandatory(db, entity_id, task_key):
     return False
 
 
+def _check_affiliate_mandatory(db, entity_id, task_key):
+    """Check if a mandatory affiliate task is complete.
+    entity_id is the user's id (affiliates are users, not separate entities).
+    Stripe Connect account for affiliate payouts lives on entity_payment_settings
+    with entity_type='user' (see affiliate.py:341 etc). W-9 lives in w9_forms with
+    entity_type='user' (the per-user W-9 used for affiliate 1099s)."""
+    if task_key == "stripe_setup":
+        row = db.execute(text("""
+            SELECT 1 FROM entity_payment_settings
+            WHERE entity_type = 'user' AND entity_id = :uid
+              AND affiliate_stripe_connect_account_id IS NOT NULL
+              AND affiliate_stripe_connect_account_id != ''
+              AND COALESCE(affiliate_stripe_connect_onboarding_complete, 0) = 1
+        """), {"uid": entity_id}).fetchone()
+        return row is not None
+
+    if task_key == "w9_filed":
+        current_year = datetime.now().year
+        # User-level W-9 (entity_type='user') is the canonical record for
+        # affiliate payouts — see tax.py:save_user_w9.
+        row = db.execute(text("""
+            SELECT id FROM w9_forms
+            WHERE entity_type = 'user'
+              AND entity_id = :uid
+              AND tax_year >= :yr
+        """), {"uid": entity_id, "yr": current_year}).fetchone()
+        return row is not None
+
+    return False
+
+
+def _user_is_affiliate(db, user_id):
+    """A user becomes an affiliate the moment at least one venue is linked
+    to them via affiliate_referrals. We use this gate to suppress the
+    checklist for users who haven't yet had a referral land."""
+    row = db.execute(text(
+        "SELECT 1 FROM affiliate_referrals WHERE affiliate_user_id = :uid LIMIT 1"
+    ), {"uid": user_id}).fetchone()
+    return row is not None
+
+
+_VALID_ENTITY_TYPES = ("venue", "artist", "affiliate")
+
+_TASK_BY_TYPE = {
+    "venue":     (VENUE_TASKS,     _check_venue_mandatory),
+    "artist":    (ARTIST_TASKS,    _check_artist_mandatory),
+    "affiliate": (AFFILIATE_TASKS, _check_affiliate_mandatory),
+}
+
+
 @router.get("/api/onboarding/{entity_type}/{entity_id}")
 def get_onboarding_checklist(entity_type: str, entity_id: int,
                               user=Depends(get_current_user), db=Depends(get_db)):
     """Get onboarding checklist with completion statuses"""
-    if entity_type not in ("venue", "artist"):
+    if entity_type not in _VALID_ENTITY_TYPES:
         raise HTTPException(400, "Invalid entity type")
 
     _check_entity_access(db, user, entity_type, entity_id)
+
+    # Affiliate checklist is only relevant once at least one referral exists —
+    # for users with no linked venues yet, return an empty list so the
+    # frontend doesn't pop a useless modal.
+    if entity_type == "affiliate" and not _user_is_affiliate(db, entity_id):
+        return {"tasks": [], "all_complete": True, "is_affiliate": False}
 
     # Get visit-based completions
     visits = db.execute(text("""
@@ -151,8 +234,7 @@ def get_onboarding_checklist(entity_type: str, entity_id: int,
     """), {"etype": entity_type, "eid": entity_id}).fetchall()
     visited_keys = {r[0] for r in visits}
 
-    tasks = VENUE_TASKS if entity_type == "venue" else ARTIST_TASKS
-    check_fn = _check_venue_mandatory if entity_type == "venue" else _check_artist_mandatory
+    tasks, check_fn = _TASK_BY_TYPE[entity_type]
 
     result = []
     all_complete = True
@@ -173,14 +255,14 @@ def get_onboarding_checklist(entity_type: str, entity_id: int,
             "completed": completed,
         })
 
-    return {"tasks": result, "all_complete": all_complete}
+    return {"tasks": result, "all_complete": all_complete, "is_affiliate": True if entity_type == "affiliate" else None}
 
 
 @router.post("/api/onboarding/{entity_type}/{entity_id}/{task_key}/visit")
 def mark_task_visited(entity_type: str, entity_id: int, task_key: str,
                       user=Depends(get_current_user), db=Depends(get_db)):
     """Mark a visit-based task as completed"""
-    if entity_type not in ("venue", "artist"):
+    if entity_type not in _VALID_ENTITY_TYPES:
         raise HTTPException(400, "Invalid entity type")
 
     _check_entity_access(db, user, entity_type, entity_id)

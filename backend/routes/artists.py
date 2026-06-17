@@ -154,16 +154,17 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.twitter_url,
                 a.tiktok_url,
                 a.website_url,
+                a.social_order,
                 a.latitude,
                 a.longitude
             FROM artists a
-            WHERE a.id = :id 
+            WHERE a.id = :id
               AND (
                 a.user_id = :uid
                 OR EXISTS (
-                  SELECT 1 FROM entity_users eu 
-                  WHERE eu.entity_type = 'artist' 
-                  AND eu.entity_id = a.id 
+                  SELECT 1 FROM entity_users eu
+                  WHERE eu.entity_type = 'artist'
+                  AND eu.entity_id = a.id
                   AND eu.user_id = :uid
                 )
               )
@@ -229,7 +230,8 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 youtube_url,
                 twitter_url,
                 tiktok_url,
-                website_url
+                website_url,
+                social_order
             FROM artists
             WHERE id=:id
         """),
@@ -297,7 +299,8 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 youtube_url = COALESCE(:youtube_url, youtube_url),
                 twitter_url = COALESCE(:twitter_url, twitter_url),
                 tiktok_url = COALESCE(:tiktok_url, tiktok_url),
-                website_url = COALESCE(:website_url, website_url)
+                website_url = COALESCE(:website_url, website_url),
+                social_order = COALESCE(:social_order, social_order)
             WHERE id = :id
 
         """),
@@ -318,6 +321,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "twitter_url": data.get("twitter_url"),
             "tiktok_url": data.get("tiktok_url"),
             "website_url": data.get("website_url"),
+            "social_order": data.get("social_order"),
         }
     )
     db.commit()
@@ -537,6 +541,23 @@ def get_artist_venues(artist_id: int, user=Depends(get_current_user), db=Depends
             my_r = my_review_map.get(vid)
             vdata['my_review'] = my_r if my_r else None
 
+    # Part 10k: ban detection — a venue that banned this artist should surface
+    # under "Banned Venues" regardless of any gig history. Overrides whatever
+    # status was set above. (Venues with gigs but no preferred row keep
+    # status='normal', which the frontend treats as the Non-Preferred bucket.)
+    if venue_dict:
+        ban_param_names = [f":bvid_{i}" for i in range(len(venue_dict))]
+        ban_params = {f"bvid_{i}": int(vid) for i, vid in enumerate(venue_dict.keys())}
+        ban_params["aid"] = artist_id
+        banned_venue_ids = {row[0] for row in db.execute(
+            text(f"SELECT venue_id FROM venue_artist_bans WHERE artist_id = :aid AND venue_id IN ({','.join(ban_param_names)})"),
+            ban_params
+        ).all()}
+        for vid in banned_venue_ids:
+            if vid in venue_dict:
+                venue_dict[vid]['status'] = 'banned'
+                venue_dict[vid]['preferred_status'] = 'banned'
+
     return list(venue_dict.values())
 
 @router.get("/api/artists/{artist_id}/venues/{venue_id}/gigs")
@@ -595,9 +616,12 @@ def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_curren
             seen_ids.add(g['id'])
             result.append(dict(g))
     
-    # Add effective_pay (venue override for this artist) to each gig
+    # Add effective_pay (venue override for this artist) to each gig.
+    # Override only applies when the artist is actively approved at this venue —
+    # revoked/denied rows still carry the override columns from before, but the
+    # per-artist negotiated rate no longer applies, so we filter status='approved'.
     pref = db.execute(
-        text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"),
+        text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid AND status = 'approved'"),
         {"vid": venue_id, "aid": artist_id}
     ).mappings().first()
     override_val = None
@@ -628,6 +652,12 @@ def delete_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get
         if not artist or artist[0] != user.id:
             raise HTTPException(403, "Not authorized")
         
+        # Audit fix (May 2026 part 5): drop the vanity URL so the slug stops
+        # resolving — otherwise resolve_vanity returns an empty profile.
+        try:
+            db.execute(text("DELETE FROM vanity_urls WHERE entity_type='artist' AND entity_id=:aid"), {"aid": artist_id})
+        except Exception:
+            pass
         # Delete artist (cascades to gigs, media, etc)
         db.execute(text("DELETE FROM artists WHERE id = :aid"), {"aid": artist_id})
         

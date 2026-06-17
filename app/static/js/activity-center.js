@@ -1,5 +1,19 @@
 // v88: Activity Center - Clickable Bubbles + Filtering by Artist/Venue
 
+// Audit fix (May 2026 part 6): HTML-escape helper for user-controlled fields.
+// Notification fields (title, message, venue_name, artist_name, gig_title,
+// cancellation_reason) are venue-/artist-supplied. A venue named `<img src=x
+// onerror=...>` would otherwise execute JS in every artist's session that
+// viewed a notification involving them. Wide blast radius.
+function _ac_esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 class ActivityCenter {
   constructor(containerId, entityId = null, entityType = null) {
     this.container = document.getElementById(containerId);
@@ -204,9 +218,12 @@ class ActivityCenter {
         actionButtons = `<span style="font-size: 0.7rem; color: #f59e0b; font-weight: 600;">⚠️ Artists Notified</span>`;
       }
       
-      // Split message into main + detail for two-line display
+      // Split message into main + detail for two-line display.
+      // Audit fix (May 2026 part 6): escape the title before interpolating;
+      // mainText/detail come from formatNotificationMessage which now escapes
+      // its own outputs.
       const msgParts = (typeof messageWithLinks === 'object') ? messageWithLinks : this.splitMessage(messageWithLinks);
-      const titleClean = (n.title || '').replace(/!$/, '');
+      const titleClean = _ac_esc((n.title || '').replace(/!$/, ''));
       const rowBg = n.is_read ? 'rgba(255,255,255,0.02)' : 'rgba(91, 140, 255, 0.08)';
       const borderColor = n.is_read ? 'transparent' : '#5b8cff';
       const titleColor = n.is_read ? 'var(--text)' : '#5b8cff';
@@ -296,14 +313,23 @@ class ActivityCenter {
   }
 
   formatNotificationMessage(n) {
+    // Audit fix (May 2026 part 6): escape every venue/artist-controlled string
+    // before building HTML. Without this, a venue/artist named `<img onerror=...>`
+    // executes JS in every viewer's notification panel. The IDs are coerced to
+    // int so they can't break out of the href attribute.
+    const _aid = parseInt(n.artist_id, 10) || 0;
+    const _vid = parseInt(n.venue_id, 10) || 0;
+    const _aname_esc = _ac_esc(n.artist_name);
+    const _vname_esc = _ac_esc(n.venue_name);
+
     // Create hyperlinks for names
-    const artistLink = n.artist_name && n.artist_id ? 
-      `<a href="/app/artist-profile.html?artist_id=${n.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color: #7c6bff; text-decoration: none; font-weight: 600;">${n.artist_name}</a>` : 
-      n.artist_name || '';
-    
-    const venueLink = n.venue_name && n.venue_id ? 
-      `<a href="/app/venue-profile.html?venue_id=${n.venue_id}" target="_blank" onclick="event.stopPropagation()" style="color: #7c6bff; text-decoration: none; font-weight: 600;">${n.venue_name}</a>` : 
-      n.venue_name || '';
+    const artistLink = n.artist_name && n.artist_id ?
+      `<a href="/app/artist-profile.html?artist_id=${_aid}" target="_blank" onclick="event.stopPropagation()" style="color: #7c6bff; text-decoration: none; font-weight: 600;">${_aname_esc}</a>` :
+      _aname_esc;
+
+    const venueLink = n.venue_name && n.venue_id ?
+      `<a href="/app/venue-profile.html?venue_id=${_vid}" target="_blank" onclick="event.stopPropagation()" style="color: #7c6bff; text-decoration: none; font-weight: 600;">${_vname_esc}</a>` :
+      _vname_esc;
 
     // Format date and time if available
     let gigDate = '';
@@ -324,10 +350,21 @@ class ActivityCenter {
       gigTime = this.formatTimeTo12Hour(effectiveStartTime);
     }
 
-    // Helper: apply name links to a raw message string
+    // Helper: apply name links to a raw message string.
+    // Audit fix (May 2026 part 6): escape the message FIRST, then substitute
+    // the (escaped) plain-text name with the link HTML. This lets the
+    // already-escaped artistLink/venueLink survive while raw HTML inside the
+    // message itself is neutralized.
     const linkify = (msg) => {
-      if (n.artist_name && n.artist_id) msg = msg.replace(new RegExp(n.artist_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), artistLink);
-      if (n.venue_name && n.venue_id) msg = msg.replace(new RegExp(n.venue_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), venueLink);
+      msg = _ac_esc(msg);
+      if (n.artist_name && n.artist_id) {
+        const _aesc = _ac_esc(n.artist_name);
+        msg = msg.replace(new RegExp(_aesc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), artistLink);
+      }
+      if (n.venue_name && n.venue_id) {
+        const _vesc = _ac_esc(n.venue_name);
+        msg = msg.replace(new RegExp(_vesc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), venueLink);
+      }
       return msg;
     };
 
@@ -425,7 +462,7 @@ class ActivityCenter {
         return msg;
       }
             case 'contract_countersign_needed': {
-        let msg = `${artistLink} has signed the contract for ${n.gig_title || gigDate || 'a gig'}.`;
+        let msg = `${artistLink} has signed the contract for ${_ac_esc(n.gig_title || gigDate || 'a gig')}.`;
         if (n.gig_id) {
           msg += ` <a href="javascript:void(0)" onclick="event.stopPropagation(); window.showCountersignModal && window.showCountersignModal(${n.gig_id})" style="color: #a78bfa; text-decoration: none; font-weight: 600; border-bottom: 1px dashed rgba(167,139,250,0.5);">Countersign Contract →</a>`;
         }
@@ -454,7 +491,7 @@ class ActivityCenter {
       }
       
       case 'contract_countersigned': {
-        let msg = `${artistLink} has signed the contract for ${n.gig_title || gigDate || 'a gig'}.`;
+        let msg = `${artistLink} has signed the contract for ${_ac_esc(n.gig_title || gigDate || 'a gig')}.`;
         msg += ` <span style="color: #22c55e; font-weight: 600;">Countersign Completed ✓</span>`;
         return msg;
       }
@@ -721,24 +758,29 @@ class ActivityCenter {
     }
   
     
-    // Build modal content
+    // Build modal content.
+    // Audit fix (May 2026 part 6): every interpolated field is HTML-escaped.
+    // The query params (venue_id, artist_id) are coerced to int before going
+    // into the href so they can't break out of the attribute.
+    const _vid = parseInt(notification.venue_id, 10) || 0;
+    const _aid = parseInt(notification.artist_id, 10) || 0;
     let content = `
       <div style="margin-bottom: 1rem;">
-        <h3 style="color: #5b8cff; margin: 0 0 0.5rem 0;">${notification.title}</h3>
-        <p style="margin: 0 0 1rem 0;">${notification.message}</p>
+        <h3 style="color: #5b8cff; margin: 0 0 0.5rem 0;">${_ac_esc(notification.title)}</h3>
+        <p style="margin: 0 0 1rem 0;">${_ac_esc(notification.message)}</p>
       </div>
     `;
-    
+
     // Add gig details if available
     if (notification.gig_id) {
       content += `
         <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 1rem; margin-bottom: 1rem;">
           <h4 style="margin: 0 0 0.5rem 0;">Gig Details:</h4>
-          ${notification.gig_title ? `<p><strong>Title:</strong> ${notification.gig_title}</p>` : ''}
-          ${notification.gig_date ? `<p><strong>Date:</strong> ${notification.gig_date}</p>` : ''}
-          ${notification.venue_name ? `<p><strong>Venue:</strong> <a href="/app/venue-profile.html?venue_id=${notification.venue_id}" target="_blank" style="color: #7c6bff;">${notification.venue_name}</a></p>` : ''}
-          ${notification.artist_name ? `<p><strong>Artist:</strong> <a href="/app/artist-profile.html?artist_id=${notification.artist_id}" target="_blank" style="color: #7c6bff;">${notification.artist_name}</a></p>` : ''}
-          ${notification.cancellation_reason ? `<p><strong>Cancellation Reason:</strong> ${notification.cancellation_reason}</p>` : ''}
+          ${notification.gig_title ? `<p><strong>Title:</strong> ${_ac_esc(notification.gig_title)}</p>` : ''}
+          ${notification.gig_date ? `<p><strong>Date:</strong> ${_ac_esc(notification.gig_date)}</p>` : ''}
+          ${notification.venue_name ? `<p><strong>Venue:</strong> <a href="/app/venue-profile.html?venue_id=${_vid}" target="_blank" style="color: #7c6bff;">${_ac_esc(notification.venue_name)}</a></p>` : ''}
+          ${notification.artist_name ? `<p><strong>Artist:</strong> <a href="/app/artist-profile.html?artist_id=${_aid}" target="_blank" style="color: #7c6bff;">${_ac_esc(notification.artist_name)}</a></p>` : ''}
+          ${notification.cancellation_reason ? `<p><strong>Cancellation Reason:</strong> ${_ac_esc(notification.cancellation_reason)}</p>` : ''}
         </div>
       `;
     }

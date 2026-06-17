@@ -13,15 +13,20 @@ logger = logging.getLogger("gigsfill.services.email_dispatch")
 
 
 def format_slot_pay_summary(slot_or_gig, fallback_pay=None):
-    """Render a pay description suitable for an email or contract line.
+    """Render a pay description for use INSIDE an email template that
+    already prepends "$" before the {pay} placeholder (the convention
+    in backend/email_templates.py — "${{pay}}" → "${pay}").
 
-    For flat-pay slots (the default): "$60.00".
-    For door-split slots (deal_type='door'): "$50 guarantee + 20% of door".
+    For flat-pay slots: "60.00".
+    For door-split slots (deal_type='door'): "50.00 guarantee + 20% of door".
+
+    For surfaces OUTSIDE of email-template substitution (JSON API responses,
+    contracts, direct frontend display) use `format_pay_summary_with_sign`
+    instead — it adds the leading "$".
 
     `slot_or_gig` is a dict-like (sqlalchemy mappings row or plain dict).
-    `fallback_pay` is used when the slot has no pay column (e.g. some
-    legacy rows pre-date the gig_slots table). All values are coerced
-    safely so a missing column doesn't blow up the email send.
+    `fallback_pay` is used when the slot has no pay column. All values
+    are coerced safely so a missing column doesn't blow up the email send.
     """
     def _get(k, default=None):
         if slot_or_gig is None:
@@ -57,6 +62,36 @@ def format_slot_pay_summary(slot_or_gig, fallback_pay=None):
             # the "$": "$50.00 guarantee + 20% of door"
             return f"{gua_dollars:,.2f} guarantee + {pct}% of door"
     return f"{pay_f:,.2f}"
+
+
+def format_pay_summary_with_sign(slot_or_gig, fallback_pay=None) -> str:
+    """Same as `format_slot_pay_summary` but INCLUDES the leading "$".
+    Use for JSON API responses (e.g. pay_summary field), contract bodies,
+    SMS strings, anywhere outside of "${{pay}}" template substitution.
+
+    Returns "$60.00" for flat or "$50.00 guarantee + 20% of door" for door deals.
+    """
+    return "$" + format_slot_pay_summary(slot_or_gig, fallback_pay)
+
+
+def slot_has_door_terms(slot_or_gig) -> bool:
+    """True if the slot/gig dict carries usable door-deal terms.
+    Mirrors the logic in `format_slot_pay_summary` so the two stay in sync.
+    """
+    if slot_or_gig is None:
+        return False
+    try:
+        deal_type = (slot_or_gig.get('deal_type') if hasattr(slot_or_gig, 'get') else slot_or_gig['deal_type']) or 'flat'
+    except (KeyError, IndexError, TypeError):
+        return False
+    if str(deal_type).lower() != 'door':
+        return False
+    try:
+        gua = int(slot_or_gig.get('guarantee_cents') or 0)
+        pct = int(slot_or_gig.get('door_pct') or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return gua > 0 or pct > 0
 
 
 def compute_slot_times(db, gig_id: int, artist_id=None) -> str:
@@ -796,7 +831,8 @@ def send_contract_sign_email(db, venue_id: int, artist_id: int, gig_id: int, gig
         """), {"gid": gig_id}).mappings().first()
         slot_rows = db.execute(_cse_text2("""
             SELECT gs.slot_number, gs.start_time, gs.end_time, gs.pay,
-                   gs.artist_type, gs.band_formats, gs.styles
+                   gs.artist_type, gs.band_formats, gs.styles,
+                   gs.deal_type, gs.door_pct, gs.guarantee_cents
             FROM gig_slots gs
             WHERE gs.gig_id = :gid AND gs.artist_id = :aid
               AND gs.status IN ('booked', 'pending_contract', 'awaiting_venue_contract')
@@ -824,12 +860,16 @@ def send_contract_sign_email(db, venue_id: int, artist_id: int, gig_id: int, gig
                 t_s = format_time_12hr(sl["start_time"] or '')
                 t_e = format_time_12hr(sl["end_time"] or '')
                 time_str = f"{t_s} – {t_e}" if t_e else t_s
-                pay = _fmt_pay(sl.get("pay") or (gig_row.get("pay") if gig_row else ''))
+                # Door-deal aware pay rendering. format_pay_summary_with_sign
+                # returns "$60.00" for flat or "$50.00 guarantee + 20% of door".
+                pay_display = format_pay_summary_with_sign(
+                    sl, fallback_pay=(gig_row.get("pay") if gig_row else None)
+                )
                 atype  = sl.get("artist_type")  or (gig_row.get("artist_type")  if gig_row else '')
                 lineup = _commas(sl.get("band_formats") or (gig_row.get("band_formats") if gig_row else ''))
                 styles = _commas(sl.get("styles")       or (gig_row.get("styles")       if gig_row else ''))
                 slot_rows_html.append(ROW.format(label="Time",   color="#111827", weight="500", value=time_str))
-                slot_rows_html.append(ROW.format(label="Pay",    color="#059669", weight="600", value=f"${pay}"))
+                slot_rows_html.append(ROW.format(label="Pay",    color="#059669", weight="600", value=pay_display))
                 if atype:  slot_rows_html.append(ROW.format(label="Type",   color="#111827", weight="500", value=atype))
                 if lineup: slot_rows_html.append(ROW.format(label="Lineup", color="#111827", weight="500", value=lineup))
                 if styles: slot_rows_html.append(ROW.format(label="Styles", color="#111827", weight="500", value=styles))
@@ -962,7 +1002,8 @@ def send_gig_edited_emails(db, gig_id: int):
             # Override base_vars with this artist's slot data
             slot_vars = {}
             slot = db.execute(text("""
-                SELECT start_time, end_time, pay, artist_type, band_formats, styles
+                SELECT start_time, end_time, pay, artist_type, band_formats, styles,
+                       deal_type, door_pct, guarantee_cents
                 FROM gig_slots
                 WHERE gig_id = :gid AND artist_id = :aid AND status = 'booked'
                 LIMIT 1
@@ -970,10 +1011,18 @@ def send_gig_edited_emails(db, gig_id: int):
             if slot:
                 _slot_base_pay = float(slot['pay'] or gig.get('pay') or 0)
                 _slot_eff_pay  = _get_effective_pay_for_slot(db, gig["venue_id"], aid, _slot_base_pay)
+                # Door-deal slots: render "50.00 guarantee + 20% of door" instead
+                # of the flat amount. The {pay} placeholder in templates already
+                # prepends "$" so we use the no-sign variant. For flat we keep
+                # the venue-override-aware effective pay.
+                if (slot.get('deal_type') or '').lower() == 'door':
+                    _pay_str = format_slot_pay_summary(slot, fallback_pay=gig.get('pay'))
+                else:
+                    _pay_str = f"{_slot_eff_pay:,.2f}"
                 slot_vars = {
                     "start_time":   format_time_12hr(slot["start_time"]),
                     "end_time":     format_time_12hr(slot["end_time"]),
-                    "pay":          f"{_slot_eff_pay:,.2f}",
+                    "pay":          _pay_str,
                     "artist_type":  slot.get("artist_type") or base_vars["artist_type"],
                     "band_formats": ", ".join(x.strip() for x in (slot.get("band_formats") or base_vars["band_formats"]).split(",") if x.strip()),
                     "styles":       ", ".join(x.strip() for x in (slot.get("styles") or base_vars["styles"]).split(",") if x.strip()),
@@ -1034,10 +1083,23 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
         email_service = EmailService(db)
         gig_id = gig_details.get('id') or gig_details.get('gig_id')
         venue_id = gig_details.get('venue_id')
-        # Use effective pay — respects artist pay override (take max of listed vs override)
+        # Door-deal aware pay rendering. Look up the artist's slot (any
+        # in-flight state) so the email pay line reflects the actual deal
+        # terms — flat OR "$X guarantee + Y% of door". For flat deals we
+        # keep the venue-override-aware effective pay.
+        _slot_row = db.execute(text("""
+            SELECT pay, deal_type, door_pct, guarantee_cents
+            FROM gig_slots
+            WHERE gig_id = :gid AND artist_id = :aid
+              AND status IN ('booked', 'pending_contract', 'awaiting_venue_contract', 'pending_venue_approval')
+            ORDER BY slot_number ASC LIMIT 1
+        """), {"gid": gig_id, "aid": artist_id}).mappings().first()
         base_pay = float(gig_details.get('pay') or 0)
-        effective_pay = _get_effective_pay_for_slot(db, venue_id, artist_id, base_pay)
-        pay_display = f"{effective_pay:,.2f}"
+        if _slot_row and (_slot_row.get('deal_type') or '').lower() == 'door':
+            pay_display = format_slot_pay_summary(_slot_row, fallback_pay=base_pay)
+        else:
+            effective_pay = _get_effective_pay_for_slot(db, venue_id, artist_id, base_pay)
+            pay_display = f"{effective_pay:,.2f}"
 
         # Generate a one-time approval token. Audit fix (May 2026 part 5):
         # previously this overwrote a single `gigs.approval_token` column —
@@ -1132,11 +1194,22 @@ def send_approval_decision_emails(db, gig_details: dict, artist_id: int,
         from backend.utils import get_all_entity_users
 
         email_service = EmailService(db)
-        # Use effective pay — respects artist pay override
+        # Door-deal aware pay rendering (mirror of send_approval_request_emails).
         base_pay = float(gig_details.get('pay') or 0)
         venue_id = gig_details.get('venue_id')
-        effective_pay = _get_effective_pay_for_slot(db, venue_id, artist_id, base_pay)
-        pay_display = f"{effective_pay:,.2f}"
+        gig_id = gig_details.get('id') or gig_details.get('gig_id')
+        _slot_row = db.execute(text("""
+            SELECT pay, deal_type, door_pct, guarantee_cents
+            FROM gig_slots
+            WHERE gig_id = :gid AND artist_id = :aid
+              AND status IN ('booked', 'pending_contract', 'awaiting_venue_contract', 'pending_venue_approval')
+            ORDER BY slot_number ASC LIMIT 1
+        """), {"gid": gig_id, "aid": artist_id}).mappings().first() if gig_id else None
+        if _slot_row and (_slot_row.get('deal_type') or '').lower() == 'door':
+            pay_display = format_slot_pay_summary(_slot_row, fallback_pay=base_pay)
+        else:
+            effective_pay = _get_effective_pay_for_slot(db, venue_id, artist_id, base_pay)
+            pay_display = f"{effective_pay:,.2f}"
         notification_type = 'artist_booking_approved' if approved else 'artist_booking_denied'
 
         slot_vars = {"slot_info": slot_info} if slot_info else {}

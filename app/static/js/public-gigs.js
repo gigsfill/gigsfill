@@ -59,9 +59,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   let allVenues = []; // For venue autocomplete
   let allArtists = []; // For artist autocomplete
 
-  // Get city from URL params
+  // Get city from URL params (or from the vanity resolver's injected
+  // window._VANITY when the page was loaded via gigsfill.com/{cityslug}).
   const params = new URLSearchParams(window.location.search);
-  const cityParam = params.get("city");
+  const cityParam = params.get("city")
+    || (window._VANITY && window._VANITY.type === "city" ? window._VANITY.city : null);
 
   /* ---------------- UTIL - EXACT COPY ---------------- */
 
@@ -119,7 +121,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (gig.status === "booked") {
       return "booked";
     }
-    // Multi-slot gig with at least one booked slot shows as booked (red)
+    // Audit fix (May 2026 part 9): a multi-slot gig with SOME booked and SOME
+    // open slots was previously painted "booked" (red) — making it look fully
+    // sold to artists who could still book the open slots. Show "partial"
+    // when at least one slot remains open and at least one is booked.
+    const isMultiSlot = (gig.total_slots_count || 0) > 1;
+    if (isMultiSlot && gig.booked_slots_count > 0) {
+      if (gig.booked_slots_count >= gig.total_slots_count) return "booked";
+      return "partial";
+    }
     if (gig.booked_slots_count > 0) {
       return "booked";
     }
@@ -187,6 +197,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             e.stopPropagation();
             openGigModal(g);
           };
+          if (typeof window.attachGigHoverCard === 'function') {
+            window.attachGigHoverCard(div, g);
+          }
           gigsContainer.appendChild(div);
         });
         
@@ -811,19 +824,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    venueAutocompleteDiv.innerHTML = matches.map(venue => `
-      <div style="
-        padding: 10px 12px;
-        cursor: pointer;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-        transition: background 0.2s;
-      "
-      onmouseover="this.style.background='rgba(255,255,255,0.08)'"
-      onmouseout="this.style.background='transparent'"
-      onclick="selectVenue('${venue.replace(/'/g, "\\'")}')">
-        ${esc(venue)}
-      </div>
-    `).join('');
+    // Audit fix (May 2026 part 7): build options as DOM nodes with addEventListener
+    // rather than inline onclick. The previous `replace(/'/g, "\\'")` only escaped
+    // single quotes — a name containing a backslash-followed-by-quote (e.g. `Foo\'`)
+    // reassembled into the attribute as `\\\'`, JS parsed it as `\` then `'`,
+    // breaking out of the string and executing injected JS.
+    venueAutocompleteDiv.innerHTML = '';
+    matches.forEach(venue => {
+      const opt = document.createElement('div');
+      opt.style.cssText = 'padding: 10px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;';
+      opt.textContent = venue;
+      opt.addEventListener('mouseover', () => { opt.style.background = 'rgba(255,255,255,0.08)'; });
+      opt.addEventListener('mouseout',  () => { opt.style.background = 'transparent'; });
+      opt.addEventListener('click', () => { window.selectVenue(venue); });
+      venueAutocompleteDiv.appendChild(opt);
+    });
 
     venueAutocompleteDiv.style.display = 'block';
   });
@@ -863,19 +878,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    artistAutocompleteDiv.innerHTML = matches.map(artist => `
-      <div style="
-        padding: 10px 12px;
-        cursor: pointer;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-        transition: background 0.2s;
-      "
-      onmouseover="this.style.background='rgba(255,255,255,0.08)'"
-      onmouseout="this.style.background='transparent'"
-      onclick="selectArtist('${artist.replace(/'/g, "\\'")}')">
-        ${esc(artist)}
-      </div>
-    `).join('');
+    // Audit fix (May 2026 part 7): see venue autocomplete above — DOM nodes
+    // with addEventListener instead of inline onclick to avoid escape bypasses.
+    artistAutocompleteDiv.innerHTML = '';
+    matches.forEach(artist => {
+      const opt = document.createElement('div');
+      opt.style.cssText = 'padding: 10px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;';
+      opt.textContent = artist;
+      opt.addEventListener('mouseover', () => { opt.style.background = 'rgba(255,255,255,0.08)'; });
+      opt.addEventListener('mouseout',  () => { opt.style.background = 'transparent'; });
+      opt.addEventListener('click', () => { window.selectArtist(artist); });
+      artistAutocompleteDiv.appendChild(opt);
+    });
 
     artistAutocompleteDiv.style.display = 'block';
   });

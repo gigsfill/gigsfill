@@ -4,7 +4,13 @@
  * Uses network-first for API calls, cache-first for static assets.
  */
 
-const CACHE_NAME = 'gigsfill-v5';
+// Audit fix (May 2026 part 6): bump so PWA users with a stale SW get the
+// fresh shell on activate. Bump whenever precached assets change.
+// v7 (2026-06-16): forces eviction of any cached artist-profile.html that
+// pre-dates the audio-caption + audio-entry reorder changes.
+// v8 (2026-06-17): forces eviction of any cached venue-create-gigs.html
+// that pre-dates the templates-in-header relocation + door-pill restyle.
+const CACHE_NAME = 'gigsfill-v8';
 
 // App shell — core files needed to launch
 const APP_SHELL = [

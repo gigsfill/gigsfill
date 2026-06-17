@@ -73,6 +73,24 @@ def main():
     logger.info(f"  DATABASE_URL set: {bool(os.environ.get('DATABASE_URL'))}")
     logger.info("=" * 60)
 
+    # Audit fix (May 2026 part 4): explicit guard. main.py only starts
+    # schedulers when GIGSFILL_RUN_SCHEDULERS=1. This service is the
+    # designated process for them, so refuse to start unless the same
+    # flag is set — that way an accidental run of this module under a
+    # systemd unit that's missing the env var fails loudly instead of
+    # quietly running schedulers in parallel with the API workers.
+    # Audit fix (May 2026 part 7): main.py accepts ("1","true","yes") for this
+    # flag — align this check so a user who set `=true` on the scheduler
+    # systemd unit doesn't refuse-to-start here AND trigger schedulers inside
+    # the API workers (which DO accept "true").
+    if os.environ.get("GIGSFILL_RUN_SCHEDULERS", "0").strip().lower() not in ("1", "true", "yes"):
+        logger.error(
+            "GIGSFILL_RUN_SCHEDULERS is not set to a truthy value — refusing to start. "
+            "This service is the only process allowed to run schedulers. "
+            "Set GIGSFILL_RUN_SCHEDULERS=1 in the gigsfill-scheduler systemd unit."
+        )
+        sys.exit(2)
+
     _ensure_db_and_templates()
 
     # Start the two scheduler threads (both daemon=True, so they die when this

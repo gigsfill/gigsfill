@@ -38,8 +38,8 @@ def update_email_template(
     ).mappings().first()
     if not admin_row or not to_admin_bool(admin_row.get("is_admin")):
         raise HTTPException(status_code=403, detail="Admin access required")
-    from datetime import datetime
-    
+    from backend.utils import utcnow_naive
+
     db.execute(
         text("""
             UPDATE email_templates

@@ -293,15 +293,42 @@ async def get_gig_info_for_flyer(venue_id: int, gig_id: int, user=Depends(get_cu
 # --- UPLOAD IMAGE ---
 @router.post("/api/venues/{venue_id}/flyers/upload-image")
 async def upload_flyer_image(venue_id: int, file: UploadFile = File(...), user=Depends(get_current_user), db=Depends(get_db)):
+    """Audit fix (May 2026 part 8): three security upgrades.
+    1. SVG removed from the allowlist — SVG can contain <script> tags that
+       execute in browser context when served from /app/static/uploads/flyers/...
+       (same-origin XSS).
+    2. 10 MB upload size cap. Previously unlimited → disk exhaustion DoS.
+    3. Magic-byte validation — file extension alone wasn't checked against
+       content, so an attacker could rename evil.exe to evil.png.
+    """
     check_venue_access(db, venue_id, user.id)
     ext = os.path.splitext(file.filename or "image.png")[1].lower()
-    if ext not in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]:
-        raise HTTPException(status_code=400, detail="Unsupported image format")
+    _ALLOWED_IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+    if ext not in _ALLOWED_IMG_EXT:
+        raise HTTPException(status_code=400, detail="Unsupported image format. Allowed: png, jpg, jpeg, gif, webp")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image too large (max 10 MB)")
+    # Magic-byte check
+    _MAGIC = {
+        ".png":  b"\x89PNG\r\n\x1a\n",
+        ".jpg":  b"\xff\xd8\xff",
+        ".jpeg": b"\xff\xd8\xff",
+        ".gif":  (b"GIF87a", b"GIF89a"),
+        ".webp": b"RIFF",  # WEBP starts with RIFF....WEBP
+    }
+    _expected = _MAGIC.get(ext)
+    if _expected:
+        if isinstance(_expected, tuple):
+            if not any(content.startswith(m) for m in _expected):
+                raise HTTPException(status_code=400, detail="File content doesn't match its extension")
+        else:
+            if not content.startswith(_expected):
+                raise HTTPException(status_code=400, detail="File content doesn't match its extension")
     venue_dir = os.path.join(UPLOAD_DIR, str(venue_id))
     os.makedirs(venue_dir, exist_ok=True)
     fname = f"{uuid.uuid4().hex[:12]}{ext}"
     fpath = os.path.join(venue_dir, fname)
-    content = await file.read()
     with open(fpath, "wb") as f:
         f.write(content)
     return {"url": f"/app/static/uploads/flyers/{venue_id}/{fname}", "filename": fname}

@@ -14,7 +14,7 @@ import json
 from backend.db import get_db
 from backend.routes.auth import get_current_user
 from backend.email_service import EmailService
-from backend.rate_limiter import limiter, RATE_EMAIL_SEND
+from backend.rate_limiter import limiter, rate_email_send_limit
 logger = logging.getLogger("gigsfill.entity_users")
 
 router = APIRouter()
@@ -269,7 +269,7 @@ def lookup_user_by_email(
 # INVITE USER TO ENTITY
 # ============================================
 @router.post("/api/entity-users/artist/{artist_id}/invite")
-@limiter.limit(RATE_EMAIL_SEND)
+@limiter.limit(rate_email_send_limit)
 async def invite_user_to_artist(
     request: Request,
     artist_id: int,
@@ -281,7 +281,7 @@ async def invite_user_to_artist(
     return await _invite_user_to_entity('artist', artist_id, data, user, db)
 
 @router.post("/api/entity-users/venue/{venue_id}/invite")
-@limiter.limit(RATE_EMAIL_SEND)
+@limiter.limit(rate_email_send_limit)
 async def invite_user_to_venue(
     request: Request,
     venue_id: int,
@@ -293,7 +293,7 @@ async def invite_user_to_venue(
     return await _invite_user_to_entity('venue', venue_id, data, user, db)
 
 @router.post("/api/entity-invitations/{invitation_id}/reinvite")
-@limiter.limit(RATE_EMAIL_SEND)
+@limiter.limit(rate_email_send_limit)
 async def reinvite_user(
     request: Request,
     invitation_id: int,
@@ -392,6 +392,23 @@ async def reinvite_user(
     return {"ok": True, "message": "Invitation re-sent successfully"}
 
 
+def _site_base_url(db) -> str:
+    """Look up the canonical site URL from platform_settings.
+    Audit fix (May 2026 part 5): centralizes the lookup so invitation links
+    don't hardcode gigsfill.com — staging/custom-domain deploys would otherwise
+    point invitees at production."""
+    try:
+        row = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='site_url' LIMIT 1")).first()
+        if row and row[0] and "127.0.0.1" not in row[0] and "localhost" not in row[0]:
+            return row[0].strip().rstrip("/")
+        row = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='base_url' LIMIT 1")).first()
+        if row and row[0] and "127.0.0.1" not in row[0] and "localhost" not in row[0]:
+            return row[0].strip().rstrip("/")
+    except Exception:
+        pass
+    return "https://gigsfill.com"
+
+
 def _send_invitation_email(email_service, to_email, inviter_name, entity_name, entity_type, token):
     """Send invitation email using the entity_invitation template"""
     import sys
@@ -404,7 +421,7 @@ def _send_invitation_email(email_service, to_email, inviter_name, entity_name, e
         logger.info(f"entity_invitation template not found in DB")
         return False
 
-    base_url = "https://gigsfill.com"
+    base_url = _site_base_url(email_service.db)
     variables = {
         'inviter_name': inviter_name,
         'entity_name': entity_name,
@@ -416,33 +433,17 @@ def _send_invitation_email(email_service, to_email, inviter_name, entity_name, e
     subject = email_service.render_template(template['subject'], variables)
     body = email_service.render_template(template['body'], variables)
 
+    # Audit fix (May 2026 part 10e): route through EmailService._send_raw_email
+    # (which uses the shared _smtp_send helper) instead of a hand-rolled SMTP
+    # block. The inline version called starttls() unconditionally with no
+    # preceding ehlo() and no fault tolerance — fragile against the production
+    # SMTP server on port 26. _smtp_send does ehlo() + best-effort starttls,
+    # the exact path the working recommend/notification emails use. This is
+    # why invitations silently failed to deliver while other emails worked.
     try:
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        import smtplib
-
-        msg = MIMEMultipart()
-        if email_service.from_name:
-            from email.utils import formataddr
-            msg['From'] = formataddr((email_service.from_name, email_service.from_email))
-        else:
-            msg['From'] = email_service.from_email
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'html'))
-
-        if email_service.smtp_port == 465:
-            with smtplib.SMTP_SSL(email_service.smtp_server, email_service.smtp_port, timeout=15) as server:
-                server.login(email_service.smtp_username, email_service.smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(email_service.smtp_server, email_service.smtp_port, timeout=15) as server:
-                server.starttls()
-                server.login(email_service.smtp_username, email_service.smtp_password)
-                server.send_message(msg)
-        return True
+        return email_service._send_raw_email(to_email=to_email, subject=subject, html_body=body)
     except Exception as e:
-        logger.error(f"Email send failed: {e}")
+        logger.error(f"Invitation email send failed to {to_email}: {e}")
         return False
 
 
@@ -602,10 +603,14 @@ async def _invite_user_to_entity(entity_type: str, entity_id: int, data: dict, u
                 import sys
                 logger.error(f"Notification insert failed: {e2}")
         
-        # Send email using pre-initialized service
-        _send_invitation_email(email_service, invited_email, inviter_name, entity['name'], entity_type, token)
-        
-        return {"ok": True, "message": "Invitation sent (user notified in app and via email)"}
+        # Send email using pre-initialized service.
+        # Audit fix (May 2026 part 10e): surface the actual send result instead
+        # of always claiming "sent via email". The existing user still gets the
+        # in-app notification regardless, so the invite is never lost.
+        sent = _send_invitation_email(email_service, invited_email, inviter_name, entity['name'], entity_type, token)
+        if sent:
+            return {"ok": True, "message": "Invitation sent (user notified in app and via email)"}
+        return {"ok": True, "message": "Invitation created and user notified in app; email delivery failed — they can still accept from their notifications."}
     
     else:
         # New user - create invitation and send email
@@ -776,33 +781,70 @@ def get_invitation_details(token: str, db=Depends(get_db)):
     
     return result
 
+def _check_invitation_fresh(invitation):
+    """Audit fix (May 2026 part 5): invitations older than 14 days are expired.
+    Reject acceptance so a leaked token from an old email archive can't be
+    redeemed years later."""
+    from datetime import timedelta
+    _created = invitation.get('created_at')
+    if _created:
+        if isinstance(_created, str):
+            try:
+                _created = datetime.fromisoformat(_created.replace('Z', '+00:00'))
+            except Exception:
+                _created = None
+        if _created and (utcnow_naive() - _created.replace(tzinfo=None)) > timedelta(days=14):
+            raise HTTPException(410, "Invitation has expired. Ask the inviter to send a new one.")
+
+
+def _verify_entity_exists(db, etype, eid):
+    """Audit fix (May 2026 part 5): if the entity (artist/venue) was deleted
+    while the invitation was pending, reject acceptance so we don't insert
+    orphan entity_users rows that point at non-existent entities."""
+    _table = "artists" if etype == "artist" else "venues"
+    _exists = db.execute(text(f"SELECT 1 FROM {_table} WHERE id = :eid"), {"eid": eid}).scalar()
+    if not _exists:
+        raise HTTPException(410, f"The {etype} this invitation was for no longer exists.")
+
+
 @router.post("/api/invitations/{token}/accept")
+@limiter.limit("10/hour")
 def accept_invitation(
+    request: Request,
     token: str,
     data: dict,
     db=Depends(get_db)
 ):
     """Accept an invitation and create user account"""
-    
+
     # Get invitation
     invitation = db.execute(
         text("SELECT * FROM entity_invitations WHERE token = :token"),
         {"token": token}
     ).mappings().first()
-    
+
     if not invitation:
         raise HTTPException(404, "Invitation not found")
-    
+
     if invitation['status'] != 'pending':
         raise HTTPException(400, f"Invitation already {invitation['status']}")
-    
+
+    # Audit fix (May 2026 part 5): reject expired tokens and deleted entities.
+    _check_invitation_fresh(invitation)
+    _verify_entity_exists(db, invitation['entity_type'], invitation['entity_id'])
+
     # Validate required fields
     first_name = data.get('first_name', '').strip()
     last_name = data.get('last_name', '').strip()
-    email = data.get('email', '').strip().lower()
+    # Audit fix (May 2026 part 5): IGNORE any email supplied in the request body.
+    # Previously the body's `email` was trusted, letting anyone with a leaked
+    # invitation token sign up with their own email and silently grant
+    # themselves member access to the entity. The token binds the invitation
+    # to a specific invited_email — that's the canonical address.
+    email = (invitation.get('invited_email') or '').strip().lower()
     phone = data.get('phone', '').strip()
     password = data.get('password', '')
-    
+
     if not all([first_name, last_name, email, password]):
         raise HTTPException(400, "Missing required fields")
 
@@ -892,24 +934,48 @@ def accept_invitation(
     }
 
 @router.post("/api/invitations/{token}/accept-existing")
+@limiter.limit("10/hour")
 def accept_invitation_existing_user(
+    request: Request,
     token: str,
-    db=Depends(get_db)
+    db=Depends(get_db),
+    user=Depends(get_current_user),
 ):
-    """Accept an invitation for a user who already has an account (via email link)"""
-    
+    """Accept an invitation for a user who already has an account.
+
+    Audit fix (May 2026 part 6): require authentication AND verify the caller's
+    email matches the invited address. Previously the endpoint was anonymous
+    and bound to whichever account the email pointed at — anyone with the token
+    (forwarded email, archive leak) could complete the bind silently without
+    consent or audit. Now the legitimate invitee must be logged in.
+    """
+
     # Get invitation
     invitation = db.execute(
         text("SELECT * FROM entity_invitations WHERE token = :token"),
         {"token": token}
     ).mappings().first()
-    
+
     if not invitation:
         raise HTTPException(404, "Invitation not found")
-    
+
+    # Audit fix (May 2026 part 6): verify caller owns the invited email.
+    _invited = (invitation.get("invited_email") or "").strip().lower()
+    _caller_email = (getattr(user, "email", "") or "").strip().lower()
+    if not _invited or _caller_email != _invited:
+        raise HTTPException(
+            403,
+            "INVITATION_EMAIL_MISMATCH: This invitation was sent to a different "
+            "email address. Please log in with the invited account."
+        )
+
     if invitation['status'] != 'pending':
         raise HTTPException(400, f"Invitation already {invitation['status']}")
-    
+
+    # Audit fix (May 2026 part 5): expiry + entity-existence guards.
+    _check_invitation_fresh(invitation)
+    _verify_entity_exists(db, invitation['entity_type'], invitation['entity_id'])
+
     # Find the user by the invited email
     existing_user = db.execute(
         text("SELECT id FROM users WHERE LOWER(email) = :email"),
@@ -979,18 +1045,19 @@ def accept_invitation_existing_user(
     }
 
 @router.post("/api/invitations/{token}/decline")
-def decline_invitation(token: str, db=Depends(get_db)):
+@limiter.limit("10/hour")
+def decline_invitation(request: Request, token: str, db=Depends(get_db)):
     """Decline an invitation"""
-    
+
     # Get invitation
     invitation = db.execute(
         text("SELECT * FROM entity_invitations WHERE token = :token"),
         {"token": token}
     ).mappings().first()
-    
+
     if not invitation:
         raise HTTPException(404, "Invitation not found")
-    
+
     if invitation['status'] != 'pending':
         raise HTTPException(400, f"Invitation already {invitation['status']}")
     
@@ -1113,13 +1180,27 @@ def create_invitation_email_html_from_template(body_text: str, entity_name: str,
 </body>
 </html>'''
 
-def create_invitation_email_html(inviter_first: str, inviter_last: str, entity_name: str, entity_type: str, token: str) -> str:
+def create_invitation_email_html(inviter_first: str, inviter_last: str, entity_name: str, entity_type: str, token: str, db=None) -> str:
     """Create branded invitation email HTML (legacy fallback)"""
-    
-    base_url = "https://gigsfill.com"  # Update to your actual domain
+
+    # Audit fix (May 2026 part 5): pull from platform_settings when a db handle
+    # is provided. Hardcoded domain stays as the last-resort fallback so the
+    # legacy callsites that don't pass db still work.
+    base_url = _site_base_url(db) if db is not None else "https://gigsfill.com"
     accept_url = f"{base_url}/app/invited_user_create_user.html?token={token}"
     decline_url = f"{base_url}/app/invited_user_declined.html?token={token}"
-    
+
+    # Audit fix (May 2026 part 5): HTML-escape every user-supplied value before
+    # interpolating into the email body. inviter_first/last and entity_name
+    # come straight from form input — a venue named '<script>alert(1)</script>'
+    # or a user with "<img onerror" in their name would otherwise inject markup
+    # (and in some email clients, executable scripts) into every invite they
+    # touched. The token is from secrets.token_urlsafe so it's URL-safe already.
+    import html as _html
+    inviter_first = _html.escape(inviter_first or "")
+    inviter_last = _html.escape(inviter_last or "")
+    entity_name = _html.escape(entity_name or "")
+
     entity_label = "artist" if entity_type == "artist" else "venue"
     
     return f'''<!DOCTYPE html>

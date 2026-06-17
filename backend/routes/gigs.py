@@ -20,8 +20,33 @@ from backend.services.notification_service import (
 from backend.services.email_dispatch import (
     send_booking_emails, send_cancellation_emails, format_email_date,
     send_approval_request_emails, send_approval_decision_emails,
+    format_pay_summary_with_sign, slot_has_door_terms,
 )
 from backend.rate_limiter import limiter
+
+
+def _enrich_pay_summary(rows):
+    """Mutate each dict in `rows` (or a single dict) so it carries a
+    `pay_summary` key — door-aware "$X guarantee + Y% of door" or flat
+    "$X.XX". Idempotent: existing pay_summary is left alone. Accepts a
+    list, a single dict, or None (returns input unchanged in odd cases).
+    Use to enrich slot / gig dicts before returning from a route.
+    """
+    if rows is None:
+        return rows
+    items = rows if isinstance(rows, list) else [rows]
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        if r.get('pay_summary'):
+            continue
+        r['pay_summary'] = format_pay_summary_with_sign(r)
+        # Convenience boolean for frontend
+        if 'is_door_deal' not in r:
+            r['is_door_deal'] = slot_has_door_terms(r)
+    return rows
+
+
 def _get_flyer_helpers():
     """Lazy import to avoid circular/load-order issues"""
     try:
@@ -986,6 +1011,7 @@ def list_gigs(db=Depends(get_db)):
                     SELECT gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time,
                            gs.pay, gs.status, gs.artist_id,
                            gs.artist_type, gs.band_formats, gs.styles,
+                           gs.deal_type, gs.door_pct, gs.guarantee_cents,
                            a.name as artist_name
                     FROM gig_slots gs
                     LEFT JOIN artists a ON gs.artist_id = a.id
@@ -994,7 +1020,8 @@ def list_gigs(db=Depends(get_db)):
                 """),
                 {"gid": gig["id"]}
             ).mappings().all()
-            gig["slots"] = [dict(s) for s in slots]
+            gig["slots"] = _enrich_pay_summary([dict(s) for s in slots])
+            _enrich_pay_summary(gig)
             result.append(gig)
         return result
 
@@ -1128,7 +1155,11 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
             """)
         ).mappings().all()
 
-        return rows
+        # Public listing is gig-level only (door deals are per-slot). Enrich
+        # each row so pay_summary is present in a consistent shape — for
+        # vanilla gig rows this is just "$X.XX", matching what the artist /
+        # venue dashboards return for door-less slots.
+        return _enrich_pay_summary([dict(r) for r in rows])
 
     except Exception as e:
         logger.error(f"Failed to load gigs. Please try again.: {e}", exc_info=True)
@@ -1206,6 +1237,7 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                 text("""
                     SELECT gs.gig_id, gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time, gs.pay, gs.status, gs.artist_id,
                            gs.artist_type, gs.band_formats, gs.styles,
+                           gs.deal_type, gs.door_pct, gs.guarantee_cents,
                            a.name as artist_name
                     FROM gig_slots gs
                     LEFT JOIN artists a ON gs.artist_id = a.id
@@ -1220,7 +1252,8 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
         result = []
         for row in rows:
             gig = dict(row)
-            gig["slots"] = slots_by_gig.get(gig["id"], [])
+            gig["slots"] = _enrich_pay_summary(slots_by_gig.get(gig["id"], []))
+            _enrich_pay_summary(gig)
             result.append(gig)
 
         return result
@@ -1264,11 +1297,15 @@ def get_gig_detail(gig_id: int, user=Depends(get_current_user), db=Depends(get_d
     slots = db.execute(text("""
         SELECT gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time, gs.pay,
                gs.artist_id, a.name as artist_name, gs.status,
-               gs.artist_type, gs.band_formats, gs.styles
+               gs.artist_type, gs.band_formats, gs.styles,
+               gs.deal_type, gs.door_pct, gs.guarantee_cents
         FROM gig_slots gs LEFT JOIN artists a ON gs.artist_id = a.id
         WHERE gs.gig_id = :gid ORDER BY gs.slot_number
     """), {"gid": gig_id}).fetchall()
-    result["slots"] = [dict(s._mapping) for s in slots]
+    result["slots"] = _enrich_pay_summary([dict(s._mapping) for s in slots])
+    # Gig-level pay_summary too (single-slot gigs don't have door deals yet
+    # but this keeps the response shape consistent for the frontend).
+    _enrich_pay_summary(result)
     return result
 
 
@@ -3082,7 +3119,10 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
                 UPDATE gig_slots
                 SET start_time = :start_time,
                     end_time   = :end_time,
-                    pay        = :pay
+                    pay        = :pay,
+                    deal_type        = COALESCE(:deal_type, deal_type),
+                    door_pct         = COALESCE(:door_pct, door_pct),
+                    guarantee_cents  = COALESCE(:guarantee_cents, guarantee_cents)
                 WHERE gig_id = :gig_id AND slot_number = :slot_number
             """),
             {
@@ -3091,6 +3131,9 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
                 "start_time": s.get("start_time"),
                 "end_time":   s.get("end_time"),
                 "pay":        s.get("pay", 0),
+                "deal_type":       s.get("deal_type"),
+                "door_pct":        s.get("door_pct"),
+                "guarantee_cents": s.get("guarantee_cents"),
             }
         )
 
@@ -3867,6 +3910,7 @@ def my_gigs(
                 SELECT gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time,
                        gs.pay, gs.status, gs.artist_id,
                        gs.artist_type, gs.band_formats, gs.styles,
+                       gs.deal_type, gs.door_pct, gs.guarantee_cents,
                        a.name as artist_name
                 FROM gig_slots gs
                 LEFT JOIN artists a ON gs.artist_id = a.id
@@ -3875,7 +3919,8 @@ def my_gigs(
             """),
             {"gid": gig["id"]}
         ).mappings().all()
-        gig["slots"] = [dict(s) for s in slots]
+        gig["slots"] = _enrich_pay_summary([dict(s) for s in slots])
+        _enrich_pay_summary(gig)
         result.append(gig)
     return result
 
@@ -3893,6 +3938,7 @@ def get_gig_slots(gig_id: int, user=Depends(get_current_user), db=Depends(get_db
                 SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
                        gs.pay, gs.artist_id, gs.status,
                        gs.artist_type, gs.band_formats, gs.styles,
+                       gs.deal_type, gs.door_pct, gs.guarantee_cents,
                        a.name as artist_name
                 FROM gig_slots gs
                 LEFT JOIN artists a ON gs.artist_id = a.id
@@ -3901,7 +3947,7 @@ def get_gig_slots(gig_id: int, user=Depends(get_current_user), db=Depends(get_db
             """),
             {"gig_id": gig_id}
         ).mappings().all()
-        return list(slots)
+        return _enrich_pay_summary([dict(s) for s in slots])
     except Exception as e:
         logger.error(f"Failed to load slots. Please try again.: {e}", exc_info=True)
         raise HTTPException(500, f"Failed to load slots. Please try again.: {str(e)}")

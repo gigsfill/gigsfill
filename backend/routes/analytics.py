@@ -597,8 +597,15 @@ async def get_admin_dashboard_stats(admin=Depends(check_admin)):
     # gig_slots, so multi-slot rows order by slot creation time — same
     # imprecision the original single-slot path had (it used g.created_at,
     # not booking time). "Recent" here is best-effort, not exact.
+    # Pay column applies the venue's per-artist pay override when status='approved'.
+    # Returns max(b.pay, override) so the admin sees what the artist is actually being paid.
+    # Uses CASE for SQLite/Postgres portability (SQLite has MAX(a,b), Postgres uses GREATEST).
     recent_bookings = qa("""
-        SELECT g.id, g.date, b.pay,
+        SELECT g.id, g.date,
+               CASE WHEN (COALESCE(pa.pay_dollars_override,0) + COALESCE(pa.pay_cents_override,0)/100.0) > COALESCE(b.pay,0)
+                    THEN (COALESCE(pa.pay_dollars_override,0) + COALESCE(pa.pay_cents_override,0)/100.0)
+                    ELSE COALESCE(b.pay,0)
+               END as pay,
                a.name as artist_name, v.venue_name
         FROM (
             SELECT id as gig_id, artist_id, pay, created_at FROM gigs WHERE artist_id IS NOT NULL
@@ -610,6 +617,10 @@ async def get_admin_dashboard_stats(admin=Depends(check_admin)):
         JOIN gigs g ON g.id = b.gig_id
         JOIN artists a ON a.id = b.artist_id
         JOIN venues v ON v.id = g.venue_id
+        LEFT JOIN preferred_artists pa
+            ON pa.venue_id = g.venue_id
+           AND pa.artist_id = b.artist_id
+           AND pa.status = 'approved'
         ORDER BY b.created_at DESC LIMIT 10
     """)
     recent_signups = qa("""

@@ -184,7 +184,7 @@ async function renderGigModal(data, callbacks = {}) {
     html += _slotsSection(data, vType, {isPast: true, isInProgress: false, close, callbacks});
     const myBookedSlot = (data.slots || []).find(s => s.is_my_slot && s.status === 'booked');
     if (myBookedSlot && vType === 'artist') {
-      const msgBtn = (onMessage && data.can_message !== false) ? `<button class="_gig-btn _gig-btn-cyan" onclick="window._gmCbs&&window._gmCbs.message&&window._gmCbs.message(${data.id},'${_esc(data.venue_name)}',${data.viewer_id})">Message Venue</button>` : '';
+      const msgBtn = (onMessage && data.can_message !== false) ? `<button class="_gig-btn _gig-btn-cyan" onclick="window._gmCbs&&window._gmCbs.message&&window._gmCbs.message(${parseInt(data.id,10)||0},${(window.jsAttr||JSON.stringify)(data.venue_name)},${parseInt(data.viewer_id,10)||0})">Message Venue</button>` : '';
       const rateBtn = `<button class="_gig-btn _gig-btn-cyan _rate-venue-btn"
         data-gig-id="${data.id}" data-venue-id="${data.venue_id}"
         data-venue-name="${_esc(data.venue_name)}" data-artist-id="${data.viewer_id}">⭐ Rate Venue</button>`;
@@ -200,7 +200,7 @@ async function renderGigModal(data, callbacks = {}) {
     html += _slotsSection(data, vType, {isPast: false, isInProgress: true, close, callbacks});
     const mySlot = (data.slots||[]).find(s=>s.is_my_slot);
     if (mySlot && vType === 'artist') {
-      const msgBtn = (onMessage && data.can_message !== false) ? `<button class="_gig-btn _gig-btn-cyan" onclick="window._gmCbs&&window._gmCbs.message&&window._gmCbs.message(${data.id},'${_esc(data.venue_name)}',${data.viewer_id})">Message Venue</button>` : '';
+      const msgBtn = (onMessage && data.can_message !== false) ? `<button class="_gig-btn _gig-btn-cyan" onclick="window._gmCbs&&window._gmCbs.message&&window._gmCbs.message(${parseInt(data.id,10)||0},${(window.jsAttr||JSON.stringify)(data.venue_name)},${parseInt(data.viewer_id,10)||0})">Message Venue</button>` : '';
       actionsHtml = `<div class="_gig-btn-row">${msgBtn}${_closeBtn(close)}</div>`;
     } else {
       actionsHtml = `<div class="_gig-btn-row" style="justify-content:flex-end;">${_closeBtn(close)}</div>`;
@@ -321,7 +321,7 @@ async function renderGigModal(data, callbacks = {}) {
     if (myBooked) {
       const slotIdField = mySlot.id;
       const msgBtn = (onMessage && data.can_message !== false)
-        ? `<button class="_gig-btn _gig-btn-cyan" onclick="window._gmCbs&&window._gmCbs.message&&window._gmCbs.message(${data.id},'${_esc(data.venue_name)}',${data.viewer_id})">Message Venue</button>`
+        ? `<button class="_gig-btn _gig-btn-cyan" onclick="window._gmCbs&&window._gmCbs.message&&window._gmCbs.message(${parseInt(data.id,10)||0},${(window.jsAttr||JSON.stringify)(data.venue_name)},${parseInt(data.viewer_id,10)||0})">Message Venue</button>`
         : '';
       if (onCancelSlot) {
         actionsHtml = `<div class="_gig-btn-row">
@@ -462,11 +462,16 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
   //     artists' negotiated pay isn't artist-facing).
   //   - Venues: on every slot (it's their gig — they always know the pay).
   let payHtml = '';
-  if (slot.pay) {
+  if (slot.pay || slot.pay_summary || slot.deal_type === 'door') {
     const isVenue = vType === 'venue';
     const showPay = isVenue || isMySlot || (isOpen && rel === 'open_bookable');
     if (showPay) {
-      payHtml = `<span style="color:#22c55e;font-weight:700;font-size:0.8rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">$${parseFloat(slot.pay).toFixed(2)}</span>`;
+      // Door-deal aware. window.formatPaySummary returns "$60.00" for flat
+      // or "$50.00 guarantee + 20% of door" for door split, using either
+      // the backend-supplied pay_summary or the deal_type/door_pct/
+      // guarantee_cents fields. Falls back to "$X.XX" gracefully.
+      const payStr = (window.formatPaySummary ? window.formatPaySummary(slot) : `$${parseFloat(slot.pay || 0).toFixed(2)}`);
+      payHtml = `<span style="color:#22c55e;font-weight:700;font-size:0.8rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">${payStr}</span>`;
     }
   }
 
@@ -573,10 +578,14 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
           // layout. Add the ✕ Cancel button and Rate Artist button so
           // every booked-slot view (whether the gig is in pending-contract
           // state with siblings or fully booked) looks identical.
+          // Audit fix (May 2026 part 8): JSON-stringify-based JS-string literals
+          // replace the broken `_esc()`-inside-onclick pattern. `_esc()` produced
+          // `&#39;` for apostrophes, but the HTML parser decoded that back to
+          // `'` before JS saw the string — letting malicious names break out.
           const _vbName = _esc(slot.artist_name || 'Booked');
-          const _vbAnameJs = (slot.artist_name || 'Artist').replace(/['"]/g, '');
-          const _msgCb  = `typeof openMessageModal==='function'&&openMessageModal(${data.id},'${_esc(data.venue_name)}',${slot.artist_id})`;
-          const _rateCb = `typeof openReviewModal==='function'&&openReviewModal({artistId:${slot.artist_id},artistName:'${_vbAnameJs}',gigId:${data.id},gigDate:'${_esc(data.date||'')}',gigTitle:'${_esc(data.title||'')}'})`;
+          const _jsa = window.jsAttr || JSON.stringify;
+          const _msgCb  = `typeof openMessageModal==='function'&&openMessageModal(${parseInt(data.id,10)||0},${_jsa(data.venue_name)},${parseInt(slot.artist_id,10)||0})`;
+          const _rateCb = `typeof openReviewModal==='function'&&openReviewModal({artistId:${parseInt(slot.artist_id,10)||0},artistName:${_jsa(slot.artist_name||'Artist')},gigId:${parseInt(data.id,10)||0},gigDate:${_jsa(data.date||'')},gigTitle:${_jsa(data.title||'')}})`;
           const _cancelCb = `window.cancelSlotBooking&&cancelSlotBooking(${data.id}, ${slot.id}, ${slot.slot_number}, ${slot.artist_id || 'null'})`;
           const _cancelBtnHtml = (!isPast && !slotStarted)
             ? `<button onclick="${_cancelCb}"
@@ -821,7 +830,7 @@ function _countersignBlock(slot, onCountersign, gigId) {
             onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'">
             Countersign & Confirm Booking
           </button>
-          ${slot.artist_id ? `<button onclick="typeof openMessageModal==='function'&&openMessageModal(${gigId},'${_esc(slot.artist_name||'Artist')}',${slot.artist_id})"
+          ${slot.artist_id ? `<button onclick="typeof openMessageModal==='function'&&openMessageModal(${parseInt(gigId,10)||0},${(window.jsAttr||JSON.stringify)(slot.artist_name||'Artist')},${parseInt(slot.artist_id,10)||0})"
             style="padding:6px 14px;font-size:0.82rem;background:transparent;border:1px solid rgba(6,182,212,0.4);color:#06b6d4;border-radius:6px;cursor:pointer;">
             💬 Message Artist
           </button>` : ''}

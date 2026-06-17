@@ -16,13 +16,27 @@ from sqlalchemy import text
 
 from backend.db import get_db
 from backend.routes.auth import get_current_user
-from backend.rate_limiter import limiter, RATE_EMAIL_SEND
+from backend.rate_limiter import limiter, rate_email_send_limit, rate_aff_track_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _site_base_url(db) -> str:
+    """Return canonical site URL from platform_settings. Audit fix (May 2026
+    part 5): centralizes lookup so affiliate signup links don't hardcode
+    gigsfill.com — staging/custom-domain deploys would otherwise leak prod URLs."""
+    try:
+        for _key in ("site_url", "base_url"):
+            row = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key = :k LIMIT 1"), {"k": _key}).first()
+            if row and row[0] and "127.0.0.1" not in row[0] and "localhost" not in row[0]:
+                return row[0].strip().rstrip("/")
+    except Exception:
+        pass
+    return "https://gigsfill.com"
+
 
 def _aff_setting(db, key, default):
     r = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key = :k"), {"k": key}).scalar()
@@ -33,14 +47,45 @@ def _aff_setting(db, key, default):
 
 
 def _get_quarter(dt: datetime = None) -> str:
-    """Return quarter string like '2026-Q1'"""
-    dt = dt or utcnow_naive()
+    """Return quarter string like '2026-Q1'.
+
+    Audit fix (May 2026 part 9): on quarter-boundary midnight in platform tz,
+    `utcnow_naive()` reads as the NEXT day in UTC for any platform tz behind
+    UTC (e.g. America/Los_Angeles). That made the quarter label flip up to
+    8 hours early and accrued earnings on Q4 Dec 31 23:30 PT to land in next
+    year's Q1. Compute the calendar quarter in platform-local time when no
+    explicit dt is passed.
+    """
+    if dt is None:
+        try:
+            import pytz as _pytz
+            from backend.db import SessionLocal as _SL
+            _db = _SL()
+            try:
+                _tz_str = _db.execute(text(
+                    "SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'"
+                )).scalar() or "America/Los_Angeles"
+            finally:
+                _db.close()
+            dt = datetime.now(_pytz.timezone(_tz_str)).replace(tzinfo=None)
+        except Exception:
+            dt = utcnow_naive()
     q = (dt.month - 1) // 3 + 1
     return f"{dt.year}-Q{q}"
 
 
 def _current_rate(db, referral_row) -> float:
-    """Return the current rate for a referral based on days since venue signup."""
+    """Return the current rate for a referral based on days since venue signup.
+
+    Audit fix (May 2026 part 9): the rates and the reduction window are read
+    LIVE from `platform_settings` (Admin → Affiliates → Affiliate Settings),
+    not snapshotted from the referral row at signup time. This was a critical
+    correctness gap — admin changing the platform-wide rate in the UI had no
+    effect on existing affiliates because every accrual reused the snapshot
+    rate stored on `affiliate_referrals` (typically 1.0% / 0.5% / 365d). Now:
+    live setting wins, row snapshot is a fallback only when the setting is
+    missing or unreadable.
+    """
     linked_at = referral_row["linked_at"]
     if isinstance(linked_at, str):
         try:
@@ -48,9 +93,18 @@ def _current_rate(db, referral_row) -> float:
         except Exception:
             linked_at = utcnow_naive()
     days_elapsed = (utcnow_naive() - linked_at).days
-    if days_elapsed >= referral_row["reduced_after_days"]:
-        return referral_row["reduced_rate_percent"]
-    return referral_row["initial_rate_percent"]
+
+    live_initial = _aff_setting(db, "affiliate_rate_percent", None)
+    live_reduced = _aff_setting(db, "affiliate_reduced_rate_percent", None)
+    live_days    = _aff_setting(db, "affiliate_reduced_after_days", None)
+
+    initial_pct = live_initial if live_initial is not None else referral_row["initial_rate_percent"]
+    reduced_pct = live_reduced if live_reduced is not None else referral_row["reduced_rate_percent"]
+    reduced_days = int(live_days) if live_days is not None else referral_row["reduced_after_days"]
+
+    if days_elapsed >= reduced_days:
+        return reduced_pct
+    return initial_pct
 
 
 def _check_admin(user):
@@ -63,13 +117,63 @@ def _check_admin(user):
 
 # ── Affiliate code click tracking (landing page cookie) ──────────────────────
 
+_AFF_CODE_RE = __import__('re').compile(r'^[A-Z0-9-]{4,20}$')
+
+
+def _safe_internal_redirect(redirect_to: str) -> str:
+    """Audit fix (May 2026 part 9c): the /api/affiliate/track endpoint is
+    publicly shared in recommend emails; an attacker who can hand-craft the
+    URL can use it as an open-redirect drop-off for phishing. Constrain to
+    same-origin relative paths only.
+    """
+    if not redirect_to:
+        return "/"
+    # Disallow scheme/authority/protocol-relative URLs
+    rt = redirect_to.strip()
+    if rt.startswith("//") or "://" in rt or rt.startswith("\\\\"):
+        return "/"
+    # Must start with a single slash (relative path on our origin)
+    if not rt.startswith("/"):
+        return "/"
+    # Length cap defends against weird payloads
+    if len(rt) > 200:
+        return "/"
+    return rt
+
+
 @router.get("/api/affiliate/track/{code}")
-def track_affiliate_click(code: str, redirect_to: str = "/", db=Depends(get_db)):
-    """Record affiliate click and set cookie, then redirect."""
-    code = code.strip().upper()
+@limiter.limit(rate_aff_track_limit)
+def track_affiliate_click(request: Request, code: str, redirect_to: str = "/", db=Depends(get_db)):
+    """Record affiliate click and set cookie, then redirect.
+
+    Audit fix (May 2026 part 9c):
+      - Rate-limited to 30/min/IP so bots can't spam the click-tracking writer.
+      - `redirect_to` is constrained to same-origin relative paths only — the
+        endpoint used to be an open redirect, perfect phishing vector.
+      - Code shape is validated BEFORE the DB query; obviously-bogus codes
+        skip the lookup entirely.
+      - When the program is disabled (`affiliate_enabled='false'`), the
+        endpoint still redirects so the link "works," but no cookie is set
+        and no DB writes happen — accruals would no-op anyway.
+    """
+    safe_redirect = _safe_internal_redirect(redirect_to)
+    code = (code or "").strip().upper()
+    if not _AFF_CODE_RE.match(code):
+        return RedirectResponse(safe_redirect)
+
+    # Kill switch — recommend links still navigate, but stop accruing state.
+    try:
+        en = db.execute(text(
+            "SELECT setting_value FROM platform_settings WHERE setting_key='affiliate_enabled'"
+        )).scalar()
+        if en is not None and str(en).lower() not in ("true", "1"):
+            return RedirectResponse(safe_redirect)
+    except Exception:
+        pass
+
     row = db.execute(text("SELECT id FROM users WHERE affiliate_code = :c"), {"c": code}).first()
     if not row:
-        return RedirectResponse(redirect_to)
+        return RedirectResponse(safe_redirect)
 
     # Mark any recommendation emails for this code as clicked (first click wins)
     try:
@@ -82,16 +186,20 @@ def track_affiliate_click(code: str, redirect_to: str = "/", db=Depends(get_db))
     except Exception as _e:
         logger.warning(f"Could not update affiliate click tracking: {_e}")
 
-    response = RedirectResponse(redirect_to)
-    # Cookie survives 90 days
-    response.set_cookie("aff_code", code, max_age=60 * 60 * 24 * 90, httponly=True, samesite="lax")
+    response = RedirectResponse(safe_redirect)
+    # Cookie survives 90 days. secure=True since production is HTTPS-only.
+    response.set_cookie(
+        "aff_code", code,
+        max_age=60 * 60 * 24 * 90,
+        httponly=True, samesite="lax", secure=True
+    )
     return response
 
 
 # ── Send Recommend Email ──────────────────────────────────────────────────────
 
 @router.post("/api/affiliate/recommend")
-@limiter.limit(RATE_EMAIL_SEND)
+@limiter.limit(rate_email_send_limit)
 async def send_recommend_email(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
     """Send a GigsFill recommendation email on behalf of a user.
 
@@ -107,6 +215,40 @@ async def send_recommend_email(request: Request, user=Depends(get_current_user),
 
     if not recipient_email or "@" not in recipient_email:
         raise HTTPException(400, "Valid recipient email required")
+
+    # Audit fix (May 2026 part 9c): kill switch — if the affiliate program is
+    # disabled, refuse new recommends. Existing recommends + accruals already
+    # short-circuit elsewhere; this closes the "send-then-resume-on-reenable"
+    # loophole.
+    en = db.execute(text(
+        "SELECT setting_value FROM platform_settings WHERE setting_key='affiliate_enabled'"
+    )).scalar()
+    if en is not None and str(en).lower() not in ("true", "1"):
+        raise HTTPException(403, "Affiliate program is currently disabled.")
+
+    # Audit fix (May 2026 part 9c): per-affiliate DAILY cap. The per-IP
+    # 10/min rate limit doesn't stop a determined user from blasting
+    # 14,400 emails/day; this caps any one affiliate at 50 sends per
+    # rolling 24h window (sends + resends combined) so a single
+    # compromised account can't burn SMTP reputation. Admin override:
+    # platform_settings.affiliate_daily_send_cap.
+    _cap = db.execute(text(
+        "SELECT COALESCE(setting_value, '50') FROM platform_settings WHERE setting_key='affiliate_daily_send_cap'"
+    )).scalar() or "50"
+    try:
+        cap = int(_cap)
+    except Exception:
+        cap = 50
+    if cap > 0:
+        recent = db.execute(text("""
+            SELECT COUNT(*) FROM affiliate_recommend_emails
+            WHERE sender_user_id = :uid
+              AND sent_at >= datetime('now', '-24 hours')
+        """), {"uid": user.id}).scalar() or 0
+        if int(recent) >= cap:
+            raise HTTPException(429,
+                f"Daily recommend-email cap reached ({cap}/24h). "
+                f"Try again tomorrow or contact support to raise the limit.")
 
     # Get sender's affiliate code
     aff_row = db.execute(text("SELECT affiliate_code, first_name, last_name FROM users WHERE id = :uid"), {"uid": user.id}).mappings().first()
@@ -127,12 +269,37 @@ async def send_recommend_email(request: Request, user=Depends(get_current_user),
         return JSONResponse({"ok": False, "already_claimed": True,
                              "message": "This email address was previously recommended by another user."})
 
-    # Build affiliate signup URL
-    signup_url = f"https://gigsfill.com/?aff={aff_code}"
+    # Build affiliate URL. Audit fix (May 2026 part 9c): route through the
+    # `/api/affiliate/track/{code}` endpoint so (a) the recommend email's
+    # `clicked` flag is recorded and (b) the cookie is set server-side
+    # before the landing page renders. Previously the email link bypassed
+    # the tracker entirely, so the "Clicked" badge on the affiliate's
+    # dashboard never lit up.
+    # Audit fix (May 2026 part 9d): land the recipient directly on the
+    # signup page instead of the bare homepage. The cookie is still set
+    # by the track endpoint; this just saves them a click and makes the
+    # intent of the email obvious ("we're inviting you to sign up").
+    # Audit fix (May 2026 part 5): pull from platform_settings.site_url so
+    # staging / custom-domain deploys don't leak gigsfill.com links.
+    base = _site_base_url(db)
+    signup_url = f"{base}/api/affiliate/track/{aff_code}?redirect_to=/app/signup-new.html%3Frole%3Dvenue"
 
-    # Build template variables
-    greeting  = f", {recipient_name}" if recipient_name else ""
-    note_html = f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#4b5563;padding:16px;background:#f0fdf4;border-left:4px solid #10b981;border-radius:4px;">{personal_note}</p>' if personal_note else ""
+    # Build template variables — every user-controlled field MUST be HTML-
+    # escaped before substitution. recipient_name and personal_note are
+    # supplied by the sender (untrusted); sender_name from DB CAN contain
+    # crafted chars (someone could put HTML in their first_name on signup).
+    # Audit fix (May 2026 part 9c).
+    from html import escape as _h
+    safe_recipient = _h(recipient_name)
+    safe_note      = _h(personal_note)
+    safe_sender    = _h(sender_name)
+    greeting  = f", {safe_recipient}" if safe_recipient else ""
+    note_html = (
+        f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#4b5563;'
+        f'padding:16px;background:#f0fdf4;border-left:4px solid #10b981;'
+        f'border-radius:4px;">{safe_note}</p>'
+        if safe_note else ""
+    )
 
     # Send using the recommend_gigsfill DB template
     try:
@@ -142,7 +309,7 @@ async def send_recommend_email(request: Request, user=Depends(get_current_user),
         if not template:
             raise Exception("recommend_gigsfill template not found in DB")
         variables = {
-            "user_name":          sender_name,
+            "user_name":          safe_sender,
             "recipient_greeting": greeting,
             "personal_note":      note_html,
             "aff_url":            signup_url,
@@ -212,22 +379,74 @@ def get_my_recommend_emails(user=Depends(get_current_user), db=Depends(get_db)):
 
 
 @router.post("/api/affiliate/resend-recommend/{email_id}")
-@limiter.limit(RATE_EMAIL_SEND)
+@limiter.limit(rate_email_send_limit)
 async def resend_recommend_email(request: Request, email_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Resend a recommendation email. Rate-limited 10/minute (see send_recommend_email)."""
+    """Resend a recommendation email. Rate-limited 10/minute per IP.
+
+    Audit fix (May 2026 part 9c): hard caps added on top of the per-IP
+    rate limit:
+      - Affiliate-program kill switch (refuse if disabled).
+      - Per-row resend cap (max 3 resends per recipient, ≥24h apart).
+      - Per-affiliate 24h cap (same constant as initial sends).
+    """
+    en = db.execute(text(
+        "SELECT setting_value FROM platform_settings WHERE setting_key='affiliate_enabled'"
+    )).scalar()
+    if en is not None and str(en).lower() not in ("true", "1"):
+        raise HTTPException(403, "Affiliate program is currently disabled.")
+
     row = db.execute(text("""
-        SELECT id, recipient_email, recipient_name, affiliate_code
+        SELECT id, recipient_email, recipient_name, affiliate_code,
+               COALESCE(resend_count, 0) AS resend_count, last_resent_at
         FROM affiliate_recommend_emails WHERE id = :id AND sender_user_id = :uid
     """), {"id": email_id, "uid": user.id}).mappings().first()
     if not row:
         raise HTTPException(404, "Email not found")
 
+    if int(row["resend_count"] or 0) >= 3:
+        raise HTTPException(429, "Resend limit reached for this recipient (3 max). Reach out via your own email if you need to follow up.")
+
+    # 5-minute cooldown between resends to the same recipient. Tightens to
+    # prevent click-spam while staying loose enough that legitimate testing
+    # works. The per-affiliate 50/24h cap + per-IP 10/min rate limit are
+    # the real abuse controls; this is just an "are you sure?" buffer.
+    if row["last_resent_at"]:
+        recent = db.execute(text("""
+            SELECT 1 FROM affiliate_recommend_emails
+            WHERE id = :id AND last_resent_at >= datetime('now', '-5 minutes')
+        """), {"id": email_id}).first()
+        if recent:
+            raise HTTPException(429, "Please wait a few minutes before resending to the same recipient.")
+
+    # Per-affiliate 24h cap (sends + resends combined)
+    _cap = db.execute(text(
+        "SELECT COALESCE(setting_value, '50') FROM platform_settings WHERE setting_key='affiliate_daily_send_cap'"
+    )).scalar() or "50"
+    try:
+        cap = int(_cap)
+    except Exception:
+        cap = 50
+    if cap > 0:
+        recent_total = db.execute(text("""
+            SELECT COUNT(*) FROM affiliate_recommend_emails
+            WHERE sender_user_id = :uid
+              AND (sent_at >= datetime('now', '-24 hours')
+                   OR last_resent_at >= datetime('now', '-24 hours'))
+        """), {"uid": user.id}).scalar() or 0
+        if int(recent_total) >= cap:
+            raise HTTPException(429,
+                f"Daily recommend-email cap reached ({cap}/24h). Try again tomorrow.")
+
     recipient_email = row["recipient_email"]
     recipient_name  = row["recipient_name"] or ""
     aff_code        = row["affiliate_code"]
-    aff_url         = f"https://gigsfill.com/?aff={aff_code}"
+    # Audit fix (May 2026 part 9c+9d): route through tracking endpoint
+    # (sets cookie + flags clicked) and land directly on signup page.
+    aff_url         = f"{_site_base_url(db)}/api/affiliate/track/{aff_code}?redirect_to=/app/signup-new.html%3Frole%3Dvenue"
     sender_name     = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
-    greeting        = f", {recipient_name}" if recipient_name else ""
+    from html import escape as _h
+    safe_recipient  = _h(recipient_name)
+    safe_sender     = _h(sender_name)
 
     try:
         from backend.email_service import EmailService
@@ -235,8 +454,8 @@ async def resend_recommend_email(request: Request, email_id: int, user=Depends(g
         template = es.get_template("recommend_gigsfill")
         if template:
             variables = {
-                "user_name": sender_name,
-                "recipient_greeting": f", {recipient_name}" if recipient_name else "",
+                "user_name": safe_sender,
+                "recipient_greeting": f", {safe_recipient}" if safe_recipient else "",
                 "personal_note": "",
                 "aff_url": aff_url,
             }
@@ -248,10 +467,14 @@ async def resend_recommend_email(request: Request, email_id: int, user=Depends(g
     except Exception as e:
         raise HTTPException(500, f"Email send failed: {e}")
 
-    # Update sent_at timestamp
-    db.execute(text(
-        "UPDATE affiliate_recommend_emails SET sent_at = CURRENT_TIMESTAMP WHERE id = :id"
-    ), {"id": email_id})
+    # Update resend tracking
+    db.execute(text("""
+        UPDATE affiliate_recommend_emails
+        SET sent_at = CURRENT_TIMESTAMP,
+            last_resent_at = CURRENT_TIMESTAMP,
+            resend_count = COALESCE(resend_count, 0) + 1
+        WHERE id = :id
+    """), {"id": email_id})
     db.commit()
     return {"ok": True}
 
@@ -333,7 +556,14 @@ def get_payout_preview(user=Depends(get_current_user), db=Depends(get_db)):
 
 @router.get("/api/affiliate/my-referrals")
 def get_my_referrals(user=Depends(get_current_user), db=Depends(get_db)):
-    """Get all venues referred by this user with earnings summary."""
+    """Get all venues referred by this user with earnings summary.
+
+    Audit fix (May 2026 part 9c): include a `current_rate_percent` field
+    computed by `_current_rate()` so the frontend "Linked Venues → Rate"
+    column shows the LIVE rate (the one actually applied to next
+    accrual) instead of the snapshot stored on the row at signup time.
+    The snapshot columns are still returned for the audit/admin view.
+    """
     rows = db.execute(text("""
         SELECT
             ar.id as referral_id, ar.venue_id, ar.linked_at, ar.link_method,
@@ -350,7 +580,15 @@ def get_my_referrals(user=Depends(get_current_user), db=Depends(get_db)):
         ORDER BY ar.linked_at DESC
     """), {"uid": user.id}).mappings().all()
 
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["current_rate_percent"] = _current_rate(db, d)
+        except Exception:
+            d["current_rate_percent"] = d.get("initial_rate_percent")
+        result.append(d)
+    return result
 
 
 @router.get("/api/affiliate/my-summary")
@@ -466,11 +704,14 @@ async def affiliate_stripe_onboard(request: Request, user=Depends(get_current_us
 
     if not account_id:
         user_row = db.execute(text("SELECT email FROM users WHERE id = :uid"), {"uid": user.id}).mappings().first()
+        # Audit fix (May 2026 part 8): idempotency key prevents creating
+        # duplicate affiliate Connect accounts on concurrent onboard clicks.
         account = stripe.Account.create(
             type="express",
             email=user_row["email"],
             capabilities={"transfers": {"requested": True}},
-            metadata={"gigsfill_user_id": str(user.id), "type": "affiliate"}
+            metadata={"gigsfill_user_id": str(user.id), "type": "affiliate"},
+            idempotency_key=f"affiliate_connect_create_{user.id}",
         )
         account_id = account.id
         # Upsert entity_payment_settings
@@ -490,11 +731,10 @@ async def affiliate_stripe_onboard(request: Request, user=Depends(get_current_us
             """), {"uid": user.id, "acid": account_id})
         db.commit()
 
-    # Audit fix (May 2026): read base_url from platform_settings rather than
-    # hardcoding gigsfill.com — staging or custom-domain deploys would have
-    # routed users back to production after onboarding.
-    _base = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='base_url'")).scalar() or "https://gigsfill.com"
-    _base = _base.rstrip("/")
+    # Audit fix (May 2026 part 5): use the shared _site_base_url helper so all
+    # affiliate URLs come from platform_settings.site_url (with base_url as
+    # legacy fallback). Hardcoded gigsfill.com is last resort.
+    _base = _site_base_url(db)
     link = stripe.AccountLink.create(
         account=account_id,
         refresh_url=f"{_base}/app/user-profile.html?tab=affiliates&stripe=refresh",
@@ -561,7 +801,7 @@ def accrue_affiliate_earnings(db, transaction_id: int):
         return
 
     txn = db.execute(text("""
-        SELECT t.id, t.amount_cents, t.gig_id, g.venue_id
+        SELECT t.id, t.amount_cents, t.commission_cents, t.gig_id, g.venue_id
         FROM transactions t
         JOIN gigs g ON g.id = t.gig_id
         WHERE t.id = :txid
@@ -583,26 +823,124 @@ def accrue_affiliate_earnings(db, transaction_id: int):
         return
 
     rate = _current_rate(db, referral)
-    earned_cents = int(txn["amount_cents"] * rate / 100)
+    # Audit fix (May 2026 part 9): the affiliate referral commission is a
+    # split of the gigsfill PLATFORM FEE — not a slice of the artist's pay.
+    # Previously this multiplied by `txn.amount_cents` (the artists' total
+    # pay), so a 5% rate on a $100 gig accrued $5 to the affiliate when the
+    # platform only earned $10 commission to begin with — a 10× overpay.
+    # Fee base is now `commission_cents` (the platform's actual revenue on
+    # that txn).
+    #
+    # Audit fix (May 2026 part 9c): the fallback to amount_cents must ONLY
+    # fire for LEGACY rows where commission_cents was never populated
+    # (NULL). For free-trial / promo venues where platform_fee_percent=0,
+    # commission_cents legitimately = 0, and the old `<= 0` fallback
+    # re-triggered the 10× overpay we just fixed. Use `is None` to detect
+    # truly-unpopulated rows; treat real-zero as "no platform revenue → no
+    # affiliate commission."
+    _comm_raw = txn["commission_cents"]
+    if _comm_raw is None:
+        fee_base = int(txn["amount_cents"] or 0)
+        logger.warning(
+            f"[AFFILIATE] txn {transaction_id}: commission_cents is NULL (legacy row?); "
+            f"falling back to amount_cents={fee_base}. This row should be backfilled."
+        )
+    else:
+        fee_base = int(_comm_raw)
+    earned_cents = int(fee_base * rate / 100)
     if earned_cents <= 0:
         return
 
     quarter = _get_quarter()
-    db.execute(text("""
-        INSERT INTO affiliate_earnings
-            (affiliate_user_id, venue_id, transaction_id, gig_fee_cents, rate_percent, earned_cents, quarter, accrued_at)
-        VALUES (:auid, :vid, :txid, :fee, :rate, :earned, :q, CURRENT_TIMESTAMP)
-    """), {
-        "auid": referral["affiliate_user_id"],
-        "vid": txn["venue_id"],
-        "txid": transaction_id,
-        "fee": txn["amount_cents"],
-        "rate": rate,
-        "earned": earned_cents,
-        "q": quarter,
-    })
-    db.commit()
-    logger.info(f"Affiliate earnings accrued: txn {transaction_id}, ${earned_cents/100:.2f} @ {rate}% for user {referral['affiliate_user_id']}")
+    # Audit fix (May 2026 part 8): defense against double-accrual race. The
+    # earlier SELECT-then-INSERT pattern is racy — two concurrent callers
+    # (payout_scheduler tick + a webhook retry) both pass the "don't
+    # double-accrue" gate and both INSERT, doubling the affiliate's payout.
+    # Ensure a UNIQUE index on transaction_id, then catch the IntegrityError
+    # so the second caller cleanly no-ops. The index is lazy-created at the
+    # top of the function on first call to avoid touching db.py migrations.
+    try:
+        db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_affiliate_earnings_txid ON affiliate_earnings(transaction_id)"))
+    except Exception:
+        pass
+    try:
+        db.execute(text("""
+            INSERT INTO affiliate_earnings
+                (affiliate_user_id, venue_id, transaction_id, gig_fee_cents, rate_percent, earned_cents, quarter, accrued_at)
+            VALUES (:auid, :vid, :txid, :fee, :rate, :earned, :q, CURRENT_TIMESTAMP)
+        """), {
+            "auid": referral["affiliate_user_id"],
+            "vid": txn["venue_id"],
+            "txid": transaction_id,
+            "fee": fee_base,
+            "rate": rate,
+            "earned": earned_cents,
+            "q": quarter,
+        })
+        db.commit()
+        logger.info(f"Affiliate earnings accrued: txn {transaction_id}, ${earned_cents/100:.2f} @ {rate}% for user {referral['affiliate_user_id']}")
+    except Exception as _ie:
+        # Race-loser: another caller inserted the row first. Roll back and
+        # treat as a no-op to preserve the single-accrual invariant.
+        db.rollback()
+        logger.info(f"Affiliate earnings accrue txn {transaction_id}: race-loser, skipping ({_ie})")
+
+
+def claw_back_affiliate_earnings(db, transaction_id: int, reason: str = "refund"):
+    """Audit fix (May 2026 part 9): when a parent venue_charge txn is refunded or
+    a dispute is lost, claw back any affiliate accrual tied to it. If the
+    earnings row has already been paid out (payout_id IS NOT NULL) we cannot
+    silently reverse — admin alert + ledger note so the platform owner can
+    decide whether to recover from the affiliate.
+    Returns one of: 'no_row', 'voided', 'paid_alert'.
+    """
+    row = db.execute(text("""
+        SELECT id, affiliate_user_id, earned_cents, payout_id
+        FROM affiliate_earnings WHERE transaction_id = :txid
+    """), {"txid": transaction_id}).mappings().first()
+    if not row:
+        return "no_row"
+
+    if row["payout_id"] is None:
+        # Still in the un-paid pool — safe to delete.
+        db.execute(
+            text("DELETE FROM affiliate_earnings WHERE id = :rid"),
+            {"rid": row["id"]}
+        )
+        db.commit()
+        logger.info(
+            f"[AFFILIATE_CLAWBACK] txn {transaction_id}: voided ${row['earned_cents']/100:.2f} "
+            f"un-paid earnings for affiliate user {row['affiliate_user_id']} ({reason})"
+        )
+        return "voided"
+
+    # Already paid — money has left the platform. Log loudly so admin can
+    # decide whether to net it out of a future quarter.
+    logger.error(
+        f"[AFFILIATE_CLAWBACK] txn {transaction_id}: CANNOT auto-claw — "
+        f"${row['earned_cents']/100:.2f} already paid to affiliate user "
+        f"{row['affiliate_user_id']} via payout {row['payout_id']} ({reason}). "
+        f"Manual recovery required."
+    )
+    try:
+        from backend.payout_scheduler import _send_admin_alert
+        from backend.db import get_db_connection
+        conn = get_db_connection()
+        try:
+            _send_admin_alert(
+                conn,
+                f"Affiliate clawback needed — txn {transaction_id}",
+                f"""<p>Transaction <strong>#{transaction_id}</strong> was {reason} but
+                ${row['earned_cents']/100:.2f} of affiliate commission has already been
+                paid out to affiliate user #{row['affiliate_user_id']} (payout #{row['payout_id']}).</p>
+                <p>The earnings row was NOT deleted — admin should net this out of the
+                affiliate's next quarterly payout or reach out for refund directly.</p>"""
+            )
+        finally:
+            conn.close()
+    except Exception as _ae:
+        logger.warning(f"clawback alert email failed: {_ae}")
+    return "paid_alert"
 
 
 # ── Quarterly Payout Admin Reminder Email ─────────────────────────────────────
@@ -739,11 +1077,13 @@ def run_quarterly_affiliate_payouts(db):
         import stripe
         stripe.api_key = stripe_key
 
-    # Find all affiliates with unpaid earnings
+    # Find all affiliates with unpaid earnings. Audit fix (May 2026 part 10c):
+    # removed `GROUP_CONCAT(DISTINCT ae.venue_id) as venue_ids` — the column
+    # was selected but never read, and GROUP_CONCAT is SQLite-only (PG uses
+    # string_agg). Dead code + Postgres incompatibility in one line.
     affiliates = db.execute(text("""
         SELECT ae.affiliate_user_id,
-               SUM(ae.earned_cents) as total_cents,
-               GROUP_CONCAT(DISTINCT ae.venue_id) as venue_ids
+               SUM(ae.earned_cents) as total_cents
         FROM affiliate_earnings ae
         WHERE ae.payout_id IS NULL
         GROUP BY ae.affiliate_user_id
@@ -785,13 +1125,24 @@ def run_quarterly_affiliate_payouts(db):
                 logger.error(f"Affiliate below-threshold email error for user {uid}: {e}")
             continue
 
-        # Create payout record (only for eligible affiliates)
+        # Create payout record (only for eligible affiliates).
+        # Audit fix (May 2026 part 7): `INSERT OR IGNORE` is SQLite-only —
+        # branch on _IS_POSTGRES and use `ON CONFLICT DO NOTHING` for PG.
         try:
-            db.execute(text("""
-                INSERT OR IGNORE INTO affiliate_payouts
-                    (affiliate_user_id, quarter, total_cents, status)
-                VALUES (:uid, :q, :total, 'processing')
-            """), {"uid": uid, "q": quarter, "total": total})
+            from backend.db import _IS_POSTGRES as _is_pg
+            if _is_pg:
+                db.execute(text("""
+                    INSERT INTO affiliate_payouts
+                        (affiliate_user_id, quarter, total_cents, status)
+                    VALUES (:uid, :q, :total, 'processing')
+                    ON CONFLICT (affiliate_user_id, quarter) DO NOTHING
+                """), {"uid": uid, "q": quarter, "total": total})
+            else:
+                db.execute(text("""
+                    INSERT OR IGNORE INTO affiliate_payouts
+                        (affiliate_user_id, quarter, total_cents, status)
+                    VALUES (:uid, :q, :total, 'processing')
+                """), {"uid": uid, "q": quarter, "total": total})
             db.commit()
         except Exception:
             db.rollback()
@@ -938,11 +1289,30 @@ def _send_quarterly_affiliate_email(db, uid, user_name, email, total_cents, venu
 </td></tr>
 </table></td></tr></table></body></html>"""
 
+    # Audit fix (May 2026 part 10c): the previous fallback called
+    # send_notification_email with EMPTY variables, so the affiliate_quarterly
+    # template (which has {{user_name}}, {{headline}} placeholders) would
+    # render with literal "{{user_name}}" in the body. Pass real variables
+    # if the template fallback fires.
     try:
         es._send_raw_email(to_email=email, subject=f"GigsFill Affiliate Earnings — {quarter}", html_body=body)
     except AttributeError:
-        es.send_notification_email(user_email=email, user_id=uid,
-            notification_type="affiliate_quarterly", variables={})
+        _headline = (
+            f"Your affiliate payout of ${total_cents/100:.2f} for {quarter} "
+            f"{'has been sent!' if (meets_min and transfer_id) else 'is being processed.'}"
+            if meets_min
+            else f"Your earnings of ${total_cents/100:.2f} for {quarter} are below the "
+                 f"${min_cents/100:.0f} minimum and will roll over."
+        )
+        es.send_notification_email(
+            user_email=email, user_id=uid,
+            notification_type="affiliate_quarterly",
+            variables={
+                "user_name": user_name,
+                "quarter": quarter,
+                "headline": _headline,
+            }
+        )
 
 
 # ── Admin Endpoints ───────────────────────────────────────────────────────────
@@ -964,16 +1334,73 @@ async def update_affiliate_settings(request: Request, user=Depends(get_current_u
     _check_admin(user)
     data = await request.json()
     allowed = ["affiliate_enabled", "affiliate_rate_percent", "affiliate_reduced_rate_percent",
-               "affiliate_reduced_after_days", "affiliate_min_payout_cents", "affiliate_1099_threshold_cents"]
+               "affiliate_reduced_after_days", "affiliate_min_payout_cents",
+               "affiliate_1099_threshold_cents", "affiliate_daily_send_cap"]
+
+    # Audit fix (May 2026 part 9c): range-validate before writing. The
+    # earlier endpoint accepted any string — a typo of "15.0" instead of
+    # "1.5" would quadruple every affiliate's earnings live across the
+    # platform (because _current_rate now reads live from settings on
+    # every accrual). Each field has explicit min/max and type rules.
+    def _validate(key, raw):
+        if key == "affiliate_enabled":
+            v = str(raw).lower()
+            if v not in ("true", "false", "1", "0"):
+                raise HTTPException(400, f"{key}: must be true/false")
+            return "true" if v in ("true", "1") else "false"
+        if key in ("affiliate_rate_percent", "affiliate_reduced_rate_percent"):
+            try: f = float(raw)
+            except: raise HTTPException(400, f"{key}: must be a number")
+            if f < 0 or f > 50:
+                raise HTTPException(400, f"{key}: must be between 0 and 50 (percent)")
+            return str(f)
+        if key == "affiliate_reduced_after_days":
+            try: i = int(float(raw))
+            except: raise HTTPException(400, f"{key}: must be an integer")
+            if i < 0 or i > 36500:
+                raise HTTPException(400, f"{key}: must be between 0 and 36500 (days)")
+            return str(i)
+        if key in ("affiliate_min_payout_cents", "affiliate_1099_threshold_cents"):
+            try: i = int(float(raw))
+            except: raise HTTPException(400, f"{key}: must be an integer (cents)")
+            if i < 0 or i > 100_000_00:  # $100k upper bound
+                raise HTTPException(400, f"{key}: must be between 0 and 10000000 cents")
+            return str(i)
+        if key == "affiliate_daily_send_cap":
+            try: i = int(float(raw))
+            except: raise HTTPException(400, f"{key}: must be an integer")
+            if i < 0 or i > 10000:
+                raise HTTPException(400, f"{key}: must be between 0 and 10000")
+            return str(i)
+        return str(raw)
+
+    # Audit fix (May 2026 part 3): snapshot before-state so the audit row
+    # captures what changed.
+    before = {}
     for key in allowed:
         if key in data:
-            val = str(data[key])
+            cur = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key = :k"), {"k": key}).first()
+            before[key] = cur[0] if cur else None
+    after = {}
+    for key in allowed:
+        if key in data:
+            val = _validate(key, data[key])
+            after[key] = val
             existing = db.execute(text("SELECT id FROM platform_settings WHERE setting_key = :k"), {"k": key}).first()
             if existing:
                 db.execute(text("UPDATE platform_settings SET setting_value = :v WHERE setting_key = :k"), {"v": val, "k": key})
             else:
                 db.execute(text("INSERT INTO platform_settings (setting_key, setting_value) VALUES (:k, :v)"), {"k": key, "v": val})
     db.commit()
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "update_affiliate_settings",
+            target_table="platform_settings", target_id=None,
+            before=before, after=after, request=request,
+        )
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -1073,28 +1500,67 @@ async def manual_link_affiliate(request: Request, user=Depends(get_current_user)
     if not aff_user:
         raise HTTPException(404, "Affiliate code not found")
 
-    venue = db.execute(text("SELECT id FROM venues WHERE id = :vid"), {"vid": venue_id}).first()
+    venue = db.execute(text("SELECT id, user_id FROM venues WHERE id = :vid"), {"vid": venue_id}).mappings().first()
     if not venue:
         raise HTTPException(404, "Venue not found")
 
-    # Capture pre-existing referral for audit (INSERT OR REPLACE blows it away)
+    # Audit fix (May 2026 part 9c): block admin from linking an affiliate to
+    # a venue they themselves own — closes the self-referral path the signup
+    # flow already blocks.
+    if int(aff_user[0]) == int(venue["user_id"]):
+        raise HTTPException(400,
+            "Cannot link this affiliate to a venue they own — that would be self-referral.")
+
+    # Capture pre-existing referral for audit AND to refuse silent overwrite
     before_row = db.execute(text(
-        "SELECT affiliate_user_id, link_method, initial_rate_percent, reduced_rate_percent, reduced_after_days "
+        "SELECT affiliate_user_id, link_method, initial_rate_percent, "
+        "reduced_rate_percent, reduced_after_days, linked_at "
         "FROM affiliate_referrals WHERE venue_id = :vid"
     ), {"vid": venue_id}).mappings().first()
+
+    # Audit fix (May 2026 part 9c): refuse to overwrite an existing link
+    # unless caller explicitly opts in with `force=True`. The old
+    # `INSERT OR REPLACE` blew away the existing row INCLUDING `linked_at`,
+    # silently restarting the full-rate window AND swapping the affiliate
+    # to a different user — both real money implications with no warning.
+    force = bool(data.get("force"))
+    if before_row and not force:
+        raise HTTPException(409, {
+            "error": "venue_already_linked",
+            "message": (f"Venue is already linked to affiliate user "
+                        f"#{before_row['affiliate_user_id']} since {before_row['linked_at']}. "
+                        f"Re-submit with force=true to replace (will reset the rate window)."),
+            "current_link": dict(before_row),
+        })
 
     init_rate    = _aff_setting(db, "affiliate_rate_percent", 1.0)
     reduced_rate = _aff_setting(db, "affiliate_reduced_rate_percent", 0.5)
     reduced_days = int(_aff_setting(db, "affiliate_reduced_after_days", 365))
 
     try:
-        db.execute(text("""
-            INSERT OR REPLACE INTO affiliate_referrals
-                (affiliate_user_id, venue_id, link_method, initial_rate_percent,
-                 reduced_rate_percent, reduced_after_days, manually_linked_by)
-            VALUES (:auid, :vid, 'manual', :init, :red, :days, :admin_id)
-        """), {"auid": aff_user[0], "vid": venue_id, "init": init_rate,
-               "red": reduced_rate, "days": reduced_days, "admin_id": user.id})
+        if before_row:
+            # Preserve linked_at to avoid resetting the rate window on a
+            # legitimate admin re-link (e.g. correcting a typo). The
+            # initial/reduced columns are intentionally updated.
+            db.execute(text("""
+                UPDATE affiliate_referrals
+                SET affiliate_user_id = :auid,
+                    link_method = 'manual',
+                    initial_rate_percent = :init,
+                    reduced_rate_percent = :red,
+                    reduced_after_days = :days,
+                    manually_linked_by = :admin_id
+                WHERE venue_id = :vid
+            """), {"auid": aff_user[0], "vid": venue_id, "init": init_rate,
+                   "red": reduced_rate, "days": reduced_days, "admin_id": user.id})
+        else:
+            db.execute(text("""
+                INSERT INTO affiliate_referrals
+                    (affiliate_user_id, venue_id, link_method, initial_rate_percent,
+                     reduced_rate_percent, reduced_after_days, manually_linked_by)
+                VALUES (:auid, :vid, 'manual', :init, :red, :days, :admin_id)
+            """), {"auid": aff_user[0], "vid": venue_id, "init": init_rate,
+                   "red": reduced_rate, "days": reduced_days, "admin_id": user.id})
         db.commit()
 
         from backend.utils import log_admin_action
@@ -1127,35 +1593,90 @@ def delete_referral(request: Request, referral_id: int, user=Depends(get_current
         "FROM affiliate_referrals WHERE id = :rid"
     ), {"rid": referral_id}).mappings().first()
 
+    # Audit fix (May 2026 part 6): also drop unpaid affiliate_earnings rows for
+    # this (affiliate_user_id, venue_id) pair. Previously `delete_referral`
+    # only removed the referral row, leaving orphan earnings that the next
+    # quarterly sweep summed via `WHERE ae.payout_id IS NULL` and paid out —
+    # admin-revoked referrals would still earn money.
+    earnings_voided = 0
+    if before_row:
+        try:
+            _res = db.execute(
+                text("""DELETE FROM affiliate_earnings
+                        WHERE affiliate_user_id = :uid
+                          AND venue_id = :vid
+                          AND payout_id IS NULL"""),
+                {"uid": before_row["affiliate_user_id"], "vid": before_row["venue_id"]}
+            )
+            earnings_voided = _res.rowcount or 0
+        except Exception as _ee:
+            logger.warning(f"delete_referral: earnings cleanup failed for ref {referral_id}: {_ee}")
     db.execute(text("DELETE FROM affiliate_referrals WHERE id = :rid"), {"rid": referral_id})
     db.commit()
 
+    # Audit fix (May 2026 part 9c): notify the affected affiliate so the
+    # venue doesn't silently vanish from their dashboard. They still keep
+    # any payouts that already cleared (paid is paid); the cleanup above
+    # voided only un-paid earnings on that link.
+    if before_row:
+        try:
+            _venue_name = db.execute(text(
+                "SELECT venue_name FROM venues WHERE id = :vid"
+            ), {"vid": before_row["venue_id"]}).scalar() or f"Venue #{before_row['venue_id']}"
+            from backend.services.notification_service import create_notification as _cn
+            _cn(db, before_row["affiliate_user_id"], "affiliate_link_removed",
+                "Affiliate link removed",
+                (f"Admin removed your affiliate link to {_venue_name}. "
+                 f"Any previously paid commissions are unaffected; un-paid "
+                 f"earnings on this venue ({earnings_voided} row(s)) have been "
+                 f"voided. Contact support if you believe this was in error."),
+                venue_id=before_row["venue_id"])
+            db.commit()
+        except Exception as _ne:
+            logger.warning(f"delete_referral notification fan-out failed for "
+                           f"ref {referral_id}: {_ne}")
+
     from backend.utils import log_admin_action
+    _audit_after = {"earnings_voided": earnings_voided}
     log_admin_action(
         db, user, "delete_referral",
         target_table="affiliate_referrals", target_id=referral_id,
         before=(dict(before_row) if before_row else None),
+        after=_audit_after,
         request=request,
     )
-    return {"ok": True}
+    return {"ok": True, "earnings_voided": earnings_voided}
 
 
 @router.get("/api/admin/affiliate/venue-search")
 def venue_search_for_affiliate(q: str = "", user=Depends(get_current_user), db=Depends(get_db)):
     _check_admin(user)
+    # Audit fix (May 2026 part 10b): escape SQL LIKE wildcards in user input.
+    # `%` and `_` in the venue name (e.g. "100% Live") used to expand the
+    # search unexpectedly. ESCAPE '\\' tells the LIKE engine to treat the
+    # backslash-escaped wildcard as a literal.
+    safe_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     rows = db.execute(text("""
         SELECT v.id, v.venue_name, v.city, v.state,
                u.email as owner_email,
                (SELECT ar.affiliate_user_id FROM affiliate_referrals ar WHERE ar.venue_id = v.id LIMIT 1) as affiliate_user_id
         FROM venues v
         JOIN users u ON u.id = v.user_id
-        WHERE v.venue_name LIKE :q OR u.email LIKE :q OR v.city LIKE :q
+        WHERE v.venue_name LIKE :q ESCAPE '\\'
+           OR u.email      LIKE :q ESCAPE '\\'
+           OR v.city       LIKE :q ESCAPE '\\'
         LIMIT 20
-    """), {"q": f"%{q}%"}).mappings().all()
+    """), {"q": f"%{safe_q}%"}).mappings().all()
     return [dict(r) for r in rows]
 
 
 @router.post("/api/admin/affiliate/run-payouts")
+# Audit fix (May 2026 part 5): each call loops over every eligible
+# affiliate and fires `stripe.Transfer.create`. A misclick/refresh
+# during a long run could double-trigger; per-payout idempotency keys
+# protect each transfer but the unbounded loop still burns Stripe API
+# budget. Cap to 2/minute — manual ops only.
+@limiter.limit("2/minute")
 async def run_payouts_manual(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
     """Manually trigger quarterly payout run (admin only)."""
     _check_admin(user)

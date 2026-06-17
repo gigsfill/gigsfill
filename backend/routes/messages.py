@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from backend.routes.auth import get_current_user
 from backend.db import get_db
-from backend.rate_limiter import limiter, RATE_EMAIL_SEND
+from backend.rate_limiter import limiter, rate_email_send_limit
 
 logger = logging.getLogger("gigsfill.messages")
 router = APIRouter()
@@ -233,12 +233,34 @@ def get_messages(gig_id: int, artist_id: int = None, user=Depends(get_current_us
         logger.error(f"get_messages _get_user_role failed for gig {gig_id} user {user.id}: {type(e).__name__}: {e}")
         raise HTTPException(500, f"Server error loading messages: {type(e).__name__}")
 
-    # Build artist_id filter: venue scoping by specific artist, or artist scoping to self
+    # Build artist_id filter: venue scoping by specific artist, or artist scoping to self.
+    # Audit fix (May 2026 part 10): when caller is an artist, IGNORE any
+    # artist_id query param and force-scope to their own entity. Previously,
+    # an artist on a multi-slot gig could pass ?artist_id=<other_artist_on_same_gig>
+    # and read that artist's private thread with the venue.
     filter_entity_id = None
-    if artist_id:
+    if role == "artist":
+        # Artists may also own multiple acts on the same gig. If they explicitly
+        # name one of THEIR OWN artist IDs, honor it; otherwise default to the
+        # first match resolved by _get_user_role_for_gig.
+        if artist_id:
+            try:
+                owned = db.execute(text("""
+                    SELECT 1 FROM artists a
+                    WHERE a.id = :aid AND (
+                        a.user_id = :uid
+                        OR EXISTS (SELECT 1 FROM entity_users eu
+                                   WHERE eu.entity_type='artist' AND eu.entity_id=a.id AND eu.user_id=:uid)
+                    )
+                """), {"aid": int(artist_id), "uid": user.id}).first()
+            except Exception:
+                owned = None
+            filter_entity_id = int(artist_id) if owned else entity_id
+        else:
+            filter_entity_id = entity_id
+    elif artist_id:
+        # Venue caller — can scope to any artist on their gig (existing behavior)
         filter_entity_id = artist_id
-    elif role == "artist":
-        filter_entity_id = entity_id
 
     messages = db.execute(
         text("""
@@ -284,7 +306,8 @@ def get_messages(gig_id: int, artist_id: int = None, user=Depends(get_current_us
                        a.name as artist_name
                 FROM gigs g
                 JOIN venues v ON v.id = g.venue_id
-                LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status IN ('booked','pending_contract')
+                -- Audit fix (May 2026 part 6): include awaiting_venue_contract + pending_venue_approval
+                LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                 LEFT JOIN artists a ON a.id = gs.artist_id
                 WHERE g.id = :gid
                 ORDER BY gs.slot_number ASC
@@ -304,7 +327,7 @@ def get_messages(gig_id: int, artist_id: int = None, user=Depends(get_current_us
 
 # ── SEND MESSAGE ──────────────────────────────────────────────────────────────
 @router.post("/api/gigs/{gig_id}/messages")
-@limiter.limit(RATE_EMAIL_SEND)
+@limiter.limit(rate_email_send_limit)
 def send_message(request: Request, gig_id: int, data: dict,
                  user=Depends(get_current_user), db=Depends(get_db)):
     """Send a message in a gig thread. Triggers email notification to the other party.
@@ -318,6 +341,21 @@ def send_message(request: Request, gig_id: int, data: dict,
     body = str(data.get("body", "")).strip()[:3000]
     if not body:
         raise HTTPException(400, "Message body is required")
+
+    # Audit fix (May 2026 part 10): refuse new messages on cancelled gigs.
+    # Threads themselves remain readable (post-cancel follow-up about pay,
+    # logistics, etc. is fine), but writes are blocked so the cancelled
+    # thread doesn't keep growing or generating notifications.
+    try:
+        _g_status = db.execute(text(
+            "SELECT status FROM gigs WHERE id = :gid"
+        ), {"gid": gig_id}).scalar()
+        if _g_status == "cancelled":
+            raise HTTPException(409, "This gig has been cancelled — messages are read-only.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     # For venue sender: capture which artist this message is directed to
     target_artist_id = None
@@ -400,38 +438,130 @@ def send_message(request: Request, gig_id: int, data: dict,
     if role == "venue" and target_artist_id:
         notify_entity_id = target_artist_id
 
-    # Send email notification to the other party
+    # Audit fix (May 2026 part 10): per-thread email coalescing. Suppress the
+    # email if there's an unread message from THIS sender on THIS thread sent
+    # in the last 5 minutes. A chatty exchange of 10 quick replies used to
+    # send 10 separate emails to the recipient, burning SMTP reputation and
+    # generating inbox spam. The in-app notification (below) still fires
+    # every time so the recipient gets a live indicator without inbox noise.
+    skip_email = False
     try:
-        _notify_other_party(db, gig_id, user.id, role, sender_name, body, sender_entity_id=notify_entity_id)
-    except Exception as e:
-        logger.warning(f"Message notification failed for gig {gig_id}: {e}")
+        _recent_dup = db.execute(text("""
+            SELECT 1 FROM gig_messages
+            WHERE gig_id = :gid
+              AND sender_user_id = :uid
+              AND id < :this_id
+              AND is_read = 0
+              AND created_at >= datetime('now', '-5 minutes')
+            LIMIT 1
+        """), {"gid": gig_id, "uid": user.id, "this_id": msg_id}).first()
+        if _recent_dup:
+            skip_email = True
+            logger.info(f"Message {msg_id}: skipping email (coalesced — prior unread from same sender within 5 min)")
+    except Exception:
+        pass
+
+    # Send email notification to the other party
+    if not skip_email:
+        try:
+            _notify_other_party(db, gig_id, user.id, role, sender_name, body, sender_entity_id=notify_entity_id)
+        except Exception as e:
+            logger.warning(f"Message notification failed for gig {gig_id}: {e}")
+
+    # Audit fix (May 2026 part 10): in-app notification on every send, fanned
+    # out across entity_users. Previously only email fired — a user with
+    # email muted got no live indicator beyond the 30s-polled badge.
+    try:
+        from backend.services.notification_service import create_notification
+        from backend.utils import get_all_entity_users
+        # Determine which entity should receive the notification
+        if role == "venue":
+            # Notify the target artist's users
+            if target_artist_id:
+                _recipients = get_all_entity_users(db, "artist", target_artist_id)
+                _ctx_aid = target_artist_id
+                _ctx_vid = entity_id
+            else:
+                _recipients, _ctx_aid, _ctx_vid = [], None, entity_id
+        else:  # artist sender → venue users
+            venue_row = db.execute(text(
+                "SELECT v.id FROM venues v JOIN gigs g ON g.venue_id = v.id WHERE g.id = :gid"
+            ), {"gid": gig_id}).first()
+            _ctx_vid = venue_row[0] if venue_row else None
+            _ctx_aid = entity_id
+            _recipients = get_all_entity_users(db, "venue", _ctx_vid) if _ctx_vid else []
+
+        _body_preview = (body or "")[:120] + ("…" if (body or "") and len(body) > 120 else "")
+        for _u in _recipients:
+            if _u["user_id"] == user.id:
+                continue  # don't notify the sender themselves
+            create_notification(db, _u["user_id"], "new_message",
+                f"New message from {sender_name}",
+                _body_preview, gig_id=gig_id, venue_id=_ctx_vid, artist_id=_ctx_aid)
+        db.commit()
+    except Exception as _ne:
+        logger.warning(f"new-message in-app notification failed for gig {gig_id}: {_ne}")
 
     return {"ok": True, "message_id": msg_id}
 
 
 # ── MARK THREAD AS READ ───────────────────────────────────────────────────────
 @router.put("/api/gigs/{gig_id}/messages/read")
-def mark_read(gig_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Mark all messages in this gig thread as read for the current user."""
+def mark_read(gig_id: int, last_message_id: int = None, artist_id: int = None,
+              user=Depends(get_current_user), db=Depends(get_db)):
+    """Mark messages in this gig thread as read for the current user.
+
+    Audit fix (May 2026 part 10):
+      - Optional `last_message_id` query param caps the UPDATE to messages
+        with id <= last_message_id. Closes the race where a polling refresh
+        at the same instant a new message lands silently marks the new
+        message read before the user has seen it on screen.
+      - Optional `artist_id` (for artists who own multiple acts) scopes
+        the mark-read to one thread, so A1's mark-read doesn't clear A2's
+        unread state on the same gig.
+    """
     try:
         _ensure_gig_messages_table(db)
     except Exception as e:
         logger.error(f"mark_read ensure failed for gig {gig_id}: {e}")
     try:
-        _get_user_role_for_gig(db, gig_id, user.id)  # auth check
+        role, entity_id, _name = _get_user_role_for_gig(db, gig_id, user.id)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"mark_read _get_user_role failed gig {gig_id} user {user.id}: {type(e).__name__}: {e}")
         raise HTTPException(500, f"Server error: {type(e).__name__}")
 
+    # Determine which thread to mark — artists may own multiple acts on
+    # one gig; default to the act the helper resolved, but accept an
+    # explicit override that must be one of THEIR own artists.
+    filter_eid = None
+    if role == "artist":
+        if artist_id:
+            owned = db.execute(text("""
+                SELECT 1 FROM artists a
+                WHERE a.id = :aid AND (
+                    a.user_id = :uid
+                    OR EXISTS (SELECT 1 FROM entity_users eu
+                               WHERE eu.entity_type='artist' AND eu.entity_id=a.id AND eu.user_id=:uid)
+                )
+            """), {"aid": int(artist_id), "uid": user.id}).first()
+            filter_eid = int(artist_id) if owned else entity_id
+        else:
+            filter_eid = entity_id
+
+    params = {"gid": gig_id, "uid": user.id, "feid": filter_eid, "lid": last_message_id}
     db.execute(
         text("""
             UPDATE gig_messages
             SET is_read = 1
             WHERE gig_id = :gid AND sender_user_id != :uid AND is_read = 0
+              AND (:lid IS NULL OR id <= :lid)
+              AND (:feid IS NULL
+                   OR sender_entity_id = :feid
+                   OR (sender_type = 'venue' AND target_artist_id = :feid))
         """),
-        {"gid": gig_id, "uid": user.id}
+        params
     )
     db.commit()
     return {"ok": True}
@@ -502,12 +632,18 @@ def get_inbox(artist_id: int = None, venue_id: int = None, user=Depends(get_curr
                     v.venue_name,
                     tp.artist_id,
                     a.name    as artist_name,
+                    -- Audit fix (May 2026 part 10): exclude unread on cancelled gigs to
+                    -- match the header-badge filter at /api/me/messages/unread-count;
+                    -- otherwise the inbox sum ≠ the badge.
                     (SELECT COUNT(*) FROM gig_messages um
                      WHERE um.gig_id = tp.gig_id
                        AND um.sender_user_id != :uid
                        AND um.is_read = 0
                        AND (um.sender_entity_id = tp.artist_id
                             OR (um.sender_type='venue' AND (um.target_artist_id = tp.artist_id OR um.target_artist_id IS NULL)))
+                       AND EXISTS (
+                         SELECT 1 FROM gigs ug WHERE ug.id = um.gig_id AND ug.status NOT IN ('cancelled')
+                       )
                     ) as unread_count
                 FROM thread_pairs tp
                 JOIN gigs    g ON g.id = tp.gig_id
@@ -528,11 +664,11 @@ def get_inbox(artist_id: int = None, venue_id: int = None, user=Depends(get_curr
                     SELECT g2.id FROM gigs g2 JOIN artists a2 ON a2.id=g2.artist_id WHERE a2.user_id=:uid
                     UNION
                     SELECT gs.gig_id FROM gig_slots gs JOIN artists a2 ON a2.id=gs.artist_id
-                      WHERE gs.status='booked' AND a2.user_id=:uid
+                      WHERE gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') AND a2.user_id=:uid
                     UNION
                     SELECT gs.gig_id FROM gig_slots gs JOIN artists a2 ON a2.id=gs.artist_id
                       JOIN entity_users eu ON eu.entity_type='artist' AND eu.entity_id=a2.id
-                      WHERE gs.status='booked' AND eu.user_id=:uid
+                      WHERE gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') AND eu.user_id=:uid
                     UNION
                     SELECT gs.gig_id FROM gig_slots gs JOIN artists a2 ON a2.id=gs.artist_id
                       WHERE gs.status='pending_venue_approval' AND a2.user_id=:uid
@@ -615,11 +751,11 @@ def unread_count(venue_id: int = None, artist_id: int = None, user=Depends(get_c
         artist_gigs = db.execute(
             text("""
                 SELECT gs.gig_id FROM gig_slots gs JOIN artists a ON a.id=gs.artist_id
-                WHERE gs.status='booked' AND a.user_id=:uid
+                WHERE gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') AND a.user_id=:uid
                 UNION
                 SELECT gs.gig_id FROM gig_slots gs JOIN artists a ON a.id=gs.artist_id
                   JOIN entity_users eu ON eu.entity_type='artist' AND eu.entity_id=a.id
-                WHERE gs.status='booked' AND eu.user_id=:uid
+                WHERE gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') AND eu.user_id=:uid
                 UNION
                 SELECT gs.gig_id FROM gig_slots gs JOIN artists a ON a.id=gs.artist_id
                 WHERE gs.status='pending_venue_approval' AND a.user_id=:uid
@@ -639,12 +775,19 @@ def unread_count(venue_id: int = None, artist_id: int = None, user=Depends(get_c
     params = {f"g{i}": gid for i, gid in enumerate(all_gig_ids)}
     params["uid"] = user.id
 
+    # Audit fix (May 2026 part 9): exclude gigs that have been cancelled or
+    # deleted entirely from the unread badge — they stick around with stale
+    # messages because cleanup_gig_records only DELETEs gig_messages on full
+    # gig deletion; cancellation paths that reopen the gig keep the thread.
+    # The badge should reflect actionable conversations only.
     count = db.execute(
         text(f"""
-            SELECT COUNT(*) FROM gig_messages
-            WHERE gig_id IN ({placeholders})
-              AND sender_user_id != :uid
-              AND is_read = 0
+            SELECT COUNT(*) FROM gig_messages gm
+            JOIN gigs g ON g.id = gm.gig_id
+            WHERE gm.gig_id IN ({placeholders})
+              AND gm.sender_user_id != :uid
+              AND gm.is_read = 0
+              AND g.status NOT IN ('cancelled')
         """),
         params
     ).scalar() or 0
@@ -708,7 +851,7 @@ def _notify_other_party(db, gig_id: int, sender_user_id: int, sender_role: str,
                     JOIN users vu ON vu.id = v.user_id
                     LEFT JOIN artists a_direct ON a_direct.id = g.artist_id
                     LEFT JOIN users au_direct ON au_direct.id = a_direct.user_id
-                    LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status = 'booked'
+                    LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                         AND gs.id = (SELECT MIN(gs2.id) FROM gig_slots gs2
                                      WHERE gs2.gig_id = g.id AND gs2.status = 'booked')
                     LEFT JOIN artists a_slot ON a_slot.id = gs.artist_id
@@ -857,223 +1000,3 @@ def _notify_other_party(db, gig_id: int, sender_user_id: int, sender_role: str,
     except Exception as e:
         logger.warning(f"Message email notification failed: {e}")
 
-    # Get gig info — resolve artist from sender_entity_id (if artist) or booked slot
-    if sender_role == "artist" and sender_entity_id:
-        # Use the specific artist who sent the message
-        gig = db.execute(
-            T("""
-                SELECT g.title, g.date, v.venue_name as venue_name, v.id as venue_id,
-                       a.name as artist_name, a.id as artist_id,
-                       vu.email as venue_email, au.email as artist_email
-                FROM gigs g
-                JOIN venues v ON v.id = g.venue_id
-                JOIN users vu ON vu.id = v.user_id
-                JOIN artists a ON a.id = :aid
-                JOIN users au ON au.id = a.user_id
-                WHERE g.id = :gid
-                LIMIT 1
-            """),
-            {"gid": gig_id, "aid": sender_entity_id}
-        ).mappings().first()
-    else:
-        # Venue sender: sender_entity_id is now the TARGET artist_id (passed from frontend)
-        # Use it directly to look up the correct artist email
-        if sender_entity_id:
-            gig = db.execute(
-                T("""
-                    SELECT g.title, g.date, v.venue_name as venue_name, v.id as venue_id,
-                           a.name as artist_name, a.id as artist_id,
-                           vu.email as venue_email, au.email as artist_email
-                    FROM gigs g
-                    JOIN venues v ON v.id = g.venue_id
-                    JOIN users vu ON vu.id = v.user_id
-                    JOIN artists a ON a.id = :aid
-                    JOIN users au ON au.id = a.user_id
-                    WHERE g.id = :gid
-                    LIMIT 1
-                """),
-                {"gid": gig_id, "aid": sender_entity_id}
-            ).mappings().first()
-        else:
-            # Fallback: find artist from first booked slot
-            gig = db.execute(
-                T("""
-                    SELECT g.title, g.date, v.venue_name as venue_name, v.id as venue_id,
-                           COALESCE(a_direct.name, a_slot.name) as artist_name,
-                           COALESCE(a_direct.id, a_slot.id) as artist_id,
-                           vu.email as venue_email,
-                           COALESCE(au_direct.email, au_slot.email) as artist_email
-                    FROM gigs g
-                    JOIN venues v ON v.id = g.venue_id
-                    JOIN users vu ON vu.id = v.user_id
-                    LEFT JOIN artists a_direct ON a_direct.id = g.artist_id
-                    LEFT JOIN users au_direct ON au_direct.id = a_direct.user_id
-                    LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status = 'booked'
-                        AND gs.id = (SELECT MIN(gs2.id) FROM gig_slots gs2
-                                     WHERE gs2.gig_id = g.id AND gs2.status = 'booked')
-                    LEFT JOIN artists a_slot ON a_slot.id = gs.artist_id
-                    LEFT JOIN users au_slot ON au_slot.id = a_slot.user_id
-                    WHERE g.id = :gid
-                    LIMIT 1
-                """),
-                {"gid": gig_id}
-            ).mappings().first()
-
-    if not gig:
-        return
-
-    # Who gets the notification?
-    if sender_role == "venue":
-        to_email = gig["artist_email"]
-        to_name = gig["artist_name"] or "Artist"
-    else:
-        to_email = gig["venue_email"]
-        to_name = gig["venue_name"] or "Venue"
-
-    if not to_email:
-        return
-
-    # Build correct deep-link — artist link uses their actual artist_id
-    site_url = db.execute(
-        T("SELECT setting_value FROM platform_settings WHERE setting_key='site_url'")
-    ).scalar() or "https://gigsfill.com"
-    if sender_role == "artist":
-        gig_link = f"{site_url}/app/venue-create-gigs.html?venue_id={gig.get('venue_id', '')}#messages"
-    else:
-        artist_id_for_link = sender_entity_id or gig.get("artist_id", "")
-        gig_link = f"{site_url}/app/artist-book-gigs.html?artist_id={artist_id_for_link}#messages"
-
-    gig_date_str = gig.get('date', '') or ''
-    gig_title_str = gig.get('title') or 'Gig'
-    venue_name_str = gig.get('venue_name', '') or ''
-
-    # Fetch thread filtered to this specific artist's conversation
-    import sqlite3 as _sq
-    from pathlib import Path as _P
-    _dbp = _P(__file__).parent.parent.parent / "backend.db"
-    thread_rows = []
-    try:
-        _conn = _sq.connect(str(_dbp))
-        _conn.row_factory = _sq.Row
-        # The artist_id for this thread — used to scope both sides
-        # sender_entity_id is artist_id when sender=artist, or target artist_id when sender=venue
-        thread_artist_id = sender_entity_id if sender_entity_id else None
-        if thread_artist_id:
-            thread_rows = _conn.execute(
-                "SELECT sender_name, sender_type, body, created_at FROM gig_messages "
-                "WHERE gig_id=? AND ("
-                "  sender_entity_id=? "
-                "  OR (sender_type='venue' AND (target_artist_id=? OR target_artist_id IS NULL))"
-                ") "
-                "ORDER BY created_at DESC LIMIT 20",
-                (gig_id, thread_artist_id, thread_artist_id)
-            ).fetchall()
-        else:
-            thread_rows = _conn.execute(
-                "SELECT sender_name, sender_type, body, created_at FROM gig_messages "
-                "WHERE gig_id=? ORDER BY created_at DESC LIMIT 20",
-                (gig_id,)
-            ).fetchall()
-        _conn.close()
-    except Exception as _e:
-        logger.warning(f"Thread fetch failed: {_e}")
-
-    # Build thread HTML (most recent first)
-    thread_html = ""
-    for row in thread_rows:
-        is_venue = row["sender_type"] == "venue"
-        bg = "#e8f4fd" if is_venue else "#f0fdf4"
-        border = "#0ea5e9" if is_venue else "#22c55e"
-        ts = ""
-        if row["created_at"]:
-            try:
-                from datetime import datetime as _dt
-                ts = _dt.strptime(row["created_at"][:19], "%Y-%m-%d %H:%M:%S").strftime("%b %-d, %Y %-I:%M %p")
-            except Exception:
-                ts = row["created_at"][:16]
-        thread_html += f"""
-        <tr><td style="padding:2px 0;">
-          <div style="background:{bg};border-left:3px solid {border};border-radius:4px;padding:7px 14px;margin-bottom:2px;">
-            <div style="font-size:11px;color:#6b7280;margin-bottom:2px;"><strong style="color:#374151;">{row["sender_name"]}</strong> &nbsp;·&nbsp; {ts}</div>
-            <div style="font-size:13px;color:#111827;line-height:1.5;">{row["body"]}</div>
-          </div>
-        </td></tr>"""
-
-    styled = f"""<!DOCTYPE html>
-<html><body style="margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f8f9fa;">
-<tbody><tr><td style="padding:40px 20px;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-<tbody>
-<tr><td style="padding:32px 40px 24px 40px;border-bottom:1px solid #eee;">
-  <img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;" />
-</td></tr>
-<tr><td style="padding:32px 40px;">
-  <h1 style="margin:0 0 6px;font-size:20px;font-weight:600;color:#111827;">New message from {sender_name}</h1>
-  <p style="margin:0 0 24px;font-size:13px;color:#6b7280;">
-    Re: <strong>{gig_title_str}</strong> at <strong>{venue_name_str}</strong> &nbsp;·&nbsp; {gig_date_str}
-  </p>
-  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:24px;">
-  <tbody>{thread_html}</tbody>
-  </table>
-  <a href="{gig_link}" style="display:inline-block;background:#059669;color:#fff;text-decoration:none;padding:11px 22px;border-radius:6px;font-weight:600;font-size:14px;">View Full Conversation</a>
-</td></tr>
-<tr><td style="padding:20px 40px;border-top:1px solid #eee;text-align:center;">
-  <p style="margin:0;font-size:11px;color:#9ca3af;">GigsFill · <a href="https://gigsfill.com" style="color:#9ca3af;">gigsfill.com</a></p>
-</td></tr>
-</tbody></table>
-</td></tr></tbody></table>
-</body></html>"""
-
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"New message from {sender_name} — {gig.get('venue_name', 'GigsFill')}"
-        msg["From"] = from_email
-        msg["To"] = to_email
-        msg.attach(MIMEText(styled, "html"))
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
-        server.starttls()
-        server.login(from_email, email_pass)
-        server.sendmail(from_email, to_email, msg.as_string())
-        server.quit()
-    except Exception as e:
-        logger.warning(f"Message email notification failed: {e}")
-
-
-# ── DEBUG: diagnose gig messaging issues ──────────────────────────────────────
-@router.get("/api/gigs/{gig_id}/messages/debug")
-def debug_gig_messages(gig_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Diagnostic endpoint - remove after debugging."""
-    import sqlite3 as _sq
-    from pathlib import Path as _P
-    _dbp = _P(__file__).parent.parent.parent / "backend.db"
-    _c = _sq.connect(str(_dbp))
-    
-    # Check table exists
-    tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-    
-    # Check gig details
-    gig = _c.execute("SELECT id, status, artist_id, venue_id FROM gigs WHERE id=?", (gig_id,)).fetchone()
-    
-    # Check gig_slots
-    slots = _c.execute("SELECT id, status, artist_id FROM gig_slots WHERE gig_id=?", (gig_id,)).fetchall()
-    
-    # Check current user's artist/venue
-    user_artists = _c.execute("SELECT id, name, user_id FROM artists WHERE user_id=?", (user.id,)).fetchall()
-    user_venues = _c.execute("SELECT id, name, user_id FROM venues WHERE user_id=?", (user.id,)).fetchall()
-    
-    _c.close()
-    
-    return {
-        "gid": gig_id,
-        "current_user_id": user.id,
-        "tables_exist": {
-            "gig_messages": "gig_messages" in tables,
-            "gig_slots": "gig_slots" in tables,
-            "artists": "artists" in tables,
-        },
-        "gig": {"id": gig[0], "status": gig[1], "artist_id": gig[2], "venue_id": gig[3]} if gig else None,
-        "gig_slots": [{"id": s[0], "status": s[1], "artist_id": s[2]} for s in slots],
-        "user_artists": [{"id": a[0], "name": a[1]} for a in user_artists],
-        "user_venues": [{"id": v[0], "name": v[1]} for v in user_venues],
-    }

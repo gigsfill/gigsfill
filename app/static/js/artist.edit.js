@@ -27,6 +27,77 @@ function resizeImageForProfile(file, maxW, maxH) {
   });
 }
 
+/** Wire up drag-and-drop reorder on the Social Media #socialGrid. Each child
+ *  `.social-row` carries `data-brand="..."`; on dragend we collect the brands
+ *  in current DOM order, comma-join, and PUT `social_order` to the artist
+ *  endpoint. Public profile reads the field and renders tiles in that order. */
+function setupSocialReorder(artistId) {
+  const grid = document.getElementById('socialGrid');
+  if (!grid || grid.dataset.dndWired) return;
+  grid.dataset.dndWired = '1';
+  let dragged = null;
+  let didMove = false;
+
+  grid.addEventListener('dragstart', e => {
+    if (!(e.target instanceof HTMLElement)) return;
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    const row = handle.closest('.social-row');
+    if (!row) return;
+    dragged = row;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  grid.addEventListener('dragover', e => {
+    e.preventDefault();
+    if (!dragged) return;
+    if (!(e.target instanceof HTMLElement)) return;
+    const row = e.target.closest('.social-row');
+    if (!row || row === dragged) return;
+    const rect = row.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    grid.insertBefore(dragged, after ? row.nextSibling : row);
+    didMove = true;
+  });
+
+  grid.addEventListener('dragend', async () => {
+    if (!dragged) return;
+    dragged.classList.remove('dragging');
+    if (didMove) {
+      const order = [...grid.querySelectorAll('.social-row')]
+        .map(r => r.dataset.brand).filter(Boolean).join(',');
+      try {
+        // The artist update endpoint is /artists/{id} (no /api prefix) —
+        // bindAutosave() above this in this same file uses that path; the
+        // /api/artists/{id} route is GET-only and silently 405'd this PUT.
+        const r = await fetch(`/artists/${artistId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ social_order: order }),
+        });
+        if (!r.ok) console.warn('social_order save returned', r.status);
+      } catch (e) { console.warn('social_order save failed', e); }
+    }
+    dragged = null;
+    didMove = false;
+  });
+}
+
+
+/** HTML-escape any string that will be interpolated into innerHTML / template
+ *  literals. Without this a user typing `</textarea>` in the caption field
+ *  would break the surrounding HTML. */
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function qs(id) {
   return document.getElementById(id);
 }
@@ -92,14 +163,29 @@ function bindAutosave(input, field, artistId) {
       input.value = url;
     }
 
-    await fetch(`/artists/${artistId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        [field]: input.value.trim()
-      })
-    });
+    // Audit fix (May 2026 part 3): surface autosave failures instead of
+    // silently dropping them. Previously a 4xx/5xx (expired cookie, bad
+    // validation, server down) returned a discarded Promise and the user
+    // assumed the field was saved.
+    try {
+      const _res = await fetch(`/artists/${artistId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ [field]: input.value.trim() })
+      });
+      if (!_res.ok) {
+        let _detail = "";
+        try { const _j = await _res.json(); _detail = _j && _j.detail ? _j.detail : ""; } catch (_) {}
+        const _msg = _detail || `Couldn't save (HTTP ${_res.status}). Try again or refresh the page.`;
+        if (window.showErrorModal) window.showErrorModal("Save failed", _msg);
+        else console.warn("[artist.edit autosave]", field, _msg);
+      }
+    } catch (_e) {
+      const _msg = "Couldn't reach the server. Check your connection and try again.";
+      if (window.showErrorModal) window.showErrorModal("Save failed", _msg);
+      else console.warn("[artist.edit autosave]", field, _e);
+    }
   };
 
   input.addEventListener("blur", save);
@@ -116,9 +202,8 @@ async function loadArtist() {
   // -----------------------------
   // FIX HEADER NAV LINKS
   // -----------------------------
-  const artistProfileBtn = document.getElementById("artistProfileBtn");
-  if (artistProfileBtn) {
-    artistProfileBtn.href = `/app/artist-profile.html?artist_id=${artistId}`;
+  if (typeof window.applyVanityToLinks === "function") {
+    window.applyVanityToLinks("artist", artistId, ["#artistProfileBtn"]);
   }
 
   const bookGigsBtn = document.getElementById("bookGigsBtn");
@@ -167,6 +252,23 @@ async function loadArtist() {
   if (qs("tiktok_url")) bindAutosave(qs("tiktok_url"), "tiktok_url", artistId);
   if (qs("website_url")) bindAutosave(qs("website_url"), "website_url", artistId);
 
+  // Reorder the social rows in DOM to match the saved `social_order` (a
+  // comma-separated list of brand keys). Rows missing from the saved order
+  // stay in their original position relative to each other at the end. The
+  // user can then drag-reorder, and the new order saves back via `setupSocialReorder`.
+  if (artist.social_order) {
+    const grid = qs("socialGrid");
+    if (grid) {
+      const want = artist.social_order.split(',').map(s => s.trim()).filter(Boolean);
+      const rows = Array.from(grid.querySelectorAll('.social-row'));
+      const byBrand = Object.fromEntries(rows.map(r => [r.dataset.brand, r]));
+      // Append rows in the saved order first; any not in want come after.
+      want.forEach(b => { if (byBrand[b]) grid.appendChild(byBrand[b]); });
+      rows.forEach(r => { if (!want.includes(r.dataset.brand)) grid.appendChild(r); });
+    }
+  }
+  setupSocialReorder(artistId);
+
   // ARTIST TYPE AUTOSAVE
   const artistTypeEl = qs("artist_type");
   const formatsBlock = qs("bandFormatsBlock");
@@ -198,12 +300,24 @@ async function loadArtist() {
   }
   
   async function saveArtistType(artistId, payload) {
-    await fetch(`/artists/${artistId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(payload)
-    });
+    // Audit fix (May 2026 part 3): surface autosave failures instead of
+    // silently dropping them.
+    try {
+      const _res = await fetch(`/artists/${artistId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload)
+      });
+      if (!_res.ok) {
+        let _detail = "";
+        try { const _j = await _res.json(); _detail = _j && _j.detail ? _j.detail : ""; } catch (_) {}
+        const _msg = _detail || `Couldn't save artist type (HTTP ${_res.status}).`;
+        if (window.showErrorModal) window.showErrorModal("Save failed", _msg);
+      }
+    } catch (_e) {
+      if (window.showErrorModal) window.showErrorModal("Save failed", "Couldn't reach the server.");
+    }
   }
   
 
@@ -217,37 +331,39 @@ async function loadArtist() {
   
     container.addEventListener("dragstart", e => {
       if (!(e.target instanceof HTMLElement)) return;
-    
+
       let card = null;
-    
-      // Audio: drag only from handle
+
+      // Audio: drag only from handle. The handle is inside .audio-row, but
+      // .audio-row is wrapped in .audio-entry (which contains the caption
+      // textarea above the row). Reorder must move the entry — the row alone
+      // would orphan the caption from its audio.
       if (container.id === "audio") {
         const handle = e.target.closest(".drag-handle");
         if (!handle) return;
-        card = handle.closest(".audio-row");
-      } 
+        card = handle.closest(".audio-entry");
+      }
       // Pictures & Videos: drag whole card
       else {
         card = e.target.closest(".media-card");
       }
-    
+
       if (!card) return;
-    
+
       dragged = card;
       card.classList.add("dragging");
       e.dataTransfer.effectAllowed = "move";
     });
-    
-    
-  
+
+
+
     container.addEventListener("dragend", async () => {
       if (!dragged) return;
-    
+
       dragged.classList.remove("dragging");
-    
+
       if (didMove) {
-        // Support both .media-card and .audio-row
-        const selector = container.id === "audio" ? ".audio-row" : ".media-card";
+        const selector = container.id === "audio" ? ".audio-entry" : ".media-card";
         const ids = [...container.querySelectorAll(selector)]
           .map((el, i) => ({
             id: el.dataset.id,
@@ -275,8 +391,8 @@ async function loadArtist() {
       if (!dragged) return;
       if (!(e.target instanceof HTMLElement)) return;
     
-      // Support both .media-card and .audio-row
-      const card = e.target.closest(".media-card") || e.target.closest(".audio-row");
+      // Support .media-card (pics/videos) and .audio-entry (audio with caption above row)
+      const card = e.target.closest(".media-card") || e.target.closest(".audio-entry");
       if (!card || card === dragged) return;
     
       const rect = card.getBoundingClientRect();
@@ -463,40 +579,50 @@ async function loadArtist() {
     }
   }
 
-  // v73: FIXED - Load users who have access to this artist
+  // Audit fix (May 2026 part 2): previously this dropdown only listed the
+  // logged-in user. Multi-user artist accounts (entity_users) couldn't
+  // delegate the booking contact to a bandmate or agent. Now the dropdown
+  // loads /api/entity-users/artist/{id} which returns the owner + every
+  // entity_user; ``currentUser`` is only used as a fallback when that
+  // endpoint is unavailable (legacy auth-less / network failure).
   async function initBookingContact(artistId, artist) {
     const select = qs("booking_contact");
-  
-    // Get current user info
+
     const userRes = await fetch('/api/me', { credentials: 'include' });
     if (!userRes.ok) return;
-    
     const currentUser = await userRes.json();
-  
-    // Get all users with access to this artist (for now, just the owner)
-    const users = [currentUser];
-  
+
+    // Pull the full member list. If the call fails for any reason, fall
+    // back to just the current user so the dropdown is never empty.
+    let users = [currentUser];
+    try {
+      const r = await fetch(`/api/entity-users/artist/${artistId}`, { credentials: 'include' });
+      if (r.ok) {
+        const body = await r.json();
+        if (body && Array.isArray(body.users) && body.users.length) {
+          users = body.users.map(u => ({
+            id: u.user_id, first_name: u.first_name, last_name: u.last_name,
+            email: u.email, phone: u.phone, role: u.role,
+          }));
+        }
+      }
+    } catch (_) { /* fall back to currentUser-only */ }
+
     // Build dropdown with user details
     let optionsHTML = '<option value="">Select Booking Contact</option>';
-    
     users.forEach(user => {
-      const displayName = `${user.first_name} ${user.last_name}`.trim() || 'Unnamed User';
+      const displayName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Unnamed User';
       const email = user.email || '';
       const phone = user.phone || '';
-      
-      // Create user ID value
       const value = user.id;
-      
-      // Format: "John Carta - john@johncarta.com - 805-231-0046"
       let label = displayName;
       if (email) label += ` - ${email}`;
       if (phone) label += ` - ${phone}`;
-      
+      if (user.role && user.role !== 'owner') label += ` (${user.role})`;
       optionsHTML += `<option value="${value}">${label}</option>`;
     });
-    
     select.innerHTML = optionsHTML;
-  
+
     // v73: Set current value - handle both user_id and formatted string
     if (artist.booking_contact) {
       // If booking_contact is a number, it's a user_id
@@ -513,16 +639,41 @@ async function loadArtist() {
   
     select.addEventListener("change", async () => {
       const value = select.value || null;
-  
-      const res = await fetch(`/artists/${artistId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ booking_contact: value })
-      });
-  
-      if (!res.ok) {
-        console.error("Failed to save booking contact");
+      const _prev = select.dataset.lastValue || "";
+      select.disabled = true;
+      try {
+        // Audit fix (May 2026 part 5): surface backend errors so the artist
+        // sees the real reason a booking-contact change failed (authz, missing
+        // entity user, etc) instead of a silent revert. Restore previous
+        // selection on failure so the dropdown stays in sync with the DB.
+        if (typeof window.apiPutSafe === 'function') {
+          await window.apiPutSafe(`/artists/${artistId}`, { booking_contact: value });
+        } else {
+          const res = await fetch(`/artists/${artistId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ booking_contact: value })
+          });
+          if (!res.ok) {
+            let detail = `HTTP ${res.status}`;
+            try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch(_) {}
+            throw new Error(detail);
+          }
+        }
+        select.dataset.lastValue = value || "";
+      } catch (e) {
+        console.error("Failed to save booking contact:", e);
+        select.value = _prev;
+        if (typeof showStyledModal === 'function') {
+          showStyledModal('Could Not Update Booking Contact',
+            `<p style="color:#ef4444;">${(e && e.message) || 'Please try again.'}</p>`,
+            [{text:'OK',style:'ghost'}]);
+        } else {
+          alert((e && e.message) || 'Could not update booking contact.');
+        }
+      } finally {
+        select.disabled = false;
       }
     });
   }
@@ -574,7 +725,7 @@ async function loadArtist() {
     // AUDIO (MP3 file upload — capped at 3 per artist; the cap is enforced
     // server-side too in routes/media.py)
     qs("addAudioBtn").onclick = () => {
-      const count = document.querySelectorAll('#audio .audio-row[data-kind="audio"]').length;
+      const count = document.querySelectorAll('#audio .audio-entry[data-kind="audio"]').length;
       if (count >= 3) {
         const msg = "You've reached the 3 MP3 file limit. Delete an existing "
                   + "MP3 or add a link to external audio instead.";
@@ -587,6 +738,37 @@ async function loadArtist() {
     qs("audioInput").onchange = async e => {
       const file = e.target.files[0];
       if (!file) return;
+
+      // MP3-only — mirrors backend ALLOWED_EXTENSIONS['audio'] in routes/media.py.
+      // Check the extension first (cheap) so the user gets a clear message
+      // before we try uploading a file we'd reject anyway. Some macOS / iOS
+      // pickers ignore the `accept` attribute, so we can't rely on it alone.
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      if (ext !== 'mp3') {
+        const msg = `That file is a .${ext} — only MP3 files can be uploaded. ` +
+                    `Either convert to MP3 (most audio editors export MP3 in one click) ` +
+                    `or paste a link to the track on SoundCloud / Bandcamp / your own site ` +
+                    `using the "+ Add Audio Link" field below.`;
+        if (window.showErrorModal) window.showErrorModal("MP3 only", msg);
+        else alert(msg);
+        e.target.value = "";
+        return;
+      }
+
+      // 5 MB cap — mirrors backend MAX_FILE_SIZES['audio']. Client-side so
+      // the user gets immediate feedback before a multi-MB upload fails with
+      // a 400. Backend still enforces this in case the check is bypassed.
+      const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
+      if (file.size > MAX_AUDIO_BYTES) {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+        const msg = `That file is ${sizeMb} MB — the limit is 5 MB. ` +
+                    `Try re-encoding at a lower bitrate (128 kbps is plenty for a demo clip), ` +
+                    `trimming the track, or linking to it on SoundCloud/Bandcamp instead.`;
+        if (window.showErrorModal) window.showErrorModal("MP3 too large", msg);
+        else alert(msg);
+        e.target.value = "";  // reset so picking the same file fires onchange again
+        return;
+      }
 
       // Auto-populate Title from the uploaded filename (drop extension,
       // turn _ / - into spaces, trim). User can edit it after upload.
@@ -654,7 +836,15 @@ async function loadArtist() {
       );
 
       if (!res.ok) {
-        console.error("Failed to add video");
+        // Audit fix (May 2026 part 6): surface backend {detail} so the user
+        // sees the rejection reason (malformed URL, disallowed host) instead
+        // of nothing happening when they click.
+        let _detail = `HTTP ${res.status}`;
+        try { const _j = await res.json(); if (_j && _j.detail) _detail = _j.detail; } catch(_) {}
+        console.error("Failed to add video:", _detail);
+        if (typeof window.showErrorModal === 'function') {
+          window.showErrorModal('Could not add video', _detail);
+        }
         return;
       }
 
@@ -744,9 +934,9 @@ async function loadArtist() {
       // -----------------------------
       if (m.media_type === "picture") {
         hasPictures = true;
-  
+        const caption = m.caption || "";
         picturesEl.insertAdjacentHTML("beforeend", `
-          <div class="media-card" data-id="${m.id}">
+          <div class="media-card" data-id="${m.id}" data-kind="picture">
             <img src="${m.file_path}">
             <div class="media-overlay center-overlay">
               <span class="drag-handle" draggable="true">☰</span>
@@ -756,6 +946,13 @@ async function loadArtist() {
                 data-id="${m.id}"
                 class="media-title"
               />
+              <textarea
+                class="picture-caption"
+                placeholder="Add a caption (e.g. backstage, Aug 14)…"
+                maxlength="500"
+                rows="2"
+                data-id="${m.id}"
+              >${escapeHtml(caption)}</textarea>
               <button class="delete-btn" data-id="${m.id}">Delete</button>
             </div>
           </div>
@@ -765,21 +962,40 @@ async function loadArtist() {
       // -----------------------------
       // AUDIO (MP3 file)
       // -----------------------------
+      //
+      // Layout per entry (full-width card):
+      //   ┌─ .audio-entry ────────────────────────────────────────────┐
+      //   │ <textarea> caption / notes (full width)                    │
+      //   │ <row> ☰  title  <audio>  Delete                            │
+      //   └────────────────────────────────────────────────────────────┘
+      //
+      // Caption is independent of title — title is 1-line searchable label,
+      // caption is multi-line context. Stored in artist_media.caption; saves
+      // on blur via the same /api/media/{id} PUT handler the title uses.
       if (m.media_type === "audio") {
         hasAudio = true;
-
+        const caption = m.caption || "";
         audioEl.insertAdjacentHTML("beforeend", `
-          <div class="audio-row" data-id="${m.id}" data-kind="audio">
-            <span class="drag-handle" draggable="true">☰</span>
-            <input
-              class="media-title"
-              value="${m.title || ""}"
-              placeholder="Title"
-              maxlength="65"
+          <div class="audio-entry" data-id="${m.id}" data-kind="audio">
+            <textarea
+              class="audio-caption"
+              placeholder="Add a caption or notes about this track…"
+              maxlength="500"
               data-id="${m.id}"
-            />
-            <audio controls src="${m.file_path}"></audio>
-            <button class="delete-btn" data-id="${m.id}">Delete</button>
+              rows="1"
+            >${escapeHtml(caption)}</textarea>
+            <div class="audio-row">
+              <span class="drag-handle" draggable="true">☰</span>
+              <input
+                class="media-title"
+                value="${m.title || ""}"
+                placeholder="Title"
+                maxlength="65"
+                data-id="${m.id}"
+              />
+              <audio controls src="${m.file_path}"></audio>
+              <button class="delete-btn" data-id="${m.id}">Delete</button>
+            </div>
           </div>
         `);
       }
@@ -791,19 +1007,28 @@ async function loadArtist() {
         hasAudio = true;
         const url = m.video_url || "";
         const playerHtml = renderAudioLinkPlayer(url);
-
+        const caption = m.caption || "";
         audioEl.insertAdjacentHTML("beforeend", `
-          <div class="audio-row" data-id="${m.id}" data-kind="audio_link">
-            <span class="drag-handle" draggable="true">☰</span>
-            <input
-              class="media-title"
-              value="${m.title || ""}"
-              placeholder="Title"
-              maxlength="65"
+          <div class="audio-entry" data-id="${m.id}" data-kind="audio_link">
+            <textarea
+              class="audio-caption"
+              placeholder="Add a caption or notes about this track…"
+              maxlength="500"
               data-id="${m.id}"
-            />
-            ${playerHtml}
-            <button class="delete-btn" data-id="${m.id}">Delete</button>
+              rows="1"
+            >${escapeHtml(caption)}</textarea>
+            <div class="audio-row">
+              <span class="drag-handle" draggable="true">☰</span>
+              <input
+                class="media-title"
+                value="${m.title || ""}"
+                placeholder="Title"
+                maxlength="65"
+                data-id="${m.id}"
+              />
+              ${playerHtml}
+              <button class="delete-btn" data-id="${m.id}">Delete</button>
+            </div>
           </div>
         `);
       }
@@ -814,9 +1039,13 @@ async function loadArtist() {
       if (m.media_type === "video") {
         hasVideos = true;
         const thumb = getVideoThumbnail(m.video_url);
-  
+        const caption = m.caption || "";
+        // Caption sits inside the overlay below the title input — matches the
+        // audio-entry pattern (title + caption together as the "metadata" of
+        // the media). Public profile renders it below the title-label and
+        // skips the row entirely when empty, so no blank line for plain videos.
         videosEl.insertAdjacentHTML("beforeend", `
-          <div class="media-card" data-id="${m.id}">
+          <div class="media-card" data-id="${m.id}" data-kind="video">
             <img src="${thumb}" alt="Video thumbnail">
             <div class="media-overlay center-overlay">
               <span class="drag-handle" draggable="true">☰</span>
@@ -826,6 +1055,13 @@ async function loadArtist() {
                 placeholder="Title"
                 data-id="${m.id}"
               />
+              <textarea
+                class="video-caption"
+                placeholder="Add a caption (e.g. Live at the Roxy · Aug 14)…"
+                maxlength="500"
+                rows="2"
+                data-id="${m.id}"
+              >${escapeHtml(caption)}</textarea>
               <button class="delete-btn" data-id="${m.id}">Delete</button>
             </div>
           </div>
@@ -841,30 +1077,46 @@ async function loadArtist() {
   
   
 
+  // Helper: does this element get the title/caption save treatment?
+  // Captions for audio / video / picture all share Enter-commits-and-saves
+  // behavior + the same `{ caption: value }` PUT payload.
+  function _isMediaTitle(el)   { return el && el.classList && el.classList.contains("media-title"); }
+  function _isMediaCaption(el) {
+    return el && el.classList &&
+           (el.classList.contains("audio-caption") ||
+            el.classList.contains("video-caption") ||
+            el.classList.contains("picture-caption"));
+  }
+
   document.addEventListener("keydown", e => {
     if (!(e.target instanceof HTMLElement)) return;
-    if (!e.target.classList.contains("media-title")) return;
-  
-    if (e.key === "Enter") {
+    // Title inputs + caption textareas: Enter commits (blurs → blur handler
+    // fires the PUT). Captions are intentionally short — "Live at the Roxy
+    // 8/14/26" style — not paragraphs, so we treat the textarea like a
+    // single-line field. preventDefault stops the newline being inserted.
+    if ((_isMediaTitle(e.target) || _isMediaCaption(e.target)) && e.key === "Enter") {
       e.preventDefault();
       e.target.blur();
     }
   });
-  
-  
-  
+
+
+
   document.addEventListener("blur", async e => {
     if (!(e.target instanceof HTMLElement)) return;
-    if (!e.target.classList.contains("media-title")) return;
-  
+    const isTitle = _isMediaTitle(e.target);
+    const isCaption = _isMediaCaption(e.target);
+    if (!isTitle && !isCaption) return;
+
     const id = e.target.dataset.id;
-    const title = e.target.value.trim();
-  
+    const value = e.target.value.trim();
+    const payload = isTitle ? { title: value } : { caption: value };
+
     await fetch(`/api/media/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ title })
+      body: JSON.stringify(payload)
     });
   }, true);
   
@@ -875,7 +1127,10 @@ async function loadArtist() {
 
     const btn = e.target;
     const id = btn.dataset.id;
-    const card = btn.closest(".media-card") || btn.closest(".audio-row");
+    // For audio, walk up to .audio-entry so the caption (which sits ABOVE the
+    // .audio-row) gets removed along with the row. For pictures/videos the
+    // entire card IS the unit.
+    const card = btn.closest(".media-card") || btn.closest(".audio-entry");
 
     // Pick a label by media kind so the modal is specific.
     const kind = card && card.dataset.kind;
@@ -898,7 +1153,7 @@ async function loadArtist() {
       if (card) card.remove();
       // Refresh audio button's count badge if we just removed an MP3
       if (kind === "audio") {
-        const remaining = document.querySelectorAll('#audio .audio-row[data-kind="audio"]').length;
+        const remaining = document.querySelectorAll('#audio .audio-entry[data-kind="audio"]').length;
         const countEl = document.getElementById("addAudioBtnCount");
         if (countEl) countEl.textContent = remaining ? `(${remaining}/3)` : "";
       }

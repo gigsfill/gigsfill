@@ -44,15 +44,35 @@ converge to the same state.
 import uuid
 
 
-# Idempotency keys for admin-initiated Stripe writes. We used to suffix the
-# key with `int(time.time())` (second-resolution), which collides on the
-# common "admin double-clicks Refund" pattern — Stripe returns the first
-# refund and silently no-ops the second, leaving admin thinking they double-
-# refunded when only one landed. UUID4 hex gives us a fresh key per call
-# while keeping the prefix readable in the Stripe Dashboard logs.
+# Idempotency keys for admin-initiated Stripe writes.
+#
+# Audit fix (May 2026 part 5): the prior implementation suffixed the key
+# with `uuid.uuid4().hex` — a fresh random key per call. That DEFEATED
+# Stripe's idempotency entirely: a double-click on Refund or Reverse
+# generated two distinct keys, both passed Stripe's no-duplicate check,
+# both succeeded, and the admin double-refunded the venue.
+#
+# The correct behavior is the OPPOSITE: deterministic key per (operation,
+# target, amount) so duplicate Stripe calls (from network retries, admin
+# double-clicks, or a single click that crashes mid-response) collapse
+# into one charge — Stripe returns the cached first response on the
+# second send.
+#
+# Callers MUST include any axis that should produce a new Stripe call in
+# the prefix. For full-amount operations (reverse_transfer at the parent),
+# the txn_id alone is sufficient. For partial operations (refund with a
+# user-selectable amount), the amount must be in the prefix so a second
+# refund attempt with a different amount goes through.
 def _idem(prefix: str) -> str:
-    """Build a unique idempotency key with a descriptive prefix."""
-    return f"{prefix}_{uuid.uuid4().hex}"
+    """Build a stable idempotency key.
+
+    The prefix IS the key (with a single descriptive `gf_` namespace prefix
+    so all GigsFill keys are searchable in the Stripe Dashboard). Callers
+    must encode any axis that should yield a new Stripe call into the prefix
+    they pass in."""
+    # Cap at 255 chars (Stripe limit) and strip whitespace so prefixes
+    # assembled with user-controlled fields can't accidentally exceed it.
+    return f"gf_{prefix}".strip()[:255]
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
@@ -108,6 +128,24 @@ def _send_admin_email(db, recipients, template_name, variables):
         import logging
         log = logging.getLogger("gigsfill.admin_payments")
         sent_to = set()
+        # Audit fix (May 2026 part 4): open one SMTP session and reuse it
+        # across recipients. Previously this opened a fresh login per
+        # send (via _smtp_send), which for a multi-user venue/artist
+        # (5+ recipients) tripped Gmail per-connection limits and was
+        # ~3-4x slower than necessary. Falls back to per-call open if
+        # the pool can't be established.
+        import smtplib as _smtplib
+        _pool = None
+        try:
+            if email_service.smtp_port == 465:
+                _pool = _smtplib.SMTP_SSL(email_service.smtp_server, email_service.smtp_port, timeout=15)
+            else:
+                _pool = _smtplib.SMTP(email_service.smtp_server, email_service.smtp_port, timeout=15)
+                _pool.starttls()
+            _pool.login(email_service.smtp_username, email_service.smtp_password)
+        except Exception as _pe:
+            log.warning(f"[ADMIN ACTION EMAIL] pooled SMTP login failed, will open per-call: {_pe}")
+            _pool = None
         for r in recipients:
             email = r.get('email') if isinstance(r, dict) else None
             if not email or email in sent_to:
@@ -121,8 +159,11 @@ def _send_admin_email(db, recipients, template_name, variables):
                 msg['To'] = email
                 msg['X-Mailer'] = 'GigsFill'
                 msg.attach(MIMEText(body, 'html'))
-                _smtp_send(email_service.smtp_server, email_service.smtp_port,
-                           email_service.smtp_username, email_service.smtp_password, msg)
+                if _pool is not None:
+                    _pool.send_message(msg)
+                else:
+                    _smtp_send(email_service.smtp_server, email_service.smtp_port,
+                               email_service.smtp_username, email_service.smtp_password, msg)
                 # Confirmation line — without it, the success path is silent
                 # and admin can't tell from logs whether the auto-notify went
                 # out. Same one-liner pattern as email_dispatch.py.
@@ -134,6 +175,10 @@ def _send_admin_email(db, recipients, template_name, variables):
                 log.warning(
                     f"[ADMIN ACTION EMAIL] {template_name} to {email} FAILED (best-effort)",
                     exc_info=True)
+        # Close the pooled connection if we opened one.
+        if _pool is not None:
+            try: _pool.quit()
+            except Exception: pass
     except Exception:
         import logging
         logging.getLogger("gigsfill.admin_payments").warning(
@@ -683,6 +728,22 @@ def refund_payment(
             f"transferred to artists. Use the (Tier 3) reverse-transfer "
             f"action on each transferred child first, then come back.")
 
+    # Audit fix (May 2026 part 9): for PARTIAL refunds, cap the amount at the
+    # un-transferred remainder. Without this, an admin could refund (say) $80
+    # of a $100 charge after $50 had already transferred to an artist —
+    # putting the platform $30 in the hole. Force Tier-3 reverse-transfer
+    # first when the refund would exceed what we still hold.
+    if not is_full and transferred_children:
+        transferred_total = sum(int(c["artist_payout_cents"] or 0) for c in transferred_children)
+        remaining = charge_cents - transferred_total
+        if amount_cents > remaining:
+            ids = ", ".join(f"#{c['id']}" for c in transferred_children)
+            raise HTTPException(400,
+                f"Partial refund (${amount_cents/100:.2f}) exceeds un-transferred remainder "
+                f"(${remaining/100:.2f}); ${transferred_total/100:.2f} has already moved to "
+                f"artist(s) via child payout(s) {ids}. Use (Tier 3) reverse-transfer first "
+                f"to claw those back, then refund.")
+
     # 4. Pick & sanitize the Stripe `reason` ───────────────────────────────
     reason = (payload.get("reason") or "requested_by_customer").strip()
     if reason not in _STRIPE_REFUND_REASONS:
@@ -694,10 +755,24 @@ def refund_payment(
     if dry_run:
         refund = type("_DryRefund", (), {"id": "re_dryrun_" + uuid.uuid4().hex[:12]})()
     else:
+        # Audit fix (May 2026 part 5): re-read the row's status immediately
+        # before the Stripe call. Combined with the deterministic _idem key
+        # (which prevents Stripe-side double-refunds for the same amount),
+        # this closes the remaining race window for two admins clicking
+        # different refund amounts simultaneously — the second one sees the
+        # row already moved out of a refundable state and gets a 409.
+        _now_status = db.execute(text("SELECT status FROM transactions WHERE id=:tid"), {"tid": txn_id}).scalar()
+        if _now_status not in _REFUNDABLE_STATUSES:
+            raise HTTPException(409,
+                f"Transaction status changed to '{_now_status}' during this request. "
+                f"Refresh and re-evaluate.")
         from backend.routes.stripe_connect import init_stripe
         stripe, _keys = init_stripe(db)
 
-        idem_key = _idem(f"admin_refund_txn_{txn_id}")
+        # Audit fix (May 2026 part 5): include amount so a legitimate second
+        # partial refund (different amount) generates a new Stripe call,
+        # while a repeated click on the same Refund button collapses to one.
+        idem_key = _idem(f"admin_refund_txn_{txn_id}_amt{amount_cents}")
         try:
             refund = stripe.Refund.create(
                 payment_intent=pi_id,
@@ -751,6 +826,18 @@ def refund_payment(
                     cancelled_children.append(c["id"])
 
         db.commit()
+
+        # Audit fix (May 2026 part 9): claw back affiliate earnings on FULL
+        # refund. Partial refunds leave the accrual intact since the platform
+        # still earned commission on the un-refunded portion of the gig.
+        if is_full:
+            try:
+                from backend.routes.affiliate import claw_back_affiliate_earnings
+                claw_back_affiliate_earnings(db, txn_id, reason="admin refund (full)")
+            except Exception as _ace:
+                import logging as _logging
+                _logging.getLogger("gigsfill.admin_payments").warning(
+                    f"Affiliate clawback (admin refund) error txn {txn_id}: {_ace}")
     else:
         # In dry_run, project what the children-cancel would have touched
         if is_full and cancel_kids:
@@ -829,9 +916,13 @@ def mark_resolved(
     Body:
       new_status   (required) — must be in _MARK_RESOLVED_TARGETS.
       reason       (required) — free-text, min 5 chars.
+      dry_run      (optional, default False) — when true, validate the
+                   transition would succeed but do NOT mutate the DB or
+                   write an audit row. Same semantics as refund/reverse.
     """
     new_status = (payload.get("new_status") or "").strip()
     reason     = (payload.get("reason") or "").strip()[:1000]
+    dry_run    = bool(payload.get("dry_run", False))
     if new_status not in _MARK_RESOLVED_TARGETS:
         raise HTTPException(400,
             f"new_status must be one of: {', '.join(sorted(_MARK_RESOLVED_TARGETS))}")
@@ -846,13 +937,28 @@ def mark_resolved(
     if row["status"] == new_status:
         raise HTTPException(400, f"Transaction is already in status '{new_status}'.")
 
+    # Audit fix (May 2026 part 2): honor dry_run so the bulk_action
+    # "Test (dry run)" toggle actually tests instead of writing for real.
+    if dry_run:
+        return {"ok": True, "dry_run": True, "from": row["status"], "to": new_status}
+
     note = (f"Admin mark-resolved: {row['status']} → {new_status} "
             f"({getattr(admin, 'email', 'admin')}) — {reason}")
-    db.execute(text("""
+    # Audit fix (May 2026 part 5): atomic status guard so two concurrent
+    # admins (or admin + Stripe-webhook sync) can't both transition and
+    # double-stamp the notes column. The original SELECT-then-UPDATE was
+    # non-atomic. Constrain on the previously-read status; on rowcount=0
+    # the row was changed underfoot → 409.
+    _mr_res = db.execute(text("""
         UPDATE transactions
            SET status = :s, notes = COALESCE(notes || ' | ', '') || :n
-         WHERE id = :tid
-    """), {"s": new_status, "n": note, "tid": txn_id})
+         WHERE id = :tid AND status = :expected
+    """), {"s": new_status, "n": note, "tid": txn_id, "expected": row["status"]})
+    if (_mr_res.rowcount or 0) == 0:
+        raise HTTPException(
+            409,
+            f"Transaction #{txn_id} was modified by another action — refresh and retry."
+        )
     db.commit()
 
     log_admin_action(
@@ -864,7 +970,61 @@ def mark_resolved(
         request=request,
     )
     db.commit()
-    return {"ok": True, "from": row["status"], "to": new_status}
+
+    # Audit fix (May 2026 part 4): the refund/reverse paths fan out an
+    # admin-action email to the affected venue/artist; mark-resolved was
+    # silent even when the new status is one where the counterparties
+    # would care (payment_cancelled = "we're not collecting from you" /
+    # "you won't be paid"). Caller passes `send_email: true` in the body
+    # to opt in. Off by default so cleaning up stuck dispute_won/etc.
+    # doesn't spam users.
+    email_sent = False
+    if payload.get("send_email") and new_status in ("payment_cancelled",):
+        try:
+            # Audit fix (May 2026 part 5): pull venue_charge_cents too. For
+            # venue_charge / single parent rows that's the canonical refund
+            # amount; amount_cents is often NULL on parents. Previously the
+            # refund email rendered "Refund amount: $0.00".
+            parent = db.execute(text("""
+                SELECT t.id, t.gig_id, t.amount_cents, t.venue_charge_cents,
+                       t.transaction_type, t.parent_transaction_id
+                  FROM transactions t WHERE t.id = :tid
+            """), {"tid": txn_id}).mappings().first()
+            if parent:
+                # Use the parent (venue_charge) row when we have one.
+                if parent["parent_transaction_id"]:
+                    parent_row = db.execute(text("""
+                        SELECT id, amount_cents, venue_charge_cents
+                        FROM transactions WHERE id = :pid
+                    """), {"pid": parent["parent_transaction_id"]}).mappings().first()
+                    target_id_for_email = parent["parent_transaction_id"]
+                    amount_for_email = (
+                        (parent_row["venue_charge_cents"] if parent_row else None)
+                        or (parent_row["amount_cents"] if parent_row else None)
+                        or 0
+                    )
+                else:
+                    target_id_for_email = parent["id"]
+                    amount_for_email = (
+                        parent["venue_charge_cents"] or parent["amount_cents"] or 0
+                    )
+                _send_venue_refund_email(
+                    db, target_id_for_email,
+                    amount_for_email,
+                    True,
+                    "admin_mark_resolved:" + reason,
+                    stripe_refund_id="(no Stripe — mark-resolved)",
+                )
+                email_sent = True
+        except Exception as _eme:
+            # Audit fix (May 2026 part 5): use logging.getLogger directly
+            # — this module has no `logger` symbol at module scope, so the
+            # bare `logger.warning(...)` was a latent NameError.
+            import logging as _logging
+            _logging.getLogger("gigsfill.admin_payments").warning(
+                f"mark-resolved email skipped: {_eme}")
+
+    return {"ok": True, "from": row["status"], "to": new_status, "email_sent": email_sent}
 
 
 # ─── Tier 2: RE-FIRE ────────────────────────────────────────────────────────
@@ -1165,9 +1325,19 @@ def reverse_transfer(
     if dry_run:
         reversal = type("_DryReversal", (), {"id": "trr_dryrun_" + uuid.uuid4().hex[:12]})()
     else:
+        # Audit fix (May 2026 part 5): re-read status right before the Stripe
+        # call to close the concurrent-admin race (combined with deterministic
+        # _idem for same-amount duplicates).
+        _now_status = db.execute(text("SELECT status FROM transactions WHERE id=:tid"), {"tid": txn_id}).scalar()
+        if _now_status not in _REVERSIBLE_TRANSFER_STATUSES:
+            raise HTTPException(409,
+                f"Transaction status changed to '{_now_status}' during this request. "
+                f"Refresh and re-evaluate.")
         from backend.routes.stripe_connect import init_stripe
         stripe, _keys = init_stripe(db)
-        idem_key = _idem(f"admin_reverse_txn_{txn_id}")
+        # Audit fix (May 2026 part 5): include amount so partial reversals
+        # at different amounts each get their own Stripe call.
+        idem_key = _idem(f"admin_reverse_txn_{txn_id}_amt{amount_cents}")
         try:
             reversal = stripe.Transfer.create_reversal(
                 row["stripe_transfer_id"],
@@ -1287,7 +1457,7 @@ def reverse_transfer(
             try:
                 from backend.routes.stripe_connect import init_stripe as _is2
                 stripe2, _k2 = _is2(db)
-                idem_key = _idem(f"admin_reverse_refund_txn_{parent_id}")
+                idem_key = _idem(f"admin_reverse_refund_txn_{parent_id}_amt{r_amount}")
                 refund_obj = stripe2.Refund.create(
                     payment_intent=parent["stripe_payment_intent_id"],
                     amount=r_amount,
@@ -1369,11 +1539,48 @@ def reverse_transfer(
                 # the refund manually via ↩ Refund on the parent. We do NOT
                 # try to roll the reversal back.
                 msg = getattr(e, "user_message", None) or str(e)
+                # Audit fix (May 2026 part 3): record the half-completion
+                # explicitly so it shows up in the audit log and on the
+                # parent transaction's notes. Previously the only signal
+                # was the error string in the JSON response — easy to lose
+                # if the admin browser was closed before they read it.
+                try:
+                    half_note = (
+                        f"⚠️ NEEDS REFUND — reverse succeeded but refund failed: {msg[:300]}"
+                    )
+                    db.execute(text("""
+                        UPDATE transactions
+                           SET notes = COALESCE(notes || ' | ', '') || :n
+                         WHERE id = :pid
+                    """), {"n": half_note, "pid": parent_id})
+                    db.commit()
+                    log_admin_action(
+                        db, admin, "payments_refund_failed_after_reverse",
+                        target_table="transactions", target_id=parent_id,
+                        before={"status": parent["status"]},
+                        after={"status": parent["status"]},
+                        metadata={
+                            "child_txn_id": txn_id,
+                            "gig_id": parent["gig_id"],
+                            "intended_amount_cents": r_amount,
+                            "error": msg[:500],
+                            "needs_refund": True,
+                        },
+                        request=request,
+                    )
+                    db.commit()
+                except Exception as _audit_e:
+                    # Audit fix (May 2026 part 5): no module-level logger.
+                    import logging as _logging
+                    _logging.getLogger("gigsfill.admin_payments").warning(
+                        f"failed to audit-log half-completed refund: {_audit_e}")
                 refund_result = {
                     "parent_txn_id": parent_id,
+                    "needs_refund": True,
                     "error": (
                         f"Reverse succeeded but venue refund failed: {msg}. "
-                        f"Retry the refund manually on transaction #{parent_id}."
+                        f"Retry the refund manually on transaction #{parent_id}. "
+                        f"Audit row recorded; transaction notes flagged."
                     ),
                 }
 
@@ -1519,7 +1726,7 @@ def reverse_batch(
             if dry_run:
                 rev_id = "trr_dryrun_" + uuid.uuid4().hex[:12] + "_" + str(child_id)
             else:
-                idem_key = _idem(f"admin_reverse_batch_{child_id}")
+                idem_key = _idem(f"admin_reverse_batch_{child_id}_amt{amt}")
                 rev = stripe.Transfer.create_reversal(
                     row["stripe_transfer_id"],
                     amount=amt,
@@ -1592,20 +1799,33 @@ def reverse_batch(
     # hasn't actually clawed back from artists. Admin sees the per-row errors
     # in the response and can either retry the failed reversals first or
     # issue the venue refund manually with full context.
+    #
+    # Audit fix (May 2026 part 5): re-read the parent status here instead
+    # of trusting the snapshot from the top of the function. Stripe
+    # webhook sync (or another admin) could have advanced the row to
+    # `payment_cancelled` mid-batch; refunding again would double-charge.
     refund_result = None
     if payload.get("also_refund_venue"):
-        if fail_count > 0 and not dry_run:
+        parent_now = db.execute(text("""
+            SELECT id, status, stripe_payment_intent_id, venue_charge_cents
+              FROM transactions WHERE id = :pid
+        """), {"pid": parent_id}).mappings().first()
+        if not parent_now:
+            refund_result = {"error": f"Parent #{parent_id} no longer exists."}
+        elif fail_count > 0 and not dry_run:
             refund_result = {"error":
                 f"Refund skipped: {fail_count} reversal{'s' if fail_count != 1 else ''} "
                 f"failed in this batch. Resolve those first, then issue the venue refund "
                 f"separately via ↩ Refund on the parent."}
-        elif parent["status"] not in _REFUNDABLE_STATUSES:
+        elif parent_now["status"] not in _REFUNDABLE_STATUSES:
             refund_result = {"error":
-                f"Parent #{parent_id} is in status '{parent['status']}' — not refundable."}
-        elif not parent["stripe_payment_intent_id"]:
+                f"Parent #{parent_id} is now in status '{parent_now['status']}' — "
+                f"not refundable. (Status may have changed during the batch.)"}
+        elif not parent_now["stripe_payment_intent_id"]:
             refund_result = {"error": f"Parent #{parent_id} has no stripe_payment_intent_id."}
         else:
-            parent_charge = int(parent["venue_charge_cents"] or 0)
+            # Use the freshly-re-read parent for the amount cap.
+            parent_charge = int(parent_now["venue_charge_cents"] or 0)
             r_req = payload.get("refund_amount_cents")
             r_amount = int(r_req) if r_req not in (None, "") else total_amount
             if r_amount <= 0 or r_amount > parent_charge:
@@ -1635,7 +1855,7 @@ def reverse_batch(
                     try:
                         from backend.routes.stripe_connect import init_stripe as _is2
                         stripe2, _k2 = _is2(db)
-                        ref_idem = _idem(f"admin_reverse_batch_refund_{parent_id}")
+                        ref_idem = _idem(f"admin_reverse_batch_refund_{parent_id}_amt{r_amount}")
                         ref_obj = stripe2.Refund.create(
                             payment_intent=parent["stripe_payment_intent_id"],
                             amount=r_amount,
@@ -1714,9 +1934,51 @@ def reverse_batch(
                         }
                     except Exception as e:
                         msg = getattr(e, "user_message", None) or str(e)
+                        # Audit fix (May 2026 part 5): mirror the single-row
+                        # half-completion tracking. Single-row already wrote
+                        # an audit row + flagged the parent transaction's
+                        # notes with ⚠️ NEEDS REFUND; the batch path was
+                        # the laggard. Admin closing the browser used to
+                        # lose all signal of the partial state.
+                        import logging as _logging_b
+                        try:
+                            db.execute(text("""
+                                UPDATE transactions
+                                   SET notes = COALESCE(notes || ' | ', '') || :n
+                                 WHERE id = :pid
+                            """), {
+                                "n": f"⚠️ NEEDS REFUND — reverse-batch succeeded but refund failed: {msg[:300]}",
+                                "pid": parent_id,
+                            })
+                            db.commit()
+                            log_admin_action(
+                                db, admin, "payments_refund_failed_after_reverse",
+                                target_table="transactions", target_id=parent_id,
+                                before=None,
+                                after=None,
+                                metadata={
+                                    "via": "reverse_batch",
+                                    "intended_amount_cents": r_amount,
+                                    "is_full": r_is_full,
+                                    "error": msg[:500],
+                                    "needs_refund": True,
+                                    "ok_count": ok_count,
+                                    "fail_count": fail_count,
+                                },
+                                request=request,
+                            )
+                            db.commit()
+                        except Exception as _audit_e:
+                            _logging_b.getLogger("gigsfill.admin_payments").warning(
+                                f"failed to audit-log half-completed reverse-batch refund: {_audit_e}")
                         refund_result = {
                             "parent_txn_id": parent_id,
-                            "error": f"Reversals applied but venue refund failed: {msg}. Retry via ↩ Refund on the parent.",
+                            "needs_refund": True,
+                            "error": (
+                                f"Reversals applied but venue refund failed: {msg}. "
+                                f"Retry via ↩ Refund on the parent. "
+                                f"Audit row recorded; transaction notes flagged."
+                            ),
                         }
 
     return {
@@ -1757,6 +2019,10 @@ def mark_resolved_batch(
     rows = payload.get("rows") or []
     reason = (payload.get("reason") or "").strip()[:1000]
     dry_run = bool(payload.get("dry_run"))
+    # Audit fix (May 2026 part 5): single-row mark_resolved gained a
+    # `send_email` opt-in for payment_cancelled. Batch sibling now
+    # honors the same flag — applied per-row inside the loop.
+    send_email = bool(payload.get("send_email"))
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows must be a non-empty list")
     if len(rows) > 50:
@@ -1797,11 +2063,20 @@ def mark_resolved_batch(
             if not dry_run:
                 note = (f"Admin mark-resolved (batch): {row['status']} → {ns} "
                         f"({getattr(admin, 'email', 'admin')}) — {reason}")
-                db.execute(text("""
+                # Audit fix (May 2026 part 5): atomic status guard mirrors
+                # the single-row endpoint. On rowcount=0 we know another
+                # action changed the row out from under us; record as
+                # failed for this row and continue with the rest of the batch.
+                _b_res = db.execute(text("""
                     UPDATE transactions
                        SET status = :s, notes = COALESCE(notes || ' | ', '') || :n
-                     WHERE id = :tid
-                """), {"s": ns, "n": note, "tid": tid})
+                     WHERE id = :tid AND status = :expected
+                """), {"s": ns, "n": note, "tid": tid, "expected": row["status"]})
+                if (_b_res.rowcount or 0) == 0:
+                    results.append({"txn_id": tid, "ok": False,
+                                    "error": "concurrently modified — skipped"})
+                    fail_count += 1
+                    continue
                 db.commit()
                 log_admin_action(
                     db, admin, "payments_mark_resolved",
@@ -1812,6 +2087,32 @@ def mark_resolved_batch(
                     request=request,
                 )
                 db.commit()
+                # Audit fix (May 2026 part 5): fan out the venue refund
+                # email when admin opted in and the transition is to
+                # payment_cancelled. Same gating as the single-row path.
+                if send_email and ns == "payment_cancelled":
+                    try:
+                        parent_b = db.execute(text("""
+                            SELECT t.id, t.gig_id, t.amount_cents, t.venue_charge_cents,
+                                   t.parent_transaction_id
+                              FROM transactions t WHERE t.id = :tid
+                        """), {"tid": tid}).mappings().first()
+                        if parent_b:
+                            if parent_b["parent_transaction_id"]:
+                                _pb = db.execute(text("SELECT id, amount_cents, venue_charge_cents FROM transactions WHERE id = :pid"),
+                                                 {"pid": parent_b["parent_transaction_id"]}).mappings().first()
+                                target_id_b = parent_b["parent_transaction_id"]
+                                amt_b = (_pb["venue_charge_cents"] if _pb else None) or (_pb["amount_cents"] if _pb else None) or 0
+                            else:
+                                target_id_b = parent_b["id"]
+                                amt_b = parent_b["venue_charge_cents"] or parent_b["amount_cents"] or 0
+                            _send_venue_refund_email(db, target_id_b, amt_b, True,
+                                                     "admin_mark_resolved_batch:" + reason,
+                                                     stripe_refund_id="(no Stripe — mark-resolved-batch)")
+                    except Exception as _eb:
+                        import logging as _logging
+                        _logging.getLogger("gigsfill.admin_payments").warning(
+                            f"mark-resolved-batch email skipped for txn {tid}: {_eb}")
             results.append({"txn_id": tid, "ok": True,
                             "from": row["status"], "to": ns})
             ok_count += 1
@@ -2097,6 +2398,18 @@ def bulk_action(
     # Dispatch to the single-row handlers — same validation, same audit log,
     # same dry_run support. Errors on individual rows don't abort the batch;
     # they're collected and returned per-row.
+    #
+    # Audit fix (May 2026 part 5): the per-row handlers (mark_resolved,
+    # refire_payment, resend_email) are decorated with @limiter.limit(30/min).
+    # When the bulk loop called them directly, each call incremented the same
+    # per-IP bucket, so a 100-row bulk failed at row ~30 with 429. Now we
+    # unwrap the slowapi decorator and call the raw function, so the bulk
+    # endpoint itself (also rate-limited) is the only burned slot.
+    import inspect as _inspect
+    _mr_inner    = _inspect.unwrap(mark_resolved)
+    _rf_inner    = _inspect.unwrap(refire_payment)
+    _re_inner    = _inspect.unwrap(resend_email)
+
     results = []
     ok_count = 0
     fail_count = 0
@@ -2109,17 +2422,24 @@ def bulk_action(
             continue
         try:
             if action == 'mark-resolved':
-                r = mark_resolved(tid_int, {
+                # Audit fix (May 2026 part 2): forward dry_run so the
+                # "Test (dry run)" UI toggle doesn't silently write.
+                # Audit fix (May 2026 part 5): also forward send_email
+                # so the opt-in venue refund email fans out from the
+                # bulk path, not just single-row.
+                r = _mr_inner(tid_int, {
                     "new_status": params["new_status"],
                     "reason":     params["reason"],
+                    "dry_run":    dry_run,
+                    "send_email": params.get("send_email", False),
                 }, request, admin, db)
             elif action == 'refire':
-                r = refire_payment(tid_int, {
+                r = _rf_inner(tid_int, {
                     "notes":   params.get("notes", ""),
                     "dry_run": dry_run,
                 }, request, admin, db)
             elif action == 'resend-email':
-                r = resend_email(tid_int, {
+                r = _re_inner(tid_int, {
                     "template": params["template"],
                     "dry_run":  dry_run,
                 }, request, admin, db)
@@ -2157,7 +2477,12 @@ _RECON_MAX_TXNS = 200
 # this handler could be tried. Putting "reconcile" under /reports/ avoids the
 # clash without having to reorder the file.
 @router.get("/api/admin/payments/reports/reconcile")
+# Audit fix (May 2026 part 3): each call bursts up to 200 live Stripe API
+# requests (PI/Transfer retrieve). A misbehaving UI loop could blow
+# through the Stripe rate budget. Cap to 6 reconciles/minute per admin.
+@limiter.limit("6/minute")
 def reconcile(
+    request: Request,
     from_date: str = Query(..., description="YYYY-MM-DD, gig date inclusive"),
     to_date:   str = Query(..., description="YYYY-MM-DD, gig date inclusive"),
     only_mismatches: bool = Query(True),
@@ -2260,6 +2585,22 @@ def reconcile(
                     notes_bits.append(f"Stripe shows ${rev/100:.2f} of ${amt/100:.2f} reversed")
                 else:
                     observed = 'succeeded'
+                    # Audit fix (May 2026 part 9): when our row says 'transferred'
+                    # but Stripe's destination_payment has succeeded for the
+                    # artist, the scheduler should have flipped us to 'paid' —
+                    # surface this so admin can investigate (this was the May 26
+                    # incident pattern). Add a note rather than mutating, since
+                    # reconcile is read-only by design.
+                    if r["status"] == 'transferred':
+                        try:
+                            _dp = getattr(obj, "destination_payment", None)
+                            if _dp:
+                                notes_bits.append(
+                                    "Our 'transferred' but Stripe destination_payment succeeded — "
+                                    "should have advanced to 'paid' via dest-charge poll."
+                                )
+                        except Exception:
+                            pass
             else:
                 obj = stripe.PaymentIntent.retrieve(ref_id)
                 stripe_status = getattr(obj, "status", None)

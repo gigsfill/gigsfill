@@ -2,6 +2,73 @@
 // HELPERS
 // -----------------------------
 
+/** Wire up drag-and-drop reorder on the venue Social Media #socialGrid.
+ *  On dragend, collect `data-brand` in current DOM order and PUT
+ *  `/api/venues/{id}` with `{ social_order: "..." }`. Public profile reads
+ *  the column and renders tiles in that order. */
+function setupVenueSocialReorder(venueId) {
+  const grid = document.getElementById('socialGrid');
+  if (!grid || grid.dataset.dndWired) return;
+  grid.dataset.dndWired = '1';
+  let dragged = null;
+  let didMove = false;
+
+  grid.addEventListener('dragstart', e => {
+    if (!(e.target instanceof HTMLElement)) return;
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    const row = handle.closest('.social-row');
+    if (!row) return;
+    dragged = row;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  grid.addEventListener('dragover', e => {
+    e.preventDefault();
+    if (!dragged) return;
+    if (!(e.target instanceof HTMLElement)) return;
+    const row = e.target.closest('.social-row');
+    if (!row || row === dragged) return;
+    const rect = row.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    grid.insertBefore(dragged, after ? row.nextSibling : row);
+    didMove = true;
+  });
+
+  grid.addEventListener('dragend', async () => {
+    if (!dragged) return;
+    dragged.classList.remove('dragging');
+    if (didMove) {
+      const order = [...grid.querySelectorAll('.social-row')]
+        .map(r => r.dataset.brand).filter(Boolean).join(',');
+      try {
+        await fetch(`/api/venues/${venueId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ social_order: order }),
+        });
+      } catch (e) { console.warn('social_order save failed', e); }
+    }
+    dragged = null;
+    didMove = false;
+  });
+}
+
+
+/** HTML-escape any string that will be interpolated into innerHTML / template
+ *  literals. Mirrors the helper of the same name in artist.edit.js. */
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+
 /**
  * Resize an image File to fit within maxW×maxH while preserving aspect ratio,
  * then return it as a Blob (image/jpeg, quality 0.92).
@@ -415,6 +482,22 @@ async function loadVenue() {
     if (venueData.default_flyer_template_id) flyerTplSel.value = String(venueData.default_flyer_template_id);
   }
 
+  // SOCIAL ORDER — reorder social rows in DOM to match the saved
+  // `social_order` (comma-separated brand keys). Missing brands keep their
+  // natural position relative to each other at the end. Then wire drag-to-
+  // reorder so changes persist via PUT /api/venues/{id} { social_order }.
+  if (venueData.social_order) {
+    const grid = document.getElementById('socialGrid');
+    if (grid) {
+      const want = venueData.social_order.split(',').map(s => s.trim()).filter(Boolean);
+      const rows = Array.from(grid.querySelectorAll('.social-row'));
+      const byBrand = Object.fromEntries(rows.map(r => [r.dataset.brand, r]));
+      want.forEach(b => { if (byBrand[b]) grid.appendChild(byBrand[b]); });
+      rows.forEach(r => { if (!want.includes(r.dataset.brand)) grid.appendChild(r); });
+    }
+  }
+  setupVenueSocialReorder(venueId);
+
   // ARTIST FREQUENCY (LOAD)
   const freqMode = document.getElementById("artistFrequencyMode");
   const freqWrap = document.getElementById("artistFrequencyLimit");
@@ -656,7 +739,13 @@ async function saveVideo() {
   });
 
   if (!res.ok) {
-    console.error("Failed to save video");
+    // Audit fix (May 2026 part 6): surface backend {detail}.
+    let _detail = `HTTP ${res.status}`;
+    try { const _j = await res.json(); if (_j && _j.detail) _detail = _j.detail; } catch(_) {}
+    console.error("Failed to save video:", _detail);
+    if (typeof window.showErrorModal === 'function') {
+      window.showErrorModal('Could not add video', _detail);
+    }
     return;
   }
 
@@ -731,8 +820,9 @@ async function loadVenueMedia(venueId) {
     }
 
     if (m.media_type === "picture") {
+      const caption = m.caption || "";
       qs("pictures").innerHTML += `
-        <div class="media-card" data-id="${m.id}" draggable="true">
+        <div class="media-card" data-id="${m.id}" draggable="true" data-kind="picture">
           <img src="${m.file_path}">
           <div class="media-overlay center-overlay">
             <span class="drag-handle" draggable="true">☰</span>
@@ -742,6 +832,14 @@ async function loadVenueMedia(venueId) {
               value="${m.title || ""}"
               data-id="${m.id}"
             />
+            <textarea
+              class="picture-caption"
+              draggable="false"
+              placeholder="Add a caption (e.g. backstage, Aug 14)…"
+              maxlength="500"
+              rows="2"
+              data-id="${m.id}"
+            >${escapeHtml(caption)}</textarea>
             <button class="delete-btn" data-id="${m.id}">Delete</button>
           </div>
         </div>
@@ -749,8 +847,9 @@ async function loadVenueMedia(venueId) {
     }
 
     if (m.media_type === "video") {
+      const caption = m.caption || "";
       qs("videos").innerHTML += `
-        <div class="media-card" data-id="${m.id}" draggable="true">
+        <div class="media-card" data-id="${m.id}" draggable="true" data-kind="video">
           <img src="${getVideoThumbnail(m.video_url)}">
           <div class="media-overlay center-overlay">
             <span class="drag-handle" draggable="true">☰</span>
@@ -760,6 +859,14 @@ async function loadVenueMedia(venueId) {
               value="${m.title || ""}"
               data-id="${m.id}"
             />
+            <textarea
+              class="video-caption"
+              draggable="false"
+              placeholder="Add a caption (e.g. Live at the Roxy · Aug 14)…"
+              maxlength="500"
+              rows="2"
+              data-id="${m.id}"
+            >${escapeHtml(caption)}</textarea>
             <button class="delete-btn" data-id="${m.id}">Delete</button>
           </div>
         </div>
@@ -856,8 +963,21 @@ document.addEventListener("dragstart", e => {
   }
 });
 
+// Helper — does this element get caption save treatment? Picture + video
+// share the .video-caption / .picture-caption classes; both PUT to the same
+// /api/venues/media/{id} endpoint with `caption` in the payload.
+function _isVCaption(el) {
+  return el && el.classList &&
+         (el.classList.contains("video-caption") || el.classList.contains("picture-caption"));
+}
+
 document.addEventListener("keydown", e => {
-  if (e.target.classList.contains("media-title") && e.key === "Enter") {
+  // Title input + caption textareas: Enter commits (blurs → save).
+  // Captions are short labels, not paragraphs — preventDefault stops newlines.
+  if (!e.target.classList) return;
+  const isTitle = e.target.classList.contains("media-title");
+  const isCaption = _isVCaption(e.target);
+  if ((isTitle || isCaption) && e.key === "Enter") {
     e.preventDefault();
     e.target.blur();
   }
@@ -871,13 +991,19 @@ document.addEventListener("blur", async e => {
     }
   }
 
-  if (!e.target || !e.target.classList || !e.target.classList.contains("media-title")) return;
+  if (!e.target || !e.target.classList) return;
+  const isTitle = e.target.classList.contains("media-title");
+  const isCaption = _isVCaption(e.target);
+  if (!isTitle && !isCaption) return;
+
+  const value = e.target.value.trim();
+  const payload = isTitle ? { title: value } : { caption: value };
 
   await fetch(`/api/venues/media/${e.target.dataset.id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ title: e.target.value.trim() })
+    body: JSON.stringify(payload)
   });
 }, true);
 

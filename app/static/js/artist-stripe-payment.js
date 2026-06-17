@@ -150,9 +150,14 @@ async function loadArtistEarningsHistory() {
     // status='payment_cancelled' are post-gig payment cancellations — venue
     // refused to pay after the gig. Artist should see these as "Cancelled red".
     window._artistEarnData = txns.map(function(t) {
-      var statusMap = { paid:'Paid', transferred:'Processing', test:'Test', scheduled:'Upcoming', pending:'Upcoming', charged:'Processing', pending_transfer:'Processing', charge_retry:'Processing', payment_failed:'Issue', transfer_failed:'Issue', payment_cancelled:'Cancelled', free_trial:'🎟 Free Trial' };
-      var colorMap = { paid:'#10b981', transferred:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charged:'#f59e0b', pending_transfer:'#f59e0b', charge_retry:'#f97316', payment_failed:'#ef4444', transfer_failed:'#ef4444', payment_cancelled:'#f97316', free_trial:'#f59e0b' };
-      var statusTip = { transferred:'Transfer sent to your Stripe account — funds held while the venue payment settles, then released to your bank (typically 5–7 business days after the gig)', paid:'Deposited in your bank account', scheduled:'Scheduled for processing after the gig', pending:'Pending processing', charged:'Venue charged — transfer in progress (bank deposit typically 5–7 business days after the gig)', pending_transfer:'Payment processing — payout typically arrives within 5–7 business days of the gig', charge_retry:'Retrying charge', payment_failed:'Payment issue — contact support', transfer_failed:'Transfer issue — contact support', upcoming:'Gig is upcoming — payout will process after the gig completes', free_trial:'Free Trial venue — GigsFill is comping platform fees. The venue pays you directly for this gig.' };
+      // Audit fix (May 2026 part 9): distinguish payment-failure states
+      // (transfer_failed, payment_failed) from in-flight "Processing" rather
+      // than burying them under the same orange "Processing" pill. Failed
+      // payouts need the artist to contact support; calling them "Processing"
+      // hid real problems for days. Now failure rows render distinctly.
+      var statusMap = { paid:'Paid', transferred:'Processing', test:'Test', scheduled:'Upcoming', pending:'Upcoming', charged:'Processing', pending_transfer:'Processing', charge_retry:'Retrying', payment_failed:'Payment Issue', transfer_failed:'Transfer Issue', payment_cancelled:'Cancelled', free_trial:'🎟 Free Trial' };
+      var colorMap = { paid:'#10b981', transferred:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charged:'#f59e0b', pending_transfer:'#f59e0b', charge_retry:'#f97316', payment_failed:'#dc2626', transfer_failed:'#dc2626', payment_cancelled:'#f97316', free_trial:'#f59e0b' };
+      var statusTip = { transferred:'Transfer sent to your Stripe account — funds held while the venue payment settles, then released to your bank (typically 5–7 business days after the gig)', paid:'Deposited in your bank account', scheduled:'Scheduled for processing after the gig', pending:'Pending processing', charged:'Venue charged — transfer in progress (bank deposit typically 5–7 business days after the gig)', pending_transfer:'Payment processing — payout typically arrives within 5–7 business days of the gig', charge_retry:'Retrying — last attempt failed, scheduler will try again soon', payment_failed:'⚠ Venue charge failed — contact GigsFill support to resolve', transfer_failed:'⚠ Transfer to your Stripe account failed — your bank/account info may need updating. Contact GigsFill support.', upcoming:'Gig is upcoming — payout will process after the gig completes', free_trial:'Free Trial venue — GigsFill is comping platform fees. The venue pays you directly for this gig.' };
       window._artistEarnStatusTip = statusTip;
       // Format time from "HH:MM" 24h or similar to 12h display
       var rawTime = t.gig_time || t.start_time || '';
@@ -265,10 +270,12 @@ function renderArtistEarningsTable() {
   html += '<th style="' + hdrStyle + 'text-align:left;" onclick="artistEarnSortBy(\'status\')">Status' + arrow('status') + '</th>';
   html += '</tr></thead><tbody>';
 
+  // Audit fix (May 2026 part 8): escape venue_name; clamp id.
+  var _asp_esc = function(s){return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
   pageData.forEach(function(t) {
     var link = t.venue_id
-      ? '<a href="/app/venue-profile.html?venue_id=' + t.venue_id + '" style="color:var(--text-white);text-decoration:none;border-bottom:1px dashed rgba(255,255,255,0.3);" onmouseover="this.style.color=\'#a78bfa\'" onmouseout="this.style.color=\'var(--text-white)\'">' + t.venue_name + '</a>'
-      : t.venue_name;
+      ? '<a href="/app/venue-profile.html?venue_id=' + (parseInt(t.venue_id, 10) || 0) + '" style="color:var(--text-white);text-decoration:none;border-bottom:1px dashed rgba(255,255,255,0.3);" onmouseover="this.style.color=\'#a78bfa\'" onmouseout="this.style.color=\'var(--text-white)\'">' + _asp_esc(t.venue_name) + '</a>'
+      : _asp_esc(t.venue_name);
     var isCancelled = t.rawStatus === 'payment_cancelled';
     // Gig fee: strikethrough when cancelled (venue didn't pay artist)
     var gigFeeCell = isCancelled
@@ -332,15 +339,19 @@ function exportArtistEarnings(format) {
     var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'earnings_history.csv'; a.click();
   } else if (format === 'pdf') {
+    // Audit fix (May 2026 part 8): escape every interpolated field in the
+    // print-export popup. Previously venue_name + status went into the popup
+    // raw, allowing same-origin XSS via a malicious venue name.
+    var _esc_pe = function(s){return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
     var w = window.open('', '_blank');
     w.document.write('<html><head><title>Earnings History</title><style>@page{size:landscape;margin:10mm 12mm;}body{font-family:Arial,sans-serif;padding:10px 15px;}table{width:100%;border-collapse:collapse;margin-top:12px;}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:12px;white-space:nowrap;}th{background:#f4f4f4;font-weight:bold;}tr:nth-child(even){background:#fafafa;}.right{text-align:right;}.cancelled{color:#ef4444;}</style></head><body>');
-    w.document.write('<h2 style="margin-bottom:4px;">Earnings History</h2><p style="margin-top:0;font-size:12px;color:#666;">Exported: ' + new Date().toLocaleDateString() + '</p>');
+    w.document.write('<h2 style="margin-bottom:4px;">Earnings History</h2><p style="margin-top:0;font-size:12px;color:#666;">Exported: ' + _esc_pe(new Date().toLocaleDateString()) + '</p>');
     w.document.write('<table><tr><th>Date</th><th>Time</th><th>Venue</th><th class="right">Gig Pay</th><th class="right">Platform Fee</th><th class="right">Total Paid</th><th>Status</th></tr>');
     data.forEach(function(t) {
       var isCancelled = t.rawStatus === 'payment_cancelled';
       var totalPaidStr = isCancelled ? '<span class="cancelled">$0.00</span>' : '$' + t.total_paid.toFixed(2);
-      var statusStr = isCancelled ? '<span class="cancelled">Cancelled</span>' : t.status;
-      w.document.write('<tr><td>' + t.gig_date + '</td><td>' + (t.gig_time || '') + '</td><td>' + t.venue_name + '</td><td class="right">$' + t.gig_fee.toFixed(2) + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
+      var statusStr = isCancelled ? '<span class="cancelled">Cancelled</span>' : _esc_pe(t.status);
+      w.document.write('<tr><td>' + _esc_pe(t.gig_date) + '</td><td>' + _esc_pe(t.gig_time || '') + '</td><td>' + _esc_pe(t.venue_name) + '</td><td class="right">$' + t.gig_fee.toFixed(2) + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
     });
     w.document.write('</table></body></html>');
     w.document.close();

@@ -89,7 +89,13 @@ def _slot_status_for_viewer(slot, viewer_type, viewer_id, contract_rows,
             relationship = "preferred_denied"
         elif preferred_status not in ("approved", None) and preferred_status is not None and preferred_status != "pending":
             relationship = "no_access"
-        elif preferred_status is None and not gig_is_blast_open and not gig_freq_exempt:
+        elif preferred_status is None and not gig_is_blast_open:
+            # Audit fix (May 2026 part 10g): frequency_exempt was previously
+            # part of this condition (`and not gig_freq_exempt`), which let
+            # NON-PREFERRED artists book any frequency-exempt gig. But
+            # frequency_exempt only waives the booking-FREQUENCY limit — it
+            # must NOT bypass the preferred-status requirement. Only a valid
+            # blast (gig_is_blast_open) opens a gig to non-preferred artists.
             relationship = "not_preferred"
         elif freq_check and freq_check.get("blocked") and not gig_is_blast_open and not gig_freq_exempt:
             relationship = "freq_blocked"
@@ -225,7 +231,7 @@ def get_gig_modal_data(
             _ov = db.execute(text(
                 "SELECT pay_dollars_override, pay_cents_override "
                 "FROM preferred_artists "
-                "WHERE venue_id = :vid AND artist_id = :aid"
+                "WHERE venue_id = :vid AND artist_id = :aid AND status = 'approved'"
             ), {"vid": gig["venue_id"], "aid": viewer_id}).mappings().first()
             if _ov and _ov.get("pay_dollars_override") is not None:
                 _override_pay = float(_ov["pay_dollars_override"]) + float(_ov.get("pay_cents_override") or 0) / 100
@@ -334,7 +340,8 @@ def get_gig_modal_data(
                 SELECT g2.date FROM gigs g2
                 JOIN gig_slots gs2 ON gs2.gig_id = g2.id
                 WHERE g2.venue_id = :vid AND gs2.artist_id = :aid
-                  AND gs2.status IN ('booked','pending_contract')
+                  -- Audit fix (May 2026 part 6): include awaiting_venue_contract + pending_venue_approval
+                  AND gs2.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                   AND g2.id != :gid
                 ORDER BY ABS(julianday(g2.date) - julianday(:date)) ASC
                 LIMIT 1
@@ -414,6 +421,21 @@ def get_gig_modal_data(
     gig_is_blast_open = bool(gig.get("is_blast_open"))
     gig_freq_exempt   = bool(gig.get("frequency_exempt"))
     has_wl            = bool(gig.get("has_active_waitlist"))
+
+    # Audit fix (May 2026 part 10g): the modal previously only treated a gig as
+    # open-to-non-preferred when it had a live radius_blast_token (cancellation
+    # blast). It missed the venue's open-gig "blast all nearby artists within
+    # 36h/1week" feature, which is the SAME bypass the booking backend honors
+    # via _open_blast_bypass_active. Without this, a non-preferred artist who
+    # received the open-gig blast email saw "request preferred status" while
+    # the backend would have happily accepted their booking. Fold the backend's
+    # authoritative check into the modal so the two never disagree.
+    try:
+        from backend.routes.gigs import _open_blast_bypass_active
+        if not gig_is_blast_open and _open_blast_bypass_active(db, gig["venue_id"], gig_id):
+            gig_is_blast_open = True
+    except Exception:
+        pass
 
     slot_data = []
     for slot in slots:

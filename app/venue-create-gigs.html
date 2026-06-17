@@ -927,6 +927,162 @@
     margin-right: 1px;
   }
 
+  /* Door Split pill — same square shape and treatment as .slot-pay-pill,
+     but greens-tinted-muted when off and brightens when on. The whole row
+     (toggle button + inline inputs) lives inside this one pill so they
+     read as a single control. */
+  .slot-door-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    /* Greyed-out neutral look when door split is INACTIVE so the active
+       pay pill on the left reads as the "current" option. Switches to
+       bright green when .is-on is toggled by the JS. */
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    padding: 3px 8px;
+    color: rgba(255, 255, 255, 0.45);
+    opacity: 0.75;
+    font-weight: 600;
+    font-size: 0.78rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s;
+    box-sizing: border-box;
+    /* Height-match the .slot-pay-pill, which has a real <input> inside
+       (browser default line-height: normal makes the input ~2-3px taller
+       than a plain span at the same font-size). align-self:stretch makes
+       this pill match the row's tallest sibling. */
+    align-self: stretch;
+    min-height: 1.55rem;
+  }
+  .slot-door-pill.is-on {
+    background: rgba(34, 197, 94, 0.20);
+    border-color: rgba(34, 197, 94, 0.60);
+    color: #86efac;
+    opacity: 1;
+  }
+  .slot-door-pill .slot-door-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    outline: none;
+  }
+  .slot-door-pill .slot-door-toggle-btn:focus-visible {
+    outline: 2px solid rgba(34, 197, 94, 0.55);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  /* DOOR INPUTS ROW (separate row below the header, only visible when
+     door split is active). The inputs live inside their own square pill
+     anchored on the right so they sit directly beneath the door bubble. */
+  #slotList .slot-door-row { font-size: 0.78rem; }
+  .slot-door-inputs {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(34, 197, 94, 0.10);
+    border: 1px solid rgba(34, 197, 94, 0.40);
+    border-radius: 4px;
+    padding: 3px 10px;
+    color: #86efac;
+    font-weight: 600;
+    font-size: 0.78rem;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .slot-door-inputs .slot-door-symbol,
+  .slot-door-inputs .slot-door-plus,
+  .slot-door-inputs .slot-door-label-text {
+    color: inherit;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .slot-door-inputs .slot-door-label-text { font-weight: 600; opacity: 0.9; }
+  /* Extra breathing room around the "+" so it visually sits in the middle
+     between the guarantee dollars on its left and "Percent of door:" on
+     its right. */
+  .slot-door-inputs .slot-door-plus { padding: 0 8px; opacity: 0.85; }
+  /* The user-entered VALUES (guarantee + percent) render in white so they
+     pop against the green labels — visually communicates "this number is
+     what you typed, the rest is a label." Same chromeless treatment as
+     .slot-pay-amount: transparent bg, no border, just the colored text. */
+  .slot-door-inputs input.slot-door-guarantee,
+  .slot-door-inputs input.slot-door-pct {
+    background: transparent !important;
+    border: 0 !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    font-size: 0.78rem !important;
+    padding: 1px 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    line-height: 1.2;
+    text-align: center;
+    -moz-appearance: textfield;
+  }
+  .slot-door-inputs input.slot-door-guarantee { width: 7ch; }
+  .slot-door-inputs input.slot-door-pct       { width: 3ch; }
+  .slot-door-inputs input.slot-door-guarantee::-webkit-outer-spin-button,
+  .slot-door-inputs input.slot-door-guarantee::-webkit-inner-spin-button,
+  .slot-door-inputs input.slot-door-pct::-webkit-outer-spin-button,
+  .slot-door-inputs input.slot-door-pct::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .slot-door-inputs input:focus { outline: none !important; }
+
+  /* HEADER PILLS (Save as Template / Load a Template) — same square+colored
+     vocabulary as .slot-pay-pill / .slot-door-pill / .slot-pill so the
+     modal-header templates UI reads as a peer to the body's pills. Two
+     color variants matching the palette used elsewhere in this modal:
+       header-pill-green  → save/positive (matches .slot-pay-pill)
+       header-pill-purple → load/select  (matches .slot-pill family) */
+  .header-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid;
+    font-family: var(--font-primary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.2;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.05s;
+  }
+  .header-pill:hover { transform: translateY(-1px); }
+  .header-pill:active { transform: translateY(0); }
+  .header-pill:focus { outline: none; }
+  .header-pill:focus-visible {
+    outline: 2px solid #06b6d4;
+    outline-offset: 2px;
+  }
+  .header-pill-green {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.40);
+    color: #86efac;
+  }
+  .header-pill-green:hover {
+    background: rgba(34, 197, 94, 0.22);
+    border-color: rgba(34, 197, 94, 0.65);
+  }
+  .header-pill-purple {
+    background: rgba(168, 85, 247, 0.12);
+    border-color: rgba(168, 85, 247, 0.40);
+    color: #c4b5fd;
+  }
+  .header-pill-purple:hover {
+    background: rgba(168, 85, 247, 0.22);
+    border-color: rgba(168, 85, 247, 0.65);
+  }
+
   /* Slot metadata sub-row — single dense line of pill toggles that mirrors
      the "🎸 Live Band · Solo,Duo,Trio · Country,Pop,Rock" line on the
      read-only Past Event Details modal. Hidden checkboxes inside each
@@ -971,6 +1127,7 @@
   #recurringOptions .day-pill > span,
   #recurringOptions .end-pill > span { line-height: 1; }
   #slotList .slot-pill input[type="checkbox"],
+  #slotList .slot-door-checkbox,
   #recurringOptions .day-pill input[type="checkbox"],
   #recurringOptions .end-pill input[type="radio"] {
     display: none !important;
@@ -2712,7 +2869,26 @@
 <div class="modal-overlay hidden" id="gigModal">
   <div class="modal modal-clean">
 
-    <h2 id="modalTitle">Create Gig</h2>
+    <!-- Header: title on the left, templates UI floated right.
+         Templates are CREATE-mode only (hidden when editing — see
+         #gigTemplatesRow display toggle in venue.create-gigs.js). -->
+    <div class="modal-header-row" style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+      <h2 id="modalTitle" style="margin:0;">Create Gig</h2>
+      <div id="gigTemplatesRow" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <!-- Pill bubbles — same square+colored look as .slot-pay-pill /
+             .slot-door-pill / .slot-pill so the templates UI matches the
+             rest of the modal's pill vocabulary. Save → green (positive
+             action). Load → purple (matches the slot Type/lineup pill family). -->
+        <button type="button" id="saveTemplateBtn" class="header-pill header-pill-green"
+          data-tooltip="Save the current slot configuration as a reusable template">
+          💾 Save as Template
+        </button>
+        <button type="button" id="loadTemplateBtn" class="header-pill header-pill-purple"
+          data-tooltip="Open a saved template to apply to this gig">
+          📋 Load a Template
+        </button>
+      </div>
+    </div>
     <div class="modal-separator"></div>
 
     <section class="modal-section">
@@ -2805,25 +2981,9 @@
           💰 File Door Receipts
         </button>
 
-        <!-- Templates row — save current slot config or load a saved one.
-             Backend: /api/venues/{vid}/gig-templates (Jun 2026 feature).
-             Wired in venue.create-gigs.js (setupGigTemplates / applyGigTemplate). -->
-        <div id="gigTemplatesRow" style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
-          <button type="button" id="saveTemplateBtn"
-            data-tooltip="Save the current slot configuration as a reusable template"
-            style="padding:5px 12px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.32);border-radius:5px;color:#86efac;font-size:0.75rem;cursor:pointer;font-weight:600;">
-            💾 Save as Template
-          </button>
-          <select id="loadTemplateSelect"
-            style="padding:5px 8px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.32);border-radius:5px;color:#c4b5fd;font-size:0.75rem;cursor:pointer;max-width:240px;">
-            <option value="">📋 Use a saved template…</option>
-          </select>
-          <button type="button" id="deleteTemplateBtn" style="display:none;
-            padding:5px 10px;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.32);border-radius:5px;color:#fca5a5;font-size:0.75rem;cursor:pointer;font-weight:600;"
-            data-tooltip="Delete the currently selected template">
-            🗑 Delete
-          </button>
-        </div>
+        <!-- Templates row moved to the modal header (upper-right). It's
+             create-mode only — when editing an existing gig the JS hides
+             #gigTemplatesRow. -->
         <div id="slotError" style="display:none; color:#ef4444; font-size:0.75rem; margin-top:6px;"></div>
       </div>
       
@@ -2963,7 +3123,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=13"></script>
 <script src="/app/static/js/gf-modals.js?v=6"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=139"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=154"></script>
 <script src="/app/static/js/gf-tooltip.js?v=1"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>

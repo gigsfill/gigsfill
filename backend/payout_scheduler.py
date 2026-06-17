@@ -87,9 +87,19 @@ def get_payout_time():
 
 
 def process_payouts_now():
-    """Process all pending payouts: charge venue card, then transfer to artist"""
+    """Process all pending payouts: charge venue card, then transfer to artist.
+
+    Audit fix (May 2026 part 8): `tz` was referenced at three sites inside
+    this function (the three `_handle_charge_failure` calls) but never set —
+    only scheduler_loop() defined it. Every charge failure (card declined,
+    no card on file, any Stripe exception) hit `NameError: tz`, caught by
+    the outer except at the end and logged as a generic warning. **Charge
+    retries were silently broken in production.** Now defined locally so
+    all three call sites resolve.
+    """
     try:
         import stripe
+        tz = get_platform_timezone()
 
         conn = _raw_db_conn()
         conn.row_factory = sqlite3.Row
@@ -535,23 +545,38 @@ def process_payouts_now():
                             dest_charge = stripe.Charge.retrieve(
                                 tr.destination_payment, stripe_account=connect_acct
                             )
+                            # FIX (May 26 2026 — pass 8): the destination_payment
+                            # `status='succeeded'` AND `paid=True` is the artist-
+                            # visible "Succeeded" line in their Stripe Express
+                            # dashboard. From the artist's perspective, that's
+                            # "done" — they see it credited the day after the gig.
+                            # The 2-7 day BalanceTransaction `pending → available`
+                            # hold is Stripe's internal accounting (chargeback
+                            # reserve), not a state the artist tracks. Previously
+                            # we waited for `available`, which made gigsfill show
+                            # "Processing" for days/weeks AFTER the artist saw
+                            # "Succeeded" in Stripe — confusing and a steady
+                            # source of support complaints. Now we mark paid as
+                            # soon as the transfer is committed; if a reversal/
+                            # refund happens later, the transfer.reversed /
+                            # charge.refunded webhook handlers flip status back.
+                            _dest_succeeded = (
+                                getattr(dest_charge, "status", "") == "succeeded"
+                                and bool(getattr(dest_charge, "paid", False))
+                                and not bool(getattr(dest_charge, "refunded", False))
+                            )
+                            if _dest_succeeded:
+                                bank_settled = True
+                            # Also keep the original BT-status check as a
+                            # fallback signal — if for some reason dest_charge
+                            # doesn't have the expected fields, the BT-status
+                            # path still works.
                             bt_id = getattr(dest_charge, "balance_transaction", None)
-                            if bt_id:
+                            if not bank_settled and bt_id:
                                 bt_id_str = bt_id if isinstance(bt_id, str) else bt_id.id
                                 bt = stripe.BalanceTransaction.retrieve(
                                     bt_id_str, stripe_account=connect_acct
                                 )
-                                # FIX (May 14 2026): accept 'available' as
-                                # settled too. Connect Express accounts on
-                                # MANUAL payout schedule (Stripe's default for
-                                # many live setups) leave bal_tx in 'available'
-                                # indefinitely — Stripe never auto-issues a
-                                # Payout, so status='paid' never happens. From
-                                # the artist's perspective, 'available' means
-                                # the money is in their Connect balance and
-                                # they can withdraw whenever. Marking our row
-                                # 'paid' is correct — we've completed our job.
-                                # 'pending' → still in the 2-day hold, leave.
                                 if getattr(bt, "status", "") in ("paid", "available"):
                                     bank_settled = True
                         except stripe.error.PermissionError:
@@ -583,6 +608,37 @@ def process_payouts_now():
                         )
                         conn.commit()
                         logger.info(f"Txn {txn['id']}: Bank payout confirmed — marked paid")
+                        # Audit fix (May 2026 part 9): drop an in-app notification
+                        # on the transferred → paid transition so the artist sees
+                        # "Paid ✓" in their Activity Center, not just a silent
+                        # change in the Payments tab. Fans out to all entity_users.
+                        try:
+                            from backend.db import SessionLocal as _SLn
+                            from backend.services.notification_service import create_notification as _cn
+                            from backend.utils import get_all_entity_users as _gaeu
+                            from sqlalchemy import text as _txt
+                            _ndb = _SLn()
+                            try:
+                                _gid = txn["gig_id"] if "gig_id" in txn.keys() else None
+                                _gigrow = _ndb.execute(
+                                    _txt("""SELECT g.id, g.date, v.venue_name
+                                            FROM gigs g JOIN venues v ON v.id = g.venue_id
+                                            WHERE g.id = :gid"""),
+                                    {"gid": _gid}
+                                ).mappings().first()
+                                if _gigrow and txn["artist_id"]:
+                                    _users = _gaeu(_ndb, "artist", txn["artist_id"])
+                                    for _u in _users:
+                                        _cn(_ndb, _u["user_id"], 'payout_paid',
+                                            f"Paid — {_gigrow['venue_name']}",
+                                            f"Your payout for the gig at {_gigrow['venue_name']} "
+                                            f"on {_gigrow['date']} is now in your bank account.",
+                                            gig_id=_gid, artist_id=txn["artist_id"])
+                                    _ndb.commit()
+                            finally:
+                                _ndb.close()
+                        except Exception as _ne:
+                            logger.warning(f"Txn {txn['id']}: paid-notification create failed: {_ne}")
                         try:
                             from backend.routes.affiliate import accrue_affiliate_earnings
                             from backend.db import SessionLocal as _SL
@@ -595,6 +651,65 @@ def process_payouts_now():
                             logger.warning(f"Affiliate accrual error for txn {txn['id']}: {_ae}")
                 except Exception as e:
                     logger.warning(f"Txn {txn['id']}: Transfer poll failed — {e}")
+
+        # ---- STALE 'transferred' sweep (May 2026 part 9) ----
+        # Detect transactions stuck in 'transferred' (= "Processing" on artist UI)
+        # for >14 days. The polling loop above should normally flip these to 'paid'
+        # once the destination charge succeeds, but if a row consistently fails the
+        # poll (e.g. the destination_payment is missing or Stripe API errors), it
+        # sits silently in "Processing" forever. Surface them so admin can manually
+        # reconcile via the Admin → Payments page. Rate-limited to one alert per
+        # 24h via a marker row on platform_settings.
+        try:
+            stale = conn.execute("""
+                SELECT t.id, t.gig_id, t.processed_at, v.venue_name,
+                       COALESCE(a.name, 'unknown') as artist_name
+                FROM transactions t
+                LEFT JOIN gigs g ON g.id = t.gig_id
+                LEFT JOIN venues v ON v.id = g.venue_id
+                LEFT JOIN artists a ON a.id = t.artist_id
+                WHERE t.status = 'transferred'
+                  AND t.transaction_type IN ('artist_payout', 'single')
+                  AND t.processed_at IS NOT NULL
+                  AND t.processed_at <= datetime('now', '-14 days')
+                ORDER BY t.processed_at ASC
+                LIMIT 50
+            """).fetchall()
+            if stale:
+                # Throttle: only alert once per 24h regardless of row count
+                _last_alert = conn.execute(
+                    "SELECT setting_value FROM platform_settings WHERE setting_key = '_stale_transferred_last_alert'"
+                ).fetchone()
+                from datetime import datetime, timedelta
+                throttle_ok = True
+                if _last_alert and _last_alert[0]:
+                    try:
+                        _la = datetime.fromisoformat(_last_alert[0].replace("Z", ""))
+                        throttle_ok = (datetime.utcnow() - _la) > timedelta(hours=24)
+                    except Exception:
+                        pass
+                if throttle_ok:
+                    _rows_html = "".join(
+                        f"<li>Txn #{r['id']} — {r['venue_name']} → {r['artist_name']} "
+                        f"(transferred {r['processed_at']})</li>" for r in stale
+                    )
+                    _send_admin_alert(
+                        conn,
+                        f"Stale 'Processing' payouts — {len(stale)} txn(s) >14 days old",
+                        f"<p>{len(stale)} artist payout(s) have been stuck in <code>transferred</code> "
+                        f"(= 'Processing' on artist UI) for more than 14 days. The dest-payment polling "
+                        f"loop did not transition them to <code>paid</code>. Investigate via Admin → "
+                        f"Payments and either re-fire the poll or mark resolved manually.</p>"
+                        f"<ul>{_rows_html}</ul>"
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO platform_settings (setting_key, setting_value) VALUES ('_stale_transferred_last_alert', ?)",
+                        (datetime.utcnow().isoformat() + "Z",)
+                    )
+                    conn.commit()
+                    logger.warning(f"[STALE_PROCESSING] Alerted admin: {len(stale)} txns stuck in transferred >14d")
+        except Exception as _spe:
+            logger.warning(f"Stale-transferred sweep failed: {_spe}")
 
         # ---- POLL STRIPE for async PaymentIntent failures ----
         # payment_intent.payment_failed webhooks are v1 events incompatible with v2 destinations.
@@ -837,8 +952,49 @@ def _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz):
         logger.error(f"Txn {txn_id}: FAILED final ({new_attempts}/{MAX_CHARGE_ATTEMPTS}) - {reason}, venue {venue_id} suspended")
         _send_charge_failed_email(conn, txn, reason)
         _send_venue_suspended_email(conn, venue_id, reason)
+        # Audit fix (May 2026 part 10): notify the artist if a fully_signed
+        # contract is now backed by a permanently-failed charge. Previously
+        # the contract was "legally executed" in our DB but money never
+        # moved — the artist would show up to perform with no warning that
+        # the venue's payment had bounced. This notification gives them a
+        # heads-up so they can chase the venue / contact support.
+        try:
+            _gig_id = txn["gig_id"] if "gig_id" in txn.keys() else None
+            if _gig_id:
+                _signed = conn.execute("""
+                    SELECT gc.id, gc.artist_id FROM gig_contracts gc
+                    WHERE gc.gig_id = ? AND gc.status = 'fully_signed'
+                """, (_gig_id,)).fetchall()
+                if _signed:
+                    from backend.db import SessionLocal as _SLp
+                    from backend.services.notification_service import create_notification as _cn
+                    from backend.utils import get_all_entity_users as _gaeu
+                    _ndb = _SLp()
+                    try:
+                        for _sc in _signed:
+                            _aid = _sc["artist_id"] if "artist_id" in _sc.keys() else _sc[1]
+                            if not _aid:
+                                continue
+                            for _u in _gaeu(_ndb, "artist", _aid):
+                                _cn(_ndb, _u["user_id"], "contract_charge_failed",
+                                    "Venue payment failed on your signed gig",
+                                    "We could not collect payment from the venue on a gig you have a "
+                                    "fully signed contract for. Please reach out to the venue or contact "
+                                    "GigsFill support before the gig date — the contract is still in force "
+                                    "but the venue's account is suspended.",
+                                    gig_id=_gig_id, artist_id=_aid)
+                        _ndb.commit()
+                    finally:
+                        _ndb.close()
+        except Exception as _ne:
+            logger.warning(f"contract-charge-fail notification fan-out failed for txn {txn_id}: {_ne}")
     else:
-        retry_at = (datetime.now(tz) + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+        # Audit fix (May 2026 part 8): write retry_at in NAIVE UTC to match the
+        # scheduler's SELECT (line 134: `AND t.scheduled_process_at <= ?` with
+        # `utcnow_naive()`). Previously `datetime.now(tz)` produced a local-time
+        # string which the scheduler compared as if it were UTC — retries fired
+        # 3-8h early depending on platform timezone offset from UTC.
+        retry_at = (utcnow_naive() + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
         conn.execute(
             """UPDATE transactions SET status = 'charge_retry',
                charge_attempts = ?, last_charge_attempt_at = ?,
@@ -847,7 +1003,7 @@ def _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz):
             (new_attempts, utcnow_naive().isoformat(), reason, retry_at, txn_id)
         )
         conn.commit()
-        logger.error(f"Txn {txn_id}: Charge failed, retry {new_attempts}/{MAX_CHARGE_ATTEMPTS} scheduled for {retry_at}")
+        logger.error(f"Txn {txn_id}: Charge failed, retry {new_attempts}/{MAX_CHARGE_ATTEMPTS} scheduled for {retry_at} UTC")
         _send_venue_payment_warning(conn, txn, venue_id, new_attempts)
 
 
@@ -908,14 +1064,25 @@ def scheduler_loop():
                     last_affiliate_payout_date != now.date()):
                 logger.info(f"Running quarterly affiliate payouts for {now.strftime('%Y-%m-%d')}")
                 try:
-                    from backend.routes.affiliate import run_quarterly_affiliate_payouts, send_quarterly_affiliate_reminder
+                    # Audit fix (May 2026 part 9c): drop the
+                    # send_quarterly_affiliate_reminder call. Its docstring
+                    # explicitly states it's meant as a "due today" prompt
+                    # to admin BEFORE auto-running, but the scheduler called
+                    # it AFTER the payout run, so its WHERE payout_id IS NULL
+                    # query only returned below-threshold rollovers. Admin
+                    # saw "Payouts Due Today" with $0 eligible after the
+                    # payouts had already fired — and was sometimes tempted
+                    # to click "Run Quarterly Payouts Now" thinking nothing
+                    # had happened (per-payout Stripe idempotency_key
+                    # blocked the double-fire but new accruals mid-window
+                    # could still slip in). The auto-payout function sends
+                    # per-affiliate emails on its own; admin can read
+                    # Admin → Affiliates to see what ran.
+                    from backend.routes.affiliate import run_quarterly_affiliate_payouts
                     from backend.db import SessionLocal as _SL
                     _aff_db = _SL()
                     try:
-                        # 1. Auto-run all eligible payouts via Stripe
                         run_quarterly_affiliate_payouts(_aff_db)
-                        # 2. Send admin summary email with results
-                        send_quarterly_affiliate_reminder(_aff_db)
                     finally:
                         _aff_db.close()
                     last_affiliate_payout_date = now.date()
@@ -926,7 +1093,18 @@ def scheduler_loop():
         time.sleep(60)
 
 
+_payout_scheduler_started = False
+
 def start_payout_scheduler():
+    """Audit fix (May 2026 part 3): no-op if already started, mirroring
+    scheduler.start_scheduler. Two concurrent payout threads would
+    happily fire the same Stripe charges twice. The systemd-process
+    gate was the only defense; this is belt-and-suspenders."""
+    global _payout_scheduler_started
+    if _payout_scheduler_started:
+        logger.warning("[PayoutScheduler] start() called again — ignored, already running")
+        return
+    _payout_scheduler_started = True
     thread = threading.Thread(target=scheduler_loop, daemon=True, name="PayoutScheduler")
     thread.start()
     logger.info("[PayoutScheduler] Background thread started")
@@ -969,14 +1147,27 @@ def _send_html_email(settings, to_email, subject, html_body):
     msg['From'] = formataddr((from_name, from_email))
     msg['To'] = to_email
     msg.attach(MIMEText(styled, 'html'))
+    # Audit fix (May 2026 part 5): wrap in try/finally so server.quit() runs
+    # even when sendmail raises. Previously a single SMTP-level failure left
+    # the TCP connection open until the kernel reaped it — and over a long
+    # scheduler run a stuck server could leak hundreds of half-open sockets.
+    server = None
     try:
         server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
         server.starttls()
         server.login(from_email, email_pass)
         server.sendmail(from_email, to_email, msg.as_string())
-        server.quit()
     except Exception as e:
         logger.error(f"SMTP error for {to_email}: {e}")
+    finally:
+        if server is not None:
+            try:
+                server.quit()
+            except Exception:
+                try:
+                    server.close()
+                except Exception:
+                    pass
 
 def _get_entity_emails(conn, entity_type, entity_id):
     if entity_type == 'venue':
@@ -1139,22 +1330,29 @@ def _send_payout_email(conn, txn):
             "SELECT subject, body FROM email_templates WHERE template_key = 'artist_payment_sent'"
         ).fetchone()
         if not tmpl:
-            # Fallback: send simple email
+            # Fallback: send simple email. Audit fix (May 2026 part 5):
+            # escape interpolated values to prevent HTML breakage / XSS-shape.
+            _vname = _esc(gig_info['venue_name'])
+            _aname = _esc(gig_info['artist_name'] or 'there')
+            _gdate = _esc(gig_info['date'])
             emails = _get_entity_emails(conn, 'artist', gig_info["artist_id"])
             for email in emails:
                 _send_html_email(settings, email,
                     f"You've been paid for your gig at {gig_info['venue_name']}!",
-                    f"""<p>Hi {gig_info['artist_name'] or 'there'},</p>
-                    <p>Great news! Payment for your gig at <strong>{gig_info['venue_name']}</strong>
-                    on <strong>{gig_info['date']}</strong> has been processed.</p>
+                    f"""<p>Hi {_aname},</p>
+                    <p>Great news! Payment for your gig at <strong>{_vname}</strong>
+                    on <strong>{_gdate}</strong> has been processed.</p>
                     <p style="font-size:18px;font-weight:700;color:#10b981;">Payout: ${payout/100:.2f}</p>
                     <p>The funds will appear in your connected Stripe account shortly.</p>
                     <p>— The GigsFill Team</p>""")
             return
 
+        # Audit fix (May 2026 part 5): escape user-controlled fields before
+        # substitution. venue_name / artist_name come from DB and used to
+        # land raw into the HTML body via `replace("{{venue_name}}", str(v))`.
         variables = {
-            'artist_name': gig_info['artist_name'] or 'Artist',
-            'venue_name': gig_info['venue_name'],
+            'artist_name': _esc(gig_info['artist_name'] or 'Artist'),
+            'venue_name': _esc(gig_info['venue_name']),
             'date': format_email_date(gig_info['date']),
             'pay': f"{amount/100:.2f}",
             'artist_fee': f"{fee/100:.2f}",
@@ -1247,9 +1445,12 @@ def _send_venue_charged_email(conn, txn, venue_id):
             if a_row:
                 artist_name = a_row["name"]
 
+        # Audit fix (May 2026 part 5): HTML-escape venue_name/artist_name
+        # before they're substituted into the email body — venue can set
+        # their display name to anything including HTML chars.
         variables = {
-            "venue_name": gig_info["venue_name"] or "",
-            "artist_name": artist_name,
+            "venue_name": _esc(gig_info["venue_name"] or ""),
+            "artist_name": _esc(artist_name),
             "date": gig_info["date"] or "",
             "pay": f"{pay:.2f}",
             "venue_fee": f"{venue_fee:.2f}",
@@ -1285,6 +1486,17 @@ def _send_venue_charged_email(conn, txn, venue_id):
         logger.error(f"Venue charged email error: {e}")
 
 
+# Audit fix (May 2026 part 3): variables that get interpolated into the
+# hardcoded HTML email bodies below are now passed through `_esc()` so a
+# venue with HTML chars in its name (or a Stripe reason string with raw
+# markup) can't break the layout or inject script-shaped content. TODO:
+# follow up with a full migration to backend.email_templates so admins
+# can edit copy from the Admin > Email Templates UI.
+def _esc(s):
+    import html as _h
+    return _h.escape("" if s is None else str(s), quote=False)
+
+
 def _send_charge_failed_email(conn, txn, reason):
     """Notify artist that venue payment failed permanently"""
     try:
@@ -1311,13 +1523,17 @@ def _send_charge_failed_email(conn, txn, reason):
             return
         settings = _get_smtp_settings(conn)
         emails = _get_entity_emails(conn, 'artist', gig_info["artist_id"])
+        _vname  = _esc(gig_info['venue_name'])
+        _gdate  = _esc(gig_info['date'])
+        _aname  = _esc(gig_info['artist_name'] or 'there')
+        _reason = _esc(reason)
         for email in emails:
             _send_html_email(settings, email,
                 f"Payment Issue - {gig_info['venue_name']} gig on {gig_info['date']}",
-                f"""<p>Hi {gig_info['artist_name'] or 'there'},</p>
-                <p>We were unable to collect payment from <strong>{gig_info['venue_name']}</strong>
-                for your gig on <strong>{gig_info['date']}</strong> after multiple attempts.</p>
-                <p><strong>Reason:</strong> {reason}</p>
+                f"""<p>Hi {_aname},</p>
+                <p>We were unable to collect payment from <strong>{_vname}</strong>
+                for your gig on <strong>{_gdate}</strong> after multiple attempts.</p>
+                <p><strong>Reason:</strong> {_reason}</p>
                 <p>We've notified the venue and suspended their account until payment is resolved.
                 We'll continue working to get you paid.</p>
                 <p>— The GigsFill Team</p>""")
@@ -1335,12 +1551,14 @@ def _send_venue_payment_warning(conn, txn, venue_id, attempt):
         remaining = MAX_CHARGE_ATTEMPTS - attempt
         settings = _get_smtp_settings(conn)
         emails = _get_entity_emails(conn, 'venue', venue_id)
+        _gdate = _esc(gig_info['date'] if gig_info else 'N/A')
+        _vname = _esc(venue_info['venue_name'])
         for email in emails:
             _send_html_email(settings, email,
                 f"⚠️ Payment Failed - Action Required",
                 f"""<p>Hi there,</p>
-                <p>We attempted to charge your card for the gig on <strong>{gig_info['date'] if gig_info else 'N/A'}</strong>
-                at <strong>{venue_info['venue_name']}</strong>, but the charge was declined.</p>
+                <p>We attempted to charge your card for the gig on <strong>{_gdate}</strong>
+                at <strong>{_vname}</strong>, but the charge was declined.</p>
                 <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:16px;margin:16px 0;">
                 <p style="margin:0;color:#92400e;font-weight:600;">Attempt {attempt} of {MAX_CHARGE_ATTEMPTS}.
                 {'We will retry tomorrow.' if remaining > 0 else 'This was the final attempt.'}</p>
@@ -1359,13 +1577,15 @@ def _send_venue_suspended_email(conn, venue_id, reason):
             return
         settings = _get_smtp_settings(conn)
         emails = _get_entity_emails(conn, 'venue', venue_id)
+        _vname  = _esc(venue_info['venue_name'])
+        _reason = _esc(reason)
         for email in emails:
             _send_html_email(settings, email,
                 f"🚫 Venue Suspended - {venue_info['venue_name']}",
                 f"""<p>Hi there,</p>
-                <p>Your venue <strong>{venue_info['venue_name']}</strong> has been
+                <p>Your venue <strong>{_vname}</strong> has been
                 <span style="color:#dc2626;font-weight:700;">suspended</span> due to payment issues.</p>
-                <p><strong>Reason:</strong> {reason}</p>
+                <p><strong>Reason:</strong> {_reason}</p>
                 <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin:16px 0;">
                 <p style="margin:0;color:#991b1b;font-weight:600;">While suspended:</p>
                 <ul style="color:#991b1b;margin:8px 0;">
@@ -1418,13 +1638,16 @@ def _send_transfer_failed_emails(conn, txn, venue_id):
             "SELECT subject, body FROM email_templates WHERE template_key = 'transfer_failed_artist'"
         ).fetchone()
 
+        # Audit fix (May 2026 part 5): escape user-controlled fields and
+        # the gig_summary (built from DB) so a venue/artist name containing
+        # HTML doesn't break the email layout.
         variables = {
-            'artist_name': gig_info['artist_name'] or 'Artist',
-            'venue_name': gig_info['venue_name'],
+            'artist_name': _esc(gig_info['artist_name'] or 'Artist'),
+            'venue_name': _esc(gig_info['venue_name']),
             'date': format_email_date(gig_info['date']),
             'start_time': _format_time_12h(gig_info['start_time']),
             'end_time': _format_time_12h(gig_info['end_time']),
-            'gig_summary': gig_summary,
+            'gig_summary': _esc(gig_summary),
             'payout_amount': payout,
             'venue_charge': venue_charge,
         }
@@ -1436,9 +1659,13 @@ def _send_transfer_failed_emails(conn, txn, venue_id):
                 subject = subject.replace("{{" + k + "}}", str(v))
                 body = body.replace("{{" + k + "}}", str(v))
         else:
+            _vn = _esc(gig_info['venue_name'])
+            _an = _esc(gig_info['artist_name'] or 'there')
+            _gd = _esc(gig_info['date'])
+            _gs = _esc(gig_summary)
             subject = f"Payment Update — {gig_info['venue_name']} gig on {gig_info['date']}"
-            body = f"""<p>Hi {gig_info['artist_name'] or 'there'},</p>
-                <p><strong>{gig_summary}</strong></p>
+            body = f"""<p>Hi {_an},</p>
+                <p><strong>{_gs}</strong></p>
                 <p>The venue was successfully charged but the transfer to you failed.</p>
                 <p>Artist payout: <strong>${payout}</strong></p>
                 <p>The GigsFill team is working on this issue and you will receive your payment as soon as possible.</p>
@@ -1462,9 +1689,12 @@ def _send_transfer_failed_emails(conn, txn, venue_id):
                 subject = subject.replace("{{" + k + "}}", str(v))
                 body = body.replace("{{" + k + "}}", str(v))
         else:
+            _an2 = _esc(gig_info['artist_name'] or 'Artist')
+            _gd2 = _esc(gig_info['date'])
+            _gs2 = _esc(gig_summary)
             subject = f"Payment Update — {gig_info['artist_name'] or 'Artist'} gig on {gig_info['date']}"
             body = f"""<p>Hi there,</p>
-                <p><strong>{gig_summary}</strong></p>
+                <p><strong>{_gs2}</strong></p>
                 <p>You were charged <strong>${venue_charge}</strong> but the transfer to the artist failed.</p>
                 <p>Artist payout: <strong>${payout}</strong></p>
                 <p>The GigsFill team is working on this issue and the artist will receive their payment as soon as possible.</p>

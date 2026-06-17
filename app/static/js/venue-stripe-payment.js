@@ -358,10 +358,12 @@ function renderVenueBillingTable() {
     // Multi-slot gigs render the artist column as a comma-separated list of names.
     // We can't link each name individually (only one artist_id is returned), so
     // multi-artist cells render as plain text. Single-artist cells stay clickable.
+    // Audit fix (May 2026 part 8): escape artist_name in the venue billing table.
+    var _vsp_esc = function(s){return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
     var isMulti = (t.artist_name || '').indexOf(',') !== -1;
     var link = (t.artist_id && !isMulti)
-      ? '<a href="/app/artist-profile.html?artist_id=' + t.artist_id + '" style="color:var(--text-white);text-decoration:none;border-bottom:1px dashed rgba(255,255,255,0.3);" onmouseover="this.style.color=\'#a78bfa\'" onmouseout="this.style.color=\'var(--text-white)\'">' + t.artist_name + '</a>'
-      : t.artist_name;
+      ? '<a href="/app/artist-profile.html?artist_id=' + (parseInt(t.artist_id, 10) || 0) + '" style="color:var(--text-white);text-decoration:none;border-bottom:1px dashed rgba(255,255,255,0.3);" onmouseover="this.style.color=\'#a78bfa\'" onmouseout="this.style.color=\'var(--text-white)\'">' + _vsp_esc(t.artist_name) + '</a>'
+      : _vsp_esc(t.artist_name);
     var isCancelled = t.rawStatus === 'payment_cancelled';
     var statusCell = '<span style="color:' + t.statusColor + ';">' + t.status + '</span>';
     if (isCancelled) {
@@ -429,16 +431,20 @@ function exportVenueBilling(format) {
     var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'billing_history.csv'; a.click();
   } else if (format === 'pdf') {
+    // Audit fix (May 2026 part 8): escape every interpolated field in the
+    // print-export popup. Previously artist_name + status went raw — XSS
+    // via a malicious artist name.
+    var _esc_pe = function(s){return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
     var w = window.open('', '_blank');
     w.document.write('<html><head><title>Billing History</title><style>@page{size:landscape;margin:10mm 12mm;}body{font-family:Arial,sans-serif;padding:10px 15px;}table{width:100%;border-collapse:collapse;margin-top:12px;}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:12px;white-space:nowrap;}th{background:#f4f4f4;font-weight:bold;}tr:nth-child(even){background:#fafafa;}.right{text-align:right;}.cancelled{color:#ef4444;}</style></head><body>');
-    w.document.write('<h2 style="margin-bottom:4px;">Billing History</h2><p style="margin-top:0;font-size:12px;color:#666;">Exported: ' + new Date().toLocaleDateString() + '</p>');
+    w.document.write('<h2 style="margin-bottom:4px;">Billing History</h2><p style="margin-top:0;font-size:12px;color:#666;">Exported: ' + _esc_pe(new Date().toLocaleDateString()) + '</p>');
     w.document.write('<table><tr><th>Date</th><th>Time</th><th>Artist</th><th class="right">Gig Fee</th><th class="right">Platform Fee</th><th class="right">Total Paid</th><th>Status</th></tr>');
     data.forEach(function(t) {
       var isCx = t.rawStatus === 'payment_cancelled';
       var gigFeeStr = isCx ? '<span class="cancelled">$0.00 ($' + t.gig_fee.toFixed(2) + ')</span>' : '$' + t.gig_fee.toFixed(2);
       var totalPaidStr = isCx ? '$' + t.platform_fee.toFixed(2) : '$' + t.total_paid.toFixed(2);
-      var statusStr = isCx ? '<span class="cancelled">Cancelled</span>' : t.status;
-      w.document.write('<tr><td>' + t.gig_date + '</td><td>' + (t.gig_time || '') + '</td><td>' + t.artist_name + '</td><td class="right">' + gigFeeStr + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
+      var statusStr = isCx ? '<span class="cancelled">Cancelled</span>' : _esc_pe(t.status);
+      w.document.write('<tr><td>' + _esc_pe(t.gig_date) + '</td><td>' + _esc_pe(t.gig_time || '') + '</td><td>' + _esc_pe(t.artist_name) + '</td><td class="right">' + gigFeeStr + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
     });
     w.document.write('</table></body></html>');
     w.document.close();

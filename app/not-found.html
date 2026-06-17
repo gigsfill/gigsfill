@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Not found · GigsFill</title>
+  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-favicon.png">
+  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/mobile.css" rel="stylesheet">
+  <style>
+    .nf-card {
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 24px 28px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .nf-slug {
+      color: var(--cyan);
+      font-family: monospace;
+      font-weight: 700;
+    }
+    .nf-suggestion {
+      margin: 14px 0 8px 0;
+      padding: 12px 14px;
+      background: rgba(6,182,212,0.06);
+      border: 1px solid rgba(6,182,212,0.3);
+      border-radius: 8px;
+      font-size: 0.95rem;
+    }
+    .nf-suggestion a {
+      color: var(--cyan);
+      font-weight: 700;
+      text-decoration: none;
+      border-bottom: 1px dashed rgba(6,182,212,0.5);
+    }
+    .nf-headline {
+      font-size: 1.4rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+      margin: 0 0 10px 0;
+      background: linear-gradient(135deg, var(--purple) 0%, var(--cyan) 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .nf-sub {
+      color: var(--text-gray);
+      margin: 0 0 32px 0;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero" style="padding-top: 25px; padding-bottom: 0;">
+    <a href="/app/index.html">
+      <img src="/app/static/img/gigsfill-logo.png" alt="GigsFill"
+        style="height:72px;width:auto;margin-bottom:4px;display:block;margin-left:auto;margin-right:auto;">
+    </a>
+    <p class="tagline" style="margin-bottom: 24px;">Live music, booked right.</p>
+
+    <div class="nf-card">
+      <div class="nf-headline">{{HEADLINE}}</div>
+      <p class="nf-sub">{{MESSAGE_HTML}}</p>
+
+      {{SUGGESTION_HTML}}
+
+      <h3 style="text-align: center; margin: 22px 0 12px 0; color: var(--text);">
+        Search for live music in your town.
+      </h3>
+      <div class="field" style="position: relative;">
+        <label style="text-align: left;">City</label>
+        <input type="text" id="searchCity" placeholder="Enter city name..." autocomplete="off">
+      </div>
+
+      <div class="btn-group" style="grid-template-columns: 1fr; max-width: 200px; margin: 16px auto 4px auto;">
+        <button class="btn primary" onclick="nfFindMusic()">Find Music</button>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    © 2026 GigsFill. Built for the music community. ·
+    <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
+  </footer>
+
+  <script src="/app/static/js/city-autocomplete.js"></script>
+  <script>
+    async function nfFindMusic() {
+      const city = document.getElementById('searchCity').value.trim();
+      if (!city) return;
+      try {
+        const r = await fetch('/api/validate-city?city=' + encodeURIComponent(city) + '&_t=' + Date.now());
+        const d = await r.json();
+        if (!d.valid) {
+          alert("We don't have that city yet — try a nearby city.");
+          return;
+        }
+      } catch (e) { /* fall through */ }
+      window.location.href = '/app/public-gigs.html?city=' + encodeURIComponent(city);
+    }
+    if (typeof initCityAutocomplete === 'function') {
+      initCityAutocomplete({ inputId: 'searchCity' });
+    }
+    document.getElementById('searchCity').addEventListener('keypress', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); nfFindMusic(); }
+    });
+  </script>
+  <script src="/app/static/js/maintenance-banner.js"></script>
+</body>
+</html>

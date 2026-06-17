@@ -346,10 +346,15 @@
         ? new Date(currentContract.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
         : '';
 
+      // Audit fix (May 2026 part 8): escape every interpolation. fullPath comes
+      // from server but goes into href; displayName is venue-supplied (the
+      // contract template name).
+      const _ec = (typeof esc === 'function' ? esc : s => String(s||'').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])));
+      const _ea = (typeof escAttr === 'function' ? escAttr : _ec);
       pdfStatus.innerHTML = `
         <div style="display:flex; align-items:center; gap:16px; padding:10px 14px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; flex-wrap:wrap;">
-          <a href="${fullPath}" target="_blank" style="color:var(--cyan); font-size:0.85rem; text-decoration:none; border-bottom:1px solid rgba(6,182,212,0.3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:280px;" title="${displayName}">\u{1F4C4} ${displayName}</a>
-          <span style="font-size:0.75rem; color:var(--text-gray); white-space:nowrap;">${uploadDate}</span>
+          <a href="${_ea(fullPath)}" target="_blank" style="color:var(--cyan); font-size:0.85rem; text-decoration:none; border-bottom:1px solid rgba(6,182,212,0.3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:280px;" title="${_ea(displayName)}">\u{1F4C4} ${_ec(displayName)}</a>
+          <span style="font-size:0.75rem; color:var(--text-gray); white-space:nowrap;">${_ec(uploadDate)}</span>
           <div style="display:flex; gap:8px; margin-left:auto;">
             <button class="btn ghost" onclick="window.venueContracts.openRename()" style="padding:4px 12px; font-size:0.75rem;">Rename</button>
             <button class="btn ghost" onclick="document.getElementById('contractPdfInput').click()" style="padding:4px 12px; font-size:0.75rem;">Replace</button>
@@ -911,20 +916,27 @@
         statusBadge = '<span style="font-size:0.7rem; padding:2px 8px; border-radius:4px; background:rgba(239,68,68,0.15); color:#ef4444; white-space:nowrap;">Pending</span>';
       }
 
+      // Audit fix (May 2026 part 8): escape user-controlled fields + clamp ids.
+      const _ec = (typeof esc === 'function' ? esc : s => String(s||'').replace(/[<>&"']/g, ch => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[ch])));
+      const _ea = (typeof escAttr === 'function' ? escAttr : _ec);
+      const _cid = parseInt(c.id, 10) || 0;
+      const _aid = parseInt(c.artist_id, 10) || 0;
+      // Only accept relative app paths or https URLs for the PDF link.
+      const _isSafePdf = u => { const t = String(u||'').trim(); return t.startsWith('/') || /^https?:\/\//i.test(t); };
       let downloadBtn = '';
-      if (c.signed_pdf_path) {
-        downloadBtn = `<a href="${c.signed_pdf_path}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
-      } else if (c.pdf_file_path) {
-        downloadBtn = `<a href="${c.pdf_file_path}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
+      if (c.signed_pdf_path && _isSafePdf(c.signed_pdf_path)) {
+        downloadBtn = `<a href="${_ea(c.signed_pdf_path)}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
+      } else if (c.pdf_file_path && _isSafePdf(c.pdf_file_path)) {
+        downloadBtn = `<a href="${_ea(c.pdf_file_path)}" download style="color:var(--cyan); font-size:0.75rem;">Download</a>`;
       } else {
-        downloadBtn = `<a href="#" onclick="window.venueContracts.downloadDigitalContract(${c.id});return false;" style="color:var(--cyan); font-size:0.75rem; cursor:pointer;">Download</a>`;
+        downloadBtn = `<a href="#" onclick="window.venueContracts.downloadDigitalContract(${_cid});return false;" style="color:var(--cyan); font-size:0.75rem; cursor:pointer;">Download</a>`;
       }
 
       tableHtml += `
         <tr style="border-bottom:1px solid var(--border);">
-          <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; max-width:280px;" title="${displayName}">${displayName}</td>
-          <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray);">${c.artist_id ? `<a href="/app/artist-profile.html?artist_id=${c.artist_id}" target="_blank" style="color:var(--accent-cyan,#06b6d4); text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${artistName}</a>` : artistName}</td>
-          <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray); white-space:nowrap;">${fmtDate}</td>
+          <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; max-width:280px;" title="${_ea(displayName)}">${_ec(displayName)}</td>
+          <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray);">${_aid ? `<a href="/app/artist-profile.html?artist_id=${_aid}" target="_blank" style="color:var(--accent-cyan,#06b6d4); text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${_ec(artistName)}</a>` : _ec(artistName)}</td>
+          <td style="padding:10px 12px; font-size:0.85rem; color:var(--text-gray); white-space:nowrap;">${_ec(fmtDate)}</td>
           <td style="padding:10px 12px;">${statusBadge}</td>
           <td style="padding:10px 12px; text-align:right;">${downloadBtn}</td>
         </tr>`;

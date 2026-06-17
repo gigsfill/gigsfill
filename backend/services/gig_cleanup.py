@@ -24,6 +24,59 @@ CONTRACT_NOTIFICATION_TYPES = (
     'gig_booked',
 )
 
+# Transaction statuses that mean real money has moved (or is in flight).
+# Any cancel / delete that would discard a row in one of these statuses
+# without first refunding/reversing through Stripe is a data-integrity
+# bug — the audit trail of money already charged would simply vanish.
+# Audit fix (May 2026 part 5): widen the tuple to include dispute and
+# processing states. Without 'disputed' / 'dispute_won' / 'dispute_lost' /
+# 'processing', a gig with an open chargeback or in-flight payment intent
+# would pass the assert, then delete_gig_with_slots' bulk
+# `DELETE FROM transactions WHERE gig_id=:gid` (gigs.py:4783) would wipe the
+# dispute audit trail and the in-flight PI row.
+CHARGED_TRANSACTION_STATUSES = (
+    'charged', 'paid', 'transferred', 'transfer_failed', 'pending_transfer',
+    'disputed', 'dispute_won', 'dispute_lost', 'processing'
+)
+
+
+def assert_no_charged_transactions(db, gig_id: int, artist_id: int = None):
+    """Raise HTTPException(409, "CHARGED_TRANSACTION_EXISTS: ...") if any
+    transaction tied to this gig (and optionally this artist) is in a
+    money-moving state.
+
+    Callers should run this BEFORE invoking ``cleanup_gig_records`` /
+    ``delete_gig_completely`` so the venue/admin is forced through the
+    explicit refund + transfer-reversal flow in admin_payments.py
+    instead of silently dropping the audit trail.
+    """
+    from fastapi import HTTPException
+    placeholders = ", ".join(f"'{s}'" for s in CHARGED_TRANSACTION_STATUSES)
+    if artist_id is None:
+        row = db.execute(
+            text(f"""SELECT id, status FROM transactions
+                     WHERE gig_id = :gid
+                       AND status IN ({placeholders})
+                     LIMIT 1"""),
+            {"gid": gig_id}
+        ).mappings().first()
+    else:
+        row = db.execute(
+            text(f"""SELECT id, status FROM transactions
+                     WHERE gig_id = :gid AND artist_id = :aid
+                       AND status IN ({placeholders})
+                     LIMIT 1"""),
+            {"gid": gig_id, "aid": artist_id}
+        ).mappings().first()
+    if row:
+        who = f"for this artist" if artist_id else "on this gig"
+        raise HTTPException(
+            409,
+            f"CHARGED_TRANSACTION_EXISTS: Cannot proceed — a transaction {who} "
+            f"is in status '{row['status']}'. Use the cancel-payment / refund "
+            f"flow in Admin → Payments first."
+        )
+
 
 def cleanup_gig_records(db, gig_id: int, artist_id: int = None):
     """
@@ -202,11 +255,20 @@ def cleanup_gig_records(db, gig_id: int, artist_id: int = None):
         )
         
         logger.debug(f"Cleaned up records for gig={gig_id}, artist={artist_id}")
-        
+
     except Exception as e:
-        logger.error(f"Cleanup failed for gig={gig_id}, artist={artist_id}: {e}")
+        # Audit fix (May 2026 part 2): previously this swallowed the
+        # exception, called rollback, returned silently — callers kept
+        # mutating (slot reset, emails, blasts) assuming cleanup
+        # succeeded, leaving the DB in a half-cleaned state. Now we log
+        # with the stack trace AND re-raise so the caller can react.
+        logger.error(
+            f"Cleanup failed for gig={gig_id}, artist={artist_id}: {e}",
+            exc_info=True
+        )
         try: db.rollback()
-        except: pass
+        except Exception: pass
+        raise
 
 
 def delete_gig_completely(db, gig_id: int):

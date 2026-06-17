@@ -67,7 +67,7 @@
         <button type="button" id="vanityEditBtn"
           style="padding:4px 12px;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.4);color:#c4b5fd;border-radius:5px;font-size:0.72rem;font-weight:600;cursor:pointer;">✎ Edit</button>
       </div>
-      <div style="font-size:0.68rem;color:var(--text-gray);margin-top:4px;">Share this link anywhere — it always opens this ${labelType.toLowerCase()}'s public page.</div>
+      <div style="font-size:0.68rem;color:var(--text-gray);margin-top:4px;font-style:italic;">Share this link anywhere — it always opens your ${labelType.toLowerCase()}'s public profile page.</div>
     ` : `
       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
         <span style="color:var(--text-gray);font-size:0.78rem;font-family:monospace;">${PUBLIC_BASE}/</span>
@@ -86,12 +86,138 @@
     return `<div style="padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;">${inner}</div>`;
   }
 
-  window.initVanityUrlEditor = function (entityType, entityId) {
+  // Public helper: set href on one or more links to the vanity URL for the
+  // given entity. Falls back to the legacy ?-query URL if the vanity lookup
+  // fails, so the link always works.
+  // Usage: window.applyVanityToLinks('artist', 7, ['#artistProfileBtn']);
+  window.applyVanityToLinks = function (entityType, entityId, selectors) {
+    if (entityType !== 'artist' && entityType !== 'venue') return;
+    if (!entityId || !selectors || !selectors.length) return;
+
+    const legacy = entityType === 'artist'
+      ? `/app/artist-profile.html?artist_id=${entityId}`
+      : `/app/venue-profile.html?venue_id=${entityId}`;
+
+    function setAll(href) {
+      selectors.forEach((sel) => {
+        document.querySelectorAll(sel).forEach((a) => { a.href = href; });
+      });
+    }
+    // Set the legacy URL immediately so the link is never broken, then
+    // upgrade to the vanity URL once the lookup returns.
+    setAll(legacy);
+
+    fetch(`/api/vanity/${entityType}/${entityId}`, { credentials: 'include' })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data && data.url) setAll(data.url);
+      })
+      .catch(() => { /* keep legacy fallback */ });
+  };
+
+  // ─── Site-wide legacy → vanity URL rewriter ────────────────────────────────
+  // Anywhere the app renders `<a href="/app/artist-profile.html?artist_id=N">`
+  // or `<a href="/app/venue-profile.html?venue_id=N">`, this helper rewrites
+  // the href to the entity's vanity URL (e.g. `/14cannons`) so users always
+  // see + share the pretty URL. The legacy URL still works as a fallback —
+  // we only upgrade it; we never break it. Uses `/api/vanity-lookup` which is
+  // public + unauth so it works on any page.
+  //
+  // Strategy: one initial DOM sweep on load, plus a MutationObserver to catch
+  // anchors added dynamically (renderers like the calendar, hover cards, gig
+  // modals all inject anchors after page load). In-memory cache so we never
+  // refetch the same (type, id) twice.
+  const _vanityCache = {};  // key "type:id" -> Promise<string|null> (url or null)
+  const _LEGACY_RE = /\/app\/(artist|venue)-profile\.html\?(artist_id|venue_id)=(\d+)/i;
+
+  function _lookupVanity(entityType, entityId) {
+    const key = entityType + ':' + entityId;
+    if (_vanityCache[key]) return _vanityCache[key];
+    _vanityCache[key] = fetch(
+      `/api/vanity-lookup/${entityType}/${entityId}`,
+      { credentials: 'omit' }
+    )
+      .then(r => r.ok ? r.json() : null)
+      .then(d => (d && d.url) ? d.url : null)
+      .catch(() => null);
+    return _vanityCache[key];
+  }
+
+  function _rewriteAnchor(a) {
+    if (a.dataset.vanityProcessed) return;
+    const href = a.getAttribute('href') || '';
+    const m = href.match(_LEGACY_RE);
+    if (!m) return;
+    a.dataset.vanityProcessed = '1';
+    const entityType = m[1];
+    const entityId = m[3];
+    _lookupVanity(entityType, entityId).then((slugUrl) => {
+      if (slugUrl) a.setAttribute('href', slugUrl);
+    });
+  }
+
+  function _rewriteAllInScope(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('a[href*="profile.html?"]').forEach(_rewriteAnchor);
+  }
+
+  function _initVanityRewriter() {
+    if (window._vanityRewriterStarted) return;
+    window._vanityRewriterStarted = true;
+    _rewriteAllInScope(document);
+    // MutationObserver catches anchors added by client-side renderers (calendar,
+    // gig hover cards, lists, modals, etc.) after the initial paint. We listen
+    // for both new nodes AND href attribute changes (some pages reuse the same
+    // <a> and just swap href).
+    const obs = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'childList') {
+          m.addedNodes.forEach((n) => {
+            if (!(n instanceof Element)) return;
+            if (n.tagName === 'A') _rewriteAnchor(n);
+            else _rewriteAllInScope(n);
+          });
+        } else if (m.type === 'attributes' && m.attributeName === 'href' && m.target instanceof Element) {
+          // Only re-process if the new href looks legacy (don't loop on our own writes)
+          const h = m.target.getAttribute('href') || '';
+          if (_LEGACY_RE.test(h)) {
+            delete m.target.dataset.vanityProcessed;
+            _rewriteAnchor(m.target);
+          }
+        }
+      }
+    });
+    obs.observe(document.body || document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['href'],
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _initVanityRewriter);
+  } else {
+    _initVanityRewriter();
+  }
+
+  window.initVanityUrlEditor = function (entityType, entityId, opts) {
     if (entityType !== 'artist' && entityType !== 'venue') return;
     if (!entityId) return;
 
     const host = document.getElementById('vanityUrlSection');
     if (!host) return;
+
+    // Optional: selectors for sibling links (e.g. the "Artist Profile" header
+    // button) whose href should track the current vanity URL.
+    const linkSelectors = (opts && opts.linkSelectors) || [];
+    function syncLinkHrefs() {
+      const target = state.fullUrl || (state.slug ? (PUBLIC_BASE + '/' + state.slug) : '');
+      if (!target) return;
+      linkSelectors.forEach((sel) => {
+        document.querySelectorAll(sel).forEach((a) => { a.href = target; });
+      });
+    }
 
     const state = {
       type: entityType,
@@ -121,6 +247,7 @@
         state.fullUrl = data.url || '';
         state.editing = false;
         rerender();
+        syncLinkHrefs();
       } catch (e) { /* silent — section just won't show */ }
     }
 
@@ -259,6 +386,7 @@
             state.availability = null;
             state.savingError = '';
             rerender();
+            syncLinkHrefs();
           } catch (e) {
             state.savingError = e.message || 'Network error';
             saveBtn.disabled = false;

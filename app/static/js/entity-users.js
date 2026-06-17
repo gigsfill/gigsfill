@@ -57,14 +57,25 @@ class EntityUsersManager {
       </div>
     `;
     
-    // User rows
+    // User rows.
+    // Audit fix (May 2026 part 8): every user-controlled field interpolated
+    // into HTML or into inline-onclick JS-string args is now escaped/coerced.
+    // Inline onclick args use jsAttr (JSON.stringify-based) which produces
+    // its own outer quotes — emitting `${jsAttr(x)}` not `'${jsAttr(x)}'`.
+    const _jsa = window.jsAttr || JSON.stringify;
+    const _e = (s) => (typeof esc === 'function' ? esc(s) : String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'));
     const rowsHtml = this.users.map(user => {
       const isPending = user.role === 'pending';
       const isDeclined = user.role === 'declined';
       const isInvitation = isPending || isDeclined;
       const rowOpacity = isInvitation ? 'opacity: 0.7;' : '';
-      const clickHandler = isInvitation ? `onclick="entityUsersManager.showReinviteModal(${user.invitation_id}, '${(user.email || '').replace(/'/g, "\\'")}')" style="cursor: pointer; ${rowOpacity}"` : `style="${rowOpacity}"`;
-      
+      const _invId = parseInt(user.invitation_id, 10) || 0;
+      const _uid = parseInt(user.user_id, 10) || 0;
+      const _fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+      const clickHandler = isInvitation
+        ? `onclick="entityUsersManager.showReinviteModal(${_invId}, ${_jsa(user.email || '')})" style="cursor: pointer; ${rowOpacity}"`
+        : `style="${rowOpacity}"`;
+
       let statusHtml = '';
       if (user.role === 'owner') {
         statusHtml = `<span style="font-size: 0.7rem; color: var(--cyan); text-transform: uppercase; font-weight: 600;">Owner</span>`;
@@ -74,20 +85,20 @@ class EntityUsersManager {
         statusHtml = `<span style="font-size: 0.7rem; color: #ef4444; text-transform: uppercase; font-weight: 600;">Declined</span>`;
       } else {
         statusHtml = `
-          <button class="btn" style="background: #dc3545; padding: 6px 12px; font-size: 0.75rem; text-transform: uppercase;" 
-                  onclick="event.stopPropagation(); entityUsersManager.confirmRemoveUser(${user.user_id}, '${user.first_name} ${user.last_name}')">
+          <button class="btn" style="background: #dc3545; padding: 6px 12px; font-size: 0.75rem; text-transform: uppercase;"
+                  onclick="event.stopPropagation(); entityUsersManager.confirmRemoveUser(${_uid}, ${_jsa(_fullName)})">
             REMOVE
           </button>
         `;
       }
-      
+
       return `
         <div class="entity-item" ${clickHandler}>
           <div style="display: grid; grid-template-columns: 120px 120px 1fr 140px 80px; gap: 16px; align-items: center; padding: 12px 16px;">
-            <span style="color: ${isInvitation ? 'var(--text-gray)' : 'var(--text)'}; font-size: 0.875rem; font-style: ${isInvitation ? 'italic' : 'normal'};">${user.first_name || '-'}</span>
-            <span style="color: ${isInvitation ? 'var(--text-gray)' : 'var(--text)'}; font-size: 0.875rem; font-style: ${isInvitation ? 'italic' : 'normal'};">${user.last_name || '-'}</span>
-            <span style="color: var(--text-gray); font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis;">${user.email || '-'}</span>
-            <span style="color: var(--text-gray); font-size: 0.875rem;">${user.phone || '-'}</span>
+            <span style="color: ${isInvitation ? 'var(--text-gray)' : 'var(--text)'}; font-size: 0.875rem; font-style: ${isInvitation ? 'italic' : 'normal'};">${_e(user.first_name || '-')}</span>
+            <span style="color: ${isInvitation ? 'var(--text-gray)' : 'var(--text)'}; font-size: 0.875rem; font-style: ${isInvitation ? 'italic' : 'normal'};">${_e(user.last_name || '-')}</span>
+            <span style="color: var(--text-gray); font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis;">${_e(user.email || '-')}</span>
+            <span style="color: var(--text-gray); font-size: 0.875rem;">${_e(user.phone || '-')}</span>
             ${statusHtml}
           </div>
         </div>

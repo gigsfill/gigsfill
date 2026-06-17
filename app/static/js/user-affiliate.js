@@ -16,7 +16,63 @@ async function loadAffiliatesPage() {
     loadAffW9(),
     loadAffProgramSettings(),
     loadAffArtistStripeAccounts(),
+    loadAffChecklist(),
   ]);
+}
+
+// ── Setup checklist (Stripe + W-9 mandatory for affiliates) ──────────────────
+
+async function loadAffChecklist() {
+  const uid = window._currentUserId;
+  if (!uid) return;
+  try {
+    const r = await fetch(`/api/onboarding/affiliate/${uid}`, { credentials: 'include' });
+    if (!r.ok) return;
+    const d = await r.json();
+    const banner = document.getElementById('affChecklistBanner');
+    if (!banner) return;
+
+    // No tasks (no referrals yet) → hide banner entirely.
+    if (!d.tasks || !d.tasks.length || d.all_complete) {
+      banner.style.display = 'none';
+      return;
+    }
+
+    const stripeTask = d.tasks.find(t => t.key === 'stripe_setup');
+    const w9Task     = d.tasks.find(t => t.key === 'w9_filed');
+    const done = d.tasks.filter(t => t.completed).length;
+    const total = d.tasks.length;
+
+    const stripeBtn = document.getElementById('affChecklistStripeBtn');
+    const w9Btn     = document.getElementById('affChecklistW9Btn');
+    if (stripeBtn) {
+      if (stripeTask?.completed) {
+        stripeBtn.textContent = '✓ Stripe set up';
+        stripeBtn.disabled = true;
+        stripeBtn.style.opacity = '0.6';
+        stripeBtn.style.cursor = 'default';
+      }
+    }
+    if (w9Btn) {
+      if (w9Task?.completed) {
+        w9Btn.textContent = '✓ W-9 on file';
+        w9Btn.disabled = true;
+        w9Btn.style.opacity = '0.6';
+        w9Btn.style.cursor = 'default';
+      }
+    }
+
+    const msgEl = document.getElementById('affChecklistMessage');
+    if (msgEl) {
+      const pending = d.tasks.filter(t => !t.completed).map(t => t.title);
+      msgEl.textContent =
+        'A venue has been linked to your affiliate account. Before we can pay you, please complete: '
+        + pending.join(' and ') + '.';
+    }
+    const progEl = document.getElementById('affChecklistProgress');
+    if (progEl) progEl.textContent = `${done} of ${total} steps complete`;
+    banner.style.display = 'block';
+  } catch (e) {}
 }
 
 // ── Program Settings (dynamic payout schedule footer) ────────────────────────
@@ -64,7 +120,7 @@ async function loadAffSummary() {
 
     const urlEl = document.getElementById('affShareUrl');
     if (urlEl && _affSummary.affiliate_code)
-      urlEl.textContent = `gigsfill.com/?aff=${_affSummary.affiliate_code}`;
+      urlEl.textContent = `gigsfill.com/app/signup-new.html?aff=${_affSummary.affiliate_code}&role=venue`;
 
     const statsEl = document.getElementById('affMyStats');
     if (statsEl) {
@@ -118,7 +174,7 @@ function _updateAffStripeStatus(hasStripe, artistName, accountId) {
   } else {
     if (!document.getElementById('affExistingStripeSelect')) {
       block.innerHTML = `<div id="affStripeStatus" style="font-size:0.75rem;color:#f59e0b;padding:12px 16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;">
-        <div style="margin-bottom:8px;">⚠️ Set up Stripe to receive payouts</div>
+        <div style="margin-bottom:8px;">⚠️ Please set up Stripe to receive your Affiliate payouts…</div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px;">
             <label style="font-size:0.68rem;color:var(--text-gray);">Use existing artist account</label>
@@ -179,7 +235,10 @@ function _renderPayoutHistory(payouts) {
 function copyAffCode() {
   const code = _affSummary?.affiliate_code;
   if (!code) return;
-  const url = `https://gigsfill.com/?aff=${code}`;
+  // Audit fix (May 2026 part 9d): direct venue-signup link, not homepage.
+  // Affiliate program is about getting VENUES signed up — drop recipients
+  // straight onto the venue signup form, cookie set, ready to fill out.
+  const url = `https://gigsfill.com/app/signup-new.html?aff=${code}&role=venue`;
 
   // Build modal if not already present
   let modal = document.getElementById('affCopyLinkModal');
@@ -217,7 +276,7 @@ function copyAffCode() {
 function _doCopyAffLink() {
   const code = _affSummary?.affiliate_code;
   if (!code) return;
-  const url = `https://gigsfill.com/?aff=${code}`;
+  const url = `https://gigsfill.com/app/signup-new.html?aff=${code}&role=venue`;
   const btn = document.getElementById('affCopyLinkBtn');
   const result = document.getElementById('affCopyLinkResult');
   navigator.clipboard.writeText(url).then(() => {
@@ -347,8 +406,9 @@ async function resendAffRecommend(emailId, btn) {
   btn.textContent = '…'; btn.disabled = true;
   try {
     const r = await fetch(`/api/affiliate/resend-recommend/${emailId}`, { method:'POST', credentials:'include' });
-    const d = await r.json();
-    if (d.ok) {
+    let d = {};
+    try { d = await r.json(); } catch (_) {}
+    if (r.ok && d.ok) {
       btn.textContent = '✓ Sent!'; btn.style.color = '#10b981'; btn.style.fontWeight = '700';
       setTimeout(async () => {
         btn.textContent = orig; btn.style.color = ''; btn.style.fontWeight = '';
@@ -356,10 +416,17 @@ async function resendAffRecommend(emailId, btn) {
         await loadAffMyEmails();
       }, 2500);
     } else {
-      btn.textContent = 'Error'; btn.style.color = '#ef4444';
-      setTimeout(() => { btn.textContent=orig; btn.style.color=''; btn.disabled=false; }, 2500);
+      // Surface the backend's reason (cooldown, cap reached, kill switch, etc.)
+      // rather than the generic "Error" that hid what was happening.
+      const reason = (d && d.detail) ? String(d.detail) : (r.status === 429 ? 'Slow down — try later' : 'Error');
+      btn.textContent = reason.length > 40 ? reason.slice(0, 38) + '…' : reason;
+      btn.title = reason;
+      btn.style.color = '#ef4444';
+      setTimeout(() => {
+        btn.textContent = orig; btn.style.color = ''; btn.title = ''; btn.disabled = false;
+      }, 4500);
     }
-  } catch(e) { btn.textContent=orig; btn.disabled=false; }
+  } catch(e) { btn.textContent = orig; btn.disabled = false; }
 }
 
 // ── Referrals List (expandable rows) ──────────────────────────────────────────
@@ -405,7 +472,12 @@ function _renderAffReferrals(el) {
 
   _affReferrals.forEach((rv, idx) => {
     const linkedDays = Math.floor((Date.now() - new Date(rv.linked_at)) / 86400000);
-    const curRate = linkedDays >= (rv.reduced_after_days||365) ? rv.reduced_rate_percent : rv.initial_rate_percent;
+    // Audit fix (May 2026 part 9c): prefer server-computed `current_rate_percent`
+    // (live admin setting) over the row snapshot. Falls back to the snapshot if
+    // the server is older or current_rate_percent didn't come through.
+    const curRate = (rv.current_rate_percent !== undefined && rv.current_rate_percent !== null)
+      ? rv.current_rate_percent
+      : (linkedDays >= (rv.reduced_after_days||365) ? rv.reduced_rate_percent : rv.initial_rate_percent);
     const hasGigs = (rv.gig_count||0) > 0;
     html += `<tr id="affVenueRow_${rv.venue_id}"
         onclick="${hasGigs ? `toggleAffVenueExpand(${rv.venue_id}, this)` : ''}"
@@ -600,6 +672,40 @@ async function startAffStripeOnboard() {
   } catch(e) { btn.textContent=orig; btn.disabled=false; }
 }
 
+// Fix: clicking Connect Stripe → browser back leaves the button stuck on
+// "Loading…" because the browser may restore the page from BFCache exactly
+// as it was at navigation time. Reset the button BEFORE leaving so the
+// cached snapshot is already clean, AND re-render on return as defense in
+// depth. `pagehide` fires reliably whether BFCache is used or not;
+// `pageshow` is the BFCache restore signal; `visibilitychange` covers the
+// case where the user comes back via tab focus rather than a navigation.
+function _resetAffStripeButtonIfLoading() {
+  const block = document.getElementById('affStripeBlock');
+  if (!block) return;
+  const btns = block.querySelectorAll('button');
+  btns.forEach(function(b) {
+    const t = (b.textContent || '').trim();
+    if (t === 'Loading…' || t === 'Loading...' || b.disabled) {
+      b.textContent = 'Connect Stripe →';
+      b.disabled = false;
+    }
+  });
+}
+
+window.addEventListener('pagehide', _resetAffStripeButtonIfLoading);
+window.addEventListener('pageshow', function(e) {
+  // Reset on every pageshow — covers BFCache restore (e.persisted=true) AND
+  // the case where the browser opted out of BFCache and did a full reload
+  // but somehow preserved the in-memory button state.
+  _resetAffStripeButtonIfLoading();
+  if (e.persisted && _affSummary) {
+    _updateAffStripeStatus(_affSummary.has_stripe, _affSummary.stripe_artist_name, _affSummary.stripe_account_id);
+  }
+});
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') _resetAffStripeButtonIfLoading();
+});
+
 // ── URL param auto-open ───────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -642,17 +748,21 @@ async function loadAffW9() {
     set('w9Address1', d.address_line_1); set('w9City', d.city);
     set('w9State', d.state); set('w9Zip', d.zip_code);
 
-    const histRows = await fetch(`/api/users/${uid}/affiliate-1099s`, { credentials:'include' })
-      .then(r => r.ok ? r.json() : []).catch(() => []);
+    // Audit fix (May 2026 part 9c): API returns {records:[...], threshold_cents:N}
+    // not a flat array, AND the row field is `total_cents` not `total_earned_cents`.
+    // Both bugs combined meant the 1099 history block never rendered.
+    const histResp = await fetch(`/api/users/${uid}/affiliate-1099s`, { credentials:'include' })
+      .then(r => r.ok ? r.json() : null).catch(() => null);
+    const histRows = (histResp && Array.isArray(histResp.records)) ? histResp.records : [];
     if (histRows.length) {
       const histEl = document.getElementById('affTaxHistory');
       const listEl = document.getElementById('aff1099List');
       if (histEl) histEl.style.display = 'block';
       if (listEl) listEl.innerHTML = histRows.map(h => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:0.75rem;">
-          <span style="color:var(--text);">${h.tax_year} 1099-NEC</span>
-          <span style="color:#10b981;font-weight:600;">$${((h.total_earned_cents||0)/100).toFixed(2)}</span>
-          <span style="font-size:0.68rem;color:var(--text-gray);">${h.status||'generated'}</span>
+          <span style="color:var(--text);">${esc(h.tax_year)} 1099-NEC</span>
+          <span style="color:#10b981;font-weight:600;">$${((h.total_cents||0)/100).toFixed(2)}</span>
+          <span style="font-size:0.68rem;color:var(--text-gray);">${esc(h.status||'generated')}</span>
         </div>`).join('');
     }
   } catch(e) {}

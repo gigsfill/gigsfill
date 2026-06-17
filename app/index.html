@@ -83,11 +83,159 @@
     .auth-panel .btn-group {
       margin-top: 12px !important;
     }
-    /* Disable hover effects on feature cards */
-    .feature-card:hover {
-      transform: none !important;
-      box-shadow: none !important;
-      border-color: var(--border) !important;
+    /* Stage-themed feature cards: clickable, with inline SVG art and
+       atmospheric gradients (not emoji). Keep the existing .feature-card
+       grid layout but override the inner look. */
+    .feature-card.gf-stage {
+      position: relative;
+      overflow: hidden;
+      padding: 0 !important;
+      cursor: pointer;
+      min-height: 200px;
+      border: 1px solid rgba(255,255,255,0.08) !important;
+      background: #0a1024 !important;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+    .feature-card.gf-stage:hover {
+      transform: translateY(-2px) !important;
+      border-color: rgba(6,182,212,0.45) !important;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.5) !important;
+    }
+    .feature-card.gf-stage .gf-stage-art {
+      position: absolute; inset: 0; z-index: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .feature-card.gf-stage .gf-stage-art svg {
+      width: 100%; height: 100%; opacity: 0.95;
+    }
+    .feature-card.gf-stage.artist {
+      background: radial-gradient(circle at 50% 35%, rgba(168,85,247,0.30), transparent 60%),
+                  linear-gradient(135deg, #1a0b2e 0%, #3b1361 100%) !important;
+    }
+    .feature-card.gf-stage.venue {
+      background: radial-gradient(circle at 50% 20%, rgba(6,182,212,0.35), transparent 60%),
+                  linear-gradient(135deg, #04111c 0%, #0b3a4a 100%) !important;
+    }
+    .feature-card.gf-stage .gf-stage-overlay {
+      position: relative; z-index: 1;
+      padding: 18px 22px 20px;
+      display: flex; flex-direction: column;
+      align-items: flex-start; gap: 4px;
+      background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.7) 100%);
+      min-height: 200px;
+      justify-content: flex-end;
+    }
+    .feature-card.gf-stage h3 {
+      margin: 0 !important;
+      font-size: 1.45rem !important;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      background: linear-gradient(135deg, var(--purple) 0%, var(--cyan) 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .feature-card.gf-stage .gf-stage-sub {
+      font-size: 0.78rem;
+      color: #cbd5e1;
+      margin-top: 4px;
+    }
+    .feature-card.gf-stage .gf-stage-cta {
+      margin-top: 8px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--cyan);
+    }
+
+    /* Centered modal for the For-Artists / For-Venues feature list. */
+    .gf-feature-modal-overlay {
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0,0,0,0.72);
+      backdrop-filter: blur(5px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .gf-feature-modal-overlay.hidden { display: none; }
+    .gf-feature-modal {
+      position: relative;
+      max-width: 560px;
+      width: 100%;
+      max-height: 86vh;
+      overflow-y: auto;
+      background: linear-gradient(180deg, #0e1729 0%, #0a0f1e 100%);
+      border: 1px solid rgba(6,182,212,0.35);
+      border-radius: 14px;
+      padding: 26px 28px 22px;
+      color: var(--text);
+      box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+    }
+    .gf-feature-modal h2 {
+      margin: 0 0 6px 0;
+      font-size: 1.55rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, var(--purple) 0%, var(--cyan) 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .gf-feature-modal .gf-fm-sub {
+      color: var(--text-gray);
+      font-size: 0.88rem;
+      margin-bottom: 18px;
+    }
+    .gf-feature-modal ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .gf-feature-modal li {
+      position: relative;
+      padding: 8px 0 8px 28px;
+      font-size: 0.9rem;
+      line-height: 1.45;
+      color: var(--text);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .gf-feature-modal li:last-child { border-bottom: none; }
+    .gf-feature-modal li::before {
+      content: '';
+      position: absolute;
+      left: 4px; top: 14px;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+    }
+    .gf-feature-modal li strong {
+      color: var(--cyan);
+      font-weight: 700;
+    }
+    .gf-feature-modal-close {
+      position: absolute;
+      top: 12px; right: 12px;
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: #ef4444;
+      border: none;
+      color: #fff;
+      font-size: 1.1rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+      line-height: 1;
+    }
+    .gf-feature-modal-close:hover { background: #dc2626; }
+    .gf-feature-modal-footer {
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      display: flex; justify-content: center; gap: 10px;
+    }
+    .gf-feature-modal-footer .btn {
+      font-size: 0.85rem;
     }
   </style>
 </head>
@@ -145,16 +293,106 @@
 
   <div class="container">
     <div class="features">
-      <div class="feature-card artist">
-        <span class="feature-icon">🎸</span>
-        <h3>For Artists</h3>
-        <p>Browse available gigs, showcase your talent with stunning media portfolios, and book venues directly through our platform.</p>
+      <div class="feature-card gf-stage artist" onclick="openFeatureModal('artist')"
+           role="button" tabindex="0"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openFeatureModal('artist');}">
+        <div class="gf-stage-art" aria-hidden="true">
+          <!-- Stylized mic + sound waves silhouette -->
+          <svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <radialGradient id="aGlow" cx="50%" cy="35%" r="55%">
+                <stop offset="0%" stop-color="#c084fc" stop-opacity="0.55"/>
+                <stop offset="100%" stop-color="#c084fc" stop-opacity="0"/>
+              </radialGradient>
+              <linearGradient id="aMic" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#e9d5ff"/>
+                <stop offset="1" stop-color="#7c3aed"/>
+              </linearGradient>
+              <linearGradient id="aStand" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#cbd5e1"/>
+                <stop offset="1" stop-color="#475569"/>
+              </linearGradient>
+            </defs>
+            <rect width="320" height="200" fill="url(#aGlow)"/>
+            <!-- audio waves left -->
+            <path d="M 110 70 Q 95 95 110 120" stroke="#c084fc" stroke-width="2.5" fill="none" opacity="0.55"/>
+            <path d="M 95 65 Q 75 95 95 125" stroke="#a855f7" stroke-width="2" fill="none" opacity="0.4"/>
+            <path d="M 80 60 Q 55 95 80 130" stroke="#7c3aed" stroke-width="1.5" fill="none" opacity="0.25"/>
+            <!-- audio waves right -->
+            <path d="M 210 70 Q 225 95 210 120" stroke="#c084fc" stroke-width="2.5" fill="none" opacity="0.55"/>
+            <path d="M 225 65 Q 245 95 225 125" stroke="#a855f7" stroke-width="2" fill="none" opacity="0.4"/>
+            <path d="M 240 60 Q 265 95 240 130" stroke="#7c3aed" stroke-width="1.5" fill="none" opacity="0.25"/>
+            <!-- mic head -->
+            <ellipse cx="160" cy="78" rx="26" ry="36" fill="url(#aMic)"/>
+            <!-- grille lines -->
+            <line x1="140" y1="65" x2="180" y2="65" stroke="#1a0b2e" stroke-width="1" opacity="0.45"/>
+            <line x1="138" y1="78" x2="182" y2="78" stroke="#1a0b2e" stroke-width="1" opacity="0.45"/>
+            <line x1="140" y1="91" x2="180" y2="91" stroke="#1a0b2e" stroke-width="1" opacity="0.45"/>
+            <!-- mic neck -->
+            <rect x="155" y="114" width="10" height="14" fill="#3b1361" rx="2"/>
+            <!-- stand pole -->
+            <rect x="158" y="128" width="4" height="46" fill="url(#aStand)"/>
+            <!-- base -->
+            <ellipse cx="160" cy="178" rx="40" ry="6" fill="url(#aStand)"/>
+          </svg>
+        </div>
+        <div class="gf-stage-overlay">
+          <h3>For Artists</h3>
+          <div class="gf-stage-sub">Browse gigs, build a profile, get paid.</div>
+          <div class="gf-stage-cta">Tap to see what's included →</div>
+        </div>
       </div>
 
-      <div class="feature-card venue">
-        <span class="feature-icon">🎭</span>
-        <h3>For Venues</h3>
-        <p>Post gigs to attract top talent, discover artists that match your vibe, and manage your booking calendar effortlessly.</p>
+      <div class="feature-card gf-stage venue" onclick="openFeatureModal('venue')"
+           role="button" tabindex="0"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openFeatureModal('venue');}">
+        <div class="gf-stage-art" aria-hidden="true">
+          <!-- Stylized stage with spotlight cones silhouette -->
+          <svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <linearGradient id="vLightL" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#06b6d4" stop-opacity="0.55"/>
+                <stop offset="1" stop-color="#06b6d4" stop-opacity="0"/>
+              </linearGradient>
+              <linearGradient id="vLightR" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#22d3ee" stop-opacity="0.55"/>
+                <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+              </linearGradient>
+              <linearGradient id="vStage" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#0e3a52"/>
+                <stop offset="1" stop-color="#031018"/>
+              </linearGradient>
+              <radialGradient id="vGlow" cx="50%" cy="80%" r="55%">
+                <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.40"/>
+                <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <rect width="320" height="200" fill="url(#vGlow)"/>
+            <!-- left spotlight cone -->
+            <path d="M 100 0 L 70 145 L 175 145 Z" fill="url(#vLightL)"/>
+            <!-- right spotlight cone -->
+            <path d="M 220 0 L 250 145 L 145 145 Z" fill="url(#vLightR)"/>
+            <!-- stage front -->
+            <path d="M 30 150 L 290 150 L 290 200 L 30 200 Z" fill="url(#vStage)"/>
+            <!-- stage front rim light -->
+            <line x1="30" y1="150" x2="290" y2="150" stroke="#22d3ee" stroke-width="1.5" opacity="0.85"/>
+            <!-- amp left -->
+            <rect x="50" y="130" width="20" height="20" fill="#1a1a1a" stroke="#475569" stroke-width="1"/>
+            <circle cx="60" cy="140" r="5" fill="#374151"/>
+            <!-- amp right -->
+            <rect x="250" y="130" width="20" height="20" fill="#1a1a1a" stroke="#475569" stroke-width="1"/>
+            <circle cx="260" cy="140" r="5" fill="#374151"/>
+            <!-- center microphone stand on stage -->
+            <ellipse cx="160" cy="125" rx="6" ry="9" fill="#cbd5e1"/>
+            <rect x="158" y="132" width="4" height="18" fill="#94a3b8"/>
+            <ellipse cx="160" cy="150" rx="14" ry="2" fill="#475569"/>
+          </svg>
+        </div>
+        <div class="gf-stage-overlay">
+          <h3>For Venues</h3>
+          <div class="gf-stage-sub">Fill the calendar, run the room, get paid.</div>
+          <div class="gf-stage-cta">Tap to see what's included →</div>
+        </div>
       </div>
     </div>
   </div>
@@ -167,7 +405,87 @@
   <script src="/app/static/js/city-autocomplete.js"></script>
   
 
-<script src="/app/static/js/index-init.js"></script>
+<!-- Feature-list modals opened from the "For Artists" / "For Venues" cards. -->
+<div id="featureModalArtist" class="gf-feature-modal-overlay hidden" onclick="closeFeatureModalIfOverlay(event,'artist')">
+  <div class="gf-feature-modal" role="dialog" aria-modal="true" aria-labelledby="fmaTitle" onclick="event.stopPropagation()">
+    <button type="button" class="gf-feature-modal-close" aria-label="Close" onclick="closeFeatureModal('artist')">×</button>
+    <h2 id="fmaTitle">For Artists</h2>
+    <div class="gf-fm-sub">Everything GigsFill gives you as a working musician.</div>
+    <ul>
+      <li><strong>Find gigs in your area.</strong> Interactive calendar with city, distance, gig-type, and pay filters.</li>
+      <li><strong>One-click booking.</strong> No back-and-forth emails. See an open slot, book it, you're done.</li>
+      <li><strong>Media-rich profile.</strong> Bio, photos, audio, video, and links to Spotify, Instagram, YouTube, and more.</li>
+      <li><strong>Get notified first.</strong> Become a venue's Preferred Artist and the open-gig blast hits your inbox before anyone else.</li>
+      <li><strong>Digital contracts.</strong> Sign, countersign, and store every contract right on the gig.</li>
+      <li><strong>Direct Stripe payouts.</strong> Money transfers begin automatically the day after each gig — no chasing checks.</li>
+      <li><strong>Vanity URL.</strong> Get a clean link to share on socials, EPKs, and texts — <code>gigsfill.com/yourname</code>.</li>
+      <li><strong>Calendar sync.</strong> One-click iCal export so booked gigs flow into Google or Apple Calendar.</li>
+      <li><strong>Ratings &amp; reviews.</strong> Build credibility from venues you've played — visible on your public profile.</li>
+      <li><strong>Waitlist alerts.</strong> Join the waitlist for gigs you want to play and get pinged when the gig opens up due to a cancellation.</li>
+      <li><strong>Multi-user accounts.</strong> Bandmates, agents, or anyone you want can log in to the same artist profile.</li>
+      <li><strong>Mobile-friendly.</strong> Browse, book, and sign contracts from your phone.</li>
+    </ul>
+    <div class="gf-feature-modal-footer">
+      <a class="btn primary" href="/app/signup-new.html">Create Artist Account</a>
+    </div>
+  </div>
+</div>
+
+<div id="featureModalVenue" class="gf-feature-modal-overlay hidden" onclick="closeFeatureModalIfOverlay(event,'venue')">
+  <div class="gf-feature-modal" role="dialog" aria-modal="true" aria-labelledby="fmvTitle" onclick="event.stopPropagation()">
+    <button type="button" class="gf-feature-modal-close" aria-label="Close" onclick="closeFeatureModal('venue')">×</button>
+    <h2 id="fmvTitle">For Venues</h2>
+    <div class="gf-fm-sub">Everything GigsFill gives you to run live music at your venue.</div>
+    <ul>
+      <li><strong>Post gigs in seconds.</strong> Single-slot, multi-slot, or recurring weekly — all from one calendar view.</li>
+      <li><strong>Auto-blast open gigs.</strong> Notify every qualified artist within a radius you choose — fill open nights fast.</li>
+      <li><strong>Preferred Artists list.</strong> Curate the bands you love; create frequency limits, priority notifications, decide who gets first dibs.</li>
+      <li><strong>Beautiful flyers, built in.</strong> Drag-and-drop flyer editor with templates — every gig gets a sharable poster.</li>
+      <li><strong>Status-coded calendar.</strong> Open, booked, pending contract, cancelled — color-coded for easy viewing.</li>
+      <li><strong>Digital contracts.</strong> Sign and countersign contracts on platform; digital contracts or PDF contracts stored for every gig.</li>
+      <li><strong>Stripe payments built in.</strong> Credit card is stored in Stripe, automatically pay artists the day after a gig. You have option to cancel payment if artist is a no-show or for other reasons.</li>
+      <li><strong>Multi-user accounts.</strong> Owners and managers each get their own login on one venue account to help manage gigs and calendar.</li>
+      <li><strong>Real-time waitlist.</strong> When a booked artist cancels, GigsFill auto-contacts the next artist in line — no scrambling.</li>
+      <li><strong>Ratings &amp; reviews.</strong> Vet artists before you book them; see how they've performed at other venues.</li>
+      <li><strong>Vanity URL.</strong> Get <code>gigsfill.com/yourvenue</code> for socials, Google listings, and posters.</li>
+      <li><strong>Email Center.</strong> Send broadcast updates to artists on your preferred list — without leaving the app.</li>
+      <li><strong>Mobile-friendly.</strong> All site functionality can be run from your phone.</li>
+    </ul>
+    <div class="gf-feature-modal-footer">
+      <a class="btn primary" href="/app/signup-new.html">Create Venue Account</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  function openFeatureModal(which) {
+    const id = which === 'venue' ? 'featureModalVenue' : 'featureModalArtist';
+    const m = document.getElementById(id);
+    if (m) { m.classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
+  }
+  function closeFeatureModal(which) {
+    const id = which === 'venue' ? 'featureModalVenue' : 'featureModalArtist';
+    const m = document.getElementById(id);
+    if (m) { m.classList.add('hidden'); document.body.style.overflow = ''; }
+  }
+  function closeFeatureModalIfOverlay(evt, which) {
+    // Close only when the click landed on the overlay itself, not bubbled
+    // up from the modal's content (the inner div uses stopPropagation).
+    if (evt.target === evt.currentTarget) closeFeatureModal(which);
+  }
+  // Escape key closes whichever modal is open.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    ['featureModalArtist', 'featureModalVenue'].forEach(function (id) {
+      const m = document.getElementById(id);
+      if (m && !m.classList.contains('hidden')) {
+        m.classList.add('hidden'); document.body.style.overflow = '';
+      }
+    });
+  });
+</script>
+
+<script src="/app/static/js/index-init.js?v=7"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
 
