@@ -1944,7 +1944,7 @@ TEMPLATES = {
     },
 
     "recommend_gigsfill": {
-        "subject": '{{user_name}} thinks your venue will love GigsFill',
+        "subject": '{{user_name}} thinks you should check out GigsFill',
         "body": '''<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -1960,14 +1960,32 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 32px 40px;">
-<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Your venue is invited to GigsFill</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi{{recipient_greeting}}! <strong>{{user_name}}</strong> thought your venue would love GigsFill &mdash; the easiest way to fill open dates with live music.</p>
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">You&rsquo;re invited to GigsFill</h1>
+<p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi{{recipient_greeting}}! <strong>{{user_name}}</strong> thought you&rsquo;d love GigsFill &mdash; the simplest way to connect live-music venues with the right local artists.</p>
 {{personal_note}}
-<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">GigsFill helps <strong>venues</strong> book the right artists fast: post an open slot, pick from local talent, sign the contract, and we handle the payment. No commission on a gig that doesn&#39;t happen, and no surprise fees.</p>
-<div style="text-align: center; margin: 32px 0;">
-<a href="{{aff_url}}" style="display: inline-block; background: #06b6d4; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Sign Up Your Venue</a>
+<p style="margin: 0 0 14px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">GigsFill works for both sides of a gig &mdash; pick the side that fits you:</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0;">
+<tr>
+<td style="padding: 14px 16px; background:#f0fdf4; border-left:4px solid #10b981; border-radius:4px;" valign="top">
+<div style="font-weight:700;color:#065f46;font-size:14px;margin-bottom:4px;">If you book live music at a venue</div>
+<div style="font-size:14px;color:#4b5563;line-height:1.55;">Post an open date, pick from local talent, sign the contract, and we handle the payment. No commission on a gig that doesn&rsquo;t happen, and no surprise fees.</div>
+</td>
+</tr>
+<tr><td style="height:8px;line-height:8px;">&nbsp;</td></tr>
+<tr>
+<td style="padding: 14px 16px; background:#eff6ff; border-left:4px solid #3b82f6; border-radius:4px;" valign="top">
+<div style="font-weight:700;color:#1e40af;font-size:14px;margin-bottom:4px;">If you&rsquo;re an artist or band</div>
+<div style="font-size:14px;color:#4b5563;line-height:1.55;">Build a profile, get discovered by nearby venues, book open dates that match your style, and get paid through the platform &mdash; no chasing checks after the show.</div>
+</td>
+</tr>
+</table>
+<div style="text-align: center; margin: 28px 0 20px 0;">
+<a href="{{aff_url}}" style="display: inline-block; background: #06b6d4; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Sign Up &mdash; Pick Your Role</a>
 </div>
-<p style="margin: 0; font-size: 13px; color: #9ca3af; text-align: center;">Free to sign up &middot; No commitment &middot; Cancel anytime</p>
+<p style="margin: 0 0 6px 0; font-size: 13px; color: #9ca3af; text-align: center;">Free to sign up &middot; No commitment &middot; Cancel anytime</p>
+<p style="margin: 20px 0 0 0; font-size: 12px; color: #9ca3af; line-height:1.55; padding-top:14px; border-top:1px solid #f3f4f6;">
+<em>A note from GigsFill:</em> This invitation includes <strong>{{user_name}}</strong>&rsquo;s affiliate link. If you sign up as a <strong>venue</strong>, GigsFill thanks them with a small commission on the gig fees that venue pays &mdash; at no extra cost to you. Artist signups carry no affiliate credit. Read the full program details on our <a href="https://gigsfill.com/app/legal.html#affiliate" style="color:#06b6d4;">Affiliate Program Terms</a>.
+</p>
 </td>
 </tr>
 <tr>

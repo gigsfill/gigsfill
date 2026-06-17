@@ -282,7 +282,13 @@ async def send_recommend_email(request: Request, user=Depends(get_current_user),
     # Audit fix (May 2026 part 5): pull from platform_settings.site_url so
     # staging / custom-domain deploys don't leak gigsfill.com links.
     base = _site_base_url(db)
-    signup_url = f"{base}/api/affiliate/track/{aff_code}?redirect_to=/app/signup-new.html%3Frole%3Dvenue"
+    # Land on the role-picker (no ?role= pre-selected) so the recipient
+    # can pick venue OR artist. Affiliate attribution still fires only
+    # on venue signup (per auth.py / our terms in legal.html#affiliate);
+    # artist signups won't earn the sender a commission but they're a
+    # legitimate outcome — better to let the recipient land where they
+    # actually belong than force them into the wrong signup flow.
+    signup_url = f"{base}/api/affiliate/track/{aff_code}?redirect_to=/app/signup-new.html"
 
     # Build template variables — every user-controlled field MUST be HTML-
     # escaped before substitution. recipient_name and personal_note are
@@ -442,7 +448,9 @@ async def resend_recommend_email(request: Request, email_id: int, user=Depends(g
     aff_code        = row["affiliate_code"]
     # Audit fix (May 2026 part 9c+9d): route through tracking endpoint
     # (sets cookie + flags clicked) and land directly on signup page.
-    aff_url         = f"{_site_base_url(db)}/api/affiliate/track/{aff_code}?redirect_to=/app/signup-new.html%3Frole%3Dvenue"
+    # Resend reuses the same role-neutral landing page as the initial send —
+    # role picker stays in front of the user so they can choose venue OR artist.
+    aff_url         = f"{_site_base_url(db)}/api/affiliate/track/{aff_code}?redirect_to=/app/signup-new.html"
     sender_name     = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
     from html import escape as _h
     safe_recipient  = _h(recipient_name)
