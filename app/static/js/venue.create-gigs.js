@@ -1294,9 +1294,8 @@ document.addEventListener("DOMContentLoaded", async () => {
                  margin-bottom:6px; cursor:pointer; transition:border-color 0.12s, background 0.12s;"
           onmouseenter="this.style.borderColor='#06b6d4'; this.style.background='#161a22';"
           onmouseleave="this.style.borderColor='#2a2f3a'; this.style.background='#0f1116';">
-          <div style="flex:1; min-width:0;">
-            <div style="color:#fff; font-weight:600; font-size:0.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_esc(t.name)}</div>
-            <div style="color:#94a3b8; font-size:0.75rem; margin-top:2px;">${count} slot${count === 1 ? '' : 's'}</div>
+          <div style="flex:1; min-width:0; color:#fff; font-weight:600; font-size:0.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            ${_esc(t.name)} <span style="color:#94a3b8; font-weight:500; font-size:0.8rem;">(${count} slot${count === 1 ? '' : 's'})</span>
           </div>
           <button type="button" class="gf-tpl-del" data-tpl-id="${_esc(t.id)}" data-tpl-name="${_esc(t.name)}"
             style="background:transparent; border:0; color:#fca5a5; font-size:1.05rem; cursor:pointer; padding:4px 8px; line-height:1; border-radius:4px;"

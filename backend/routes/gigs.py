@@ -998,7 +998,7 @@ def list_gigs(db=Depends(get_db)):
                     ) THEN 1 ELSE 0 END as has_active_waitlist,
                     (SELECT el.notification_key FROM gig_email_log el
                      WHERE el.gig_id = g.id
-                     AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast')
+                     AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
                      ORDER BY el.sent_at DESC LIMIT 1) as last_notification_key,
                     v.venue_name,
                     v.address_line_1,
@@ -1224,7 +1224,7 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                     ) THEN 1 ELSE 0 END as has_active_waitlist,
                     (SELECT el.notification_key FROM gig_email_log el
                      WHERE el.gig_id = g.id
-                     AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast')
+                     AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
                      ORDER BY el.sent_at DESC LIMIT 1) as last_notification_key,
                     v.venue_name,
                     COALESCE(a.name,
@@ -1302,7 +1302,7 @@ def get_gig_detail(gig_id: int, user=Depends(get_current_user), db=Depends(get_d
                     ) THEN 1 ELSE 0 END as has_active_waitlist,
                (SELECT el.notification_key FROM gig_email_log el
                 WHERE el.gig_id = g.id
-                AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast')
+                AND el.notification_key IN ('open_gig_4w','open_gig_2w','open_gig_1w','open_gig_36h','cancelled_blast','radius_blast','new_gig_blast')
                 ORDER BY el.sent_at DESC LIMIT 1) as last_notification_key,
                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
                v.latitude as venue_lat, v.longitude as venue_lon,
