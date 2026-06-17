@@ -935,30 +935,41 @@ async function loadInvitedArtists(venueId) {
             const isSignedUp = status === 'signed_up' || status === 'preferred_requested' || status === 'preferred_approved';
             const statusBadge = STATUS_BADGES[status] || STATUS_BADGES.pending;
 
+            // Resend / Delete buttons. We use a flex container with
+            // margin-left:auto on the Delete button so the Delete always
+            // sits at the right edge of the Action cell — regardless of
+            // whether the (×N) resent-counter is "(×1)" or "(×1000)" the
+            // Delete column lines up vertically across rows.
+            const DEL_BTN = (label, title) =>
+                '<button class="inv-delete-btn" onclick="deleteInvitation(' + inv.id + ', this)" title="' + title + '" style="margin-left:auto;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;font-weight:500;">' + label + '</button>';
             let actionHtml = '';
             if (isSignedUp) {
                 const suDate = inv.signed_up_at ? formatInvDate(inv.signed_up_at) : '';
                 actionHtml = suDate ? '<span style="font-size:0.72rem;color:#22c55e;">' + suDate + '</span>' : '—';
             } else if (status === 'declined') {
                 actionHtml = '<span style="font-size:0.72rem;color:#9ca3af;">No follow-up</span>'
-                    + ' <button class="inv-delete-btn" onclick="deleteInvitation(' + inv.id + ', this)" title="Remove from tracker" style="margin-left:6px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;font-weight:500;">Delete</button>';
+                    + DEL_BTN('Delete', 'Remove from tracker');
             } else {
                 const resentNote = inv.resent_count > 0
                     ? ' <span style="font-size:0.65rem;color:#6b7280;">(×' + inv.resent_count + ')</span>'
                     : '';
                 actionHtml = '<button class="inv-resend-btn" onclick="resendInvitation(' + inv.id + ', this)">Resend</button>' + resentNote
-                    + ' <button class="inv-delete-btn" onclick="deleteInvitation(' + inv.id + ', this)" title="Delete this invitation" style="margin-left:6px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;font-weight:500;">Delete</button>';
+                    + DEL_BTN('Delete', 'Delete this invitation');
             }
 
             const bounceLine = (status === 'bounced' && inv.bounce_reason)
                 ? '<div style="grid-column:1/-1;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:5px 10px;border-radius:4px;font-size:0.72rem;margin-top:6px;">⚠ ' + escapeHtmlLocal(inv.bounce_reason) + '</div>'
                 : '';
 
+            // Action cell is a flex row so margin-left:auto on the Delete
+            // button does the right thing. min-height keeps the row from
+            // collapsing when the cell only has the date span (signed-up
+            // / declined states).
             return '<div class="inv-row">' +
                 '<div class="inv-email" title="' + escapeAttr(inv.email) + '">' + escapeHtmlLocal(inv.email) + '</div>' +
                 '<div>' + statusBadge + '</div>' +
                 '<div class="inv-date">' + date + '</div>' +
-                '<div>' + actionHtml + '</div>' +
+                '<div style="display:flex;align-items:center;gap:6px;min-height:24px;">' + actionHtml + '</div>' +
                 bounceLine +
                 '</div>';
         }).join('');
