@@ -1064,6 +1064,240 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
     }
 
 
+@router.post("/api/stripe/cancel-slot-payment")
+def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(get_db)):
+    """
+    Cancel ONE artist's payout on a multi-slot gig (or a single-slot
+    gig, which the new modal also targets through this endpoint).
+
+    Body: {slot_id: int, reason: str}
+
+    Behavior parallels cancel_gig_payment but scoped to one slot's
+    artist_payout child:
+      - Marks THAT child transaction status='payment_cancelled'
+      - Charges the venue's card immediately for THAT slot's share of
+        the platform fee (idempotency_key = gig_{gid}_slot_{sid}_cancel_fee)
+      - Calls _recompute_gig_fees so the remaining LIVE children +
+        the parent's venue_charge total reflect "one fewer artist to
+        pay" — venue won't be charged at 5pm for the cancelled slot's
+        gig amount, only for the remaining slots.
+      - Sends notifications + emails to both the venue and the
+        cancelled artist.
+
+    Per-slot scoping fixes a pre-existing bug: cancel_gig_payment
+    used LIMIT 1 on the transaction lookup, so on a multi-slot gig
+    it only cancelled ONE of the children — the others stayed
+    'scheduled' and the venue still got charged for them at 5pm.
+    Frontends calling cancel_gig_payment on a multi-slot gig should
+    migrate to looping cancel_slot_payment over each selected slot.
+    """
+    stripe_mod, keys = init_stripe(db)
+    slot_id = data.get("slot_id")
+    reason = (data.get("reason") or "").strip()
+    if not slot_id:
+        raise HTTPException(400, "Missing slot_id")
+    if not reason:
+        raise HTTPException(400, "A reason is required")
+
+    # Look up the slot, its gig, venue, artist, and the child
+    # artist_payout transaction. Filter the txn lookup by `notes
+    # LIKE 'Slot {sid}%'` to disambiguate when the same artist has
+    # multiple slots on the gig (the booking flow writes
+    # notes='Slot {slot_id}' — mirrors the door-settle filter).
+    slot = db.execute(
+        text("""SELECT gs.id, gs.gig_id, gs.slot_number, gs.artist_id, gs.status,
+                       g.venue_id, g.date as gig_date, g.title as gig_title,
+                       v.venue_name, v.user_id as venue_user_id,
+                       a.name as artist_name, a.user_id as artist_user_id
+                FROM gig_slots gs
+                JOIN gigs g ON g.id = gs.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                LEFT JOIN artists a ON a.id = gs.artist_id
+                WHERE gs.id = :sid"""),
+        {"sid": slot_id}
+    ).mappings().first()
+    if not slot:
+        raise HTTPException(404, "Slot not found")
+    if not slot.get("artist_id"):
+        raise HTTPException(400, "Slot has no booked artist to cancel")
+
+    venue_id = slot["venue_id"]
+    venue_check = db.execute(
+        text("""SELECT 1 FROM venues v WHERE v.id = :vid AND (
+            v.user_id = :uid OR EXISTS (
+                SELECT 1 FROM entity_users eu WHERE eu.entity_type='venue' AND eu.entity_id=v.id AND eu.user_id=:uid
+            ))"""),
+        {"vid": venue_id, "uid": user.id}
+    ).first()
+    if not venue_check:
+        raise HTTPException(403, "Not authorized")
+
+    # Find the artist_payout transaction for THIS slot.
+    txn = db.execute(
+        text("""SELECT id, gig_id, artist_id, amount_cents, commission_cents,
+                       scheduled_process_at, status, parent_transaction_id, notes
+                FROM transactions
+                WHERE gig_id = :gid AND artist_id = :aid
+                  AND status IN ('scheduled', 'test')
+                  AND (transaction_type IS NULL
+                       OR transaction_type IN ('artist_payout', 'single'))
+                  AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid)
+                LIMIT 1"""),
+        {"gid": slot["gig_id"], "aid": slot["artist_id"],
+         "slot_like": f"Slot {int(slot_id)}%",
+         "slot_like_mid": f"%Slot {int(slot_id)} %"}
+    ).mappings().first()
+    # Legacy fallback for single-slot rows without a Slot prefix.
+    if not txn:
+        txn = db.execute(
+            text("""SELECT id, gig_id, artist_id, amount_cents, commission_cents,
+                           scheduled_process_at, status, parent_transaction_id, notes
+                    FROM transactions
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND status IN ('scheduled', 'test')
+                      AND (transaction_type IS NULL
+                           OR transaction_type IN ('artist_payout', 'single'))
+                      AND (notes IS NULL OR notes NOT LIKE 'Slot %')
+                    LIMIT 1"""),
+            {"gid": slot["gig_id"], "aid": slot["artist_id"]}
+        ).mappings().first()
+    if not txn:
+        raise HTTPException(400, "No cancellable payout found for this slot (already paid, transferred, or cancelled).")
+    txn = dict(txn)
+
+    # Timing gate — must be BEFORE the scheduler's payout window.
+    from zoneinfo import ZoneInfo
+    try:
+        tz_row = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key = 'platform_timezone'")).mappings().first()
+        tz = ZoneInfo(tz_row["setting_value"]) if tz_row and tz_row["setting_value"] else ZoneInfo("America/Los_Angeles")
+    except Exception:
+        tz = ZoneInfo("America/Los_Angeles")
+    now_local = datetime.now(tz)
+    if txn.get("scheduled_process_at"):
+        sched_str = str(txn["scheduled_process_at"])
+        try:
+            sched_naive = datetime.fromisoformat(sched_str.replace("Z", ""))
+            sched_local = sched_naive.replace(tzinfo=tz)
+            if now_local >= sched_local:
+                raise HTTPException(400, "Payment cancellation window has closed for this slot.")
+        except (ValueError, TypeError):
+            pass
+
+    # Venue's share of the platform fee for THIS slot only.
+    fee_split = keys.get('platform_fee_split', 'split')
+    commission = int(txn.get("commission_cents") or 0)
+    if fee_split == 'venue_only':
+        venue_fee_cents = commission
+    elif fee_split == 'artist_only':
+        venue_fee_cents = 0
+    else:
+        venue_fee_cents = commission // 2
+
+    # Charge the platform fee immediately. Idempotency key carries
+    # both gig_id and slot_id so a double-click never double-charges
+    # and cancelling slot 1 doesn't collide with cancelling slot 2.
+    payments_live = keys.get('payments_enabled', False)
+    platform_fee_pi_id = None
+    if payments_live and venue_fee_cents > 0:
+        venue_settings = db.execute(
+            text("SELECT stripe_customer_id, stripe_payment_method_id FROM entity_payment_settings WHERE entity_type='venue' AND entity_id=:vid"),
+            {"vid": venue_id}
+        ).mappings().first()
+        if venue_settings and venue_settings.get("stripe_payment_method_id"):
+            try:
+                pi = stripe_mod.PaymentIntent.create(
+                    amount=venue_fee_cents,
+                    currency="usd",
+                    customer=venue_settings["stripe_customer_id"],
+                    payment_method=venue_settings["stripe_payment_method_id"],
+                    off_session=True,
+                    confirm=True,
+                    idempotency_key=f"gig_{slot['gig_id']}_slot_{slot_id}_cancel_fee",
+                    metadata={
+                        "gig_id": str(slot["gig_id"]),
+                        "slot_id": str(slot_id),
+                        "type": "slot_payment_cancellation_platform_fee",
+                        "platform": "gigsfill"
+                    },
+                    description=f"GigsFill platform fee — Gig #{slot['gig_id']} slot #{slot_id} (payment cancelled by venue)"
+                )
+                platform_fee_pi_id = pi.id
+            except Exception as e:
+                logging.error(f"[CancelSlotPayment] Platform fee charge failed for gig {slot['gig_id']} slot {slot_id}: {e}")
+
+    # Mark the child cancelled.
+    db.execute(
+        text("""UPDATE transactions SET
+                  status = 'payment_cancelled',
+                  cancel_reason = :reason,
+                  cancelled_at = :now,
+                  platform_fee_charged_cents = :fee,
+                  stripe_payment_intent_id = COALESCE(:pi_id, stripe_payment_intent_id),
+                  notes = COALESCE(notes, '') || :note_suffix
+                WHERE id = :tid"""),
+        {"reason": reason, "now": utcnow_naive().isoformat(),
+         "fee": venue_fee_cents, "pi_id": platform_fee_pi_id,
+         "note_suffix": f" [slot-cancelled by user {user.id}: {reason[:80]}]",
+         "tid": txn["id"]}
+    )
+
+    # Redistribute fees among remaining LIVE children + rewrite
+    # parent venue_charge total. _recompute filters out
+    # 'payment_cancelled' rows so the cancelled slot drops out
+    # cleanly. If ALL children are now cancelled, _recompute is a
+    # no-op (no live children) — mark parent cancelled directly.
+    try:
+        from backend.routes.gigs import _recompute_gig_fees
+        _recompute_gig_fees(db, slot["gig_id"])
+    except Exception as _e:
+        logging.warning(f"[CancelSlotPayment] _recompute_gig_fees failed for gig {slot['gig_id']}: {_e}")
+    _live_count = db.execute(
+        text("""SELECT COUNT(*) FROM transactions
+                WHERE gig_id = :gid AND transaction_type = 'artist_payout'
+                  AND status NOT IN ('payment_cancelled')"""),
+        {"gid": slot["gig_id"]}
+    ).scalar() or 0
+    if _live_count == 0:
+        db.execute(
+            text("""UPDATE transactions SET status='payment_cancelled',
+                       cancel_reason=:reason, cancelled_at=:now
+                    WHERE gig_id=:gid AND transaction_type='venue_charge'
+                      AND status IN ('scheduled','test')"""),
+            {"reason": "All slots cancelled", "now": utcnow_naive().isoformat(),
+             "gid": slot["gig_id"]}
+        )
+
+    # Notifications — venue + cancelled artist.
+    gig_label = slot.get("gig_title") or str(slot.get("gig_date") or "a gig")
+    venue_name = slot.get("venue_name") or "Venue"
+    artist_name = slot.get("artist_name") or "Artist"
+    db.execute(
+        text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
+                VALUES (:uid, 'payment_cancelled', 'Payment Cancelled', :msg, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
+        {"uid": slot["venue_user_id"],
+         "msg": f"You cancelled payment to {artist_name} (Slot {slot['slot_number']}) for {gig_label}. Platform fee of ${venue_fee_cents/100:.2f} charged.",
+         "gid": slot["gig_id"], "vid": venue_id, "aid": slot["artist_id"]}
+    )
+    if slot.get("artist_user_id"):
+        db.execute(
+            text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
+                    VALUES (:uid, 'payment_cancelled', 'Payment Cancelled', :msg, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
+            {"uid": slot["artist_user_id"],
+             "msg": f"{venue_name} has cancelled your payment for {gig_label} (Slot {slot['slot_number']}). Reason: {reason}. Please contact the venue directly.",
+             "gid": slot["gig_id"], "vid": venue_id, "aid": slot["artist_id"]}
+        )
+    db.commit()
+    return {
+        "ok": True,
+        "slot_id": slot_id,
+        "slot_number": slot["slot_number"],
+        "artist_name": artist_name,
+        "platform_fee_charged": venue_fee_cents,
+        "platform_fee_pi_id": platform_fee_pi_id,
+        "remaining_live_children": _live_count,
+    }
+
+
 @router.post("/api/stripe/reinstate-gig-payment")
 def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     """

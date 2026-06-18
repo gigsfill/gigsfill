@@ -6305,106 +6305,246 @@ async function updateBookedGigNotes(gigId) {
 // CANCEL GIG PAYMENT
 // ============================================
 
-window._showCancelPaymentModal = function(gigId) {
-  // Fetch fee percentage for disclaimer
-  fetch('/api/stripe/config', { credentials: 'include' })
-    .then(r => r.json())
-    .then(cfg => {
-      const feePct = cfg.platform_fee_percent != null ? (Number(cfg.platform_fee_percent) % 1 === 0 ? cfg.platform_fee_percent : Number(cfg.platform_fee_percent).toFixed(1)) : '5';
-      
-      const overlay = document.createElement('div');
-      overlay.id = 'cancelPaymentOverlay';
-      overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;';
-      overlay.innerHTML = `
-        <div style="background:var(--card-bg,#1a1a2e);border:1px solid rgba(239,68,68,0.3);border-radius:12px;max-width:500px;width:92%;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
-          <h3 style="margin:0 0 4px 0;color:#ef4444;font-size:1.1rem;">⚠️ Cancel Gig Payment?</h3>
-          <p style="color:var(--text-muted,#999);font-size:0.85rem;margin:0 0 18px 0;line-height:1.5;">
-            Are you sure you want to cancel this gig's payment to the artist?
-          </p>
-          
-          <label style="display:block;font-size:0.85rem;color:var(--text,#fff);font-weight:600;margin-bottom:6px;">Reason for not paying artist:</label>
-          <textarea id="cancelPaymentReason" rows="3" placeholder="Please explain why you are cancelling this payment..." 
-            style="width:100%;padding:10px 14px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#fff;font-size:0.85rem;resize:vertical;box-sizing:border-box;font-family:inherit;"></textarea>
-          
-          <p style="color:rgba(239,68,68,0.7);font-size:0.75rem;margin:12px 0 6px 0;line-height:1.5;">
-            ⚠️ Cancelling this gig's payment still requires the Venue to pay the GigsFill platform fee of ${feePct}%.
-          </p>
-          <p style="color:var(--text-muted,#777);font-size:0.72rem;margin:0 0 18px 0;line-height:1.4;">
-            <em>Disclaimer: Payment disputes are between the Venue and Artist. GigsFill is not involved in resolving payment disputes 
-            and is not responsible for the outcome. The artist may contact you directly regarding this matter.</em>
-          </p>
-          
-          <div style="display:flex;gap:10px;justify-content:flex-end;">
-            <button id="cancelPayOverlayClose" class="btn ghost" style="padding:8px 18px;font-size:0.85rem;">Never Mind</button>
-            <button id="cancelPayConfirmBtn" class="btn" style="background:#ef4444;color:#fff;padding:8px 18px;font-size:0.85rem;border:none;border-radius:6px;cursor:pointer;">Confirm Cancel Payment</button>
-          </div>
-          <div id="cancelPayStatus" style="margin-top:10px;text-align:center;font-size:0.85rem;"></div>
-        </div>
-      `;
-      document.body.appendChild(overlay);
-      
-      function closeCancelPaymentAndGigModal() {
-        overlay.remove();
-        const gigModal = document.getElementById('gigModal');
-        if (gigModal) gigModal.classList.add('hidden');
+window._showCancelPaymentModal = async function(gigId) {
+  // Fetch fee config + the gig's slots in parallel. Slots drive the
+  // per-row checkbox + reason UI; without them we can't render the
+  // modal at all. The /slots endpoint lists every slot — we filter
+  // to booked ones in JS (pending / open slots can't have their
+  // payment cancelled since there's no booking yet).
+  let feePct = '5';
+  let slots = [];
+  try {
+    const [cfgRes, slotsRes] = await Promise.all([
+      fetch('/api/stripe/config', { credentials: 'include' }),
+      fetch(`/api/gigs/${gigId}/slots`, { credentials: 'include' }),
+    ]);
+    if (cfgRes.ok) {
+      const cfg = await cfgRes.json();
+      const raw = cfg.platform_fee_percent;
+      if (raw != null) feePct = (Number(raw) % 1 === 0) ? String(raw) : Number(raw).toFixed(1);
+    }
+    if (slotsRes.ok) {
+      slots = await slotsRes.json();
+    }
+  } catch (e) {
+    alert('Unable to load slot list.');
+    return;
+  }
+
+  // Filter to slots whose payment is actually cancellable: booked
+  // with an artist. Door-deal pre-settle slots are still cancellable —
+  // they have a guarantee transaction already on the schedule.
+  const cancellable = (slots || []).filter(s => s.artist_id && s.status === 'booked');
+  if (cancellable.length === 0) {
+    alert('No cancellable slots — every booked artist on this gig has already been paid out or cancelled.');
+    return;
+  }
+
+  const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const _money = c => '$' + ((Number(c) || 0) / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const _dollars = d => '$' + (Number(d) || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+  // Per-slot row HTML. Each row has its own checkbox + reason textarea.
+  // Textarea starts disabled; checkbox toggle enables/disables it.
+  // Pay column shows the slot's listed pay (with door breakdown
+  // inline for door deals so the venue sees what they're saving).
+  const slotRowsHtml = cancellable.map(s => {
+    const slotN = s.slot_number || '?';
+    const who = s.artist_name || 'Artist';
+    const isDoor = String(s.deal_type || '').toLowerCase() === 'door';
+    let payHtml;
+    if (isDoor) {
+      const gua = _money(s.guarantee_cents || 0);
+      const pct = parseInt(s.door_pct, 10) || 0;
+      if (s.settled_at && s.settled_pay_cents != null) {
+        payHtml = `<strong>${_money(s.settled_pay_cents)}</strong>
+          <span style="color:var(--text-muted, #94a3b8);font-size:0.72rem;display:block;margin-top:1px;">
+            ${gua} guarantee + ${pct}% door (settled)
+          </span>`;
+      } else {
+        payHtml = `<strong>${gua}</strong>
+          <span style="color:var(--text-muted, #94a3b8);font-size:0.72rem;display:block;margin-top:1px;">
+            ${gua} guarantee + ${pct}% door (not yet settled)
+          </span>`;
       }
-      overlay.querySelector('#cancelPayOverlayClose').onclick = closeCancelPaymentAndGigModal;
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeCancelPaymentAndGigModal(); });
-      
-      overlay.querySelector('#cancelPayConfirmBtn').onclick = async () => {
-        const reason = document.getElementById('cancelPaymentReason').value.trim();
-        if (!reason) { alert('Please provide a reason for cancelling this payment.'); return; }
-        
-        const btn = overlay.querySelector('#cancelPayConfirmBtn');
-        const status = overlay.querySelector('#cancelPayStatus');
-        btn.disabled = true;
-        btn.textContent = 'Processing...';
-        
-        try {
-          const res = await fetch('/api/stripe/cancel-gig-payment', {
-            method: 'POST', credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gig_id: gigId, reason: reason })
-          });
-          
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            const msg = Array.isArray(err.detail) ? err.detail.join(' ') : (err.detail || 'Cancel failed');
-            throw new Error(typeof msg === 'string' ? msg : 'Cancel failed');
-          }
-          
-          const result = await res.json();
-          status.style.color = '#22c55e';
-          const fee = result.platform_fee_charged != null ? result.platform_fee_charged : 0;
-          status.textContent = result.message || (fee > 0 ? '✓ Payment cancelled. Platform fee of $' + (fee / 100).toFixed(2) + ' charged.' : '✓ Payment cancelled.');
-          btn.style.display = 'none';
-          overlay.querySelector('#cancelPayOverlayClose').textContent = 'Close';
-          overlay.querySelector('#cancelPayOverlayClose').onclick = () => {
-            overlay.remove();
-            const gigModal = document.getElementById('gigModal');
-            if (gigModal) gigModal.classList.add('hidden');
-          };
-          
-          // Hide the cancel payment button in the gig modal
-          const cpb = document.getElementById('cancelGigPaymentBtn');
-          if (cpb) cpb.style.display = 'none';
-          
-          // Refresh activity center
-          if (window.activityCenterVenue) window.activityCenterVenue.loadNotifications();
-          // Refresh billing
-          if (typeof loadVenueBillingHistory === 'function') loadVenueBillingHistory();
-          
-        } catch(e) {
-          btn.disabled = false;
-          btn.textContent = 'Confirm Cancel Payment';
-          status.style.color = '#ef4444';
-          status.textContent = '✗ ' + e.message;
-        }
-      };
-    })
-    .catch(() => {
-      alert('Unable to load fee configuration.');
+    } else {
+      payHtml = `<strong>${_dollars(s.pay || 0)}</strong>`;
+    }
+    return `
+      <div class="cancel-slot-row" data-slot-id="${s.id}" data-slot-num="${slotN}" data-artist-name="${_esc(who)}"
+        style="padding:12px 14px;margin-bottom:10px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">
+        <label style="display:grid;grid-template-columns:auto 1fr max-content;column-gap:12px;align-items:center;cursor:pointer;">
+          <input type="checkbox" class="cancel-slot-check" style="width:18px;height:18px;cursor:pointer;accent-color:#ef4444;">
+          <div>
+            <div style="color:#a78bfa;font-weight:600;font-size:0.82rem;">Slot ${slotN} · ${_esc(who)}</div>
+          </div>
+          <div style="color:var(--text, #e4e7eb);font-size:0.85rem;text-align:right;">${payHtml}</div>
+        </label>
+        <textarea class="cancel-slot-reason" rows="2"
+          placeholder="Reason for not paying ${_esc(who)} (required when checked)"
+          disabled
+          style="margin-top:10px;width:100%;padding:8px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#fff;font-size:0.82rem;resize:vertical;box-sizing:border-box;font-family:inherit;opacity:0.5;"></textarea>
+      </div>
+    `;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cancelPaymentOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto;';
+  overlay.innerHTML = `
+    <div style="background:var(--card-bg,#1a1a2e);border:1px solid rgba(239,68,68,0.3);border-radius:12px;max-width:580px;width:100%;padding:24px 26px;box-shadow:0 20px 60px rgba(0,0,0,0.5);max-height:90vh;overflow-y:auto;">
+      <h3 style="margin:0 0 4px 0;color:#ef4444;font-size:1.1rem;">⚠️ Cancel Slot Payments</h3>
+      <p style="color:var(--text-muted,#999);font-size:0.82rem;margin:0 0 16px 0;line-height:1.5;">
+        Check each slot whose payment you want to cancel and provide a reason. Unchecked
+        slots will continue to be paid as scheduled.
+      </p>
+      <div id="cancelSlotList">${slotRowsHtml}</div>
+      <p style="color:rgba(239,68,68,0.75);font-size:0.74rem;margin:14px 0 6px 0;line-height:1.5;">
+        ⚠️ Cancelling a slot's payment still requires the venue to pay the
+        GigsFill platform fee (${feePct}%) for that slot.
+      </p>
+      <p style="color:var(--text-muted,#777);font-size:0.7rem;margin:0 0 16px 0;line-height:1.45;">
+        <em>Disclaimer: Payment disputes are between the venue and artist. GigsFill is
+        not involved in resolving payment disputes and is not responsible for the
+        outcome. The artist may contact you directly regarding this matter.</em>
+      </p>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button id="cancelPayOverlayClose" class="btn ghost" style="padding:8px 18px;font-size:0.85rem;">Never Mind</button>
+        <button id="cancelPayConfirmBtn" class="btn" style="background:#ef4444;color:#fff;padding:8px 18px;font-size:0.85rem;border:none;border-radius:6px;cursor:pointer;" disabled>Confirm — 0 slots</button>
+      </div>
+      <div id="cancelPayStatus" style="margin-top:12px;text-align:center;font-size:0.85rem;"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  function closeCancelPaymentAndGigModal() {
+    overlay.remove();
+    const gigModal = document.getElementById('gigModal');
+    if (gigModal) gigModal.classList.add('hidden');
+  }
+  overlay.querySelector('#cancelPayOverlayClose').onclick = closeCancelPaymentAndGigModal;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeCancelPaymentAndGigModal(); });
+
+  // Enable each row's reason textarea when its checkbox is on;
+  // update the Confirm button label to show the count of selected
+  // slots; disable Confirm when nothing is checked.
+  const confirmBtn = overlay.querySelector('#cancelPayConfirmBtn');
+  function _refreshConfirm() {
+    const n = overlay.querySelectorAll('.cancel-slot-check:checked').length;
+    confirmBtn.disabled = n === 0;
+    confirmBtn.textContent = n === 0 ? 'Confirm — 0 slots'
+      : `Confirm Cancel — ${n} slot${n === 1 ? '' : 's'}`;
+  }
+  overlay.querySelectorAll('.cancel-slot-row').forEach(row => {
+    const cb = row.querySelector('.cancel-slot-check');
+    const ta = row.querySelector('.cancel-slot-reason');
+    cb.addEventListener('change', () => {
+      ta.disabled = !cb.checked;
+      ta.style.opacity = cb.checked ? '1' : '0.5';
+      if (cb.checked) ta.focus();
+      _refreshConfirm();
     });
+  });
+
+  confirmBtn.onclick = async () => {
+    // Validate: every checked slot must have a non-empty reason.
+    const selected = [];
+    let validationFailed = false;
+    overlay.querySelectorAll('.cancel-slot-row').forEach(row => {
+      const cb = row.querySelector('.cancel-slot-check');
+      const ta = row.querySelector('.cancel-slot-reason');
+      if (!cb.checked) return;
+      const reason = ta.value.trim();
+      if (!reason) {
+        ta.style.borderColor = '#ef4444';
+        validationFailed = true;
+        return;
+      }
+      ta.style.borderColor = 'rgba(255,255,255,0.12)';
+      selected.push({
+        slot_id: parseInt(row.dataset.slotId, 10),
+        slot_num: row.dataset.slotNum,
+        artist_name: row.dataset.artistName,
+        reason
+      });
+    });
+    if (validationFailed) {
+      const status = overlay.querySelector('#cancelPayStatus');
+      status.style.color = '#ef4444';
+      status.textContent = 'Please provide a reason for every selected slot.';
+      return;
+    }
+    if (!selected.length) return;
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Processing…';
+    const status = overlay.querySelector('#cancelPayStatus');
+    status.style.color = 'var(--text-muted)';
+    status.textContent = `Cancelling ${selected.length} slot(s)…`;
+
+    // Fire serially so each Stripe charge gets its own clean
+    // success/failure outcome; parallel would still work
+    // (idempotency keys are per-slot) but serial keeps the status
+    // text usefully progressive.
+    let totalFee = 0;
+    const failures = [];
+    for (let i = 0; i < selected.length; i++) {
+      const s = selected[i];
+      status.textContent = `Cancelling slot ${s.slot_num} (${s.artist_name})… ${i+1}/${selected.length}`;
+      try {
+        const res = await fetch('/api/stripe/cancel-slot-payment', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot_id: s.slot_id, reason: s.reason })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const msg = Array.isArray(err.detail) ? err.detail.join(' ') : (err.detail || `HTTP ${res.status}`);
+          throw new Error(msg);
+        }
+        const result = await res.json();
+        totalFee += result.platform_fee_charged || 0;
+      } catch (e) {
+        failures.push(`Slot ${s.slot_num} (${s.artist_name}): ${e.message}`);
+      }
+    }
+
+    if (failures.length === selected.length) {
+      status.style.color = '#ef4444';
+      status.textContent = '✗ All cancellations failed. ' + failures[0];
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = `Retry — ${selected.length} slot${selected.length === 1 ? '' : 's'}`;
+      return;
+    }
+
+    const okCount = selected.length - failures.length;
+    if (failures.length) {
+      status.style.color = '#f59e0b';
+      status.innerHTML = `Cancelled ${okCount}/${selected.length} slots. ${failures.length} failed:<br><em style="font-size:0.75rem;">${failures.join('<br>')}</em>`;
+    } else {
+      status.style.color = '#22c55e';
+      const feeMsg = totalFee > 0 ? ` Platform fee charged: $${(totalFee/100).toFixed(2)}.` : '';
+      status.textContent = `✓ Cancelled ${okCount} slot${okCount === 1 ? '' : 's'}.${feeMsg}`;
+    }
+    confirmBtn.style.display = 'none';
+    overlay.querySelector('#cancelPayOverlayClose').textContent = 'Close';
+    overlay.querySelector('#cancelPayOverlayClose').onclick = () => {
+      overlay.remove();
+      const gigModal = document.getElementById('gigModal');
+      if (gigModal) gigModal.classList.add('hidden');
+    };
+
+    // Hide the cancel button on the gig modal + refresh activity / billing.
+    const cpb = document.getElementById('cancelGigPaymentBtn');
+    if (cpb) cpb.style.display = 'none';
+    if (window.activityCenterVenue) window.activityCenterVenue.loadNotifications();
+    if (typeof loadVenueBillingHistory === 'function') loadVenueBillingHistory();
+    try {
+      window.dispatchEvent(new CustomEvent('gigsfill:payments-stale', {
+        detail: { reason: 'slot-cancel', gig_id: gigId }
+      }));
+    } catch (_) {}
+  };
 };
 
 // ============================================
