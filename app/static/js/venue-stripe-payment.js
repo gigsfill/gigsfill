@@ -291,7 +291,12 @@ async function loadVenueBillingHistory() {
         statusColor: displayColor,
         rawStatus: rawStatus,
         txn_id: t.id,
-        cancel_reason: t.cancel_reason || ''
+        cancel_reason: t.cancel_reason || '',
+        // Per-slot breakdown — populated for ANY slot that's a door
+        // deal so the venue Payments row can render
+        // "Slot 2 (Fridays Past): $10 guarantee + 50% door · $15 receipts"
+        // sub-lines under Gig Fee. Flat-pay slots render nothing.
+        slot_details: Array.isArray(t.slot_details) ? t.slot_details : []
       };
     });
     window._venueBillSort = { col: 'gig_date_sort', dir: -1 };  // all = descending (most recent first)
@@ -371,10 +376,44 @@ function renderVenueBillingTable() {
         + '<a href="javascript:void(0)" onclick="showReinstatePaymentModal(' + t.txn_id + ')" '
         + 'style="color:#a78bfa;font-size:0.7rem;text-decoration:none;border-bottom:1px dashed rgba(167,139,250,0.5);cursor:pointer;white-space:nowrap;">Pay Artist?</a>';
     }
+    // Door-deal breakdown — for each slot on this gig that's a door
+    // deal, render one sub-line under the Gig Fee total so the venue
+    // sees exactly which slots contributed and what their settle
+    // state is. Multi-slot gigs may have a mix of flat + door slots;
+    // flat slots render nothing here (they're already in the Gig Fee
+    // total). Format per line:
+    //   "Slot 2 · Fridays Past: $10 guarantee + 50% door · $15.00 receipts"
+    //   or "· not yet settled" when the door slot hasn't been settled.
+    var dealLines = '';
+    if (Array.isArray(t.slot_details) && t.slot_details.length) {
+      var doorSlots = t.slot_details.filter(function(s){
+        return String(s.deal_type || '').toLowerCase() === 'door';
+      });
+      if (doorSlots.length) {
+        var rows = doorSlots.map(function(sd) {
+          var who = sd.artist_name ? ' · ' + _vsp_esc(sd.artist_name) : '';
+          var slotLbl = 'Slot ' + (parseInt(sd.slot_number, 10) || '?') + who;
+          var gua = (Number(sd.guarantee_cents) || 0) / 100;
+          var pct = Number(sd.door_pct) || 0;
+          var terms = '$' + gua.toFixed(2) + ' guarantee + ' + pct + '% door';
+          var recv;
+          if (sd.settled_at && sd.door_receipts_cents != null) {
+            var r = (Number(sd.door_receipts_cents) || 0) / 100;
+            recv = '$' + r.toFixed(2) + ' receipts';
+          } else {
+            recv = '<span style="color:#fbbf24;">not yet settled</span>';
+          }
+          return '<div style="font-size:0.68rem;color:var(--text-muted);line-height:1.35;">'
+               + '<span style="color:#a78bfa;font-weight:600;">' + _vsp_esc(slotLbl) + ':</span> '
+               + terms + ' · ' + recv + '</div>';
+        }).join('');
+        dealLines = '<div style="margin-top:3px;">' + rows + '</div>';
+      }
+    }
     // Gig Fee and Total Paid: for cancelled, strike through gig fee, show platform fee still owed
     var gigFeeCell = isCancelled
-      ? '<span style="color:#9ca3af;text-decoration:line-through;font-size:0.8rem;">$' + t.gig_fee.toFixed(2) + '</span>'
-      : '$' + t.gig_fee.toFixed(2);
+      ? '<span style="color:#9ca3af;text-decoration:line-through;font-size:0.8rem;">$' + t.gig_fee.toFixed(2) + '</span>' + dealLines
+      : '$' + t.gig_fee.toFixed(2) + dealLines;
     var totalPaidCell = isCancelled
       ? '<span style="font-weight:700;color:#f97316;">$' + t.total_paid.toFixed(2) + '</span><div style="font-size:0.7rem;color:var(--text-muted);">platform fee</div>'
       : '<span style="font-weight:700;">$' + t.total_paid.toFixed(2) + '</span>';

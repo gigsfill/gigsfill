@@ -7,7 +7,7 @@ Handles:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from backend.db import get_db
 from backend.routes.auth import get_current_user
 from datetime import datetime, timedelta
@@ -1436,8 +1436,52 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
         """),
         {"vid": venue_id}
     ).mappings().all()
-    
-    return [dict(t) for t in txns]
+
+    out = [dict(t) for t in txns]
+    # Pay-detail enrichment — each venue_charge row covers one gig.
+    # We attach a `slot_details` list (one entry per BOOKED slot on the
+    # gig) so the frontend can render a per-slot breakdown line under
+    # the row's Gig Fee total. Frontend only renders breakdown rows
+    # for slots with deal_type='door'; flat-pay slots fold into the
+    # gig-level totals already shown.
+    try:
+        _enrich_venue_txns_with_slot_details(db, out)
+    except Exception as _ee:
+        logger.warning(f"[venue_txns] slot-detail enrich failed: {_ee}")
+    return out
+
+
+def _enrich_venue_txns_with_slot_details(db, txns):
+    """Mutates each txn dict in `txns`, adding a `slot_details` list
+    of dicts {slot_number, artist_name, pay, deal_type, door_pct,
+    guarantee_cents, door_receipts_cents, settled_pay_cents,
+    settled_at} — one entry per booked/pending slot on the gig.
+    Single batched query for all gig_ids in the result.
+    """
+    if not txns:
+        return
+    gig_ids = list({int(t.get("gig_id") or 0) for t in txns if t.get("gig_id")})
+    if not gig_ids:
+        return
+    rows = db.execute(
+        text("""
+            SELECT gs.gig_id, gs.slot_number, gs.pay,
+                   gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                   gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
+                   a.name as artist_name
+            FROM gig_slots gs
+            LEFT JOIN artists a ON a.id = gs.artist_id
+            WHERE gs.gig_id IN :gids
+              AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+            ORDER BY gs.gig_id ASC, gs.slot_number ASC
+        """).bindparams(bindparam("gids", expanding=True)),
+        {"gids": gig_ids}
+    ).mappings().all()
+    by_gig = {}
+    for r in rows:
+        by_gig.setdefault(int(r["gig_id"]), []).append(dict(r))
+    for t in txns:
+        t["slot_details"] = by_gig.get(int(t.get("gig_id") or 0), [])
 
 
 def _correct_transaction_amount_if_needed(db, txn, venue_id, artist_id, gig_pay):
@@ -1543,7 +1587,60 @@ def get_artist_transactions(artist_id: int, user=Depends(get_current_user), db=D
         aid = t.get("artist_id")
         if vid is not None and aid is not None:
             _correct_transaction_amount_if_needed(db, t, vid, aid, t.get("gig_pay"))
+
+    # Pay-detail enrichment — surface the door-deal breakdown on each
+    # artist payment row. Artist sees ONE payout per gig/slot, so we
+    # fetch just THIS artist's slot's deal columns. Powers the
+    # "$10 guarantee + 50% door · $15 receipts" sub-line under Gig Fee.
+    try:
+        _enrich_artist_txns_with_deal_info(db, txns)
+    except Exception as _ee:
+        logger.warning(f"[artist_txns] deal-info enrich failed: {_ee}")
     return txns
+
+
+def _enrich_artist_txns_with_deal_info(db, txns):
+    """Mutates each txn in `txns`, adding a `slot_detail` dict with
+    deal_type / door_pct / guarantee_cents / door_receipts_cents /
+    settled_pay_cents / settled_at when the artist's slot has door
+    terms. Flat-pay rows get slot_detail=None so the frontend can
+    short-circuit. Single-query — fetches all (gig_id, artist_id)
+    slot rows in one shot.
+    """
+    if not txns:
+        return
+    pairs = [(int(t.get("gig_id") or 0), int(t.get("artist_id") or 0))
+             for t in txns
+             if t.get("gig_id") and t.get("artist_id")]
+    if not pairs:
+        return
+    # Pull slot rows for each (gig_id, artist_id) pair. There may be
+    # more than one slot per pair (an artist could book multiple slots
+    # on the same gig — though uncommon); we key by gig_id+artist_id
+    # and let the frontend pick the door-deal entry if any.
+    # SQLite + Postgres both support tuple IN, but expanding bindparam
+    # over tuples is finicky — easier to fetch all rows for the artist
+    # ids in scope and filter in Python.
+    gig_ids = list({p[0] for p in pairs})
+    rows = db.execute(
+        text("""SELECT gig_id, artist_id, deal_type, door_pct, guarantee_cents,
+                       door_receipts_cents, settled_pay_cents, settled_at
+                FROM gig_slots
+                WHERE gig_id IN :gids AND artist_id IS NOT NULL"""
+            ).bindparams(bindparam("gids", expanding=True)),
+        {"gids": gig_ids}
+    ).mappings().all()
+    by_pair = {}
+    for r in rows:
+        by_pair.setdefault((int(r["gig_id"]), int(r["artist_id"])), []).append(dict(r))
+    for t in txns:
+        gid = int(t.get("gig_id") or 0)
+        aid = int(t.get("artist_id") or 0)
+        candidates = by_pair.get((gid, aid), [])
+        # Prefer the door slot if any; else first row.
+        door = next((c for c in candidates
+                     if (c.get("deal_type") or "").lower() == "door"), None)
+        t["slot_detail"] = door or (candidates[0] if candidates else None)
 
 
 @router.get("/api/stripe/venue/{venue_id}/upcoming-charges")
