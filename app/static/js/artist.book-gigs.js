@@ -1046,9 +1046,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     const modal = overlay.querySelector(".modal");
 
     modal.classList.add("day-modal");
-    // Shrink-to-fit width so the modal hugs its content instead of
-    // sitting at a fixed wider size with dead space on the right.
-    // Inner container's max-width still caps individual cards.
+    // Shrink-to-fit width so the modal hugs its content. minWidth=0
+    // clears the legacy `min-width: min(860px, 98vw)` rule on
+    // .modal.day-modal in modals-legacy.css which would otherwise
+    // force the modal to ~860px even when content is much narrower.
+    modal.style.minWidth = '0';
     modal.style.width = 'max-content';
     modal.style.maxWidth = '92vw';
 

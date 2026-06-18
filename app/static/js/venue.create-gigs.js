@@ -3703,13 +3703,16 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           style="background:transparent;border:1px solid rgba(245,158,11,0.4);color:#f59e0b;border-radius:4px;padding:3px 10px;font-size:0.75rem;cursor:pointer;white-space:nowrap;">Rate Artist</button>`;
 
         // Inline "Add Door Receipts" button — shows next to the pay
-        // pill on door-deal slots whose start time has passed. Click
-        // opens the door settle modal scoped to THIS specific slot
-        // (carries slot data via data-slot JSON so the modal doesn't
-        // need to round-trip the API again).
+        // pill on door-deal slots whose start time has passed. Right-
+        // aligned (sits AFTER the flex:1 spacer) so it lines up with
+        // the action buttons that appear under the slot row. Slot data
+        // stored on a global lookup keyed by slot id so the onclick is
+        // simple and doesn't need to JSON-escape attribute values
+        // (which broke embedded quotes last commit).
         let doorReceiptsBtn = '';
         if (slot.deal_type === 'door' && _slotHasStarted) {
-          const _slotForBtn = {
+          window.__doorSlotData = window.__doorSlotData || {};
+          window.__doorSlotData[slot.id] = {
             slot_id: slot.id, slot_number: slot.slot_number,
             artist_name: slot.artist_name || '',
             guarantee_cents: slot.guarantee_cents || 0,
@@ -3717,10 +3720,8 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             door_receipts_cents: slot.door_receipts_cents || 0,
             settled_at: slot.settled_at || null,
           };
-          const _slotJson = JSON.stringify(_slotForBtn).replace(/'/g, '&apos;').replace(/"/g, '&quot;');
-          doorReceiptsBtn = `<button onclick="event.stopPropagation(); window._openDoorSettleModal && window._openDoorSettleModal(JSON.parse(this.getAttribute('data-slot').replace(/&apos;/g,\\\"'\\\").replace(/&quot;/g,'\\\"')))"
-            data-slot="${_slotJson}"
-            style="margin-left:4px;padding:2px 10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:4px;color:#fbbf24;font-size:0.72rem;cursor:pointer;font-weight:600;white-space:nowrap;"
+          doorReceiptsBtn = `<button onclick="event.stopPropagation(); if (window._openDoorSettleModal) window._openDoorSettleModal(window.__doorSlotData[${slot.id}])"
+            style="padding:3px 12px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:4px;color:#fbbf24;font-size:0.75rem;cursor:pointer;font-weight:600;white-space:nowrap;"
             title="Open the door settlement window for this slot. Enter the receipts collected at the door; we'll compute the artist's total (guarantee + door share) and queue the Stripe charge for tomorrow's 5 PM payout sweep.">Add Door Receipts</button>`;
         }
 
@@ -3730,8 +3731,8 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
               <span style="font-weight:700;min-width:56px;color:#a855f7;letter-spacing:0.3px;">Slot ${slot.slot_number}</span>
               <span style="color:#cbd5e1;">${formatTime12Hour(slot.start_time)} – ${formatTime12Hour(slot.end_time)}</span>
               ${slotPayHtml}
-              ${doorReceiptsBtn}
               <span style="flex:1;"></span>
+              ${doorReceiptsBtn}
               ${cancelBtn}
             </div>
             ${typeInfo ? `<div style="margin-top:5px;color:var(--text-muted);font-size:0.78rem;line-height:1.4;font-style:italic;">${typeInfo}</div>` : ''}
