@@ -1046,6 +1046,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     const modal = overlay.querySelector(".modal");
 
     modal.classList.add("day-modal");
+    // Override the legacy .modal.day-modal { width:max-content; max-width:none }
+    // rule which would let the modal grow to the widest card. Cap to 720px so
+    // the modal sits inside the viewport and cards wrap as needed.
+    modal.style.width = '720px';
+    modal.style.maxWidth = '92vw';
 
     const title = document.getElementById("modalTitle");
     const body = document.getElementById("modalBody");
@@ -1319,6 +1324,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           class="gig ${gigClass} gig-row"
           ${rowTooltip ? `title="${rowTooltip.replace(/"/g, '&quot;')}"` : ''}
           style="
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            white-space: normal;
             padding: 10px 12px;
             line-height: 1.35;
             background: ${gigBg};

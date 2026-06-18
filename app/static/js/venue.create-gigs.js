@@ -1560,11 +1560,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     settleDealsBtn.style.display = 'none';
     if (!gig || !gig.id || !gig.date) return;
     try {
-      // start_time may be HH:MM or HH:MM:SS; fall back to 00:00 so a
-      // missing start_time still shows the button on the gig date.
       const startStr = (gig.start_time || '00:00').slice(0, 5);
       const startDt = new Date(gig.date + 'T' + startStr + ':00');
-      if (startDt <= new Date()) settleDealsBtn.style.display = 'inline-flex';
+      if (startDt <= new Date()) {
+        // Move the button into the modal-actions row so it's visible
+        // regardless of which modal layout is active. The button's
+        // original parent (#slotBuilder) is hidden by _showBookedGigModal
+        // for booked / in-progress gigs — that's why the venue couldn't
+        // see "Add Door Receipts" on a gig that was already running.
+        const actionsRow = document.querySelector('#gigModal .modal-actions');
+        if (actionsRow && settleDealsBtn.parentElement !== actionsRow) {
+          actionsRow.insertBefore(settleDealsBtn, actionsRow.firstChild);
+        }
+        settleDealsBtn.style.display = 'inline-flex';
+      }
     } catch (_) {}
   };
 
