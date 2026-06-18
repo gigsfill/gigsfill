@@ -2942,32 +2942,23 @@
   <h2 style="font-size: 1.1rem; margin-bottom: 6px; color: var(--text);">Add Door Receipts</h2>
   <div id="doorSettleSubtitle" style="font-size:0.78rem;color:var(--text-gray);margin-bottom:18px;"></div>
 
-  <!-- Settlement breakdown — amount | label, one line each.
-       Amounts live in the LEFT column (mono font, $-prefixed) so the
-       dollar signs line up vertically; labels sit on the RIGHT with
-       a generous indent so they're easy to scan. Updated live by
-       _updateDoorSettleTotal() in venue.create-gigs.js. -->
-  <!-- Settlement breakdown — all four amounts share the same visual
-       shape: a "$" symbol at the LEFT edge of column 1, then the
-       digits with a small gap. Same font family as the rest of the
-       modal (no mono). The receipts row swaps the digits span for an
-       inline editable input; the $ symbol stays in the same x column
-       so all four $ glyphs align vertically. Updated live by
-       _updateDoorSettleTotal() in venue.create-gigs.js — it writes
-       the digit portion into the *Value spans and to the legacy
-       hidden mirrors so existing code keeps working. -->
+  <!-- Settlement breakdown — single span per amount, carrying the
+       "$X.XX" text directly so _updateDoorSettleTotal()'s textContent
+       writes update the visible cell. The $ glyph sits at the left
+       edge of each cell (text-align:left, no padding) so the four
+       $ signs line up vertically with the input row's leading "$"
+       sibling. min-width 115px keeps the label column starting at
+       a consistent x across every row regardless of digit count.
+       Same body font as the rest of the modal — no mono. -->
   <div style="display:grid;grid-template-columns:max-content 1fr;column-gap:32px;row-gap:12px;align-items:center;margin-bottom:18px;">
 
-    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:0.95rem;font-weight:700;color:#10b981;min-width:115px;">
-      <span>$</span>
-      <span id="doorSettleGuaranteeValue">0.00</span>
-    </div>
+    <div id="doorSettleGuarantee" style="display:inline-block;min-width:115px;font-size:0.95rem;font-weight:700;color:#10b981;text-align:left;letter-spacing:0.02em;">$0.00</div>
     <div style="font-size:0.82rem;color:var(--text-gray);font-weight:500;"
       title="The floor amount you committed to at booking. The artist gets this even if door receipts are $0.">
       Guaranteed Pay
     </div>
 
-    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:0.95rem;font-weight:700;color:var(--text);min-width:115px;">
+    <div style="display:inline-flex;align-items:baseline;gap:6px;min-width:115px;font-size:0.95rem;font-weight:700;color:var(--text);">
       <span>$</span>
       <input type="text" id="doorSettleReceiptsInput" value="0.00" inputmode="decimal" maxlength="10"
         onclick="this.select()" onfocus="this.select()"
@@ -2979,19 +2970,13 @@
       Total Door Receipts
     </label>
 
-    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:0.95rem;font-weight:700;color:#10b981;min-width:115px;">
-      <span>$</span>
-      <span id="doorSettleDoorShareValue">0.00</span>
-    </div>
+    <div id="doorSettleDoorShare" style="display:inline-block;min-width:115px;font-size:0.95rem;font-weight:700;color:#10b981;text-align:left;letter-spacing:0.02em;">$0.00</div>
     <div style="font-size:0.82rem;color:var(--text-gray);font-weight:500;"
       title="The artist's share of the door receipts entered above — locked at booking time per the deal terms.">
       Artist Receives <span id="doorSettleDoorPct" style="color:var(--text);">0%</span>
     </div>
 
-    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:1.15rem;font-weight:800;color:#06b6d4;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);min-width:115px;">
-      <span>$</span>
-      <span id="doorSettleTotalValue">0.00</span>
-    </div>
+    <div id="doorSettleTotal" style="display:inline-block;min-width:115px;font-size:1.15rem;font-weight:800;color:#06b6d4;text-align:left;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);letter-spacing:0.02em;">$0.00</div>
     <div style="font-size:0.85rem;color:#67e8f9;font-weight:700;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);"
       title="The site will charge this amount to your saved card at tomorrow's 5 PM payout sweep, then transfer (net of platform fees) to the artist's Stripe Connect account.">
       Artist Total Payout
@@ -3001,12 +2986,6 @@
       = $0.00 guarantee + $0.00 door share
     </div>
   </div>
-  <!-- Legacy mirror ids — kept hidden so existing
-       _updateDoorSettleTotal() writes don't error before the JS is
-       updated to target the new *Value spans below. -->
-  <span id="doorSettleGuarantee" hidden></span>
-  <span id="doorSettleDoorShare" hidden></span>
-  <span id="doorSettleTotal" hidden></span>
 
   <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:6px;padding:8px 12px;margin-bottom:18px;font-size:0.72rem;color:#fbbf24;line-height:1.5;"
     title="You can reopen this dialog and revise the receipts any time before the next-day 5 PM payout sweep. Once the scheduler has charged the venue card, the row freezes.">
@@ -3314,7 +3293,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=180"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=181"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
@@ -3332,7 +3311,7 @@
 <script src="/app/static/js/vanity-url-editor.js?v=3"></script>
 <script src="/app/static/js/venue-create-gigs-init.js?v=6"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
-<script src="/app/static/js/gig-hover-card.js?v=16"></script>
+<script src="/app/static/js/gig-hover-card.js?v=17"></script>
 <script src="/app/static/js/sw-register.js"></script>
 </body>
 </html>

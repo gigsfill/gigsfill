@@ -146,36 +146,24 @@
       const reallyBooked = takenSlots.filter(s => s.status === 'booked');
       const pending      = takenSlots.filter(s => PENDING_STATUSES.has(s.status));
       openSlots = totalSlots - takenSlots.length;
+      // Multi-slot: header shows the STATE only — never the artist
+      // names. The per-slot breakdown below already lists each name
+      // next to its slot time, so repeating them in the header is
+      // redundant and crowds the card.
       if (takenSlots.length === 0) {
         header = `Open — ${totalSlots} slots`;
         isOpenHere = true;
       } else if (reallyBooked.length === takenSlots.length) {
-        // All taken slots are fully booked.
-        header = 'Booked — ';
-        artistChips = takenSlots.map(s => ({
-          id: s.artist_id || null, name: s.artist_name || '',
-        }));
+        header = 'Booked';
       } else if (pending.length === takenSlots.length) {
-        // Every taken slot is mid-contract.
-        header = 'Pending Venue Countersign — ';
-        artistChips = takenSlots.map(s => ({
-          id: s.artist_id || null, name: s.artist_name || '',
-        }));
+        header = 'Pending Venue Countersign';
       } else {
-        // Mixed — split header: "Booked — X · Pending — Y" so both
-        // states are unambiguous in a single line.
-        const _bookedNames = reallyBooked.map(s => s.artist_name || '?').filter(Boolean).join(', ');
-        const _pendingNames = pending.map(s => s.artist_name || '?').filter(Boolean).join(', ');
         const parts = [];
-        if (_bookedNames) parts.push(`Booked — ${_bookedNames}`);
-        if (_pendingNames) parts.push(`Pending Countersign — ${_pendingNames}`);
+        if (reallyBooked.length) parts.push(`Booked — ${reallyBooked.length}`);
+        if (pending.length)      parts.push(`Pending — ${pending.length}`);
         header = parts.join(' · ');
-        // Chips stay linkable for the booked + pending mix; pending
-        // chips are visually de-emphasized via the statusLabel below.
-        artistChips = takenSlots.map(s => ({
-          id: s.artist_id || null, name: s.artist_name || '',
-        }));
       }
+      artistChips = []; // names are in the per-slot breakdown below
     } else {
       isOpenHere = (g.status === 'open' || !g.artist_id) && !g.artist_name;
       if (isOpenHere) {

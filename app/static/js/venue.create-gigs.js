@@ -1425,23 +1425,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     const doorShare = Math.floor((receipts * pct) / 100);
     // Mirror backend _compute_settled_pay: max(g, g + door_share)
     const total = Math.max(gua, gua + doorShare);
-    // Whole-amount string for the breakdown line ("= $10.00 guarantee
-    // + $5.00 door share"). The split-$ rows write the digits only,
-    // so $ stays in its own span at the column's left edge.
-    const fmt  = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const fmtN = (c) => (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-
-    // New split-$ structure: write digits-only into *Value spans.
-    setText('doorSettleTotalValue', fmtN(total));
-    setText('doorSettleDoorShareValue', fmtN(doorShare));
-
-    // Legacy hidden mirrors — keep updated until callers stop reading them.
-    setText('doorSettleTotal', fmt(total));
-    setText('doorSettleDoorShare', fmt(doorShare));
-
-    setText('doorSettleBreakdown',
-      `= ${fmt(gua)} guarantee + ${fmt(doorShare)} door share`);
+    const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const totalEl = document.getElementById('doorSettleTotal');
+    const breakdownEl = document.getElementById('doorSettleBreakdown');
+    const shareEl = document.getElementById('doorSettleDoorShare');
+    if (totalEl) totalEl.textContent = fmt(total);
+    if (shareEl) shareEl.textContent = fmt(doorShare);
+    if (breakdownEl) breakdownEl.textContent = `= ${fmt(gua)} guarantee + ${fmt(doorShare)} door share`;
   }
 
   window._openDoorSettleModal = _openDoorSettleModal;
@@ -1453,14 +1443,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (sub) {
       sub.textContent = `Slot ${slot.slot_number}${slot.artist_name ? ' — ' + slot.artist_name : ''}`;
     }
-    // New split-$ row writes digits into doorSettleGuaranteeValue;
-    // legacy hidden mirror gets the full "$X.XX" for any old reader.
-    const _guaDigits = ((slot.guarantee_cents || 0) / 100)
-      .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const _guaValEl  = document.getElementById('doorSettleGuaranteeValue');
-    const _guaLegacy = document.getElementById('doorSettleGuarantee');
-    if (_guaValEl)  _guaValEl.textContent  = _guaDigits;
-    if (_guaLegacy) _guaLegacy.textContent = '$' + _guaDigits;
+    document.getElementById('doorSettleGuarantee').textContent =
+      '$' + ((slot.guarantee_cents || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     document.getElementById('doorSettleDoorPct').textContent = (slot.door_pct || 0) + '%';
     const inp = document.getElementById('doorSettleReceiptsInput');
     // Pre-populate prior receipts when re-opening a settled slot (the
