@@ -1086,43 +1086,32 @@ document.addEventListener("DOMContentLoaded", async () => {
       let gigBorder = '';
       let gigTextColor = '#ffffff';
 
-      if (gigClass === 'open') {
-        gigBg = 'linear-gradient(135deg,#10b981,#059669)';
-        gigBorder = '#059669';
-        gigTextColor = '#000000';
-      } else if (gigClass === 'booked-mine') {
-        gigBg = 'linear-gradient(135deg,#00d9ff,#00a8cc)';
-        gigBorder = '#00a8cc';
-        gigTextColor = '#000000';
-      } else if (gigClass === 'booked-other') {
-        gigBg = 'linear-gradient(135deg,#ef4444,#b91c1c)';
-        gigBorder = '#b91c1c';
-        gigTextColor = '#ffffff';
-      } else if (gigClass === 'pending-contract-mine') {
-        gigBg = 'linear-gradient(135deg,#3b82f6,#2563eb)';
-        gigBorder = '#2563eb';
-        gigTextColor = '#000000';
-      } else if (gigClass === 'pending-contract') {
-        gigBg = 'linear-gradient(135deg,#ef4444,#b91c1c)';
-        gigBorder = '#b91c1c';
-        gigTextColor = '#ffffff';
-      } else if (gigClass === 'pending-venue-approval') {
-        gigBg = 'linear-gradient(135deg,#00d9ff,#00a8cc)';
-        gigBorder = '#00a8cc';
-        gigTextColor = '#000000';
-      } else if (gigClass === 'blocked') {
-        gigBg = 'linear-gradient(135deg,#4b5563,#374151)';
-        gigBorder = '#374151';
-        gigTextColor = '#ffffff';
-      } else if (gigClass === 'started') {
-        gigBg = 'linear-gradient(135deg,#1f2937,#111827)';
-        gigBorder = '#111827';
-        gigTextColor = '#ffffff';
-      } else if (gigClass === 'blast-open' || gigClass === 'waitlist-pending') {
-        gigBg = 'linear-gradient(135deg,#f59e0b,#d97706)';
-        gigBorder = '#d97706';
-        gigTextColor = '#000000';
-      }
+      // Subtle accent-tinted theme — matches the Gig Details modal
+      // aesthetic. Each status colors only the left border + a faint
+      // background wash, with the same dark card surface as the rest
+      // of the site so text stays light-on-dark and readable.
+      const _accent = (
+        gigClass === 'open'                   ? '#10b981' :
+        gigClass === 'booked-mine'            ? '#06b6d4' :
+        gigClass === 'pending-contract-mine'  ? '#3b82f6' :
+        gigClass === 'pending-venue-approval' ? '#06b6d4' :
+        gigClass === 'booked-other'           ? '#ef4444' :
+        gigClass === 'pending-contract'       ? '#ef4444' :
+        gigClass === 'blocked'                ? '#6b7280' :
+        gigClass === 'started'                ? '#374151' :
+        (gigClass === 'blast-open' || gigClass === 'waitlist-pending') ? '#f59e0b' :
+        '#10b981'
+      );
+      // background tint + border alpha derived from the accent for a
+      // consistent feel across statuses. The card surface itself stays
+      // dark so text reads cleanly.
+      const _accentRGB = (() => {
+        const m = _accent.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+        return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : '16,185,129';
+      })();
+      gigBg = `linear-gradient(180deg, rgba(${_accentRGB},0.08), rgba(${_accentRGB},0.03))`;
+      gigBorder = `rgba(${_accentRGB},0.35)`;
+      gigTextColor = 'var(--text, #e4e7eb)';
 
       
       // Format lineup with spaces
@@ -1293,29 +1282,26 @@ document.addEventListener("DOMContentLoaded", async () => {
         // to the LONGEST time in the data (max-content), then name,
         // then pay, then status. No more per-row independent grids.
         _inner = `
-          <div style="display:grid;grid-template-columns:max-content max-content 1fr max-content max-content;column-gap:12px;row-gap:6px;align-items:center;margin-top:8px;padding:8px 10px;background:rgba(0,0,0,0.18);border-radius:6px;font-size:0.74rem;">
+          <div style="display:grid;grid-template-columns:max-content max-content 1fr max-content max-content;column-gap:14px;row-gap:6px;align-items:center;margin-top:10px;padding:10px 12px;background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.05);border-radius:6px;font-size:0.78rem;">
             ${_sortedSlots.map((s, i) => {
               const _myMatch = parseInt(s.artist_id) === _aid;
               const _slotIsOpen = s.status === 'open';
               const _who = s.artist_name
                 ? (s.artist_id
-                    ? `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;">${esc(s.artist_name)}</a>`
-                    : `<span style="font-weight:600;">${esc(s.artist_name)}</span>`)
-                : `<span style="opacity:0.75;font-weight:600;">Open</span>`;
+                    ? `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:#67e8f9;text-decoration:none;font-weight:600;">${esc(s.artist_name)}</a>`
+                    : `<span style="font-weight:600;color:var(--text, #e4e7eb);">${esc(s.artist_name)}</span>`)
+                : `<span style="color:var(--text-muted, #94a3b8);font-weight:600;">Open</span>`;
               const _slotTime = `${formatTime12Hour(s.start_time || '')}${s.end_time ? ' – ' + formatTime12Hour(s.end_time) : ''}`;
-              // Pay visibility — only the artist's OWN booked slot and
-              // OPEN slots (so they know what's offered) show pay. Other
-              // artists' booked-slot pay is none of this viewer's business.
               const _payVisible = _slotIsOpen || _myMatch;
               const _slotPay = _payVisible ? _fmtSlotPay(s) : '';
-              const _myStyle = _myMatch ? 'background:rgba(255,255,255,0.07);border-radius:4px;' : '';
+              const _myStyle = _myMatch ? 'background:rgba(6,182,212,0.10);border-radius:4px;' : '';
               return `
                 <div style="display:contents;">
-                  <div style="font-weight:700;color:rgba(255,255,255,0.85);padding:3px 4px;${_myStyle}">Slot ${s.slot_number || (i + 1)}</div>
-                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;color:rgba(255,255,255,0.82);white-space:nowrap;padding:3px 0;${_myStyle}">${_slotTime}</div>
-                  <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 4px;${_myStyle}">${_who}</div>
-                  <div style="font-weight:700;white-space:nowrap;text-align:right;padding:3px 4px;${_myStyle}">${_slotPay}</div>
-                  <div style="padding:3px 4px;${_myStyle}">${_slotBadge(s)}</div>
+                  <div style="font-weight:700;color:#a855f7;letter-spacing:0.3px;padding:4px 6px;${_myStyle}">Slot ${s.slot_number || (i + 1)}</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.74rem;color:#cbd5e1;white-space:nowrap;padding:4px 0;${_myStyle}">${_slotTime}</div>
+                  <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 6px;${_myStyle}">${_who}</div>
+                  <div style="font-weight:700;white-space:nowrap;text-align:right;padding:4px 6px;color:#22c55e;${_myStyle}">${_slotPay}</div>
+                  <div style="padding:4px 6px;${_myStyle}">${_slotBadge(s)}</div>
                 </div>`;
             }).join('')}
           </div>`;
@@ -1347,13 +1333,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             cursor: pointer;
           "
         >
-          <div style="display:flex;align-items:center;gap:10px;font-weight:700;font-size:0.88rem;flex-wrap:wrap;">
-            <span style="font-size:1rem;">${_typeIcon}</span>
-            <span>${esc(g.venue_name)}</span>
-            ${_venueLocation ? `<span style="opacity:0.78;font-weight:500;font-size:0.78rem;">${_venueLocation}</span>` : ''}
-            ${_isMultiSlot ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.74rem;opacity:0.78;margin-left:auto;">${_gigTimeLabel}</span>` : ''}
+          <div style="display:flex;align-items:center;gap:10px;font-weight:600;font-size:0.95rem;flex-wrap:wrap;color:var(--text, #e4e7eb);">
+            <span style="font-size:1.05rem;">${_typeIcon}</span>
+            <span style="color:var(--text, #e4e7eb);">${esc(g.venue_name)}</span>
+            ${_venueLocation ? `<span style="color:var(--text-muted, #94a3b8);font-weight:500;font-size:0.82rem;">${_venueLocation}</span>` : ''}
+            ${_isMultiSlot ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.78rem;color:var(--text-muted, #94a3b8);margin-left:auto;">${_gigTimeLabel}</span>` : ''}
           </div>
-          <div style="font-size:0.72rem;opacity:0.78;margin-top:3px;font-weight:500;">${_typeLine}</div>
+          <div style="font-size:0.76rem;color:var(--text-muted, #94a3b8);margin-top:4px;font-weight:500;">${_typeLine}</div>
           ${_inner}
         </div>
       `;

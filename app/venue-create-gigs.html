@@ -2939,45 +2939,46 @@
      ════════════════════════════════════════════════════════════════════ -->
 <div class="modal-overlay hidden" id="doorSettleModal" style="z-index: 10002;">
 <div class="modal" style="max-width: 520px;">
-  <h2 style="font-size: 1.1rem; margin-bottom: 6px; color: var(--text);">Settle Door Deal</h2>
+  <h2 style="font-size: 1.1rem; margin-bottom: 6px; color: var(--text);">Add Door Receipts</h2>
   <div id="doorSettleSubtitle" style="font-size:0.78rem;color:var(--text-gray);margin-bottom:18px;"></div>
 
-  <!-- Settlement breakdown — label | value, one line each. CSS grid
-       keeps the dollar values vertically aligned across the four
-       rows. The receipts cell contains an inline $-prefixed input;
-       all other cells render computed values. Updated live by
+  <!-- Settlement breakdown — amount | label, one line each.
+       Amounts live in the LEFT column (mono font, $-prefixed) so the
+       dollar signs line up vertically; labels sit on the RIGHT with
+       a generous indent so they're easy to scan. Updated live by
        _updateDoorSettleTotal() in venue.create-gigs.js. -->
-  <div style="display:grid;grid-template-columns:auto max-content;column-gap:18px;row-gap:10px;align-items:center;margin-bottom:18px;">
+  <div style="display:grid;grid-template-columns:max-content 1fr;column-gap:20px;row-gap:10px;align-items:center;margin-bottom:18px;">
+    <div id="doorSettleGuarantee" style="font-size:0.95rem;font-weight:700;color:#10b981;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$0.00</div>
     <div style="font-size:0.82rem;color:var(--text-gray);font-weight:500;"
       title="The floor amount you committed to at booking. The artist gets this even if door receipts are $0.">
       Guaranteed Pay
     </div>
-    <div id="doorSettleGuarantee" style="font-size:0.95rem;font-weight:700;color:#10b981;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$0.00</div>
 
-    <label for="doorSettleReceiptsInput" style="font-size:0.82rem;color:var(--text);font-weight:500;cursor:text;"
-      title="Gross cash collected at the door tonight (or POS card receipts run at the door), in dollars. Type digits — input formats ATM-style (rightmost two digits are cents).">
-      Total Door Receipts
-    </label>
-    <div style="display:flex;align-items:center;gap:4px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:4px 10px;justify-self:end;min-width:130px;">
-      <span style="font-size:0.95rem;color:var(--text-gray);font-weight:600;">$</span>
+    <div style="display:flex;align-items:center;gap:4px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:4px 10px;min-width:130px;">
+      <span style="font-size:0.95rem;color:var(--text-gray);font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$</span>
       <input type="text" id="doorSettleReceiptsInput" value="0.00" inputmode="decimal" maxlength="12"
+        onclick="this.select()" onfocus="this.select()"
         title="Click and start typing. Rightmost two digits are cents. e.g. type '1','5','0','0','0' → $150.00"
         style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:0.95rem;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:right;width:100%;">
     </div>
+    <label for="doorSettleReceiptsInput" style="font-size:0.82rem;color:var(--text);font-weight:500;cursor:text;"
+      title="Gross cash collected at the door tonight (or POS card receipts run at the door), in dollars. Click the field to select-all and replace by typing.">
+      Total Door Receipts
+    </label>
 
+    <div id="doorSettleDoorShare" style="font-size:0.95rem;font-weight:700;color:#10b981;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$0.00</div>
     <div style="font-size:0.82rem;color:var(--text-gray);font-weight:500;"
       title="The artist's share of the door receipts entered above — locked at booking time per the deal terms.">
       Artist Receives <span id="doorSettleDoorPct" style="color:var(--text);">0%</span>
     </div>
-    <div id="doorSettleDoorShare" style="font-size:0.95rem;font-weight:700;color:#10b981;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$0.00</div>
 
+    <div id="doorSettleTotal" style="font-size:1.15rem;font-weight:800;color:#06b6d4;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);">$0.00</div>
     <div style="font-size:0.85rem;color:#67e8f9;font-weight:700;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);"
       title="The site will charge this amount to your saved card at tomorrow's 5 PM payout sweep, then transfer (net of platform fees) to the artist's Stripe Connect account.">
       Artist Total Payout
     </div>
-    <div id="doorSettleTotal" style="font-size:1.15rem;font-weight:800;color:#06b6d4;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);">$0.00</div>
 
-    <div id="doorSettleBreakdown" style="grid-column:1 / -1;font-size:0.72rem;color:var(--text-gray);margin-top:-4px;text-align:right;font-style:italic;">
+    <div id="doorSettleBreakdown" style="grid-column:1 / -1;font-size:0.72rem;color:var(--text-gray);margin-top:-4px;text-align:left;font-style:italic;">
       = $0.00 guarantee + $0.00 door share
     </div>
   </div>
@@ -3288,7 +3289,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=177"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=178"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>

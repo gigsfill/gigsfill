@@ -248,11 +248,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Column headers + grid layout
     let content = `
       <div class="day-modal-content" style="
-        display: grid;
-        grid-auto-rows: auto;
+        display: flex;
+        flex-direction: column;
         row-gap: 10px;
-        width: 100%;
-        min-width: 820px;
+        width: max-content;
+        max-width: 620px;
+        font-size: 0.78rem;
       ">
     `;
 
@@ -267,68 +268,68 @@ document.addEventListener("DOMContentLoaded", async () => {
     dayGigs.forEach(g => {
       const gigClass = getGigClass(g);
 
-      let gigBg, gigBorder, gigTextColor;
-      if (gigClass === 'open') {
-        gigBg = 'linear-gradient(135deg,#10b981,#059669)';
-        gigBorder = '#059669';
-        gigTextColor = '#000000';
-      } else {
-        // booked (red)
-        gigBg = 'linear-gradient(135deg,#ef4444,#b91c1c)';
-        gigBorder = '#b91c1c';
-        gigTextColor = '#ffffff';
-      }
+      // Subtle accent theme — green for open, red for booked.
+      const _accent = gigClass === 'open' ? '#10b981' : '#ef4444';
+      const _accentRGB = gigClass === 'open' ? '16,185,129' : '239,68,68';
+      const gigBg = `linear-gradient(180deg, rgba(${_accentRGB},0.08), rgba(${_accentRGB},0.03))`;
+      const gigBorder = `rgba(${_accentRGB},0.35)`;
 
       const location = `${g.venue_city || g.city || ''}${(g.venue_city || g.city) && (g.venue_state || g.state) ? ', ' : ''}${g.venue_state || g.state || ''}`;
 
-      let artistTypeDisplay = esc(g.artist_type || 'Any');
-      if (g.artist_type === 'Live Band' && g.band_formats)
-        artistTypeDisplay += ` \u2022 ${g.band_formats.split(',').map(f => esc(f.trim())).join(', ')}`;
+      let _typeLine = esc(g.artist_type || 'Any');
+      if (g.artist_type === 'Live Band' && g.band_formats) {
+        _typeLine += ' \u00b7 ' + esc(g.band_formats.split(',').map(f => f.trim()).filter(Boolean).join(', '));
+      }
+      if (g.artist_type === 'Live Band' && g.styles) {
+        _typeLine += ' \u00b7 ' + esc(g.styles.split(',').map(s => s.trim()).filter(Boolean).join(', '));
+      }
 
-      // Artist cell — from slots if available, else gig directly
       let artistDisplay = '';
       if (gigClass === 'open') {
-        artistDisplay = `<span style="opacity:0.75;">OPEN</span>`;
+        artistDisplay = `<span style="color:var(--text-muted, #94a3b8);font-weight:600;">Open</span>`;
       } else if (g._slots) {
         const booked = g._slots.filter(s => s.status === 'booked' && s.artist_name);
         artistDisplay = booked.length === 0
-          ? '<span style="opacity:0.75;">Booked</span>'
-          : booked.map(s => `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">${esc(s.artist_name)}</a>`).join('<br>');
+          ? '<span style="color:var(--text-muted, #94a3b8);">Booked</span>'
+          : booked.map(s => `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:#67e8f9;text-decoration:none;font-weight:600;">${esc(s.artist_name)}</a>`).join(', ');
       } else if (g.artist_name) {
-        artistDisplay = `<a href="/app/artist-profile.html?artist_id=${g.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;">${esc(g.artist_name)}</a>`;
+        artistDisplay = `<a href="/app/artist-profile.html?artist_id=${g.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:#67e8f9;text-decoration:none;font-weight:600;">${esc(g.artist_name)}</a>`;
       } else {
-        artistDisplay = `<span style="opacity:0.75;">Booked</span>`;
+        artistDisplay = `<span style="color:var(--text-muted, #94a3b8);">Booked</span>`;
       }
 
-      const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'};
-      const icon = icons[g.artist_type] || '🎵';
+      const icons = {'Live Band':'\ud83c\udfb8','DJ':'\ud83c\udfa7','Comedian':'\ud83c\udfa4','Trivia Host':'\ud83e\udde0'};
+      const icon = icons[g.artist_type] || '\ud83c\udfb5';
+      const _timeLabel = `${formatTime12Hour(g.start_time)}${g.end_time ? ' \u2013 ' + formatTime12Hour(g.end_time) : ''}`;
 
       content += `
         <div
           onclick="openGigFromDayModal(${g.id})"
           class="gig ${gigClass} gig-row"
           style="
-            display: grid;
-            grid-template-columns: 130px minmax(130px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(150px,1.5fr);
-            column-gap: 12px;
-            align-items: center;
-            padding: 6px 10px;
-            margin: 0;
-            line-height: 1.3;
-            white-space: nowrap;
-            font-weight: 700;
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            white-space: normal;
+            padding: 10px 12px;
+            line-height: 1.35;
             background: ${gigBg};
             border: 1px solid ${gigBorder};
-            border-radius: 6px;
-            color: ${gigTextColor};
+            border-radius: 8px;
+            color: var(--text, #e4e7eb);
             cursor: pointer;
           "
         >
-          <div>${icon} ${formatTime12Hour(g.start_time)}${g.end_time ? ' \u2013 ' + formatTime12Hour(g.end_time) : ''}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.venue_name || '')}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(location)}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${artistDisplay}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(artistTypeDisplay)}</div>
+          <div style="display:flex;align-items:center;gap:10px;font-weight:600;font-size:0.95rem;flex-wrap:wrap;color:var(--text, #e4e7eb);">
+            <span style="font-size:1.05rem;">${icon}</span>
+            <span>${esc(g.venue_name || '')}</span>
+            ${location ? `<span style="color:var(--text-muted, #94a3b8);font-weight:500;font-size:0.82rem;">${esc(location)}</span>` : ''}
+            <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.78rem;color:var(--text-muted, #94a3b8);margin-left:auto;">${_timeLabel}</span>
+          </div>
+          <div style="font-size:0.76rem;color:var(--text-muted, #94a3b8);margin-top:4px;font-weight:500;">${_typeLine}</div>
+          <div style="display:flex;align-items:center;gap:14px;margin-top:6px;font-size:0.82rem;">
+            <span>${artistDisplay}</span>
+          </div>
         </div>
       `;
     });
