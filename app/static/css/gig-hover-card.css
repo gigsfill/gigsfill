@@ -19,7 +19,7 @@
   /* Wider so "🎸 Live Band" plus all four lineup chips (Solo / Duo /
      Trio / Full Band) can wrap onto a single row when present.
      Was 320px; now 460px which fits the worst-case row by ~10px. */
-  max-width: 460px;
+  max-width: 560px;
 }
 
 /* Header line: "Booked — Fridays Past" or "Open". */
