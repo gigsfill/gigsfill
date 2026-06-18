@@ -41,9 +41,10 @@
   // logic can know the exact size before measurement. The CSS max-width
   // is only a safety net — this value wins. Sized so the type row
   // (🎸 Live Band + Solo + Duo + Trio + Full Band) fits on one line
-  // and styles wrap onto the next row. Was 520px (too wide — styles
-  // bunched onto the type row); narrower keeps the row clean.
-  const CARD_WIDTH = 400;
+  // with minimal trailing slack: chips total ~340px + 24px card
+  // padding ≈ 364px, so the cap sits just above. Styles row wraps
+  // naturally onto the next row(s) at this width.
+  const CARD_WIDTH = 370;
   const GAP = 10;  // px between bubble and card
 
   let currentCard = null;
