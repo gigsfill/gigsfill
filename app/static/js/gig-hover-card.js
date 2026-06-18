@@ -256,8 +256,34 @@
       }
       return out;
     };
-    const lineupChips = splitChips(g.band_formats || g.lineup || g.artist_band_formats);
-    const styleChips  = splitChips(g.styles || g.artist_styles);
+    // For BOOKED slots/gigs, we want to show only the chips that
+    // represent what the booked artist ACTUALLY brings (intersection of
+    // gig requirements + artist profile). For OPEN gigs we show the full
+    // requirement list so visitors know what's acceptable.
+    //
+    // Data sources:
+    //   - Gig requirements: g.band_formats / g.styles (always present)
+    //   - Booked artist's profile: g.artist_band_formats / g.artist_styles
+    //     (single-slot gigs) or pulled from a slot when present
+    //     (multi-slot — venue calendar's per-slot bubbles merge slot
+    //     data into g, so g.artist_band_formats reflects THAT slot's
+    //     booked artist).
+    //
+    // Falls back to "show all requirements" when artist's profile data
+    // isn't on hand (older API responses, public unauth views, etc).
+    const reqLineup = splitChips(g.band_formats || g.lineup);
+    const reqStyles = splitChips(g.styles);
+    const artistLineup = splitChips(g.artist_band_formats);
+    const artistStyles = splitChips(g.artist_styles);
+    const intersect = (req, artistOwn) => {
+      if (!artistOwn.length) return req;     // no artist data → show full req list
+      if (!req.length) return artistOwn;     // no req filter → show artist's full list
+      const lc = new Set(artistOwn.map(x => x.toLowerCase()));
+      return req.filter(x => lc.has(x.toLowerCase()));
+    };
+    const isBooked = !!(g.artist_id || (g.slots && g.slots[0] && g.slots[0].artist_id));
+    const lineupChips = isBooked ? intersect(reqLineup, artistLineup) : reqLineup;
+    const styleChips  = isBooked ? intersect(reqStyles, artistStyles) : reqStyles;
 
     return {
       __card: true,
@@ -376,8 +402,13 @@
       badges.push(`<span class="${cls}">${esc(p.statusLabel)}</span>`);
     }
     // Artist type stays as a single neutral badge (Live Band / DJ /
-    // Comedian / etc.) — it's a single value, not a comma-list.
-    if (p.artistType) badges.push(`<span class="gf-ghc-badge gf-ghc-dim">${esc(p.artistType)}</span>`);
+    // Comedian / etc.) — it's a single value, not a comma-list. Add
+    // the matching emoji icon from the site-wide convention.
+    if (p.artistType) {
+      const _typeIcons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'};
+      const _icon = _typeIcons[p.artistType] || '🎵';
+      badges.push(`<span class="gf-ghc-badge gf-ghc-dim">${_icon} ${esc(p.artistType)}</span>`);
+    }
     // Lineup chips render as separate GREEN pills (Solo / Duo / Trio /
     // Full Band) matching the venue create-gig page convention. Styles
     // render as separate PURPLE pills (Country / Hip-Hop / Rock / etc.).

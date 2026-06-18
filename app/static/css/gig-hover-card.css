@@ -16,7 +16,10 @@
   font-size: 0.82rem;
   line-height: 1.4;
   transition: opacity 120ms ease-out;
-  max-width: 320px;
+  /* Wider so "🎸 Live Band" plus all four lineup chips (Solo / Duo /
+     Trio / Full Band) can wrap onto a single row when present.
+     Was 320px; now 460px which fits the worst-case row by ~10px. */
+  max-width: 460px;
 }
 
 /* Header line: "Booked — Fridays Past" or "Open". */

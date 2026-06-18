@@ -1038,7 +1038,13 @@ def list_gigs(db=Depends(get_db)):
                            gs.pay, gs.status, gs.artist_id,
                            gs.artist_type, gs.band_formats, gs.styles,
                            gs.deal_type, gs.door_pct, gs.guarantee_cents,
-                           a.name as artist_name
+                           a.name as artist_name,
+                           -- Booked artist's actual profile attributes — used
+                           -- by the hover card to filter the lineup/style
+                           -- chips to just the booked artist's matches. NULL
+                           -- on open slots; falls back to gig requirements then.
+                           a.band_formats as artist_band_formats,
+                           a.styles      as artist_styles
                     FROM gig_slots gs
                     LEFT JOIN artists a ON gs.artist_id = a.id
                     WHERE gs.gig_id = :gid
@@ -1268,7 +1274,9 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                     SELECT gs.gig_id, gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time, gs.pay, gs.status, gs.artist_id,
                            gs.artist_type, gs.band_formats, gs.styles,
                            gs.deal_type, gs.door_pct, gs.guarantee_cents,
-                           a.name as artist_name
+                           a.name as artist_name,
+                           a.band_formats as artist_band_formats,
+                           a.styles      as artist_styles
                     FROM gig_slots gs
                     LEFT JOIN artists a ON gs.artist_id = a.id
                     WHERE gs.gig_id IN :gids
