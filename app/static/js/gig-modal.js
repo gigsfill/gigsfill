@@ -300,11 +300,29 @@ async function renderGigModal(data, callbacks = {}) {
   }
 
   /* ── Frequency warning banner ─────────────────────────────────────────── */
+  // Suppressed when the artist ALREADY has a slot on this gig — the
+  // limit is a pre-booking gate, not a post-booking restriction. If they
+  // got in, they got in (via blast / open-window / frequency_exempt
+  // flag at booking time). Showing "⚠️ Frequency Limitation" on a gig
+  // they've already booked reads as if the venue is going to retract
+  // the booking, which is wrong. Also kept the existing skip when the
+  // gig is currently blast-open or marked frequency_exempt now.
   if (vType === 'artist' && data.freq_check && !data.is_blast_open && !data.frequency_exempt) {
-    const fc = data.freq_check;
-    const dir = fc.isBeforeBookedGig ? 'before' : 'after';
-    html += _banner('red', '⚠️ Frequency Limitation',
-      `This gig is ${fc.absDaysBetween} day${fc.absDaysBetween!==1?'s':''} ${dir} your booked gig on ${fc.lastGigDate}. This venue requires at least ${fc.daysRequired} days between bookings.`);
+    const _alreadyOnGig = (data.slots || []).some(s => s.is_my_slot);
+    if (!_alreadyOnGig) {
+      const fc = data.freq_check;
+      const dir = fc.isBeforeBookedGig ? 'before' : 'after';
+      html += _banner('red', '⚠️ Frequency Limitation',
+        `This gig is ${fc.absDaysBetween} day${fc.absDaysBetween!==1?'s':''} ${dir} your booked gig on ${fc.lastGigDate}. This venue requires at least ${fc.daysRequired} days between bookings.`);
+    } else {
+      // Friendly confirmation that the booking is legit despite being
+      // within the venue's normal frequency window. Reassures the
+      // artist that the spot they grabbed under a blast / waiver is
+      // theirs and won't be retracted.
+      const fc = data.freq_check;
+      html += _banner('green', 'Frequency Waived',
+        `This gig is within the venue's usual ${fc.daysRequired}-day window between your bookings, but you booked it during an open-blast / waiver — your spot is locked in.`);
+    }
   }
 
   /* ── Slots section ────────────────────────────────────────────────────── */
