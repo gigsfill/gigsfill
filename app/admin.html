@@ -778,6 +778,7 @@
     <div class="tabs">
       <button class="tab active" onclick="switchTab('platform')">Platform Settings</button>
       <button class="tab" onclick="switchTab('payments')">Payments</button>
+      <button class="tab" onclick="switchTab('flags')">🚩 Flags</button>
       <button class="tab" onclick="switchTab('support')">Support</button>
       <button class="tab" onclick="switchTab('templates')">Email Templates</button>
       <button class="tab" onclick="switchTab('flyertemplates')">Flyer Templates</button>
@@ -1294,6 +1295,54 @@
         <!-- Results table -->
         <div id="apTable" style="overflow-x:auto;min-height:200px;"></div>
         <div id="apPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;font-size:0.72rem;color:var(--text-gray);"></div>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         FLAGS TAB — venues that have routed real pay off-platform via
+         $0 listings (flat-$0 OR pure-door no-guarantee). Each such
+         booking auto-bumps the venue's zero_pay_booking_count and
+         notifies admin via in-app notification. Admin can raise the
+         per-venue fee_pct_override here to recoup the lost cut on the
+         venue's future REAL bookings.
+         Data: GET  /api/admin/zero-pay-flagged-venues
+         Edit: PUT  /api/admin/venues/{vid}/fee-pct-override
+         ────────────────────────────────────────────────────────────────── -->
+    <div class="tab-content" id="flags-tab">
+      <div class="content-card" style="padding:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+          <div>
+            <span style="font-size:0.85rem;font-weight:700;color:var(--text);">🚩 Off-Platform-Pay Flagged Venues</span>
+            <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">
+              Venues that booked artists at $0 pay (real $ likely flowing off-platform). Raise the fee % to recoup the cut.
+            </span>
+          </div>
+          <button onclick="loadFlaggedVenues()"
+            style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">
+            ↺ Refresh
+          </button>
+        </div>
+
+        <!-- Help banner — explains the mechanism. Click X to dismiss; persists per session via sessionStorage. -->
+        <div id="flagsHelpBanner" style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:0.74rem;color:#fbbf24;line-height:1.55;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+            <div>
+              <strong>How this works:</strong> When a venue books an artist for $0 pay (flat or pure-door with no guarantee),
+              the booking still goes through and GigsFill collects the <em>platform minimum fee</em> on the venue charge.
+              But the venue is likely paying the artist in cash off-site — meaning we miss the artist-side cut.
+              Each such booking is logged here and admins get an in-app notification.
+              Set a <strong>fee % override</strong> below to raise this venue's platform fee on FUTURE real bookings (any pay amount).
+              Leave blank to use the global default.
+            </div>
+            <button onclick="this.parentElement.parentElement.style.display='none';sessionStorage.setItem('flagsBannerDismissed','1');"
+              style="background:transparent;border:none;color:#fbbf24;cursor:pointer;font-size:1rem;line-height:1;padding:0 0 0 8px;" title="Dismiss for this session">✕</button>
+          </div>
+        </div>
+
+        <div id="flagsTable" style="overflow-x:auto;min-height:120px;"></div>
+        <div id="flagsEmpty" style="display:none;padding:30px;text-align:center;color:var(--text-gray);font-size:0.85rem;">
+          No flagged venues yet. Venues appear here automatically once they book a $0 gig.
+        </div>
       </div>
     </div>
 
@@ -2063,6 +2112,7 @@ function switchDbLogsTab(tab) {
 <script src="/app/static/js/admin-payments.js?v=25"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=2"></script>
+<script src="/app/static/js/admin-flags.js?v=1"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>
 <script src="/app/static/js/sw-register.js"></script>
 
@@ -2096,6 +2146,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     if (tab === 'affiliates')    { typeof loadAffiliatesTab === 'function'      && loadAffiliatesTab(); }
     if (tab === 'platform')      { typeof loadEmailSettings === 'function'      && loadEmailSettings(); }
+    if (tab === 'flags')         { typeof loadFlaggedVenues === 'function'      && loadFlaggedVenues(); }
   };
 });
 </script>
