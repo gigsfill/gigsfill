@@ -1623,7 +1623,8 @@ def _enrich_artist_txns_with_deal_info(db, txns):
     # ids in scope and filter in Python.
     gig_ids = list({p[0] for p in pairs})
     rows = db.execute(
-        text("""SELECT gig_id, artist_id, deal_type, door_pct, guarantee_cents,
+        text("""SELECT gig_id, artist_id, slot_number, pay,
+                       deal_type, door_pct, guarantee_cents,
                        door_receipts_cents, settled_pay_cents, settled_at
                 FROM gig_slots
                 WHERE gig_id IN :gids AND artist_id IS NOT NULL"""

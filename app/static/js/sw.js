@@ -10,7 +10,7 @@
 // pre-dates the audio-caption + audio-entry reorder changes.
 // v8 (2026-06-17): forces eviction of any cached venue-create-gigs.html
 // that pre-dates the templates-in-header relocation + door-pill restyle.
-const CACHE_NAME = 'gigsfill-v8';
+const CACHE_NAME = 'gigsfill-v9';
 
 // App shell — core files needed to launch
 const APP_SHELL = [
