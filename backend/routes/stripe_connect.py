@@ -725,17 +725,47 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
     - Charges venue ONLY the platform fee (GigsFill's share)
     - Marks transaction as payment_cancelled
     - Sends notifications + emails to both parties
+
+    DEPRECATED for multi-slot gigs (June 2026). The venue UI now uses
+    /api/stripe/cancel-slot-payment per slot. This endpoint had a
+    latent multi-slot bug — the LIMIT 1 transaction lookup returned
+    whichever child sorted first, cancelling only one slot's payout
+    even when the caller wanted the whole gig dead.
+
+    Behavior preserved for single-slot gigs (and legacy callers).
+    Multi-slot calls now return 400 with a clear migration hint.
     """
     stripe_mod, keys = init_stripe(db)
     gig_id = data.get("gig_id")
     reason = (data.get("reason") or "").strip()
-    
+
     if not gig_id:
         raise HTTPException(400, "Missing gig_id")
     if not reason:
         raise HTTPException(400, "A reason is required")
-    
-    # Get transaction (scheduled or test = cancellable)
+
+    # AUDIT FIX (Jun 2026): refuse the legacy whole-gig cancel on
+    # multi-slot gigs. The endpoint's LIMIT 1 + single-reason model
+    # never worked correctly for them — it would cancel one child
+    # and leave the others scheduled, charging the venue at 5pm.
+    _slot_count = db.execute(
+        text("""SELECT COUNT(*) FROM gig_slots
+                WHERE gig_id = :gid AND status = 'booked' AND artist_id IS NOT NULL"""),
+        {"gid": gig_id}
+    ).scalar() or 0
+    if _slot_count > 1:
+        raise HTTPException(
+            400,
+            "This gig has multiple booked slots. Use /api/stripe/cancel-slot-payment "
+            "per slot instead — the legacy whole-gig endpoint can't represent "
+            "per-slot reasons or slot-scoped fee charges."
+        )
+
+    # Get transaction (scheduled or test = cancellable). Prefer the
+    # parent venue_charge row when present so we don't accidentally
+    # grab a child first (the LIMIT 1 + no ordering meant whichever
+    # row the planner returned). Falls back to any cancellable txn
+    # for legacy single rows.
     txn = db.execute(
         text("""
             SELECT t.*, g.venue_id, g.date as gig_date, g.title as gig_title,
@@ -746,10 +776,32 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
             JOIN venues v ON g.venue_id = v.id
             LEFT JOIN artists a ON a.id = COALESCE(t.artist_id, g.artist_id)
             WHERE t.gig_id = :gid AND t.status IN ('scheduled', 'test')
+              AND COALESCE(t.transaction_type, 'single') IN ('venue_charge', 'single')
+            ORDER BY
+              CASE WHEN COALESCE(t.transaction_type,'single')='venue_charge' THEN 0 ELSE 1 END,
+              t.id ASC
             LIMIT 1
         """),
         {"gid": gig_id}
     ).mappings().first()
+    # Final fallback — original LIMIT 1 behavior for any historical
+    # rows that don't carry transaction_type at all (very old data).
+    if not txn:
+        txn = db.execute(
+            text("""
+                SELECT t.*, g.venue_id, g.date as gig_date, g.title as gig_title,
+                       v.venue_name, a.name as artist_name, a.id as aid,
+                       v.user_id as venue_user_id, a.user_id as artist_user_id
+                FROM transactions t
+                JOIN gigs g ON t.gig_id = g.id
+                JOIN venues v ON g.venue_id = v.id
+                LEFT JOIN artists a ON a.id = COALESCE(t.artist_id, g.artist_id)
+                WHERE t.gig_id = :gid AND t.status IN ('scheduled', 'test')
+                ORDER BY t.id ASC
+                LIMIT 1
+            """),
+            {"gid": gig_id}
+        ).mappings().first()
     
     # If no transaction exists (e.g. gig booked before transaction flow), record cancellation from booked slot
     if not txn:
@@ -1234,7 +1286,27 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
                 logging.error(f"[CancelSlotPayment] Platform fee charge failed for gig {slot['gig_id']} slot {slot_id}: {e}")
                 fee_charge_error = str(e)[:160]
 
-    # Mark the child cancelled.
+    # Mark the child cancelled. The audit note suffix carries the
+    # money picture as of cancel time — invaluable when reconciling
+    # post-hoc. For door deals we record BOTH the cancelled amount
+    # and the underlying terms so the audit trail distinguishes
+    # "cancelled the settled $20" from "cancelled the $10 guarantee
+    # floor while never settling."
+    _settled_door = db.execute(
+        text("""SELECT deal_type, guarantee_cents, door_pct,
+                       door_receipts_cents, settled_pay_cents, settled_at
+                FROM gig_slots WHERE id = :sid"""),
+        {"sid": slot_id}
+    ).mappings().first()
+    _audit_money = f"amount={int(txn.get('amount_cents') or 0)}c fee={venue_fee_cents}c"
+    if _settled_door and (_settled_door.get("deal_type") or "").lower() == "door":
+        _g = int(_settled_door.get("guarantee_cents") or 0)
+        _p = int(_settled_door.get("door_pct") or 0)
+        if _settled_door.get("settled_at"):
+            _r = int(_settled_door.get("door_receipts_cents") or 0)
+            _audit_money += f" door[settled g={_g}c +{_p}% receipts={_r}c]"
+        else:
+            _audit_money += f" door[unsettled g={_g}c +{_p}%]"
     db.execute(
         text("""UPDATE transactions SET
                   status = 'payment_cancelled',
@@ -1246,8 +1318,15 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
                 WHERE id = :tid"""),
         {"reason": reason, "now": utcnow_naive().isoformat(),
          "fee": venue_fee_cents, "pi_id": platform_fee_pi_id,
-         "note_suffix": f" [slot-cancelled by user {user.id}: {reason[:80]}]",
+         "note_suffix": f" [slot-cancelled by user {user.id}: {reason[:80]} {_audit_money}]",
          "tid": txn["id"]}
+    )
+    # Also log so ops can grep across cancellations without parsing
+    # the notes string.
+    logging.getLogger("gigsfill.slot_cancel").info(
+        "[SLOT_CANCEL] gig=%s slot=%s artist=%s by_user=%s %s reason=%r",
+        slot["gig_id"], slot_id, slot["artist_id"], user.id,
+        _audit_money, reason[:120]
     )
 
     # Redistribute fees among remaining LIVE children + rewrite
