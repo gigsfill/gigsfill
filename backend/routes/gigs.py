@@ -271,6 +271,22 @@ def _recompute_gig_fees(db, gig_id):
     ).fetchall():
         settings[r[0]] = r[1]
     fee_pct       = float(settings.get('platform_fee_percent', '10')) / 100
+    # Per-venue fee_pct override — must mirror _create_booking_transaction
+    # so settle/recompute uses the same rate as booking. Look up the venue
+    # from the parent transaction's gig.
+    try:
+        _vid_row = db.execute(
+            text("SELECT venue_id FROM gigs WHERE id = :gid"), {"gid": gig_id}
+        ).mappings().first()
+        if _vid_row:
+            _ov = db.execute(
+                text("SELECT fee_pct_override FROM venue_payment_overrides WHERE venue_id = :vid"),
+                {"vid": _vid_row["venue_id"]}
+            ).mappings().first()
+            if _ov and _ov.get("fee_pct_override") is not None:
+                fee_pct = float(_ov["fee_pct_override"]) / 100
+    except Exception:
+        pass
     min_fee_cents = int(float(settings.get('platform_min_fee', '0')) * 100)
     fee_split     = settings.get('platform_fee_split', 'split')
 
@@ -342,6 +358,102 @@ def _recompute_gig_fees(db, gig_id):
         f"fee=${total_fee/100:.2f}, venue charged=${venue_charge_total/100:.2f}, "
         f"artists={n}"
     )
+
+
+def _flag_zero_pay_booking(db, venue_id, gig_id, artist_id, slot_id, reason):
+    """Record a $0-pay booking event for off-platform-pay detection.
+
+    Triggered when a venue books an artist with amount_cents=0 — either
+    flat-pay $0 or a pure-door deal (guarantee_cents=0, door_pct>0)
+    that may never be settled (so the artist's real pay is happening
+    off-platform via cash at the gig).
+
+    GigsFill still earns the platform_min_fee, so this isn't blocked —
+    but repeated $0 bookings from the same venue suggest the venue is
+    routing real pay off-site, and admin should know. We:
+      1. Bump the venue's zero_pay_booking_count + last_zero_pay_at.
+      2. Insert one in-app notification per admin user so the activity
+         shows up in their notifications feed.
+      3. logger.info for the audit trail.
+    Admin can then bump venue_payment_overrides.fee_pct_override to
+    recoup the lost percentage on this venue's future bookings.
+
+    Caller is responsible for db.commit().
+    """
+    try:
+        # Upsert the override row's counter — venue_payment_overrides has
+        # a UNIQUE(venue_id) constraint. Try update first, then insert if
+        # no row exists (portable across SQLite + Postgres without needing
+        # ON CONFLICT syntax differences).
+        from datetime import datetime as _dt
+        _now = _dt.utcnow()
+        _r = db.execute(
+            text("""UPDATE venue_payment_overrides
+                    SET zero_pay_booking_count = COALESCE(zero_pay_booking_count, 0) + 1,
+                        last_zero_pay_at = :now
+                    WHERE venue_id = :vid"""),
+            {"vid": venue_id, "now": _now}
+        )
+        if (_r.rowcount or 0) == 0:
+            db.execute(
+                text("""INSERT INTO venue_payment_overrides
+                        (venue_id, payments_suspended, zero_pay_booking_count, last_zero_pay_at, notes)
+                        VALUES (:vid, 0, 1, :now, :note)"""),
+                {"vid": venue_id, "now": _now,
+                 "note": "Auto-created on first zero-pay booking flag"}
+            )
+
+        # Look up venue name + artist name for the notification body.
+        _v = db.execute(
+            text("SELECT venue_name FROM venues WHERE id = :vid"), {"vid": venue_id}
+        ).mappings().first()
+        _a = db.execute(
+            text("SELECT name FROM artists WHERE id = :aid"), {"aid": artist_id}
+        ).mappings().first()
+        _vname = (_v and _v.get("venue_name")) or f"Venue #{venue_id}"
+        _aname = (_a and _a.get("name")) or f"Artist #{artist_id}"
+
+        # Get current count for the notification message.
+        _cnt = db.execute(
+            text("SELECT zero_pay_booking_count FROM venue_payment_overrides WHERE venue_id = :vid"),
+            {"vid": venue_id}
+        ).scalar() or 1
+
+        # Notify every admin user (is_admin is TEXT in this codebase).
+        # Use the canonical check: LOWER(is_admin) IN ('true','1').
+        _admins = db.execute(
+            text("""SELECT id FROM users
+                    WHERE LOWER(COALESCE(CAST(is_admin AS TEXT), 'false')) IN ('true','1')""")
+        ).mappings().all()
+        try:
+            from backend.services.notification_service import create_notification
+            for _au in _admins:
+                create_notification(
+                    db,
+                    user_id=_au["id"],
+                    notification_type="admin_zero_pay_booking",
+                    title=f"⚠ Zero-pay booking at {_vname}",
+                    message=(
+                        f"{_vname} just booked {_aname} for ${0.00:.2f} "
+                        f"({reason}). This venue's running count: {_cnt}. "
+                        f"GigsFill will still collect the platform minimum fee, "
+                        f"but real pay may be flowing off-platform. "
+                        f"Consider raising this venue's fee_pct_override."
+                    ),
+                    gig_id=gig_id,
+                    venue_id=venue_id,
+                    artist_id=artist_id,
+                )
+        except Exception as _ne:
+            logger.warning(f"[ZERO_PAY_FLAG] notification dispatch failed: {_ne}")
+
+        logger.info(
+            "[ZERO_PAY_FLAG] venue=%s artist=%s gig=%s slot=%s reason=%s count=%d",
+            venue_id, artist_id, gig_id, slot_id, reason, _cnt
+        )
+    except Exception as e:
+        # Never block the booking itself if the flagging plumbing fails.
+        logger.warning(f"[ZERO_PAY_FLAG] tracking failed for venue {venue_id}: {e}", exc_info=True)
 
 
 def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig_date, slot_id=None):
@@ -434,6 +546,21 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
             settings[r[0]] = r[1]
 
         fee_pct       = float(settings.get('platform_fee_percent', '10')) / 100
+        # Per-venue fee_pct override — admin tool. When set, the venue
+        # pays the override rate instead of the platform default. Used
+        # to recoup lost revenue from venues that route real pay off-
+        # platform via $0 listings ($0 flat / $0-guarantee door deals
+        # are flagged by _flag_zero_pay_booking below; admin can then
+        # bump THIS venue's percentage in venue_payment_overrides.fee_pct_override).
+        try:
+            _ov = db.execute(
+                text("SELECT fee_pct_override FROM venue_payment_overrides WHERE venue_id = :vid"),
+                {"vid": venue_id}
+            ).mappings().first()
+            if _ov and _ov.get("fee_pct_override") is not None:
+                fee_pct = float(_ov["fee_pct_override"]) / 100
+        except Exception:
+            pass
         min_fee_cents = int(float(settings.get('platform_min_fee', '0')) * 100)
         fee_split     = settings.get('platform_fee_split', 'split')
         payments_live = settings.get('payments_enabled', '0') in ('1', 'true')
@@ -462,6 +589,15 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
                 pass
         if amount_cents < 0 or (amount_cents == 0 and not _is_door_zero):
             return
+
+        # Flag $0 bookings — flat-pay $0 OR pure-door (no guarantee, % door)
+        # both leave GigsFill collecting only the platform minimum fee. Real
+        # pay may be flowing off-platform via cash at the gig. The flag
+        # bumps a per-venue counter and pings admin so persistent offenders
+        # can have their fee_pct_override raised manually.
+        if amount_cents == 0:
+            _reason = "pure-door, no guarantee" if _is_door_zero else "flat $0 pay"
+            _flag_zero_pay_booking(db, venue_id, gig_id, artist_id, slot_id, _reason)
 
         # Per-artist fee calculation
         total_fee_cents = max(int(amount_cents * fee_pct), min_fee_cents)

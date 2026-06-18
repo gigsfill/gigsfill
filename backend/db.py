@@ -1345,7 +1345,21 @@ def setup_database():
             FOREIGN KEY (suspended_by) REFERENCES users(id)
         )
     """)
-    
+    # Additive columns for the off-platform-pay flagging system:
+    # - fee_pct_override: if NOT NULL, overrides platform_fee_percent
+    #   for THIS venue's bookings (admin tool to recoup lost revenue
+    #   from venues that route real pay off-platform via $0 listings).
+    # - zero_pay_booking_count: running counter of bookings made with
+    #   amount_cents=0 (flat-$0 or pure-door no-guarantee). Auto-bumped
+    #   by _flag_zero_pay_booking() on every such booking event.
+    # - last_zero_pay_at: timestamp of the most recent $0 booking so
+    #   admin can sort flagged venues by recency.
+    _add_columns(cursor, "venue_payment_overrides", [
+        "fee_pct_override REAL",
+        "zero_pay_booking_count INTEGER DEFAULT 0",
+        "last_zero_pay_at DATETIME",
+    ])
+
     conn.commit()
     conn.close()
     

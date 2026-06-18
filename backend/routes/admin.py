@@ -2729,3 +2729,79 @@ def test_smtp(data: dict, request: Request, admin=Depends(check_admin), db=Depen
     except Exception as e:
         return {"ok": False, "error": str(e),
                 "smtp_server": smtp_server, "smtp_port": smtp_port, "smtp_email": smtp_email}
+
+
+# ==========================================================================
+# Off-platform-pay flagging — admin tools for venues that route real pay
+# off-site via $0 listings (flat-$0 or pure-door no-guarantee). The booking
+# code in routes/gigs.py:_flag_zero_pay_booking auto-bumps the venue's
+# zero_pay_booking_count and notifies admins. These endpoints expose the
+# data + let admin raise this venue's fee_pct_override to compensate.
+# ==========================================================================
+
+@router.get("/api/admin/zero-pay-flagged-venues")
+def list_zero_pay_flagged_venues(admin=Depends(check_admin), db=Depends(get_db)):
+    """List venues that have booked $0 gigs, sorted by recency. Returns
+    each venue's running count, last-flagged timestamp, and current
+    fee_pct_override (NULL = uses platform default).
+    """
+    rows = db.execute(
+        text("""
+            SELECT v.id as venue_id, v.venue_name, v.city, v.state,
+                   vpo.zero_pay_booking_count, vpo.last_zero_pay_at,
+                   vpo.fee_pct_override
+            FROM venue_payment_overrides vpo
+            JOIN venues v ON v.id = vpo.venue_id
+            WHERE COALESCE(vpo.zero_pay_booking_count, 0) > 0
+            ORDER BY vpo.last_zero_pay_at DESC NULLS LAST
+        """)
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.put("/api/admin/venues/{venue_id}/fee-pct-override")
+def set_venue_fee_pct_override(venue_id: int, data: dict,
+                                 admin=Depends(check_admin), db=Depends(get_db)):
+    """Set or clear a per-venue platform fee percentage override.
+
+    Body:
+      { "fee_pct_override": 25.0 }  - set venue to 25% platform fee
+      { "fee_pct_override": null }  - clear override, revert to platform default
+
+    The override applies to NEW bookings + any settle/recompute on existing
+    'scheduled' transactions for this venue. Already-charged transactions
+    are not retroactively re-rated.
+    """
+    raw = data.get("fee_pct_override")
+    if raw is not None:
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "fee_pct_override must be a number or null")
+        if v < 0 or v > 100:
+            raise HTTPException(400, "fee_pct_override must be between 0 and 100")
+        new_val = v
+    else:
+        new_val = None
+
+    venue = db.execute(
+        text("SELECT id FROM venues WHERE id = :vid"), {"vid": venue_id}
+    ).mappings().first()
+    if not venue:
+        raise HTTPException(404, "Venue not found")
+
+    # Upsert: try UPDATE first, INSERT if no row.
+    _r = db.execute(
+        text("UPDATE venue_payment_overrides SET fee_pct_override = :v WHERE venue_id = :vid"),
+        {"v": new_val, "vid": venue_id}
+    )
+    if (_r.rowcount or 0) == 0:
+        db.execute(
+            text("""INSERT INTO venue_payment_overrides
+                    (venue_id, payments_suspended, fee_pct_override, notes)
+                    VALUES (:vid, 0, :v, :note)"""),
+            {"vid": venue_id, "v": new_val,
+             "note": "Admin set fee_pct_override"}
+        )
+    db.commit()
+    return {"ok": True, "venue_id": venue_id, "fee_pct_override": new_val}
