@@ -257,10 +257,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       ">
     `;
 
-    // Pre-fetch slot data for multi-slot gigs so we can show artist names
+    // Pre-fetch slot data for multi-slot gigs so we can show artist names.
+    // /public — anonymous viewers; the auth endpoint 401s + exposes
+    // door receipts.
     await Promise.all(dayGigs.filter(g => g.status === 'booked' || (g.booked_slots_count > 0)).map(async g => {
       try {
-        const r = await fetch(`/api/gigs/${g.id}/slots`);
+        const r = await fetch(`/api/gigs/${g.id}/slots/public`);
         if (r.ok) g._slots = (await r.json()).sort((a,b) => (a.start_time||'').localeCompare(b.start_time||''));
       } catch(e) {}
     }));
@@ -476,7 +478,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // For multi-slot gigs, fetch and display slots (after Artist Type / Band Formats)
     if (isMultiSlot) {
       try {
-        const slotsRes = await fetch(`/api/gigs/${gig.id}/slots`);
+        const slotsRes = await fetch(`/api/gigs/${gig.id}/slots/public`);
         if (slotsRes.ok) {
           const slots = (await slotsRes.json()).sort((a,b) => (a.start_time||'').localeCompare(b.start_time||''));
           content += '<div style="margin-top:14px;">';
@@ -529,18 +531,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       const response = await fetch('/api/gigs/public');
       if (response.ok) {
         allGigs = await response.json();
-        // For multi-slot gigs, hydrate g.slots so the hover card can
-        // render the per-slot breakdown (payloadFromGig only builds
-        // slotLines when g.slots is an array with length >= 2). The
-        // day-modal already pre-fetches into g._slots — we just write
-        // to both keys so each consumer finds what it expects.
+        // Hydrate g.slots from the PUBLIC slots endpoint. /api/gigs/{id}/slots
+        // requires authentication and exposes internal financial fields
+        // (pay, guarantee_cents, door_receipts_cents) so anonymous viewers
+        // got 401s + saw door receipts they shouldn't. The /public variant
+        // returns only the fields the hover card / day modal need.
         try {
           await Promise.all(
             allGigs
               .filter(g => g.is_multi_slot || g.total_slots_count > 0 || g.booked_slots_count > 0)
               .map(async g => {
                 try {
-                  const r = await fetch(`/api/gigs/${g.id}/slots`);
+                  const r = await fetch(`/api/gigs/${g.id}/slots/public`);
                   if (r.ok) {
                     const sorted = (await r.json())
                       .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));

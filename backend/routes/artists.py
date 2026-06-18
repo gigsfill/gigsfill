@@ -642,13 +642,17 @@ def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_curren
             pay = override_val
         g["effective_pay"] = round(pay, 2)
 
-    # Stamp pay_summary on each row so the frontend can render the
-    # door-aware string ("$10.00 guarantee + 50% of door") without
-    # rebuilding the logic in JS. _enrich_pay_summary reads deal_type
-    # / guarantee_cents / door_pct off the row and writes pay_summary.
+    # Stamp pay_summary ONLY for door deals — the flat-pay summary
+    # would just be "$<listed pay>" and would mask any venue override
+    # (the frontend prefers pay_summary when present). Door deals
+    # don't honor overrides (the guarantee is the contract), so the
+    # door summary is always correct regardless of override state.
     try:
         from backend.routes.gigs import _enrich_pay_summary
-        _enrich_pay_summary(result)
+        _door_only = [g for g in result
+                      if str(g.get('deal_type') or '').lower() == 'door']
+        if _door_only:
+            _enrich_pay_summary(_door_only)
     except Exception:
         pass
 

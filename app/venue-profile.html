@@ -742,7 +742,7 @@
       // For multi-slot gigs, fetch and display slot details
       if (isMultiSlot) {
         try {
-          const slotsRes = await fetch(`/api/gigs/${g.id}/slots`);
+          const slotsRes = await fetch(`/api/gigs/${g.id}/slots/public`);
           if (slotsRes.ok) {
             const slots = await slotsRes.json();
             slots.forEach(s => {
@@ -1055,7 +1055,7 @@
       // Prefetch slots for all gigs
       await Promise.all(dayGigs.map(async g => {
         try {
-          const r = await fetch(`/api/gigs/${g.id}/slots`);
+          const r = await fetch(`/api/gigs/${g.id}/slots/public`);
           if (r.ok) g._daySlots = (await r.json()).sort((a,b) => (a.start_time||'').localeCompare(b.start_time||''));
         } catch(e) {}
       }));
@@ -1253,7 +1253,7 @@ window.loadVenueReviews = loadVenueReviews;
   </script>
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/gig-hover-card.js?v=17"></script>
+<script src="/app/static/js/gig-hover-card.js?v=18"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
 <script src="/app/static/js/vanity-url-editor.js?v=3"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>

@@ -348,31 +348,41 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
         {"venue_id": venue_id}
     ).mappings().all()
     
-    # v97: Then get all booked gigs for this venue (regular + slot bookings)
+    # v97: Then get all booked gigs for this venue (regular + slot bookings).
+    # Door-deal terms live on gig_slots; LEFT JOIN by (gig_id, artist_id)
+    # so my-artists.js can render the same "$X guarantee + Y% of door"
+    # pay summary that every other surface uses. Single-slot bookings
+    # also create a gig_slots row, so the JOIN finds the right deal row
+    # for both shapes.
     gigs_result = db.execute(
         text("""
-            SELECT 
-                g.id, g.artist_id, g.date, g.start_time, g.end_time, 
+            SELECT
+                g.id, g.artist_id, g.date, g.start_time, g.end_time,
                 g.status, g.title, g.pay, g.notes, g.artist_type, g.band_formats,
-                COALESCE(g.is_multi_slot, 0) as is_multi_slot
+                COALESCE(g.is_multi_slot, 0) as is_multi_slot,
+                gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at
             FROM gigs g
-            WHERE g.venue_id = :venue_id 
+            LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = g.artist_id
+            WHERE g.venue_id = :venue_id
                 AND g.status = 'booked'
             ORDER BY g.date
         """),
         {"venue_id": venue_id}
     ).mappings().all()
-    
+
     # Also get slot-booked gigs
     slot_gigs_result = db.execute(
         text("""
             SELECT DISTINCT
                 g.id, gs.artist_id, g.date, g.start_time, g.end_time,
                 'booked' as status, g.title, gs.pay, g.notes, g.artist_type, g.band_formats,
-                COALESCE(g.is_multi_slot, 0) as is_multi_slot
+                COALESCE(g.is_multi_slot, 0) as is_multi_slot,
+                gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at
             FROM gig_slots gs
             JOIN gigs g ON gs.gig_id = g.id
-            WHERE g.venue_id = :venue_id 
+            WHERE g.venue_id = :venue_id
                 AND gs.status = 'booked'
             ORDER BY g.date
         """),
@@ -416,6 +426,19 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
             if override_val is not None and override_val > pay:
                 pay = override_val
             g["effective_pay"] = round(pay, 2)
+        # Stamp pay_summary ONLY for door deals — the flat-pay summary
+        # would just be "$<listed pay>" and would mask any venue
+        # override (frontend prefers pay_summary when present). Door
+        # deals don't honor overrides (the guarantee is the contract),
+        # so the door summary is always correct.
+        try:
+            from backend.routes.gigs import _enrich_pay_summary
+            _door_only = [g for g in artist_gigs
+                          if str(g.get('deal_type') or '').lower() == 'door']
+            if _door_only:
+                _enrich_pay_summary(_door_only)
+        except Exception:
+            pass
         artist_dict["gigs"] = artist_gigs
         artist_dict["gigs_count"] = len(artist_gigs)
         

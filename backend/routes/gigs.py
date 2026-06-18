@@ -440,7 +440,27 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
         tx_status     = 'scheduled' if payments_live else 'test'
 
         amount_cents = int(float(pay_amount or 0) * 100)
-        if amount_cents <= 0:
+        # Pure-door deals (guarantee_cents=0, door_pct>0) legitimately
+        # book at $0 — the artist's pay is determined entirely by door
+        # receipts settled after the show. Without this carve-out the
+        # `<= 0` short-circuit would skip transaction creation, and
+        # /api/gigs/{id}/slots/{sid}/settle would later find no row to
+        # bump → the artist would receive no platform payout.
+        # Detect by re-reading the slot's deal columns when slot_id is
+        # known. Flat-pay $0 rows are still skipped (no booking should
+        # truly be free for the venue under flat terms).
+        _is_door_zero = False
+        if slot_id and amount_cents <= 0:
+            try:
+                _dz = db.execute(
+                    text("SELECT deal_type, door_pct FROM gig_slots WHERE id = :sid"),
+                    {"sid": slot_id}
+                ).mappings().first()
+                if _dz and (_dz.get("deal_type") or "").lower() == "door" and int(_dz.get("door_pct") or 0) > 0:
+                    _is_door_zero = True
+            except Exception:
+                pass
+        if amount_cents < 0 or (amount_cents == 0 and not _is_door_zero):
             return
 
         # Per-artist fee calculation
@@ -4092,6 +4112,37 @@ def my_gigs(
 # ==========================================
 # GIG SLOTS ENDPOINTS (Multi-slot Events)
 # ==========================================
+
+@router.get("/api/gigs/{gig_id}/slots/public")
+def get_gig_slots_public(gig_id: int, db=Depends(get_db)):
+    """Public slot list — used by anonymous calendar pages
+    (artist-profile, venue-profile, public-gigs) to render per-slot
+    hover breakdowns. REDACTS internal financial fields that the
+    authenticated endpoint exposes to venues/artists:
+      - pay, guarantee_cents, door_pct, door_receipts_cents,
+        settled_pay_cents, settled_at are excluded.
+    Anonymous viewers should never see actual cash receipts from a
+    venue's door.
+    """
+    try:
+        slots = db.execute(
+            text("""
+                SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
+                       gs.artist_id, gs.status,
+                       gs.artist_type, gs.band_formats, gs.styles,
+                       gs.deal_type,
+                       a.name as artist_name
+                FROM gig_slots gs
+                LEFT JOIN artists a ON gs.artist_id = a.id
+                WHERE gs.gig_id = :gig_id
+                ORDER BY gs.slot_number ASC
+            """),
+            {"gig_id": gig_id}
+        ).mappings().all()
+        return [dict(s) for s in slots]
+    except Exception as e:
+        logger.error(f"Failed to load public slots: {e}", exc_info=True)
+        raise HTTPException(500, "Failed to load slots")
 
 # GET SLOTS FOR A GIG
 @router.get("/api/gigs/{gig_id}/slots")

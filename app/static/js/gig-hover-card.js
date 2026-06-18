@@ -164,6 +164,25 @@
         header = parts.join(' · ');
       }
       artistChips = []; // names are in the per-slot breakdown below
+    } else if (g.is_multi_slot) {
+      // Multi-slot gig whose .slots array hasn't been hydrated yet
+      // (slot fetch failed, race condition, or an endpoint we missed).
+      // Without this branch we'd fall through to the single-slot
+      // logic below — which keys off g.artist_id (NULL on multi-slot
+      // parents) and renders "Open" even when the gig is fully booked.
+      // booked_slots_count / total_slots_count come from the standard
+      // calendar endpoints, so use those to summarize state.
+      const _booked = parseInt(g.booked_slots_count) || 0;
+      const _total  = parseInt(g.total_slots_count) || 0;
+      if (_booked <= 0) {
+        header = _total > 0 ? `Open — ${_total} slots` : 'Open';
+        isOpenHere = true;
+      } else if (_total > 0 && _booked < _total) {
+        header = `Booked — ${_booked}/${_total}`;
+      } else {
+        header = 'Booked';
+      }
+      artistChips = [];
     } else {
       isOpenHere = (g.status === 'open' || !g.artist_id) && !g.artist_name;
       if (isOpenHere) {

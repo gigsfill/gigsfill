@@ -629,10 +629,17 @@ class MyArtists {
                         <strong style="white-space:nowrap;">${dateStr}</strong><span style="color:rgba(255,255,255,0.3);">|</span>
                         <span style="white-space:nowrap;">${formatTime(gig.start_time)} – ${formatTime(gig.end_time)}</span><span style="color:rgba(255,255,255,0.3);">|</span>
                         <span style="color:#f87171; font-weight:600; white-space:nowrap;">${({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'}[gig.artist_type] || '🎵')} Booked • ${(() => {
-                          // Door-deal aware: prefer the per-artist slot's pay_summary.
-                          const _mySlot = (gig.slots || []).find(s => parseInt(s.artist_id) === parseInt(artist.artist_id));
-                          if (_mySlot && window.formatPaySummary && (window.hasDoorDeal && window.hasDoorDeal(_mySlot) || _mySlot.pay_summary)) {
-                            return window.formatPaySummary(_mySlot);
+                          // Door-deal aware. The /preferred-artists-with-gigs
+                          // endpoint now stamps deal_type/guarantee_cents/
+                          // door_pct and pay_summary onto each gig row, so
+                          // call formatPaySummary on the gig itself. Falls
+                          // back to effective_pay / pay when there are no
+                          // door terms. The prior version looked at
+                          // gig.slots[] which the endpoint doesn't populate
+                          // — that branch never fired and door deals showed
+                          // as the bare guarantee dollar amount.
+                          if (window.formatPaySummary && (gig.pay_summary || (window.hasDoorDeal && window.hasDoorDeal(gig)))) {
+                            return window.formatPaySummary(gig);
                           }
                           const _eff = (gig.effective_pay != null ? gig.effective_pay : gig.pay);
                           return _eff != null ? `$${Number(_eff).toFixed(2)}` : 'N/A';

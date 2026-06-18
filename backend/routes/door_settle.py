@@ -139,22 +139,71 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
         f"pct={int(slot['door_pct'] or 0)}% "
         f"guarantee={int(slot['guarantee_cents'] or 0)}c]"
     )
-    updated = db.execute(
+    # Strip any prior " [door-settled ...]" suffix before appending the
+    # new one — re-settles otherwise accrete suffixes, so notes grow
+    # 60+ chars per attempt. The persistent audit trail lives in the
+    # logger.info call below; the notes column just shows "the most
+    # recent settle terms."
+    # Portable SUBSTR trick: INSTR(notes, ' [door-settled') in SQLite
+    # and POSITION/STRPOS in Postgres aren't compatible, so do the
+    # strip in Python: read the row, trim, write back. Two-step SQL,
+    # but the row is tiny.
+    slot_note_prefix = f"Slot {int(slot_id)}"
+    # Read current notes for the slot's row so we can rewrite cleanly.
+    _cur = db.execute(
         text("""
-            UPDATE transactions
-            SET amount_cents = :final,
-                notes = COALESCE(notes, '') || :audit_note
+            SELECT id, notes FROM transactions
             WHERE gig_id = :gid
               AND artist_id = :aid
               AND status = 'scheduled'
               AND (transaction_type IS NULL
                    OR transaction_type IN ('artist_payout', 'single'))
+              AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid)
         """),
-        {"final": final_pay_cents,
-         "audit_note": audit_note,
-         "gid": gig_id, "aid": slot["artist_id"]}
-    )
-    txn_updated_count = updated.rowcount or 0
+        {"gid": gig_id, "aid": slot["artist_id"],
+         "slot_like": slot_note_prefix + '%',
+         "slot_like_mid": '%' + slot_note_prefix + ' %'}
+    ).mappings().all()
+
+    def _strip_settle_suffix(s):
+        if not s:
+            return s
+        i = s.find(' [door-settled')
+        return s if i < 0 else s[:i]
+
+    txn_updated_count = 0
+    for r in _cur:
+        new_notes = (_strip_settle_suffix(r["notes"]) or '') + audit_note
+        db.execute(
+            text("UPDATE transactions SET amount_cents = :final, notes = :notes WHERE id = :id"),
+            {"final": final_pay_cents, "notes": new_notes, "id": r["id"]}
+        )
+        txn_updated_count += 1
+
+    # Fallback path: legacy rows (pre-multi-slot) wrote notes='Artist N'
+    # with no Slot prefix. If nothing matched the slot-scoped filter,
+    # fall back to the original artist+gig match — safe because legacy
+    # single-slot gigs have exactly one artist_payout row per artist.
+    if txn_updated_count == 0:
+        _legacy = db.execute(
+            text("""
+                SELECT id, notes FROM transactions
+                WHERE gig_id = :gid
+                  AND artist_id = :aid
+                  AND status = 'scheduled'
+                  AND (transaction_type IS NULL
+                       OR transaction_type IN ('artist_payout', 'single'))
+                  AND (notes IS NULL OR notes NOT LIKE 'Slot %')
+            """),
+            {"gid": gig_id, "aid": slot["artist_id"]}
+        ).mappings().all()
+        for r in _legacy:
+            new_notes = (_strip_settle_suffix(r["notes"]) or '') + audit_note
+            db.execute(
+                text("UPDATE transactions SET amount_cents = :final, notes = :notes WHERE id = :id"),
+                {"final": final_pay_cents, "notes": new_notes, "id": r["id"]}
+            )
+            txn_updated_count += 1
 
     # Re-derive the parent venue_charge total + per-child platform fees
     # from the updated children. _recompute_gig_fees is a no-op if the
