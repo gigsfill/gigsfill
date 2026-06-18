@@ -241,6 +241,24 @@
       });
     }
 
+    // Split comma-separated values into trimmed unique tokens — used for
+    // the lineup (band_formats) and styles chip rows. Drops empties and
+    // collapses duplicates while preserving the venue-set order. Bonus:
+    // no matter how the raw string was formatted ("Solo,Duo", "Solo,
+    // Duo", or "Solo , Duo"), the rendered chips read the same.
+    const splitChips = (s) => {
+      if (!s) return [];
+      const seen = new Set();
+      const out = [];
+      for (const raw of String(s).split(',')) {
+        const t = raw.trim();
+        if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); out.push(t); }
+      }
+      return out;
+    };
+    const lineupChips = splitChips(g.band_formats || g.lineup || g.artist_band_formats);
+    const styleChips  = splitChips(g.styles || g.artist_styles);
+
     return {
       __card: true,
       headerPrefix: header,           // e.g. "Booked — " or "Open"
@@ -256,6 +274,8 @@
       // per-slot breakdown below. Hide it.
       time: slotLines ? '' : fmtTime(start) + (end ? ` – ${fmtTime(end)}` : ''),
       slotLines: slotLines,
+      lineupChips: lineupChips,       // green chips — "Solo", "Duo", etc.
+      styleChips: styleChips,         // purple chips — "Country", "Hip-Hop", etc.
       mapsUrl: mapsUrl([venue, streetAddress, city, state]),
       statusLabel: statusLabel,
       artistType: g.artist_type,
@@ -355,8 +375,20 @@
                 : 'gf-ghc-badge';
       badges.push(`<span class="${cls}">${esc(p.statusLabel)}</span>`);
     }
+    // Artist type stays as a single neutral badge (Live Band / DJ /
+    // Comedian / etc.) — it's a single value, not a comma-list.
     if (p.artistType) badges.push(`<span class="gf-ghc-badge gf-ghc-dim">${esc(p.artistType)}</span>`);
-    if (p.styles)     badges.push(`<span class="gf-ghc-badge gf-ghc-dim">${esc(p.styles)}</span>`);
+    // Lineup chips render as separate GREEN pills (Solo / Duo / Trio /
+    // Full Band) matching the venue create-gig page convention. Styles
+    // render as separate PURPLE pills (Country / Hip-Hop / Rock / etc.).
+    // Each item is its own chip — the comma-and-space spacing concern
+    // is moot because we drop the commas entirely.
+    (p.lineupChips || []).forEach(t => {
+      badges.push(`<span class="gf-ghc-chip gf-ghc-chip-lineup">${esc(t)}</span>`);
+    });
+    (p.styleChips || []).forEach(t => {
+      badges.push(`<span class="gf-ghc-chip gf-ghc-chip-style">${esc(t)}</span>`);
+    });
     if (badges.length) rows.push(`<div class="gf-ghc-badges">${badges.join('')}</div>`);
 
     el.innerHTML = rows.join('');

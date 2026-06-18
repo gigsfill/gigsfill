@@ -183,3 +183,28 @@
   background: rgba(245, 158, 11, 0.1);
   border-color: rgba(245, 158, 11, 0.35);
 }
+
+/* Lineup + Style chips — one chip per token (no comma-separated string).
+   Colors match the venue create-gigs page slot pill convention:
+     lineup → green  (Solo / Duo / Trio / Full Band)
+     style  → purple (Country / Hip-Hop / Rock / etc.)
+   Sits inline with the existing .gf-ghc-badge row so they wrap together. */
+.gf-gig-hover-card .gf-ghc-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.3;
+  border: 1px solid transparent;
+}
+.gf-gig-hover-card .gf-ghc-chip-lineup {
+  background: rgba(34, 197, 94, 0.10);
+  border-color: rgba(34, 197, 94, 0.42);
+  color: #86efac;
+}
+.gf-gig-hover-card .gf-ghc-chip-style {
+  background: rgba(124, 107, 255, 0.10);
+  border-color: rgba(124, 107, 255, 0.42);
+  color: #c4b5fd;
+}
