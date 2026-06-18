@@ -282,29 +282,24 @@ function renderArtistEarningsTable() {
       ? '<a href="/app/venue-profile.html?venue_id=' + (parseInt(t.venue_id, 10) || 0) + '" style="color:var(--text-white);text-decoration:none;border-bottom:1px dashed rgba(255,255,255,0.3);" onmouseover="this.style.color=\'#a78bfa\'" onmouseout="this.style.color=\'var(--text-white)\'">' + _asp_esc(t.venue_name) + '</a>'
       : _asp_esc(t.venue_name);
     var isCancelled = t.rawStatus === 'payment_cancelled';
-    // Door-deal breakdown — if this row's slot has door terms, show
-    // a small sub-line under the Gig Pay amount so the artist sees
-    // exactly how the total was built: "$10 guarantee + 50% of door
-    // · $15.00 receipts" (or "· not yet settled" if pre-show).
-    var dealBreakdown = '';
-    if (t.slot_detail && String(t.slot_detail.deal_type || '').toLowerCase() === 'door') {
-      var sd = t.slot_detail;
-      var gua = (Number(sd.guarantee_cents) || 0) / 100;
-      var pct = Number(sd.door_pct) || 0;
-      var terms = '$' + gua.toFixed(2) + ' guarantee + ' + pct + '% of door';
-      var receiptsLine;
-      if (sd.settled_at && sd.door_receipts_cents != null) {
-        var r = (Number(sd.door_receipts_cents) || 0) / 100;
-        receiptsLine = '$' + r.toFixed(2) + ' receipts';
-      } else {
-        receiptsLine = '<span style="color:#fbbf24;">not yet settled</span>';
-      }
-      dealBreakdown = '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;line-height:1.3;">' + terms + ' · ' + receiptsLine + '</div>';
+    // Door-deal breakdown — moved from an inline sub-line to a hover
+    // tooltip. The Gig Pay number stays compact; hovering reveals the
+    // slot breakdown. Built only when this row's slot is a door deal;
+    // flat-pay rows have no tooltip (the amount IS the whole story).
+    var hoverHtml = '';
+    if (t.slot_detail && String(t.slot_detail.deal_type || '').toLowerCase() === 'door' && window.buildPaySlotTooltip) {
+      hoverHtml = window.buildPaySlotTooltip([t.slot_detail], t.venue_name);
     }
-    // Gig fee: strikethrough when cancelled (venue didn't pay artist)
-    var gigFeeCell = isCancelled
-      ? '<span style="color:#9ca3af;text-decoration:line-through;">$' + t.gig_fee.toFixed(2) + '</span>' + dealBreakdown
-      : '$' + t.gig_fee.toFixed(2) + dealBreakdown;
+    // Gig fee cell. When a hover tooltip is present, wrap the amount
+    // in a positioning host with cursor:help + dashed-underline so
+    // the user knows there's detail to peek at.
+    var feeAmt = '$' + t.gig_fee.toFixed(2);
+    var feeStyled = isCancelled
+      ? '<span style="color:#9ca3af;text-decoration:line-through;">' + feeAmt + '</span>'
+      : feeAmt;
+    var gigFeeCell = hoverHtml
+      ? '<span class="gf-pay-hover-host" style="position:relative;cursor:help;border-bottom:1px dashed rgba(255,255,255,0.25);">' + feeStyled + hoverHtml + '</span>'
+      : feeStyled;
     // Total paid: just $0.00 for cancelled — artist gets nothing, no parenthetical needed
     var totalPaidCell = isCancelled
       ? '<span style="color:#ef4444;font-weight:700;">$0.00</span>'

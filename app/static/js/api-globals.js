@@ -195,4 +195,76 @@
     const pct = parseInt(slot.door_pct, 10) || 0;
     return gua > 0 || pct > 0;
   };
+
+  // ── window.buildPaySlotTooltip(slots, counterparty) ──────────────────
+  // Shared hover-popover builder for the Payments tables (venue +
+  // artist). Renders a styled tooltip listing one row per slot:
+  //
+  //   Slot N · Artist Name   $XX.XX    breakdown
+  //
+  // Where `breakdown` is "flat" (muted) for flat-pay slots, or
+  // "$10.00 guarantee + 50% of door ($10.00)" for door deals (with
+  // the door share computed from receipts × pct). Pre-settle door
+  // slots show "not yet settled" in amber.
+  //
+  // Returns HTML that should be placed INSIDE a relatively-positioned
+  // host span carrying class .gf-pay-hover-host. The :hover rule
+  // injected below flips display:none → block.
+  window.buildPaySlotTooltip = function (slots, counterparty) {
+    if (!Array.isArray(slots) || !slots.length) return '';
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+    const money = (c) => '$' + ((Number(c) || 0) / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    const dollars = (d) => '$' + (Number(d) || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    const rows = slots.map((sd) => {
+      const slotN = sd.slot_number != null ? `Slot ${parseInt(sd.slot_number, 10)}` : '';
+      const who = sd.artist_name || counterparty || '';
+      const label = slotN + (slotN && who ? ' · ' : '') + who;
+      const isDoor = String(sd.deal_type || '').toLowerCase() === 'door';
+      const payStr = sd.pay != null ? dollars(sd.pay)
+                  : (sd.settled_pay_cents != null ? money(sd.settled_pay_cents) : '');
+      let detail = '';
+      if (isDoor) {
+        const gua = money(sd.guarantee_cents || 0);
+        const pct = parseInt(sd.door_pct, 10) || 0;
+        if (sd.settled_at && sd.door_receipts_cents != null) {
+          // Door share = receipts × pct / 100 (mirrors backend math).
+          const shareCents = Math.floor((Number(sd.door_receipts_cents) || 0) * pct / 100);
+          detail = `${gua} guarantee + ${pct}% of door (${money(shareCents)})`;
+        } else {
+          detail = `${gua} guarantee + ${pct}% of door · <span style="color:#fbbf24;">not yet settled</span>`;
+        }
+      } else {
+        detail = '<span style="color:var(--text-muted, #94a3b8);">flat</span>';
+      }
+      return ''
+        + '<div style="display:contents;">'
+        +   `<div style="color:#a78bfa;font-weight:600;padding:3px 0;white-space:nowrap;">${esc(label)}</div>`
+        +   `<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text, #e4e7eb);font-weight:700;padding:3px 0 3px 18px;text-align:right;white-space:nowrap;">${payStr}</div>`
+        +   `<div style="color:var(--text-muted, #94a3b8);padding:3px 0 3px 18px;white-space:nowrap;">${detail}</div>`
+        + '</div>';
+    }).join('');
+    return ''
+      + '<div class="gf-pay-hover-popover" style="'
+      +   'position:absolute;bottom:100%;left:50%;transform:translateX(-50%);'
+      +   'margin-bottom:8px;display:none;z-index:9000;pointer-events:none;'
+      +   'background:#151b28;border:1px solid rgba(6,182,212,0.35);border-radius:8px;'
+      +   'box-shadow:0 10px 24px rgba(0,0,0,0.45);padding:10px 14px;'
+      +   'font-size:0.74rem;line-height:1.35;min-width:280px;max-width:520px;'
+      +   '">'
+      +   '<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--cyan, #06b6d4);font-weight:700;margin-bottom:6px;">Pay Breakdown</div>'
+      +   '<div style="display:grid;grid-template-columns:max-content max-content 1fr;column-gap:14px;row-gap:2px;align-items:baseline;">' + rows + '</div>'
+      + '</div>';
+  };
+
+  // CSS that powers the hover trigger. Injected once on module load.
+  (function _injectPayHoverCss() {
+    if (document.getElementById('gfPayHoverCss')) return;
+    const s = document.createElement('style');
+    s.id = 'gfPayHoverCss';
+    s.textContent =
+      '.gf-pay-hover-host:hover .gf-pay-hover-popover { display: block !important; }';
+    document.head.appendChild(s);
+  })();
 })();
