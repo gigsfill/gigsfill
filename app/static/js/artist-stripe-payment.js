@@ -286,9 +286,21 @@ function renderArtistEarningsTable() {
     // tooltip. The Gig Pay number stays compact; hovering reveals the
     // slot breakdown. Built only when this row's slot is a door deal;
     // flat-pay rows have no tooltip (the amount IS the whole story).
+    // Hover tooltip — render for EVERY row, not just door deals.
+    // For flat-pay rows the breakdown column reads "flat" in muted
+    // color so the user can still see at a glance that the listed
+    // amount IS the whole story. For legacy rows that pre-date the
+    // gig_slots table (slot_detail null), synthesize a minimal slot
+    // from the row's own data so the hover bubble still appears.
     var hoverHtml = '';
-    if (t.slot_detail && String(t.slot_detail.deal_type || '').toLowerCase() === 'door' && window.buildPaySlotTooltip) {
-      hoverHtml = window.buildPaySlotTooltip([t.slot_detail], t.venue_name);
+    if (window.buildPaySlotTooltip) {
+      var slotForHover = t.slot_detail || {
+        slot_number: null,
+        artist_name: null,         // counterparty handled by 2nd arg
+        pay: t.gig_fee,            // dollars, helper detects via sd.pay
+        deal_type: 'flat',
+      };
+      hoverHtml = window.buildPaySlotTooltip([slotForHover], t.venue_name);
     }
     // Gig fee cell. When a hover tooltip is present, wrap the amount
     // in a positioning host with cursor:help + dashed-underline so

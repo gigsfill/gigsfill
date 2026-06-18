@@ -386,14 +386,23 @@ function renderVenueBillingTable() {
     var feeStyled = isCancelled
       ? '<span style="color:#9ca3af;text-decoration:line-through;font-size:0.8rem;">' + feeAmt + '</span>'
       : feeAmt;
+    // Hover tooltip — render for EVERY row regardless of deal type.
+    // Flat slots render their pay with a muted "flat" tag; door
+    // slots render the guarantee + door-share breakdown. For legacy
+    // rows that pre-date the gig_slots table (slot_details empty),
+    // synthesize one slot from the row's existing data so the hover
+    // still appears with the artist's name + listed pay.
     var hoverHtml = '';
-    if (Array.isArray(t.slot_details) && t.slot_details.length) {
-      var hasDoor = t.slot_details.some(function(s){
-        return String(s.deal_type || '').toLowerCase() === 'door';
-      });
-      if (hasDoor && window.buildPaySlotTooltip) {
-        hoverHtml = window.buildPaySlotTooltip(t.slot_details, '');
-      }
+    if (window.buildPaySlotTooltip) {
+      var slotsForHover = (Array.isArray(t.slot_details) && t.slot_details.length)
+        ? t.slot_details
+        : [{
+            slot_number: null,
+            artist_name: t.artist_name || '',
+            pay: t.gig_fee,
+            deal_type: 'flat',
+          }];
+      hoverHtml = window.buildPaySlotTooltip(slotsForHover, '');
     }
     var gigFeeCell = hoverHtml
       ? '<span class="gf-pay-hover-host" style="position:relative;cursor:help;border-bottom:1px dashed rgba(255,255,255,0.25);">' + feeStyled + hoverHtml + '</span>'
