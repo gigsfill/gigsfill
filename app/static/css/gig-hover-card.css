@@ -109,3 +109,70 @@
   background: rgba(248, 113, 113, 0.08);
   border-color: rgba(248, 113, 113, 0.35);
 }
+
+/* Per-slot breakdown — one line per slot showing time + artist + status
+   tag. Appears below the date for multi-slot gigs only.
+   Layout: monospace-aligned time column on the left, artist name in
+   the middle (clickable when artist_id is known), small status pill
+   on the right. Each line is its own row in a flex column. */
+.gf-gig-hover-card .gf-ghc-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+.gf-gig-hover-card .gf-ghc-slot-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  flex-wrap: wrap;
+}
+.gf-gig-hover-card .gf-ghc-slot-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+}
+.gf-gig-hover-card .gf-ghc-slot-sep {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 0.7rem;
+}
+.gf-gig-hover-card .gf-ghc-slot-who {
+  color: #e5e5e5;
+}
+.gf-gig-hover-card .gf-ghc-slot-line .gf-ghc-artist-link {
+  color: #67e8f9;
+  cursor: pointer;
+  text-decoration: none;
+}
+.gf-gig-hover-card .gf-ghc-slot-line .gf-ghc-artist-link:hover {
+  text-decoration: underline;
+}
+.gf-gig-hover-card .gf-ghc-slot-tag {
+  display: inline-block;
+  margin-left: auto;
+  padding: 1px 7px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+}
+.gf-gig-hover-card .gf-ghc-slot-tag-booked {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+.gf-gig-hover-card .gf-ghc-slot-tag-pending {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.35);
+}

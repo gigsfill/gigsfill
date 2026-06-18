@@ -207,6 +207,40 @@
       statusLabel = 'Contract pending';
     else if (g.status === 'cancelled') statusLabel = 'Cancelled';
 
+    // Per-slot breakdown for multi-slot gigs — one row per slot with its
+    // own time range + artist (or "Open") + small status tag. Renders
+    // below the date in renderCard. Only emitted when there are 2+ slots
+    // so single-slot (and venue calendar's per-slot bubble payloads,
+    // which trim slots to [slot]) don't get redundant rows.
+    let slotLines = null;
+    if (Array.isArray(g.slots) && g.slots.length >= 2) {
+      const _sorted = [...g.slots].sort(
+        (a, b) => (a.start_time || '').localeCompare(b.start_time || '')
+      );
+      slotLines = _sorted.map(s => {
+        const tStart = fmtTime(s.start_time);
+        const tEnd   = s.end_time ? fmtTime(s.end_time) : '';
+        const time   = tEnd ? `${tStart} – ${tEnd}` : tStart;
+        let who = '', tag = '', tagClass = '';
+        const st = s.status || '';
+        if (st === 'booked') {
+          who = s.artist_name || 'Booked';
+          tag = 'Booked'; tagClass = 'gf-ghc-slot-tag-booked';
+        } else if (PENDING_STATUSES.has(st)) {
+          who = s.artist_name || 'Pending';
+          tag = st === 'pending_venue_approval' ? 'Pending Approval' : 'Pending Countersign';
+          tagClass = 'gf-ghc-slot-tag-pending';
+        } else if (st === 'open') {
+          who = 'Open'; tag = ''; tagClass = '';
+        } else {
+          // Cancelled / unknown — show whatever artist info we have plus the raw status.
+          who = s.artist_name || st || '—';
+          tag = st; tagClass = '';
+        }
+        return { time, who, tag, tagClass, artistId: s.artist_id || null };
+      });
+    }
+
     return {
       __card: true,
       headerPrefix: header,           // e.g. "Booked — " or "Open"
@@ -217,7 +251,11 @@
       streetAddress: streetAddress,
       cityState: city && state ? `${city}, ${state}` : (city || state || ''),
       date: fmtDate(date),
-      time: fmtTime(start) + (end ? ` – ${fmtTime(end)}` : ''),
+      // For multi-slot gigs the overall time would just repeat slot-1's
+      // start through slot-N's end (the umbrella) — redundant with the
+      // per-slot breakdown below. Hide it.
+      time: slotLines ? '' : fmtTime(start) + (end ? ` – ${fmtTime(end)}` : ''),
+      slotLines: slotLines,
       mapsUrl: mapsUrl([venue, streetAddress, city, state]),
       statusLabel: statusLabel,
       artistType: g.artist_type,
@@ -260,6 +298,27 @@
     if (p.date) dt.push(`<div class="gf-ghc-date">${esc(p.date)}</div>`);
     if (p.time) dt.push(`<div class="gf-ghc-time">${esc(p.time)}</div>`);
     if (dt.length) rows.push(`<div class="gf-ghc-dt">${dt.join('')}</div>`);
+
+    // Per-slot breakdown — one line per slot with time, name (clickable
+    // via artist-link sentinel), and small status tag. Renders only when
+    // payloadFromGig built slotLines (multi-slot gigs).
+    if (p.slotLines && p.slotLines.length) {
+      const linesHtml = p.slotLines.map(s => {
+        const whoHtml = s.artistId
+          ? `<span class="gf-ghc-artist-link" data-artist-id="${s.artistId}">${esc(s.who)}</span>`
+          : `<span class="gf-ghc-slot-who">${esc(s.who)}</span>`;
+        const tagHtml = s.tag
+          ? `<span class="gf-ghc-slot-tag ${esc(s.tagClass || '')}">${esc(s.tag)}</span>`
+          : '';
+        return `<div class="gf-ghc-slot-line">
+          <span class="gf-ghc-slot-time">${esc(s.time)}</span>
+          <span class="gf-ghc-slot-sep">·</span>
+          ${whoHtml}
+          ${tagHtml}
+        </div>`;
+      }).join('');
+      rows.push(`<div class="gf-ghc-slots">${linesHtml}</div>`);
+    }
 
     // Venue + street address — both clickable to open Google/Apple maps.
     const loc = [];
