@@ -497,10 +497,22 @@ window.venueUpdateCard = venueUpdateCard;
 window.venueRemoveCard = venueRemoveCard;
 window.showPaymentModal = showPaymentModal;
 window.loadVenuePaymentSettings = loadVenuePaymentSettings;
+window.loadVenueBillingHistory = loadVenueBillingHistory;
 window.venueBillSortBy = venueBillSortBy;
 window.venueBillGoPage = venueBillGoPage;
 window.setVenueBillShow = window.setVenueBillShow; // already defined above
 window.exportVenueBilling = exportVenueBilling;
+
+// Auto-refresh when a settle event fires. Settle is the only flow
+// that mutates already-loaded venue transactions (recompute moves
+// amount_cents / venue_charge_cents / commission_cents on the parent
+// + every child). Without this listener the Payments tab kept
+// showing the pre-settle snapshot until the user manually refreshed.
+window.addEventListener('gigsfill:payments-stale', function () {
+  if (document.getElementById('venueBillingHistory')) {
+    loadVenueBillingHistory();
+  }
+});
 
 // Close export dropdown on outside click
 document.addEventListener('click', function(e) {

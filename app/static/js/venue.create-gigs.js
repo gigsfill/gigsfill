@@ -1510,6 +1510,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         (typeof showAlert === 'function' ? showAlert : alert)(msg,
           res.warning ? 'Door Settled — Action Required' : undefined);
       }
+      // Broadcast a stale-data event so any open Payments tab in THIS
+      // browser reloads its transaction list. Settle changes both the
+      // venue_charge total AND every artist_payout amount on this gig
+      // (via _recompute_gig_fees) — without this, the Payments tab
+      // shows last-load's numbers until the user manually refreshes.
+      try {
+        window.dispatchEvent(new CustomEvent('gigsfill:payments-stale', {
+          detail: { reason: 'door-settle', gig_id: selectedGig && selectedGig.id }
+        }));
+      } catch (_) {}
       // Walk to the next pending slot, if any.
       if (_doorSettleQueue.length) {
         _openDoorSettleModal(_doorSettleQueue.shift());

@@ -544,3 +544,12 @@ async function loadArtistPayoutSummary() {
 }
 
 window.loadArtistPayoutSummary = loadArtistPayoutSummary;
+
+// Same auto-refresh wiring as venue side — only useful if the
+// artist's browser hears the event (e.g. they're the same user
+// viewing both pages locally during dev). Safe no-op otherwise.
+window.addEventListener('gigsfill:payments-stale', function () {
+  if (document.getElementById('artistEarningsHistory')) {
+    loadArtistEarningsHistory();
+  }
+});
