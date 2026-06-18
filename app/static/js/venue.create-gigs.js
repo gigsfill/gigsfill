@@ -6409,8 +6409,10 @@ window._showCancelPaymentModal = async function(gigId) {
         outcome. The artist may contact you directly regarding this matter.</em>
       </p>
       <div style="display:flex;gap:10px;justify-content:flex-end;">
-        <button id="cancelPayOverlayClose" class="btn ghost" style="padding:8px 18px;font-size:0.85rem;">Never Mind</button>
-        <button id="cancelPayConfirmBtn" class="btn" style="background:#ef4444;color:#fff;padding:8px 18px;font-size:0.85rem;border:none;border-radius:6px;cursor:pointer;" disabled>Confirm — 0 slots</button>
+        <button id="cancelPayOverlayClose" class="btn ghost"
+          style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:var(--text-gray);padding:8px 18px;font-size:0.85rem;border-radius:6px;cursor:pointer;">Cancel</button>
+        <button id="cancelPayConfirmBtn" class="btn"
+          style="background:rgba(239,68,68,0.35);color:rgba(255,255,255,0.5);padding:8px 18px;font-size:0.85rem;border:none;border-radius:6px;cursor:not-allowed;opacity:0.6;" disabled>Confirm — 0 slots</button>
       </div>
       <div id="cancelPayStatus" style="margin-top:12px;text-align:center;font-size:0.85rem;"></div>
     </div>
@@ -6434,6 +6436,20 @@ window._showCancelPaymentModal = async function(gigId) {
     confirmBtn.disabled = n === 0;
     confirmBtn.textContent = n === 0 ? 'Confirm — 0 slots'
       : `Confirm Cancel — ${n} slot${n === 1 ? '' : 's'}`;
+    // Visual disabled state — greyed out when nothing's selected so
+    // the user doesn't think clicking will do something. Snaps back
+    // to the active red when at least one slot is checked.
+    if (n === 0) {
+      confirmBtn.style.background = 'rgba(239,68,68,0.35)';
+      confirmBtn.style.color = 'rgba(255,255,255,0.5)';
+      confirmBtn.style.cursor = 'not-allowed';
+      confirmBtn.style.opacity = '0.6';
+    } else {
+      confirmBtn.style.background = '#ef4444';
+      confirmBtn.style.color = '#fff';
+      confirmBtn.style.cursor = 'pointer';
+      confirmBtn.style.opacity = '1';
+    }
   }
   overlay.querySelectorAll('.cancel-slot-row').forEach(row => {
     const cb = row.querySelector('.cancel-slot-check');
