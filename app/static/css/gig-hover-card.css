@@ -116,22 +116,27 @@
    the middle (clickable when artist_id is known), small status pill
    on the right. Each line is its own row in a flex column. */
 .gf-gig-hover-card .gf-ghc-slots {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  /* 3-column grid — time | name | tag. Name column starts at the same
+     x-position across every row because the time column width is the
+     widest time string in the data (max-content). Children of each
+     .gf-ghc-slot-line participate directly thanks to display:contents
+     below. No dot separator any more — vertical alignment does the
+     visual separation. */
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  column-gap: 14px;
+  row-gap: 6px;
+  align-items: center;
   margin: 8px 0 4px;
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
-}
-.gf-gig-hover-card .gf-ghc-slot-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   font-size: 0.78rem;
   line-height: 1.35;
-  flex-wrap: wrap;
+}
+.gf-gig-hover-card .gf-ghc-slot-line {
+  display: contents;
 }
 .gf-gig-hover-card .gf-ghc-slot-time {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -139,9 +144,12 @@
   color: rgba(255, 255, 255, 0.78);
   white-space: nowrap;
 }
-.gf-gig-hover-card .gf-ghc-slot-sep {
-  color: rgba(255, 255, 255, 0.35);
-  font-size: 0.7rem;
+.gf-gig-hover-card .gf-ghc-slot-tag-empty {
+  /* Empty cell placeholder for rows with no tag (open slots) so the
+     3-column grid stays aligned and an open row's name doesn't widen
+     into the tag column. */
+  display: inline-block;
+  min-width: 1px;
 }
 .gf-gig-hover-card .gf-ghc-slot-who {
   color: #e5e5e5;
@@ -156,7 +164,6 @@
 }
 .gf-gig-hover-card .gf-ghc-slot-tag {
   display: inline-block;
-  margin-left: auto;
   padding: 1px 7px;
   font-size: 0.66rem;
   font-weight: 600;

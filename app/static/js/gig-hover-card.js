@@ -303,16 +303,22 @@
     // via artist-link sentinel), and small status tag. Renders only when
     // payloadFromGig built slotLines (multi-slot gigs).
     if (p.slotLines && p.slotLines.length) {
+      // Layout note (Jun 2026): .gf-ghc-slots is a CSS grid with three
+      // columns — time | name | tag. Each .gf-ghc-slot-line uses
+      // display:contents so its three children participate directly in
+      // the parent grid, which means the name column starts at the
+      // SAME x-position across every row regardless of how wide each
+      // row's time string is. No dot separator any more — vertical
+      // alignment does the visual separation.
       const linesHtml = p.slotLines.map(s => {
         const whoHtml = s.artistId
           ? `<span class="gf-ghc-artist-link" data-artist-id="${s.artistId}">${esc(s.who)}</span>`
           : `<span class="gf-ghc-slot-who">${esc(s.who)}</span>`;
         const tagHtml = s.tag
           ? `<span class="gf-ghc-slot-tag ${esc(s.tagClass || '')}">${esc(s.tag)}</span>`
-          : '';
+          : '<span class="gf-ghc-slot-tag-empty"></span>';
         return `<div class="gf-ghc-slot-line">
           <span class="gf-ghc-slot-time">${esc(s.time)}</span>
-          <span class="gf-ghc-slot-sep">·</span>
           ${whoHtml}
           ${tagHtml}
         </div>`;
