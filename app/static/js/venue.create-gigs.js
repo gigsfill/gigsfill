@@ -2016,13 +2016,20 @@ async function renderCalendar() {
                 openGigModal(g);
               };
               if (typeof window.attachGigHoverCard === 'function') {
-                // Merge slot info into the gig payload so the hover card
-                // reflects this specific slot's artist/time.
+                // Per-slot bubble hover: each bubble should reflect ONLY
+                // its own slot's artist + time, not the gig umbrella
+                // (e.g. slot 1 bubble was showing "7-11pm · Fifty Proof,
+                // Fridays Past" because g.slots = both slots and
+                // g.end_time = gig umbrella). Trim the slot list to just
+                // this slot and override start/end times so the hover
+                // card renders this slot in isolation.
                 window.attachGigHoverCard(slotDiv, {
                   ...g,
+                  slots: [slot],
                   artist_name: slot.artist_name,
                   artist_id: slot.artist_id,
                   start_time: slot.start_time,
+                  end_time: slot.end_time,
                   status: slot.status,
                 });
               }

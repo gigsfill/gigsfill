@@ -2724,6 +2724,27 @@ def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
         venue_name = venue_data["venue_name"] if venue_data else "Venue"
         artist_name = artist_data["name"] if artist_data else "Artist"
 
+        # Slot suffix — Activity Center enriches the message with the
+        # slot's actual start_time when the body contains "Slot N" (see
+        # backend/routes/notifications.py:86). Without this, multi-slot
+        # gigs fall back to the parent gig's start_time and every slot
+        # notification reads as the umbrella start. For a 2-slot gig
+        # (7-9 + 9-11) Fifty Proof's notification said 7pm AND Fridays
+        # Past's said 7pm too — Fridays Past's should say 9pm.
+        _slot_rows = db.execute(
+            text("""SELECT slot_number FROM gig_slots
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+                    ORDER BY slot_number"""),
+            {"gid": gig_id, "aid": artist_id}
+        ).fetchall()
+        if len(_slot_rows) == 1:
+            slot_suffix = f" Slot {_slot_rows[0][0]}"
+        elif len(_slot_rows) > 1:
+            slot_suffix = f" Slots {', '.join(str(r[0]) for r in _slot_rows)}"
+        else:
+            slot_suffix = ""
+
         # Audit fix (May 2026 part 7): compute entity-user lists once for fan-out.
         from backend.utils import get_all_entity_users as _gaeu
         try:
@@ -2751,21 +2772,21 @@ def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
         
         if status == "booked":
             _ins_venue('gig_booked', "Gig Booked & Contract Signed",
-                       f"{artist_name} has booked and signed the contract for {gig_label}.")
+                       f"{artist_name} has booked and signed the contract for {gig_label}{slot_suffix}.")
             _ins_artist('gig_booked', "Gig Booked!",
-                        f"You've booked {gig_label} at {venue_name}. Contract signed.")
+                        f"You've booked {gig_label}{slot_suffix} at {venue_name}. Contract signed.")
 
         elif status == "pending_contract":
             _ins_venue('contract_pending', "Gig Held — Awaiting Contract Signature",
-                       f"{artist_name} is booking {gig_label}. Awaiting their signed contract (24hr hold).")
+                       f"{artist_name} is booking {gig_label}{slot_suffix}. Awaiting their signed contract (24hr hold).")
             _ins_artist('contract_pending', "Contract Required — 24 Hours to Sign",
-                        f"Download, sign, and upload the contract for {gig_label} at {venue_name} within 24 hours to confirm your booking.")
+                        f"Download, sign, and upload the contract for {gig_label}{slot_suffix} at {venue_name} within 24 hours to confirm your booking.")
 
         elif status == "awaiting_venue_contract":
             _ins_venue('contract_upload_needed', "Contract Upload Needed — 48 Hours",
-                       f"{artist_name} wants to book {gig_label}. Upload a contract within 48 hours.")
+                       f"{artist_name} wants to book {gig_label}{slot_suffix}. Upload a contract within 48 hours.")
             _ins_artist('contract_awaiting_venue', "Awaiting Contract From Venue",
-                        f"Your booking for {gig_label} at {venue_name} is being held. The venue will upload a contract within 48 hours.")
+                        f"Your booking for {gig_label}{slot_suffix} at {venue_name} is being held. The venue will upload a contract within 48 hours.")
         
         elif status == "artist_signed":
             # Get contract_id for the countersign link
@@ -2781,7 +2802,7 @@ def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
                     gig_date_fmt = f"{d.month}/{d.day}/{d.year}"
                 except Exception:
                     gig_date_fmt = gig_data["date"][:10] if gig_data.get("date") else ""
-            msg_venue = f"{artist_name} has signed the contract for a gig on {gig_date_fmt}." if gig_date_fmt else f"{artist_name} has signed the contract for a gig."
+            msg_venue = f"{artist_name} has signed the contract for a gig{slot_suffix} on {gig_date_fmt}." if gig_date_fmt else f"{artist_name} has signed the contract for a gig{slot_suffix}."
             _ins_venue('contract_countersign_needed', "Contract Signed", msg_venue)
             # Artist: "X has signed the contract for a gig at {venue} on {date}." (second line added in activity center)
             gig_date_fmt_artist = ""
@@ -2791,14 +2812,14 @@ def _create_booking_notifications(db, gig_id, venue_id, artist_id, status):
                     gig_date_fmt_artist = f"{d.month}/{d.day}/{d.year}"
                 except Exception:
                     gig_date_fmt_artist = gig_data["date"][:10] if gig_data.get("date") else ""
-            msg_artist = f"{artist_name} has signed the contract for a gig at {venue_name} on {gig_date_fmt_artist}." if gig_date_fmt_artist else f"{artist_name} has signed the contract for a gig at {venue_name}."
+            msg_artist = f"{artist_name} has signed the contract for a gig{slot_suffix} at {venue_name} on {gig_date_fmt_artist}." if gig_date_fmt_artist else f"{artist_name} has signed the contract for a gig{slot_suffix} at {venue_name}."
             _ins_artist('contract_artist_signed', "Contract Signed — Awaiting Venue", msg_artist)
 
         elif status == "fully_signed":
             _ins_venue('gig_booked', "Contract Signed — Booking Confirmed",
-                       f"The contract for {gig_label} with {artist_name} is fully signed. Booking confirmed!")
+                       f"The contract for {gig_label}{slot_suffix} with {artist_name} is fully signed. Booking confirmed!")
             _ins_artist('gig_booked', "Gig Booked — Contract Confirmed!",
-                        f"Your gig {gig_label} at {venue_name} is confirmed! The venue has countersigned the contract.")
+                        f"Your gig {gig_label}{slot_suffix} at {venue_name} is confirmed! The venue has countersigned the contract.")
         
         db.commit()
     except Exception:
