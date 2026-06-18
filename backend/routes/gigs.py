@@ -1700,6 +1700,75 @@ def _parse_gig_slot_dt(db, venue_id: int, gig_date, start_time, end_time):
 
 # BOOK GIG (ARTIST) - COMPLETELY REWRITTEN
 
+def _check_artist_matches_gig(db, gig: dict, artist_id: int, slot_id: int = None) -> None:
+    """Hard-block bookings where the artist's type or lineup doesn't match
+    what the gig (or specific slot) requires.
+
+    Mirrors the artist.book-gigs.js frontend 'blocked' classification
+    (lines 604-612) — the UI hides the Book button on a mismatch, but a
+    direct API call would otherwise still go through. This server-side
+    gate closes that gap so the rules apply at the only layer that
+    matters: artist.book-gigs.js doing the UI, this function doing
+    the contract.
+
+    Rules:
+      - If the requirement has artist_type set, artist.artist_type must
+        equal it. A Comedian cannot book a Live Band gig.
+      - If the requirement is 'Live Band' AND band_formats is set AND
+        the artist's profile has band_formats, require at least one
+        overlap. A Full-Band-only artist cannot book a Solo-only gig.
+      - Styles (Country, Hip-Hop, etc.) are NOT gated — venues set
+        styles as guidance, not a hard filter. A country band playing
+        a rock-listed gig is a venue/artist decision, not a system one.
+
+    slot_id: when provided, prefer the slot's per-slot artist_type +
+    band_formats (multi-slot gigs can require different lineups per
+    slot). Falls back to gig-level when slot has no per-slot override.
+    """
+    artist = db.execute(
+        text("SELECT artist_type, band_formats FROM artists WHERE id = :aid"),
+        {"aid": artist_id}
+    ).mappings().first()
+    if not artist:
+        return  # auth check is elsewhere; nothing to compare against
+
+    # Pull the requirement — slot-level when slot_id provided (multi-slot
+    # gigs can override per slot), else gig-level.
+    req_type = (gig.get("artist_type") or "").strip()
+    req_fmts = gig.get("band_formats") or ""
+    if slot_id:
+        _slot = db.execute(
+            text("SELECT artist_type, band_formats FROM gig_slots WHERE id = :sid"),
+            {"sid": slot_id}
+        ).mappings().first()
+        if _slot:
+            _st = (_slot.get("artist_type") or "").strip()
+            _sf = _slot.get("band_formats") or ""
+            if _st: req_type = _st
+            if _sf: req_fmts = _sf
+
+    a_type = (artist.get("artist_type") or "").strip()
+    if req_type and a_type and req_type != a_type:
+        raise HTTPException(
+            400,
+            f"ARTIST_TYPE_MISMATCH: This gig requires {req_type}; your artist "
+            f"is registered as {a_type}. Switch to a matching artist account "
+            f"or skip this gig."
+        )
+
+    if req_type == "Live Band":
+        req_set = {f.strip() for f in str(req_fmts).split(",") if f.strip()}
+        artist_set = {f.strip() for f in str(artist.get("band_formats") or "").split(",") if f.strip()}
+        if req_set and artist_set and not (req_set & artist_set):
+            req_str = ", ".join(sorted(req_set))
+            yours_str = ", ".join(sorted(artist_set)) or "none on file"
+            raise HTTPException(
+                400,
+                f"LINEUP_MISMATCH: This gig requires lineup {req_str}; your "
+                f"artist offers {yours_str}. At least one option must overlap."
+            )
+
+
 def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
                            gig_date: str, blast_token: str = "") -> dict:
     """
@@ -1852,6 +1921,22 @@ def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
         # rather than blocking bookings. The scheduler is the real backstop.
         pass
 
+    # Artist type + lineup match — hard gate. Frontend already hides the
+    # Book button for mismatches, but a curl-direct caller would skip
+    # that. Pulled here so every booking path that uses _run_prebooking_
+    # checks (book_with_contract today, future ones tomorrow) gets it
+    # for free. book_gig / book_slot, which inline their own pref check,
+    # call _check_artist_matches_gig directly below.
+    try:
+        _gig_for_check = db.execute(
+            text("SELECT artist_type, band_formats FROM gigs WHERE id = :gid"),
+            {"gid": gig_id}
+        ).mappings().first()
+        if _gig_for_check:
+            _check_artist_matches_gig(db, dict(_gig_for_check), artist_id)
+    except HTTPException:
+        raise
+
     return {"token_valid": token_valid, "pref": pref}
 
 
@@ -1898,10 +1983,12 @@ def book_gig(
             raise HTTPException(403, "Artist does not belong to you")
         artist_id = int(artist_id)
 
-    # Load gig
+    # Load gig — also pull artist_type + band_formats so the match-gate
+    # below can run without a second SELECT.
     gig = db.execute(
         text("""
-            SELECT id, venue_id, status, date, artist_id, COALESCE(frequency_exempt, 0) as frequency_exempt
+            SELECT id, venue_id, status, date, artist_id, artist_type, band_formats,
+                   COALESCE(frequency_exempt, 0) as frequency_exempt
             FROM gigs
             WHERE id = :gid
         """),
@@ -1910,6 +1997,11 @@ def book_gig(
 
     if not gig:
         raise HTTPException(404, "Gig not found")
+
+    # Artist type + lineup match gate — see _check_artist_matches_gig
+    # docstring. Hard 400 on mismatch. Mirrors the frontend's "blocked"
+    # state so curl-direct callers can't slip past.
+    _check_artist_matches_gig(db, dict(gig), artist_id)
 
     # ── Waitlist lock ────────────────────────────────────────────────────────
     # If an exclusive sequential offer is active for this gig, ONLY the artist
@@ -4072,6 +4164,18 @@ def book_slot(
 
     if not slot:
         raise HTTPException(404, "Slot not found")
+
+    # Artist type + lineup match gate — slot-aware version so a multi-
+    # slot gig with per-slot lineup overrides enforces what THIS slot
+    # requires, not the gig umbrella. Hard 400 on mismatch. See
+    # _check_artist_matches_gig docstring for the rules.
+    _gig_for_check = db.execute(
+        text("SELECT artist_type, band_formats FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if _gig_for_check:
+        _check_artist_matches_gig(db, dict(_gig_for_check), artist_id, slot_id=slot_id)
+
     # Allow re-booking a slot the artist already has pending approval on
     if slot["status"] == "pending_venue_approval" and slot.get("artist_id") == artist_id:
         pass  # Artist re-submitting their own pending slot — allow through

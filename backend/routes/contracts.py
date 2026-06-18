@@ -2423,8 +2423,15 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
 
     # ── Pre-booking checks — shared with book_gig and book_slot ─────────────
     _blast_token = request.query_params.get("blast_token") or data.get("blast_token") or ""
-    from backend.routes.gigs import _run_prebooking_checks, _is_same_day_booking, _ensure_approval_columns, _enforce_no_artist_time_overlap
+    from backend.routes.gigs import _run_prebooking_checks, _is_same_day_booking, _ensure_approval_columns, _enforce_no_artist_time_overlap, _check_artist_matches_gig
     _check_result = _run_prebooking_checks(db, gig_id, artist_id, venue_id, str(gig.get("date", "")), _blast_token)
+    # Slot-aware match gate (multi-slot gigs can override per slot).
+    # _run_prebooking_checks already ran the gig-level version; this
+    # call wins when slot_id is supplied with its own artist_type /
+    # band_formats. Idempotent — passing slot_id=None matches the
+    # earlier gig-level check exactly so no double error.
+    if slot_id:
+        _check_artist_matches_gig(db, dict(gig), artist_id, slot_id=slot_id)
     # Hard-block on time overlap with the artist's other commitments.
     # Use slot times if booking a slot; gig umbrella times for single-slot.
     if slot_id and slot:

@@ -37,7 +37,11 @@
 
   const HOVER_DELAY_MS = 200;
   const HIDE_DELAY_MS = 180;  // grace window so the user can move into the card
-  const CARD_WIDTH = 300;
+  // Card width is applied INLINE via positionCard() so the flip-to-left
+  // logic can know the exact size before measurement. The CSS max-width
+  // is only a safety net — this value wins. Bumped from 300 to 520 so
+  // "🎸 Live Band" + Solo + Duo + Trio + Full Band fits on one line.
+  const CARD_WIDTH = 520;
   const GAP = 10;  // px between bubble and card
 
   let currentCard = null;
