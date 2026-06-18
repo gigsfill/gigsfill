@@ -529,6 +529,28 @@ document.addEventListener("DOMContentLoaded", async () => {
       const response = await fetch('/api/gigs/public');
       if (response.ok) {
         allGigs = await response.json();
+        // For multi-slot gigs, hydrate g.slots so the hover card can
+        // render the per-slot breakdown (payloadFromGig only builds
+        // slotLines when g.slots is an array with length >= 2). The
+        // day-modal already pre-fetches into g._slots — we just write
+        // to both keys so each consumer finds what it expects.
+        try {
+          await Promise.all(
+            allGigs
+              .filter(g => g.is_multi_slot || g.total_slots_count > 0 || g.booked_slots_count > 0)
+              .map(async g => {
+                try {
+                  const r = await fetch(`/api/gigs/${g.id}/slots`);
+                  if (r.ok) {
+                    const sorted = (await r.json())
+                      .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+                    g.slots = sorted;
+                    g._slots = sorted;
+                  }
+                } catch (_) {}
+              })
+          );
+        } catch (_) {}
         gigs = [...allGigs];
         updateVenueList();
         updateArtistList();

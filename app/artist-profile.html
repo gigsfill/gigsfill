@@ -571,6 +571,26 @@
     // ========== CALENDAR ==========
     async function loadGigs() {
       try { const r = await fetch(`/api/artists/${artistId}/gigs/public`); if (r.ok) artistGigs = await r.json(); } catch(e) {}
+      // For multi-slot gigs the /artists/:id/gigs/public endpoint
+      // returns the artist's slot times but NOT the full slot list.
+      // The hover card's per-slot breakdown only renders when
+      // g.slots is an array (length>=2), so fetch slots here and
+      // attach them. Mirrors what public-gigs.js already does.
+      try {
+        await Promise.all(
+          (artistGigs || [])
+            .filter(g => g.is_multi_slot)
+            .map(async g => {
+              try {
+                const r = await fetch(`/api/gigs/${g.id}/slots`);
+                if (r.ok) {
+                  g.slots = (await r.json())
+                    .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+                }
+              } catch (_) {}
+            })
+        );
+      } catch (_) {}
       const now = new Date(); calYear = now.getFullYear(); calMonth = now.getMonth();
       renderCalendar();
     }

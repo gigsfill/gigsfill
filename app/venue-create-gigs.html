@@ -2947,32 +2947,51 @@
        dollar signs line up vertically; labels sit on the RIGHT with
        a generous indent so they're easy to scan. Updated live by
        _updateDoorSettleTotal() in venue.create-gigs.js. -->
-  <div style="display:grid;grid-template-columns:115px 1fr;column-gap:32px;row-gap:10px;align-items:center;margin-bottom:18px;">
-    <div id="doorSettleGuarantee" style="font-size:0.95rem;font-weight:700;color:#10b981;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$0.00</div>
+  <!-- Settlement breakdown — all four amounts share the same visual
+       shape: a "$" symbol at the LEFT edge of column 1, then the
+       digits with a small gap. Same font family as the rest of the
+       modal (no mono). The receipts row swaps the digits span for an
+       inline editable input; the $ symbol stays in the same x column
+       so all four $ glyphs align vertically. Updated live by
+       _updateDoorSettleTotal() in venue.create-gigs.js — it writes
+       the digit portion into the *Value spans and to the legacy
+       hidden mirrors so existing code keeps working. -->
+  <div style="display:grid;grid-template-columns:max-content 1fr;column-gap:32px;row-gap:12px;align-items:center;margin-bottom:18px;">
+
+    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:0.95rem;font-weight:700;color:#10b981;min-width:115px;">
+      <span>$</span>
+      <span id="doorSettleGuaranteeValue">0.00</span>
+    </div>
     <div style="font-size:0.82rem;color:var(--text-gray);font-weight:500;"
       title="The floor amount you committed to at booking. The artist gets this even if door receipts are $0.">
       Guaranteed Pay
     </div>
 
-    <div style="display:flex;align-items:center;gap:4px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:3px 8px;width:115px;box-sizing:border-box;">
-      <span style="font-size:0.95rem;color:var(--text-gray);font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$</span>
+    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:0.95rem;font-weight:700;color:var(--text);min-width:115px;">
+      <span>$</span>
       <input type="text" id="doorSettleReceiptsInput" value="0.00" inputmode="decimal" maxlength="10"
         onclick="this.select()" onfocus="this.select()"
         title="Click and start typing. Rightmost two digits are cents. e.g. type '1','5','0','0','0' → $150.00. Supports up to $99,999.99."
-        style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--text);font-size:0.95rem;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:right;width:100%;">
+        style="background:transparent;border:none;border-bottom:1px dashed rgba(255,255,255,0.35);outline:none;color:var(--text);font:inherit;font-weight:700;text-align:left;padding:0 0 1px;width:90px;">
     </div>
     <label for="doorSettleReceiptsInput" style="font-size:0.82rem;color:var(--text);font-weight:500;cursor:text;"
       title="Gross cash collected at the door tonight (or POS card receipts run at the door), in dollars. Click the field to select-all and replace by typing.">
       Total Door Receipts
     </label>
 
-    <div id="doorSettleDoorShare" style="font-size:0.95rem;font-weight:700;color:#10b981;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$0.00</div>
+    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:0.95rem;font-weight:700;color:#10b981;min-width:115px;">
+      <span>$</span>
+      <span id="doorSettleDoorShareValue">0.00</span>
+    </div>
     <div style="font-size:0.82rem;color:var(--text-gray);font-weight:500;"
       title="The artist's share of the door receipts entered above — locked at booking time per the deal terms.">
       Artist Receives <span id="doorSettleDoorPct" style="color:var(--text);">0%</span>
     </div>
 
-    <div id="doorSettleTotal" style="font-size:1.15rem;font-weight:800;color:#06b6d4;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);">$0.00</div>
+    <div style="display:inline-flex;align-items:baseline;gap:6px;font-size:1.15rem;font-weight:800;color:#06b6d4;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);min-width:115px;">
+      <span>$</span>
+      <span id="doorSettleTotalValue">0.00</span>
+    </div>
     <div style="font-size:0.85rem;color:#67e8f9;font-weight:700;padding-top:8px;border-top:1px solid rgba(255,255,255,0.10);"
       title="The site will charge this amount to your saved card at tomorrow's 5 PM payout sweep, then transfer (net of platform fees) to the artist's Stripe Connect account.">
       Artist Total Payout
@@ -2982,6 +3001,12 @@
       = $0.00 guarantee + $0.00 door share
     </div>
   </div>
+  <!-- Legacy mirror ids — kept hidden so existing
+       _updateDoorSettleTotal() writes don't error before the JS is
+       updated to target the new *Value spans below. -->
+  <span id="doorSettleGuarantee" hidden></span>
+  <span id="doorSettleDoorShare" hidden></span>
+  <span id="doorSettleTotal" hidden></span>
 
   <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:6px;padding:8px 12px;margin-bottom:18px;font-size:0.72rem;color:#fbbf24;line-height:1.5;"
     title="You can reopen this dialog and revise the receipts any time before the next-day 5 PM payout sweep. Once the scheduler has charged the venue card, the row freezes.">
@@ -3289,7 +3314,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=179"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=180"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>

@@ -1425,13 +1425,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     const doorShare = Math.floor((receipts * pct) / 100);
     // Mirror backend _compute_settled_pay: max(g, g + door_share)
     const total = Math.max(gua, gua + doorShare);
-    const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const totalEl = document.getElementById('doorSettleTotal');
-    const breakdownEl = document.getElementById('doorSettleBreakdown');
-    const shareEl = document.getElementById('doorSettleDoorShare');
-    if (totalEl) totalEl.textContent = fmt(total);
-    if (shareEl) shareEl.textContent = fmt(doorShare);
-    if (breakdownEl) breakdownEl.textContent = `= ${fmt(gua)} guarantee + ${fmt(doorShare)} door share`;
+    // Whole-amount string for the breakdown line ("= $10.00 guarantee
+    // + $5.00 door share"). The split-$ rows write the digits only,
+    // so $ stays in its own span at the column's left edge.
+    const fmt  = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtN = (c) => (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+
+    // New split-$ structure: write digits-only into *Value spans.
+    setText('doorSettleTotalValue', fmtN(total));
+    setText('doorSettleDoorShareValue', fmtN(doorShare));
+
+    // Legacy hidden mirrors — keep updated until callers stop reading them.
+    setText('doorSettleTotal', fmt(total));
+    setText('doorSettleDoorShare', fmt(doorShare));
+
+    setText('doorSettleBreakdown',
+      `= ${fmt(gua)} guarantee + ${fmt(doorShare)} door share`);
   }
 
   window._openDoorSettleModal = _openDoorSettleModal;
@@ -1443,8 +1453,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (sub) {
       sub.textContent = `Slot ${slot.slot_number}${slot.artist_name ? ' — ' + slot.artist_name : ''}`;
     }
-    document.getElementById('doorSettleGuarantee').textContent =
-      '$' + ((slot.guarantee_cents || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
+    // New split-$ row writes digits into doorSettleGuaranteeValue;
+    // legacy hidden mirror gets the full "$X.XX" for any old reader.
+    const _guaDigits = ((slot.guarantee_cents || 0) / 100)
+      .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const _guaValEl  = document.getElementById('doorSettleGuaranteeValue');
+    const _guaLegacy = document.getElementById('doorSettleGuarantee');
+    if (_guaValEl)  _guaValEl.textContent  = _guaDigits;
+    if (_guaLegacy) _guaLegacy.textContent = '$' + _guaDigits;
     document.getElementById('doorSettleDoorPct').textContent = (slot.door_pct || 0) + '%';
     const inp = document.getElementById('doorSettleReceiptsInput');
     // Pre-populate prior receipts when re-opening a settled slot (the
@@ -3720,8 +3736,11 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             door_receipts_cents: slot.door_receipts_cents || 0,
             settled_at: slot.settled_at || null,
           };
+          // Match pay-pill height exactly — same padding, font-size,
+          // border-radius. Sit right next to the pay pill as if they
+          // were one continuous control row.
           doorReceiptsBtn = `<button onclick="event.stopPropagation(); if (window._openDoorSettleModal) window._openDoorSettleModal(window.__doorSlotData[${slot.id}])"
-            style="padding:3px 12px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:4px;color:#fbbf24;font-size:0.75rem;cursor:pointer;font-weight:600;white-space:nowrap;"
+            style="padding:1px 8px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:4px;color:#fbbf24;font-size:0.85rem;cursor:pointer;font-weight:600;white-space:nowrap;line-height:inherit;"
             title="Open the door settlement window for this slot. Enter the receipts collected at the door; we'll compute the artist's total (guarantee + door share) and queue the Stripe charge for tomorrow's 5 PM payout sweep.">Add Door Receipts</button>`;
         }
 
