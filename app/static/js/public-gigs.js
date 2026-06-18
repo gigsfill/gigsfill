@@ -326,7 +326,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span style="font-size:1.05rem;">${icon}</span>
             <span>${esc(g.venue_name || '')}</span>
             ${location ? `<span style="color:var(--text-muted, #94a3b8);font-weight:500;font-size:0.82rem;">${esc(location)}</span>` : ''}
-            <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.78rem;color:var(--text-muted, #94a3b8);margin-left:auto;">${_timeLabel}</span>
+            <span style="font-size:0.78rem;color:var(--text-muted, #94a3b8);margin-left:auto;">${_timeLabel}</span>
           </div>
           <div style="font-size:0.76rem;color:var(--text-muted, #94a3b8);margin-top:4px;font-weight:500;">${_typeLine}</div>
           <div style="display:flex;align-items:center;gap:14px;margin-top:6px;font-size:0.82rem;">

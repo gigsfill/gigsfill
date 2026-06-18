@@ -1298,7 +1298,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               return `
                 <div style="display:contents;">
                   <div style="font-weight:700;color:#a855f7;letter-spacing:0.3px;padding:4px 6px;${_myStyle}">Slot ${s.slot_number || (i + 1)}</div>
-                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.74rem;color:#cbd5e1;white-space:nowrap;padding:4px 0;${_myStyle}">${_slotTime}</div>
+                  <div style="font-size:0.74rem;color:#cbd5e1;white-space:nowrap;padding:4px 0;${_myStyle}">${_slotTime}</div>
                   <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 6px;${_myStyle}">${_who}</div>
                   <div style="font-weight:700;white-space:nowrap;text-align:right;padding:4px 6px;color:#22c55e;${_myStyle}">${_slotPay}</div>
                   <div style="padding:4px 6px;${_myStyle}">${_slotBadge(s)}</div>
@@ -1308,7 +1308,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       } else {
         _inner = `
           <div style="display:flex;align-items:center;gap:14px;margin-top:6px;flex-wrap:wrap;font-size:0.78rem;">
-            <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:rgba(255,255,255,0.85);">${_gigTimeLabel}</span>
+            <span style="color:rgba(255,255,255,0.85);">${_gigTimeLabel}</span>
             <span>${artistDisplay || '<span style="opacity:0.75;">Open</span>'}</span>
             <span style="font-weight:700;">${payDisplay}</span>
           </div>`;
@@ -1337,7 +1337,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span style="font-size:1.05rem;">${_typeIcon}</span>
             <span style="color:var(--text, #e4e7eb);">${esc(g.venue_name)}</span>
             ${_venueLocation ? `<span style="color:var(--text-muted, #94a3b8);font-weight:500;font-size:0.82rem;">${_venueLocation}</span>` : ''}
-            ${_isMultiSlot ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.78rem;color:var(--text-muted, #94a3b8);margin-left:auto;">${_gigTimeLabel}</span>` : ''}
+            ${_isMultiSlot ? `<span style="font-size:0.78rem;color:var(--text-muted, #94a3b8);margin-left:auto;">${_gigTimeLabel}</span>` : ''}
           </div>
           <div style="font-size:0.76rem;color:var(--text-muted, #94a3b8);margin-top:4px;font-weight:500;">${_typeLine}</div>
           ${_inner}

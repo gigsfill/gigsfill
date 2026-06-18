@@ -142,7 +142,6 @@
   display: contents;
 }
 .gf-gig-hover-card .gf-ghc-slot-time {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.74rem;
   color: rgba(255, 255, 255, 0.78);
   white-space: nowrap;

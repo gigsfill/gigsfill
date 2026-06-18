@@ -106,7 +106,7 @@
             </a>
           </td>
           <td style="color:var(--text-gray);font-size:0.78rem;">${_esc(loc || '—')}</td>
-          <td style="text-align:right;font-weight:700;color:#fbbf24;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">
+          <td style="text-align:right;font-weight:700;color:#fbbf24;">
             ${parseInt(r.zero_pay_booking_count) || 0}
           </td>
           <td style="color:var(--text-gray);font-size:0.78rem;">${_esc(_fmtTime(r.last_zero_pay_at))}</td>
