@@ -44,7 +44,7 @@
   // content, inflating the card. Sized tight so the type row
   // (🎸 Live Band + Solo + Duo + Trio + Full Band) fits on one line
   // with only the symmetric ~12px padding to the right of Full Band.
-  const CARD_WIDTH = 350;
+  const CARD_WIDTH = 340;
   const GAP = 10;  // px between bubble and card
 
   let currentCard = null;
