@@ -169,6 +169,53 @@ class ActivityCenter {
       return;
     }
 
+    // Group payment_cancelled / payment_reinstated notifications that
+    // share a gig + happened within 2 minutes of each other into a
+    // single row. A venue cancelling 3 slots fires 3 notifications in
+    // ~5s; without grouping the feed is a wall of near-duplicates.
+    // Each surviving "group row" carries the latest notification's
+    // id (read state) + a list of all members for the detail render.
+    filtered = (() => {
+      const out = [];
+      const GROUP_TYPES = new Set(['payment_cancelled', 'payment_reinstated']);
+      const GROUP_WINDOW_MS = 120_000;
+      let bucket = null;
+      const flush = () => {
+        if (!bucket) return;
+        if (bucket.members.length > 1) {
+          // Keep the FIRST notification as the canonical entry but
+          // attach the full members array so formatNotificationMessage
+          // can render a grouped summary.
+          const head = { ...bucket.members[0], _groupMembers: bucket.members };
+          out.push(head);
+        } else {
+          out.push(bucket.members[0]);
+        }
+        bucket = null;
+      };
+      for (const n of filtered) {
+        if (!GROUP_TYPES.has(n.notification_type) || !n.gig_id) {
+          flush();
+          out.push(n);
+          continue;
+        }
+        const ts = n.created_at ? Date.parse((n.created_at.includes('Z') || n.created_at.includes('+'))
+          ? n.created_at : n.created_at.replace(' ', 'T') + 'Z') : 0;
+        if (bucket && bucket.type === n.notification_type
+            && bucket.gigId === n.gig_id
+            && Math.abs(bucket.ts - ts) < GROUP_WINDOW_MS) {
+          bucket.members.push(n);
+          // Track most-recent ts so a slow trickle still groups.
+          bucket.ts = Math.max(bucket.ts, ts);
+        } else {
+          flush();
+          bucket = { type: n.notification_type, gigId: n.gig_id, ts, members: [n] };
+        }
+      }
+      flush();
+      return out;
+    })();
+
     // Pagination
     const totalPages = Math.ceil(filtered.length / this.perPage);
     if (this.currentPage > totalPages) this.currentPage = totalPages;
@@ -496,18 +543,26 @@ class ActivityCenter {
         return msg;
       }
       
-      case 'payment_cancelled': {
+      case 'payment_cancelled':
+      case 'payment_reinstated': {
+        // Grouped rows (3 slot-cancels for the same gig within 2 min):
+        // render a summary header + the per-slot messages collapsed.
+        if (Array.isArray(n._groupMembers) && n._groupMembers.length > 1) {
+          const verb = n.notification_type === 'payment_cancelled' ? 'cancelled' : 'reinstated';
+          const count = n._groupMembers.length;
+          const summary = `${count} slot payments ${verb}${this.isVenue ? '' : ' by ' + (n.venue_name || 'venue')}`;
+          const detail = n._groupMembers.map(m => {
+            let mm = m.message || '';
+            if (m.artist_name && m.artist_id) mm = mm.replace(new RegExp(m.artist_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), artistLink);
+            if (m.venue_name && m.venue_id) mm = mm.replace(new RegExp(m.venue_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), venueLink);
+            return `<div style="font-size:0.78rem;color:var(--text-muted);padding:3px 0 3px 14px;border-left:2px solid rgba(255,255,255,0.08);margin-top:4px;">${mm}</div>`;
+          }).join('');
+          return `<strong>${summary}</strong>${detail}`;
+        }
         let pmsg = n.message || '';
         if (n.artist_name && n.artist_id) pmsg = pmsg.replace(new RegExp(n.artist_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), artistLink);
         if (n.venue_name && n.venue_id) pmsg = pmsg.replace(new RegExp(n.venue_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), venueLink);
         return pmsg;
-      }
-      
-      case 'payment_reinstated': {
-        let rmsg = n.message || '';
-        if (n.artist_name && n.artist_id) rmsg = rmsg.replace(new RegExp(n.artist_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), artistLink);
-        if (n.venue_name && n.venue_id) rmsg = rmsg.replace(new RegExp(n.venue_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), venueLink);
-        return rmsg;
       }
       
       default:
