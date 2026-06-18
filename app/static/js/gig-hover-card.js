@@ -461,11 +461,17 @@
   function positionCard(card, anchor) {
     const r = anchor.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
-    card.style.width = CARD_WIDTH + 'px';
+    // Shrink-to-fit width: cap at CARD_WIDTH but let the card naturally
+    // narrow to whatever its widest line of content needs. Removes the
+    // dead space after "Full Band" that was showing when content was
+    // narrower than the fixed CARD_WIDTH.
+    card.style.width = 'max-content';
+    card.style.maxWidth = CARD_WIDTH + 'px';
     document.body.appendChild(card);  // append now to measure height
     const h = card.offsetHeight;
+    const actualW = card.offsetWidth; // shrink-to-fit may be < CARD_WIDTH
     let left = r.right + GAP;
-    if (left + CARD_WIDTH > vw - 8) left = r.left - CARD_WIDTH - GAP;
+    if (left + actualW > vw - 8) left = r.left - actualW - GAP;
     if (left < 8) left = 8;
     let top = r.top + (r.height / 2) - (h / 2);
     if (top + h > vh - 8) top = vh - 8 - h;
