@@ -528,11 +528,60 @@ def get_gig_modal_data(
     except Exception:
         _now = datetime.now()
 
+    # is_past must compare against the gig's actual END datetime, not
+    # just its DATE. A gig ending at 11pm tonight was previously treated
+    # as "not past" until midnight rolled over — so an artist clicking
+    # their gig at 11:30pm saw the live/upcoming modal with "Cancel My
+    # Slot", even though the show ended 30 min ago.
+    # For multi-slot gigs we use the LAST slot's end so the modal stays
+    # in "in progress" until every slot has finished.
     try:
         gig_date_obj = datetime.strptime(str(gig["date"])[:10], "%Y-%m-%d").date()
-        is_past = gig_date_obj < _now.date()
     except Exception:
-        is_past = False
+        gig_date_obj = None
+
+    is_past = False
+    try:
+        from datetime import time as _dt_time, timedelta as _dt_td
+        _now_naive = _now.replace(tzinfo=None) if _now.tzinfo else _now
+        _last_end_dt = None
+        for s in slots:
+            if not s.get("end_time"):
+                continue
+            try:
+                _eh, _em = map(int, str(s["end_time"]).split(":")[:2])
+                _end_dt = datetime.combine(gig_date_obj, _dt_time(hour=_eh, minute=_em))
+                # Overnight slot — if end < start, end is the next day
+                _sh, _sm = (None, None)
+                if s.get("start_time"):
+                    try:
+                        _sh, _sm = map(int, str(s["start_time"]).split(":")[:2])
+                    except Exception:
+                        pass
+                if _sh is not None and (_eh, _em) < (_sh, _sm):
+                    _end_dt += _dt_td(days=1)
+                if _last_end_dt is None or _end_dt > _last_end_dt:
+                    _last_end_dt = _end_dt
+            except Exception:
+                continue
+        # Fallback to gig.end_time when slots have no usable end_time
+        if _last_end_dt is None and gig.get("end_time") and gig_date_obj:
+            try:
+                _eh, _em = map(int, str(gig["end_time"]).split(":")[:2])
+                _last_end_dt = datetime.combine(gig_date_obj, _dt_time(hour=_eh, minute=_em))
+                if gig.get("start_time"):
+                    _sh, _sm = map(int, str(gig["start_time"]).split(":")[:2])
+                    if (_eh, _em) < (_sh, _sm):
+                        _last_end_dt += _dt_td(days=1)
+            except Exception:
+                pass
+        if _last_end_dt is not None:
+            is_past = _last_end_dt < _now_naive
+        elif gig_date_obj is not None:
+            # No usable end time — fall back to date-based check (legacy).
+            is_past = gig_date_obj < _now.date()
+    except Exception:
+        is_past = gig_date_obj is not None and gig_date_obj < _now.date()
 
     # Is any slot currently in progress?
     is_in_progress = False

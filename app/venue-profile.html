@@ -619,7 +619,7 @@
           dayGigs.forEach((g) => {
             if (g.is_multi_slot && g.slots && g.slots.length > 0) {
               // Expand multi-slot gigs into individual slot bubbles
-              g.slots.slice().sort((a,b) => (a.start_time||'').localeCompare(b.start_time||'')).forEach((slot) => {
+              g.slots.slice().sort((a,b) => (a.start_time||'').localeCompare(b.start_time||'')).forEach((slot, slotIdx) => {
                 const isBooked = slot.status === 'booked';
                 const cls = isBooked ? 'booked' : 'open';
                 const t = fmtTime(slot.start_time);
@@ -636,23 +636,11 @@
                   const mos=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
                   return `${days[dt.getDay()]}, ${mos[dt.getMonth()]} ${dt.getDate()} ${y}`;
                 })();
-                const hoverData = {
-                  headerPrefix: isBooked ? 'Booked — ' : 'Open',
-                  artistChips: isBooked && slot.artist_name
-                    ? [{ id: slot.artist_id || null, name: slot.artist_name }]
-                    : [],
-                  isOpen: !isBooked,
-                  venue: venueData.venue_name || '',
-                  streetAddress: street,
-                  cityState: cityState,
-                  date: _dateLabel,
-                  time: t + (slot.end_time ? ' – ' + fmtTime(slot.end_time) : ''),
-                  mapsUrl: mapsQ ? ('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(mapsQ)) : null,
-                  statusLabel: '',
-                  artistType: g.artist_type || '',
-                };
-                const hoverAttr = esc(JSON.stringify(hoverData));
-                html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${gigIdx})" data-gig-hover="${hoverAttr}">${esc(label)}</div>`;
+                // Plain bubble — post-render pass wires the shared
+                // gig-hover-card with the FULL gig + slot so the hover
+                // gets the same chips, status header, and per-slot
+                // breakdown as the venue-create-gigs calendar.
+                html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${gigIdx})" data-cal-date="${ds}" data-cal-gigidx="${gigIdx}" data-cal-slotidx="${slotIdx}">${esc(label)}</div>`;
               });
             } else {
               // Single gig or non-multi-slot
@@ -671,24 +659,7 @@
                 const mos=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
                 return `${days[dt.getDay()]}, ${mos[dt.getMonth()]} ${dt.getDate()} ${y}`;
               })();
-              const isOpenHere = g.status !== 'booked';
-              const hoverData = {
-                headerPrefix: isOpenHere ? 'Open' : 'Booked — ',
-                artistChips: !isOpenHere && g.artist_name
-                  ? [{ id: g.artist_id || null, name: g.artist_name }]
-                  : [],
-                isOpen: isOpenHere,
-                venue: venueData.venue_name || '',
-                streetAddress: _street,
-                cityState: _cityState,
-                date: _dateLabel,
-                time: t + (g.end_time ? ' – ' + fmtTime(g.end_time) : ''),
-                mapsUrl: _mapsQ ? ('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(_mapsQ)) : null,
-                statusLabel: '',
-                artistType: g.artist_type || '',
-              };
-              const hoverAttr = esc(JSON.stringify(hoverData));
-              html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${gigIdx})" data-gig-hover="${hoverAttr}">${esc(label)}</div>`;
+              html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${gigIdx})" data-cal-date="${ds}" data-cal-gigidx="${gigIdx}">${esc(label)}</div>`;
             }
             gigIdx++;
           });
@@ -697,6 +668,41 @@
         html += '</div>';
       }
       document.getElementById('calGrid').innerHTML = html;
+
+      // Wire the shared gig-hover-card on each rendered bubble. For
+      // multi-slot gigs each slot is a separate bubble and we pass a
+      // merged gig+slot view (slot times override umbrella, slots
+      // trimmed to just this slot) so the hover renders the right
+      // per-slot data — same pattern venue-create-gigs uses.
+      if (typeof window.attachGigHoverCard === 'function') {
+        document.querySelectorAll('#calGrid .cal-gig[data-cal-date]').forEach(el => {
+          const ds = el.getAttribute('data-cal-date');
+          const gigIdx = parseInt(el.getAttribute('data-cal-gigidx'), 10);
+          const slotIdxAttr = el.getAttribute('data-cal-slotidx');
+          const dayGigs = venueGigs.filter(x => x.date === ds);
+          const g = dayGigs[gigIdx];
+          if (!g) return;
+          if (slotIdxAttr !== null) {
+            // Multi-slot bubble — pass slot-merged view so hover shows
+            // THIS slot's time + artist (not the umbrella).
+            const sorted = (g.slots || []).slice().sort((a,b) => (a.start_time||'').localeCompare(b.start_time||''));
+            const slot = sorted[parseInt(slotIdxAttr, 10)];
+            if (slot) {
+              window.attachGigHoverCard(el, {
+                ...g,
+                slots: [slot],
+                artist_name: slot.artist_name,
+                artist_id: slot.artist_id,
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+                status: slot.status,
+              });
+            }
+          } else {
+            window.attachGigHoverCard(el, g);
+          }
+        });
+      }
     }
     function fmtTime(t) { if (!t) return ''; const [h,m] = t.split(':').map(Number); return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h>=12?'PM':'AM'); }
     function fmtDate(d) { if (!d) return ''; const [y,mo,dy] = d.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[parseInt(mo)-1]} ${parseInt(dy)}, ${y}`; }

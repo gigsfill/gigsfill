@@ -605,33 +605,34 @@
             const street = [g.address_line_1, g.address_line_2].filter(Boolean).join(' ');
             const cityState = [g.city, g.state].filter(Boolean).join(', ');
             const mapsQ = [venueName, street, g.city, g.state].filter(Boolean).join(', ');
-            const isOpen = !(cls === 'booked');
-            const hoverData = {
-              header: isOpen ? 'Open' : 'Booked',
-              isOpen: isOpen,
-              venue: venueName,
-              streetAddress: street,
-              cityState: cityState,
-              date: (function(){
-                const [y,mo,dy] = ds.split('-').map(Number);
-                const dt = new Date(y, mo-1, dy);
-                const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-                const mos=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-                return `${days[dt.getDay()]}, ${mos[dt.getMonth()]} ${dt.getDate()} ${y}`;
-              })(),
-              time: t + endStr,
-              mapsUrl: mapsQ ? ('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(mapsQ)) : null,
-              statusLabel: '',
-              artistType: g.artist_type || '',
-            };
-            const hoverAttr = esc(JSON.stringify(hoverData));
-            html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${idx})" data-gig-hover="${hoverAttr}">${esc(label)}</div>`;
+            // Plain bubble — the post-render pass below wires the
+            // shared gig-hover-card (gig-hover-card.js) with the FULL
+            // gig object so the hover renders the same chips, per-slot
+            // breakdown, and status header as the artist-book-gigs
+            // calendar. We used to build a flat hoverData payload here
+            // and stuff it into data-gig-hover, but that path forces
+            // __card:true and bypasses payloadFromGig's chip / slot
+            // logic — so the profile hover was missing everything new.
+            html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${idx})" data-cal-date="${ds}" data-cal-idx="${idx}">${esc(label)}</div>`;
           });
           html += '</div>';
         }
         html += '</div>';
       }
       document.getElementById('calGrid').innerHTML = html;
+
+      // Wire the shared gig-hover-card on each rendered bubble so the
+      // hover preview matches the artist-book-gigs calendar (per-slot
+      // breakdown, lineup/style chips, status-aware header). Passes
+      // the FULL gig object so payloadFromGig derives the rich payload.
+      if (typeof window.attachGigHoverCard === 'function') {
+        document.querySelectorAll('#calGrid .cal-gig[data-cal-date]').forEach(el => {
+          const ds = el.getAttribute('data-cal-date');
+          const idx = parseInt(el.getAttribute('data-cal-idx'), 10);
+          const g = artistGigs.filter(x => x.date === ds)[idx];
+          if (g) window.attachGigHoverCard(el, g);
+        });
+      }
     }
     function fmtTime(t) { if (!t) return ''; const [h,m] = t.split(':').map(Number); return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h>=12?'PM':'AM'); }
     function fmtDate(d) { if (!d) return ''; const [y,mo,dy] = d.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[parseInt(mo)-1]} ${parseInt(dy)}, ${y}`; }

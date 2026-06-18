@@ -171,6 +171,21 @@ function renderCalendar() {
     html += '</div>';
   }
   document.getElementById('calGrid').innerHTML = html;
+
+  // Wire the shared gig-hover-card on each bubble so the venue
+  // profile calendar shows the same hover preview as the venue-
+  // create-gigs page. Native title="..." stays as a fallback when
+  // gig-hover-card.js isn't loaded.
+  if (typeof window.attachGigHoverCard === 'function') {
+    document.querySelectorAll('#calGrid .cal-gig').forEach(el => {
+      const onclick = el.getAttribute('onclick') || '';
+      const m = onclick.match(/showGigDetail\('([^']+)',(\d+)\)/);
+      if (!m) return;
+      const ds = m[1], idx = parseInt(m[2], 10);
+      const g = venueGigs.filter(x => x.date === ds)[idx];
+      if (g) window.attachGigHoverCard(el, g);
+    });
+  }
 }
 function fmtTime(t) { if (!t) return ''; const [h,m] = t.split(':').map(Number); return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h>=12?'PM':'AM'); }
 function fmtDate(d) { if (!d) return ''; const [y,mo,dy] = d.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[parseInt(mo)-1]} ${parseInt(dy)}, ${y}`; }

@@ -2947,19 +2947,19 @@
        dollar signs line up vertically; labels sit on the RIGHT with
        a generous indent so they're easy to scan. Updated live by
        _updateDoorSettleTotal() in venue.create-gigs.js. -->
-  <div style="display:grid;grid-template-columns:max-content 1fr;column-gap:20px;row-gap:10px;align-items:center;margin-bottom:18px;">
+  <div style="display:grid;grid-template-columns:115px 1fr;column-gap:32px;row-gap:10px;align-items:center;margin-bottom:18px;">
     <div id="doorSettleGuarantee" style="font-size:0.95rem;font-weight:700;color:#10b981;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$0.00</div>
     <div style="font-size:0.82rem;color:var(--text-gray);font-weight:500;"
       title="The floor amount you committed to at booking. The artist gets this even if door receipts are $0.">
       Guaranteed Pay
     </div>
 
-    <div style="display:flex;align-items:center;gap:4px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:4px 10px;min-width:130px;">
+    <div style="display:flex;align-items:center;gap:4px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:3px 8px;width:115px;box-sizing:border-box;">
       <span style="font-size:0.95rem;color:var(--text-gray);font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">$</span>
-      <input type="text" id="doorSettleReceiptsInput" value="0.00" inputmode="decimal" maxlength="12"
+      <input type="text" id="doorSettleReceiptsInput" value="0.00" inputmode="decimal" maxlength="10"
         onclick="this.select()" onfocus="this.select()"
-        title="Click and start typing. Rightmost two digits are cents. e.g. type '1','5','0','0','0' → $150.00"
-        style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:0.95rem;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:right;width:100%;">
+        title="Click and start typing. Rightmost two digits are cents. e.g. type '1','5','0','0','0' → $150.00. Supports up to $99,999.99."
+        style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--text);font-size:0.95rem;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:right;width:100%;">
     </div>
     <label for="doorSettleReceiptsInput" style="font-size:0.82rem;color:var(--text);font-weight:500;cursor:text;"
       title="Gross cash collected at the door tonight (or POS card receipts run at the door), in dollars. Click the field to select-all and replace by typing.">
@@ -3289,7 +3289,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=178"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=179"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
