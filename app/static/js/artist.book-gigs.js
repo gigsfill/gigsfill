@@ -1062,12 +1062,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     
     let content = `
       <div class="day-modal-content" style="
-        display: grid;
-        grid-auto-rows: auto;
+        display: flex;
+        flex-direction: column;
         row-gap: 10px;
         width: 100%;
-        min-width: 820px;
-        font-size: 0.7rem;
+        max-width: 680px;
+        font-size: 0.78rem;
       ">
     `;
 
@@ -1233,41 +1233,109 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
 
+      // Rebuilt card (Jun 2026): the old 6-column grid jammed multi-
+      // slot data ("Fifty Proof, Fridays Past" in a 120px artist cell,
+      // umbrella time, etc.) into a single row with `nowrap + ellipsis`
+      // — text overlapped and times misrepresented per-slot reality.
+      // New layout: every gig is a card with a header strip (icon +
+      // venue + location + umbrella time on the right for multi-slot),
+      // and multi-slot gigs get nested per-slot rows below the header
+      // showing each slot's own time + artist + pay + status. Single-
+      // slot gigs render one compact details row instead.
+      const _typeIconMap = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'};
+      const _typeIcon = _typeIconMap[g.artist_type] || '🎵';
+      const _aid = parseInt(artistId);
+      const _slotsList = g.slots || [];
+      const _isMultiSlot = _slotsList.length > 1;
+      const _venueLocation = `${esc(g.city || '')}${g.state ? ', ' + esc(g.state) : ''}`;
+      const _gigTimeLabel = `${formatTime12Hour(displayStartTime)}${displayEndTime ? ' – ' + formatTime12Hour(displayEndTime) : ''}`;
+
+      // Type/lineup/styles as one dim line. Chips would be too heavy here.
+      let _typeLine = esc(g.artist_type || 'Any');
+      if (g.artist_type === 'Live Band' && g.band_formats) {
+        _typeLine += ' &middot; ' + esc(g.band_formats.split(',').map(f => f.trim()).filter(Boolean).join(', '));
+      }
+      if (g.artist_type === 'Live Band' && g.styles) {
+        _typeLine += ' &middot; ' + esc(g.styles.split(',').map(s => s.trim()).filter(Boolean).join(', '));
+      }
+
+      // Per-slot tiny status badge.
+      const _slotBadge = (s) => {
+        if (s.status === 'booked') return `<span style="background:rgba(34,197,94,0.18);color:#86efac;border:1px solid rgba(34,197,94,0.4);padding:1px 7px;border-radius:999px;font-size:0.66rem;font-weight:600;">Booked</span>`;
+        if (s.status === 'pending_contract' || s.status === 'awaiting_venue_contract')
+          return `<span style="background:rgba(245,158,11,0.18);color:#fcd34d;border:1px solid rgba(245,158,11,0.4);padding:1px 7px;border-radius:999px;font-size:0.66rem;font-weight:600;">Pending</span>`;
+        if (s.status === 'pending_venue_approval')
+          return `<span style="background:rgba(124,107,255,0.18);color:#c4b5fd;border:1px solid rgba(124,107,255,0.4);padding:1px 7px;border-radius:999px;font-size:0.66rem;font-weight:600;">Approval</span>`;
+        if (s.status === 'open')
+          return `<span style="background:rgba(52,211,153,0.14);color:#34d399;border:1px solid rgba(52,211,153,0.4);padding:1px 7px;border-radius:999px;font-size:0.66rem;font-weight:600;">Open</span>`;
+        return `<span style="opacity:0.7;font-size:0.66rem;font-weight:600;">${esc(s.status || '')}</span>`;
+      };
+      const _fmtSlotPay = (s) => {
+        if (!s) return '';
+        if (window.formatPaySummary) return window.formatPaySummary(s);
+        return s.pay != null ? `$${parseFloat(s.pay || 0).toFixed(2)}` : '';
+      };
+
+      let _inner;
+      if (_isMultiSlot) {
+        const _sortedSlots = [..._slotsList].sort(
+          (a, b) => (a.start_time || '').localeCompare(b.start_time || '')
+        );
+        _inner = `
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
+            ${_sortedSlots.map((s, i) => {
+              const _myMatch = parseInt(s.artist_id) === _aid;
+              const _who = s.artist_name
+                ? (s.artist_id
+                    ? `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;">${esc(s.artist_name)}</a>`
+                    : `<span style="font-weight:600;">${esc(s.artist_name)}</span>`)
+                : `<span style="opacity:0.75;font-weight:600;">Open</span>`;
+              const _slotTime = `${formatTime12Hour(s.start_time || '')}${s.end_time ? ' – ' + formatTime12Hour(s.end_time) : ''}`;
+              const _slotPay = _fmtSlotPay(s);
+              // Subtle outline on the artist's own slot in a multi-slot gig.
+              const _myBorder = _myMatch ? `border:1px solid rgba(255,255,255,0.45);` : `border:1px solid rgba(255,255,255,0.12);`;
+              return `
+                <div style="display:grid;grid-template-columns:62px max-content 1fr max-content max-content;column-gap:10px;align-items:center;padding:5px 9px;background:rgba(0,0,0,0.20);${_myBorder}border-radius:5px;font-size:0.74rem;">
+                  <div style="font-weight:700;color:rgba(255,255,255,0.85);">Slot ${s.slot_number || (i + 1)}</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;color:rgba(255,255,255,0.82);white-space:nowrap;">${_slotTime}</div>
+                  <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_who}</div>
+                  <div style="font-weight:700;white-space:nowrap;">${_slotPay}</div>
+                  <div>${_slotBadge(s)}</div>
+                </div>`;
+            }).join('')}
+          </div>`;
+      } else {
+        _inner = `
+          <div style="display:flex;align-items:center;gap:14px;margin-top:6px;flex-wrap:wrap;font-size:0.78rem;">
+            <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:rgba(255,255,255,0.85);">${_gigTimeLabel}</span>
+            <span>${artistDisplay || '<span style="opacity:0.75;">Open</span>'}</span>
+            <span style="font-weight:700;">${payDisplay}</span>
+          </div>`;
+      }
+
       content += `
         <div
           onclick="openGigFromDayModal(${g.id})"
           class="gig ${gigClass} gig-row"
           ${rowTooltip ? `title="${rowTooltip.replace(/"/g, '&quot;')}"` : ''}
           style="
-            display: grid;
-            grid-template-columns: 130px minmax(130px,1fr) minmax(120px,1fr) minmax(120px,1fr) 80px minmax(150px,1.5fr);
-            column-gap: 12px;
-            align-items: center;
-            padding: 6px 10px;
-            margin: 0;
-            line-height: 1.3;
-            white-space: nowrap;
-            font-weight: 700;
+            padding: 10px 12px;
+            line-height: 1.35;
             background: ${gigBg};
             border: 1px solid ${gigBorder};
-            border-radius: 6px;
+            border-radius: 8px;
             color: ${gigTextColor};
             cursor: pointer;
           "
         >
-          <div>${({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'}[g.artist_type] || '🎵') + ' '}${formatTime12Hour(displayStartTime)}${displayEndTime ? ' \u2013 ' + formatTime12Hour(displayEndTime) : ''}</div>
-
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.venue_name)}</div>
-
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.city || '')}${g.state ? ', ' + esc(g.state) : ''}</div>
-
-          <div style="overflow:hidden;text-overflow:ellipsis;">${artistDisplay}</div>
-
-          <div>${payDisplay}</div>
-
-          <div style="overflow:hidden;text-overflow:ellipsis;">
-            ${esc(g.artist_type || 'Any')}${g.artist_type === 'Live Band' && g.band_formats ? ' • ' + esc(g.band_formats.split(',').map(f => f.trim()).join(', ')) : ''}${g.artist_type === 'Live Band' && g.styles ? ' • ' + esc(g.styles.split(',').map(s => s.trim()).join(', ')) : ''}
+          <div style="display:flex;align-items:center;gap:10px;font-weight:700;font-size:0.88rem;flex-wrap:wrap;">
+            <span style="font-size:1rem;">${_typeIcon}</span>
+            <span>${esc(g.venue_name)}</span>
+            ${_venueLocation ? `<span style="opacity:0.78;font-weight:500;font-size:0.78rem;">${_venueLocation}</span>` : ''}
+            ${_isMultiSlot ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.74rem;opacity:0.78;margin-left:auto;">${_gigTimeLabel}</span>` : ''}
           </div>
+          <div style="font-size:0.72rem;opacity:0.78;margin-top:3px;font-weight:500;">${_typeLine}</div>
+          ${_inner}
         </div>
       `;
     });
