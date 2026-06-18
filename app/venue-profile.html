@@ -684,12 +684,17 @@
           if (!g) return;
           if (slotIdxAttr !== null) {
             // Multi-slot bubble — pass slot-merged view so hover shows
-            // THIS slot's time + artist (not the umbrella).
+            // THIS slot's time + artist (not the umbrella). Flip
+            // is_multi_slot:false so the hover card's single-slot
+            // branch fires; otherwise it renders just "Booked" with
+            // no artist chip (multi-slot drops chips, slot list needs
+            // length>=2 to render — neither path surfaces the name).
             const sorted = (g.slots || []).slice().sort((a,b) => (a.start_time||'').localeCompare(b.start_time||''));
             const slot = sorted[parseInt(slotIdxAttr, 10)];
             if (slot) {
               window.attachGigHoverCard(el, {
                 ...g,
+                is_multi_slot: false,
                 slots: [slot],
                 artist_name: slot.artist_name,
                 artist_id: slot.artist_id,

@@ -2034,8 +2034,18 @@ async function renderCalendar() {
                 // g.end_time = gig umbrella). Trim the slot list to just
                 // this slot and override start/end times so the hover
                 // card renders this slot in isolation.
+                //
+                // IMPORTANT: also flip is_multi_slot:false. The hover
+                // card's multi-slot branch drops artist chips from the
+                // header (names are supposed to come from the per-slot
+                // breakdown, which only renders when slots.length>=2).
+                // With our trimmed 1-slot view, the multi-slot branch
+                // would render just "Booked" — no artist name anywhere.
+                // Routing through single-slot puts the artist back in
+                // the header as a chip.
                 window.attachGigHoverCard(slotDiv, {
                   ...g,
+                  is_multi_slot: false,
                   slots: [slot],
                   artist_name: slot.artist_name,
                   artist_id: slot.artist_id,
