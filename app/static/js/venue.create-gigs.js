@@ -1556,25 +1556,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // uses the gig's start_time, which is the earliest slot's start
   // (slot ordering is by start_time ASC).
   window._maybeShowSettleBtn = function(gig) {
-    if (!settleDealsBtn) return;
-    settleDealsBtn.style.display = 'none';
-    if (!gig || !gig.id || !gig.date) return;
-    try {
-      const startStr = (gig.start_time || '00:00').slice(0, 5);
-      const startDt = new Date(gig.date + 'T' + startStr + ':00');
-      if (startDt <= new Date()) {
-        // Move the button into the modal-actions row so it's visible
-        // regardless of which modal layout is active. The button's
-        // original parent (#slotBuilder) is hidden by _showBookedGigModal
-        // for booked / in-progress gigs — that's why the venue couldn't
-        // see "Add Door Receipts" on a gig that was already running.
-        const actionsRow = document.querySelector('#gigModal .modal-actions');
-        if (actionsRow && settleDealsBtn.parentElement !== actionsRow) {
-          actionsRow.insertBefore(settleDealsBtn, actionsRow.firstChild);
-        }
-        settleDealsBtn.style.display = 'inline-flex';
-      }
-    } catch (_) {}
+    // The inline "Add Door Receipts" button now lives on each door
+    // slot's row in the gig modal (gig-modal.js _slotRow). Keep this
+    // legacy button hidden — leaving the function exported so other
+    // call sites don't break, but it's a no-op now.
+    if (settleDealsBtn) settleDealsBtn.style.display = 'none';
   };
 
 

@@ -1046,10 +1046,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const modal = overlay.querySelector(".modal");
 
     modal.classList.add("day-modal");
-    // Override the legacy .modal.day-modal { width:max-content; max-width:none }
-    // rule which would let the modal grow to the widest card. Cap to 720px so
-    // the modal sits inside the viewport and cards wrap as needed.
-    modal.style.width = '720px';
+    // Shrink-to-fit width so the modal hugs its content instead of
+    // sitting at a fixed wider size with dead space on the right.
+    // Inner container's max-width still caps individual cards.
+    modal.style.width = 'max-content';
     modal.style.maxWidth = '92vw';
 
     const title = document.getElementById("modalTitle");
@@ -1070,8 +1070,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         display: flex;
         flex-direction: column;
         row-gap: 10px;
-        width: 100%;
-        max-width: 680px;
+        width: max-content;
+        max-width: 620px;
         font-size: 0.78rem;
       ">
     `;
@@ -1286,26 +1286,34 @@ document.addEventListener("DOMContentLoaded", async () => {
         const _sortedSlots = [..._slotsList].sort(
           (a, b) => (a.start_time || '').localeCompare(b.start_time || '')
         );
+        // Parent grid with display:contents on each row — names line up
+        // vertically across ALL slots because the time column is sized
+        // to the LONGEST time in the data (max-content), then name,
+        // then pay, then status. No more per-row independent grids.
         _inner = `
-          <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
+          <div style="display:grid;grid-template-columns:max-content max-content 1fr max-content max-content;column-gap:12px;row-gap:6px;align-items:center;margin-top:8px;padding:8px 10px;background:rgba(0,0,0,0.18);border-radius:6px;font-size:0.74rem;">
             ${_sortedSlots.map((s, i) => {
               const _myMatch = parseInt(s.artist_id) === _aid;
+              const _slotIsOpen = s.status === 'open';
               const _who = s.artist_name
                 ? (s.artist_id
                     ? `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigTextColor};text-decoration:underline;font-weight:600;">${esc(s.artist_name)}</a>`
                     : `<span style="font-weight:600;">${esc(s.artist_name)}</span>`)
                 : `<span style="opacity:0.75;font-weight:600;">Open</span>`;
               const _slotTime = `${formatTime12Hour(s.start_time || '')}${s.end_time ? ' – ' + formatTime12Hour(s.end_time) : ''}`;
-              const _slotPay = _fmtSlotPay(s);
-              // Subtle outline on the artist's own slot in a multi-slot gig.
-              const _myBorder = _myMatch ? `border:1px solid rgba(255,255,255,0.45);` : `border:1px solid rgba(255,255,255,0.12);`;
+              // Pay visibility — only the artist's OWN booked slot and
+              // OPEN slots (so they know what's offered) show pay. Other
+              // artists' booked-slot pay is none of this viewer's business.
+              const _payVisible = _slotIsOpen || _myMatch;
+              const _slotPay = _payVisible ? _fmtSlotPay(s) : '';
+              const _myStyle = _myMatch ? 'background:rgba(255,255,255,0.07);border-radius:4px;' : '';
               return `
-                <div style="display:grid;grid-template-columns:62px max-content 1fr max-content max-content;column-gap:10px;align-items:center;padding:5px 9px;background:rgba(0,0,0,0.20);${_myBorder}border-radius:5px;font-size:0.74rem;">
-                  <div style="font-weight:700;color:rgba(255,255,255,0.85);">Slot ${s.slot_number || (i + 1)}</div>
-                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;color:rgba(255,255,255,0.82);white-space:nowrap;">${_slotTime}</div>
-                  <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_who}</div>
-                  <div style="font-weight:700;white-space:nowrap;">${_slotPay}</div>
-                  <div>${_slotBadge(s)}</div>
+                <div style="display:contents;">
+                  <div style="font-weight:700;color:rgba(255,255,255,0.85);padding:3px 4px;${_myStyle}">Slot ${s.slot_number || (i + 1)}</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;color:rgba(255,255,255,0.82);white-space:nowrap;padding:3px 0;${_myStyle}">${_slotTime}</div>
+                  <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 4px;${_myStyle}">${_who}</div>
+                  <div style="font-weight:700;white-space:nowrap;text-align:right;padding:3px 4px;${_myStyle}">${_slotPay}</div>
+                  <div style="padding:3px 4px;${_myStyle}">${_slotBadge(s)}</div>
                 </div>`;
             }).join('')}
           </div>`;

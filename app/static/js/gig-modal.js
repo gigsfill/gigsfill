@@ -493,6 +493,24 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
     }
   }
 
+  // Add Door Receipts button — sits right of the pay pill on the slot
+  // top line for venue users, on a door-deal slot that's booked and
+  // whose start time has passed (gig in progress or done). Opens the
+  // door settle modal for this specific slot via the existing
+  // venue.create-gigs.js handler. Was previously in modal-actions which
+  // the user found awkward — inline next to pay matches the slot row
+  // it's actually settling.
+  if (vType === 'venue' && slot.deal_type === 'door' && slot.status === 'booked') {
+    const _slotStarted = _slotStartDt && _slotStartDt <= new Date();
+    if (_slotStarted) {
+      payHtml += ` <button type="button" onclick="event.stopPropagation(); if (window._openDealSettle) window._openDealSettle();"
+        style="margin-left:6px;padding:2px 10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:4px;color:#fbbf24;font-size:0.72rem;cursor:pointer;font-weight:600;white-space:nowrap;"
+        title="Open the door settlement window for this slot. Enter the receipts collected at the door, we'll compute the artist's total (guarantee + door share) and queue the Stripe charge for tomorrow's 5 PM payout sweep.">
+        Add Door Receipts
+      </button>`;
+    }
+  }
+
   // Type / formats / styles for slot.artist_type — shown on its own line so
   // the header row stays uncluttered. Mirrors the venue-side three-line
   // layout (Slot N · time · pay  /  type info  /  artist row).
