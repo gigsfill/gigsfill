@@ -292,6 +292,10 @@ async function loadVenueBillingHistory() {
         rawStatus: rawStatus,
         txn_id: t.id,
         cancel_reason: t.cancel_reason || '',
+        // Cancelled artist_payout rows (per-slot cancel) carry their
+        // slot id so the Reinstate click routes through the
+        // per-slot endpoint. NULL for parent venue_charge rows.
+        cancelled_slot_id: t.cancelled_slot_id != null ? Number(t.cancelled_slot_id) : null,
         // Per-slot breakdown — populated for ANY slot that's a door
         // deal so the venue Payments row can render
         // "Slot 2 (Fridays Past): $10 guarantee + 50% door · $15 receipts"
@@ -372,8 +376,13 @@ function renderVenueBillingTable() {
     var isCancelled = t.rawStatus === 'payment_cancelled';
     var statusCell = '<span style="color:' + t.statusColor + ';">' + t.status + '</span>';
     if (isCancelled) {
+      // Cancelled artist_payout child → per-slot reinstate (passes
+      // slot_id to the new endpoint). Cancelled venue_charge parent
+      // → legacy whole-gig reinstate (no slot_id). The dispatcher
+      // is showReinstatePaymentModal(txnId, slotId).
+      var _slotArg = t.cancelled_slot_id != null ? ', ' + parseInt(t.cancelled_slot_id, 10) : '';
       statusCell = '<span style="color:#f97316;">Cancelled</span> '
-        + '<a href="javascript:void(0)" onclick="showReinstatePaymentModal(' + t.txn_id + ')" '
+        + '<a href="javascript:void(0)" onclick="showReinstatePaymentModal(' + t.txn_id + _slotArg + ')" '
         + 'style="color:#a78bfa;font-size:0.7rem;text-decoration:none;border-bottom:1px dashed rgba(167,139,250,0.5);cursor:pointer;white-space:nowrap;">Pay Artist?</a>';
     }
     // Door-deal breakdown — moved to a hover tooltip on the Gig Fee
@@ -525,58 +534,101 @@ document.addEventListener('click', function(e) {
 // ============================================
 // REINSTATE PAYMENT
 // ============================================
-function showReinstatePaymentModal(txnId) {
+// txnId is the cancelled transaction's id. slotId (optional, when
+// the cancelled row is an artist_payout child of a multi-slot gig)
+// routes through the new per-slot reinstate which is safe within
+// the pre-5pm window: it refunds the cancellation fee and flips
+// the child back to 'scheduled' so the normal payout pipeline
+// handles it. Without slotId we hit the legacy whole-gig endpoint
+// (used by older cancelled-parent rows).
+function showReinstatePaymentModal(txnId, slotId) {
+  var isSlot = slotId != null;
+  var headline = isSlot ? 'Reinstate Slot Payment?' : 'Reinstate Payment?';
+  var bodyText = isSlot
+    ? "You cancelled this slot's payment earlier. Reinstating will refund the cancellation fee and put the artist back on the payout schedule."
+    : 'You cancelled this payment earlier. Are you sure you want to pay the artist their gig fee now?';
+  var footnote = isSlot
+    ? 'The original payout will fire at the next 5 PM sweep along with the rest of the gig.'
+    : 'The GigsFill platform fee was already collected when you cancelled, so it will not be charged again.';
+  var actionLabel = isSlot ? 'Yes, Reinstate' : 'Yes, Pay Artist';
+
   var overlay = document.createElement('div');
   overlay.id = 'reinstatePayOverlay';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;';
   overlay.innerHTML = '<div style="background:var(--card-bg,#1a1a2e);border:1px solid rgba(139,92,246,0.3);border-radius:12px;max-width:460px;width:92%;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">'
-    + '<h3 style="margin:0 0 12px 0;color:#a78bfa;font-size:1.05rem;">💰 Reinstate Payment?</h3>'
-    + '<p style="color:var(--text-muted,#999);font-size:0.85rem;line-height:1.5;margin:0 0 8px 0;">You cancelled this payment earlier. Are you sure you want to pay the artist their gig fee now?</p>'
-    + '<p style="color:var(--text-muted,#777);font-size:0.75rem;margin:0 0 18px 0;line-height:1.4;"><em>Note: The GigsFill platform fee was already collected when you cancelled, so it will not be charged again.</em></p>'
+    + '<h3 style="margin:0 0 12px 0;color:#a78bfa;font-size:1.05rem;">💰 ' + headline + '</h3>'
+    + '<p style="color:var(--text-muted,#999);font-size:0.85rem;line-height:1.5;margin:0 0 8px 0;">' + bodyText + '</p>'
+    + '<p style="color:var(--text-muted,#777);font-size:0.75rem;margin:0 0 18px 0;line-height:1.4;"><em>Note: ' + footnote + '</em></p>'
     + '<div style="display:flex;gap:10px;justify-content:flex-end;">'
-    + '<button id="reinstateClose" class="btn ghost" style="padding:8px 18px;font-size:0.85rem;">Cancel</button>'
-    + '<button id="reinstateConfirm" class="btn primary" style="padding:8px 18px;font-size:0.85rem;">Yes, Pay Artist</button>'
+    + '<button id="reinstateClose" class="btn ghost" style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:var(--text-gray);padding:8px 18px;font-size:0.85rem;border-radius:6px;cursor:pointer;">Cancel</button>'
+    + '<button id="reinstateConfirm" class="btn primary" style="padding:8px 18px;font-size:0.85rem;">' + actionLabel + '</button>'
     + '</div>'
     + '<div id="reinstateStatus" style="margin-top:10px;text-align:center;font-size:0.85rem;"></div>'
     + '</div>';
   document.body.appendChild(overlay);
-  
+
   overlay.querySelector('#reinstateClose').onclick = function() { overlay.remove(); };
   overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
-  
+
   overlay.querySelector('#reinstateConfirm').onclick = async function() {
     var btn = overlay.querySelector('#reinstateConfirm');
     var status = overlay.querySelector('#reinstateStatus');
     btn.disabled = true;
     btn.textContent = 'Processing...';
-    
+
     try {
-      var res = await fetch('/api/stripe/reinstate-gig-payment', {
+      var url, body;
+      if (isSlot) {
+        url = '/api/stripe/reinstate-slot-payment';
+        body = JSON.stringify({ slot_id: slotId });
+      } else {
+        url = '/api/stripe/reinstate-gig-payment';
+        body = JSON.stringify({ transaction_id: txnId });
+      }
+      var res = await fetch(url, {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction_id: txnId })
+        body: body
       });
-      
+
       if (!res.ok) {
         var err = await res.json().catch(function() { return {}; });
         throw new Error(err.detail || 'Reinstate failed');
       }
-      
+
       var result = await res.json();
       status.style.color = '#22c55e';
-      status.textContent = '✓ Payment processed! Artist payout of $' + (result.artist_payout / 100).toFixed(2) + ' sent.';
+      if (isSlot) {
+        var refundMsg = result.fee_refunded_cents
+          ? ' Refunded the $' + (result.fee_refunded_cents / 100).toFixed(2) + ' cancellation fee.' : '';
+        status.textContent = '✓ Reinstated. ' + (result.artist_name || 'Artist')
+          + ' is back on the payout schedule.' + refundMsg;
+        if (result.refund_error) {
+          status.style.color = '#f59e0b';
+          status.innerHTML = (status.textContent || '') +
+            '<br><strong>⚠️ Cancellation fee refund failed</strong> — admin will follow up.';
+        }
+      } else {
+        status.textContent = '✓ Payment processed! Artist payout of $' + (result.artist_payout / 100).toFixed(2) + ' sent.';
+      }
       btn.style.display = 'none';
       overlay.querySelector('#reinstateClose').textContent = 'Close';
-      
-      // Refresh billing table
+
+      // Refresh billing table + activity + emit stale event so other
+      // open Payments tabs in the same browser refetch.
       setTimeout(function() {
         loadVenueBillingHistory();
         if (window.activityCenterVenue) window.activityCenterVenue.loadNotifications();
+        try {
+          window.dispatchEvent(new CustomEvent('gigsfill:payments-stale', {
+            detail: { reason: isSlot ? 'slot-reinstate' : 'gig-reinstate' }
+          }));
+        } catch (_) {}
       }, 1500);
-      
+
     } catch(e) {
       btn.disabled = false;
-      btn.textContent = 'Yes, Pay Artist';
+      btn.textContent = actionLabel;
       status.style.color = '#ef4444';
       status.textContent = '✗ ' + e.message;
     }

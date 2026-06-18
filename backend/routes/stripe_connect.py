@@ -1370,6 +1370,184 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
     }
 
 
+@router.post("/api/stripe/reinstate-slot-payment")
+def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(get_db)):
+    """Reverse a per-slot cancel done via /api/stripe/cancel-slot-payment.
+
+    Body: {slot_id: int}
+
+    Safe-only within the pre-5pm window — the parent venue_charge
+    must still be 'scheduled' or 'test'. If the parent has already
+    been charged (the rest of the gig has already paid), the venue
+    needs to use Admin → Payments to manually reinstate via the
+    full charge+transfer flow.
+
+    Behavior:
+      - Refund the platform fee that was collected at cancel time.
+      - Flip the child txn back to 'scheduled' and clear cancel_reason,
+        cancelled_at, platform_fee_charged_cents.
+      - Call _recompute_gig_fees so the parent venue_charge total
+        and fee distribution restore to "this slot is paying again."
+      - Notifications + emails to venue + reinstated artist.
+    """
+    stripe_mod, keys = init_stripe(db)
+    slot_id = data.get("slot_id")
+    if not slot_id:
+        raise HTTPException(400, "Missing slot_id")
+
+    # Look up the slot and the cancelled child txn.
+    slot = db.execute(
+        text("""SELECT gs.id, gs.gig_id, gs.slot_number, gs.artist_id,
+                       g.venue_id, g.date as gig_date, g.title as gig_title,
+                       v.venue_name, v.user_id as venue_user_id,
+                       a.name as artist_name, a.user_id as artist_user_id
+                FROM gig_slots gs
+                JOIN gigs g ON g.id = gs.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                LEFT JOIN artists a ON a.id = gs.artist_id
+                WHERE gs.id = :sid"""),
+        {"sid": slot_id}
+    ).mappings().first()
+    if not slot:
+        raise HTTPException(404, "Slot not found")
+    if not slot.get("artist_id"):
+        raise HTTPException(400, "Slot has no artist to reinstate")
+
+    venue_id = slot["venue_id"]
+    venue_check = db.execute(
+        text("""SELECT 1 FROM venues v WHERE v.id = :vid AND (
+            v.user_id = :uid OR EXISTS (
+                SELECT 1 FROM entity_users eu WHERE eu.entity_type='venue' AND eu.entity_id=v.id AND eu.user_id=:uid
+            ))"""),
+        {"vid": venue_id, "uid": user.id}
+    ).first()
+    if not venue_check:
+        raise HTTPException(403, "Not authorized")
+
+    # Find the cancelled child for this slot.
+    txn = db.execute(
+        text("""SELECT id, amount_cents, commission_cents, platform_fee_charged_cents,
+                       stripe_payment_intent_id, notes
+                FROM transactions
+                WHERE gig_id = :gid AND artist_id = :aid
+                  AND status = 'payment_cancelled'
+                  AND (transaction_type IS NULL
+                       OR transaction_type IN ('artist_payout', 'single'))
+                  AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid
+                       OR notes IS NULL OR notes NOT LIKE 'Slot %')
+                ORDER BY id DESC LIMIT 1"""),
+        {"gid": slot["gig_id"], "aid": slot["artist_id"],
+         "slot_like": f"Slot {int(slot_id)}%",
+         "slot_like_mid": f"%Slot {int(slot_id)} %"}
+    ).mappings().first()
+    if not txn:
+        raise HTTPException(400, "No cancelled payment found for this slot.")
+    txn = dict(txn)
+
+    # Pre-5pm gate — parent must still be cancellable / live for the
+    # scheduler to pick it up. After the parent fires we can't just
+    # rewind the books; admin has to manually charge.
+    parent = db.execute(
+        text("""SELECT id, status FROM transactions
+                WHERE gig_id = :gid AND transaction_type = 'venue_charge'
+                ORDER BY id DESC LIMIT 1"""),
+        {"gid": slot["gig_id"]}
+    ).mappings().first()
+    if not parent:
+        raise HTTPException(400, "Parent venue charge missing — admin reinstate required.")
+    if parent["status"] not in ("scheduled", "test", "payment_cancelled"):
+        raise HTTPException(400,
+            f"Parent has been charged (status='{parent['status']}'). "
+            "Use Admin → Payments to reinstate this slot manually.")
+
+    # Refund the cancellation platform fee if we charged one.
+    refund_id = None
+    refund_error = None
+    fee_to_refund = int(txn.get("platform_fee_charged_cents") or 0)
+    if fee_to_refund > 0 and txn.get("stripe_payment_intent_id"):
+        payments_live = keys.get('payments_enabled', False)
+        if payments_live:
+            try:
+                refund = stripe_mod.Refund.create(
+                    payment_intent=txn["stripe_payment_intent_id"],
+                    amount=fee_to_refund,
+                    metadata={
+                        "gig_id": str(slot["gig_id"]),
+                        "slot_id": str(slot_id),
+                        "type": "slot_reinstate_fee_refund",
+                        "platform": "gigsfill"
+                    },
+                )
+                refund_id = refund.id
+            except Exception as e:
+                logging.error(f"[ReinstateSlotPayment] Refund failed for gig {slot['gig_id']} slot {slot_id}: {e}")
+                refund_error = str(e)[:160]
+
+    # Flip the child back to scheduled. Clear cancel fields so the
+    # row reads as "live again" everywhere. Keep amount_cents — it's
+    # the original pre-cancel value; recompute uses it.
+    db.execute(
+        text("""UPDATE transactions SET
+                  status = 'scheduled',
+                  cancel_reason = NULL,
+                  cancelled_at = NULL,
+                  platform_fee_charged_cents = 0,
+                  notes = COALESCE(notes, '') || :note_suffix
+                WHERE id = :tid"""),
+        {"note_suffix": f" [slot-reinstated by user {user.id}; refund={refund_id or 'none'}]",
+         "tid": txn["id"]}
+    )
+
+    # If the parent was also cancelled (all-children-cancelled cleanup
+    # in cancel_slot_payment), flip it back to scheduled so the
+    # scheduler picks it up.
+    if parent["status"] == 'payment_cancelled':
+        db.execute(
+            text("""UPDATE transactions SET status='scheduled',
+                       cancel_reason=NULL, cancelled_at=NULL
+                    WHERE id=:pid"""),
+            {"pid": parent["id"]}
+        )
+
+    # Re-rate the gig fees now that this child is back in the mix.
+    try:
+        from backend.routes.gigs import _recompute_gig_fees
+        _recompute_gig_fees(db, slot["gig_id"])
+    except Exception as _e:
+        logging.warning(f"[ReinstateSlotPayment] _recompute_gig_fees failed: {_e}")
+
+    # Notifications.
+    gig_label = slot.get("gig_title") or str(slot.get("gig_date") or "a gig")
+    venue_name = slot.get("venue_name") or "Venue"
+    artist_name = slot.get("artist_name") or "Artist"
+    refund_note = (f" Refund of ${fee_to_refund/100:.2f} for the cancellation fee {('processed' if refund_id else 'failed — admin will follow up')}." if fee_to_refund > 0 else "")
+    db.execute(
+        text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
+                VALUES (:uid, 'payment_reinstated', 'Payment Reinstated', :msg, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
+        {"uid": slot["venue_user_id"],
+         "msg": f"You reinstated payment to {artist_name} (Slot {slot['slot_number']}) for {gig_label}.{refund_note}",
+         "gid": slot["gig_id"], "vid": venue_id, "aid": slot["artist_id"]}
+    )
+    if slot.get("artist_user_id"):
+        db.execute(
+            text("""INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at)
+                    VALUES (:uid, 'payment_reinstated', 'Payment Reinstated', :msg, :gid, :vid, :aid, 0, CURRENT_TIMESTAMP)"""),
+            {"uid": slot["artist_user_id"],
+             "msg": f"{venue_name} reinstated your payment for {gig_label} (Slot {slot['slot_number']}). You'll be paid as originally scheduled.",
+             "gid": slot["gig_id"], "vid": venue_id, "aid": slot["artist_id"]}
+        )
+    db.commit()
+    return {
+        "ok": True,
+        "slot_id": slot_id,
+        "slot_number": slot["slot_number"],
+        "artist_name": artist_name,
+        "refund_id": refund_id,
+        "refund_error": refund_error,
+        "fee_refunded_cents": fee_to_refund if refund_id else 0,
+    }
+
+
 @router.post("/api/stripe/reinstate-gig-payment")
 def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     """
@@ -1752,13 +1930,40 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
                           AND t.status = 'charged'
                        THEN 'paid'
                      ELSE t.status
-                   END as effective_status
+                   END as effective_status,
+                   -- Cancelled artist_payout rows carry the slot id in
+                   -- their notes ("Slot 123 [audit suffix…]"). Surface
+                   -- it as slot_id so the Payments page can route the
+                   -- Reinstate click through the per-slot endpoint
+                   -- rather than the legacy whole-gig flow.
+                   CASE
+                     WHEN COALESCE(t.transaction_type, '') = 'artist_payout'
+                          AND t.status = 'payment_cancelled'
+                          AND t.notes LIKE 'Slot %'
+                       THEN CAST(SUBSTR(
+                              t.notes,
+                              6,
+                              CASE WHEN INSTR(SUBSTR(t.notes, 6), ' ') > 0
+                                   THEN INSTR(SUBSTR(t.notes, 6), ' ') - 1
+                                   ELSE LENGTH(SUBSTR(t.notes, 6))
+                              END
+                            ) AS INTEGER)
+                     ELSE NULL
+                   END as cancelled_slot_id
             FROM transactions t
             JOIN gigs g ON t.gig_id = g.id
             LEFT JOIN artists a ON a.id = t.artist_id
             LEFT JOIN artists a2 ON a2.id = g.artist_id
             WHERE g.venue_id = :vid
-              AND COALESCE(t.transaction_type, 'single') IN ('venue_charge', 'single', 'payment_cancelled', 'free_trial')
+              AND (
+                COALESCE(t.transaction_type, 'single') IN ('venue_charge', 'single', 'payment_cancelled', 'free_trial')
+                -- Per-slot cancellations create an artist_payout row with
+                -- status='payment_cancelled'. Surface those too so the venue
+                -- can reinstate via the Payments page. Without this, a
+                -- cancelled slot's cancel + reinstate UI was completely
+                -- invisible — only the parent venue_charge showed up.
+                OR (COALESCE(t.transaction_type, '') = 'artist_payout' AND t.status = 'payment_cancelled')
+              )
               AND (
                 -- Only show transactions for gigs that are actually booked/in-progress
                 g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval','started','completed','paid')
