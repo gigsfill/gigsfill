@@ -564,27 +564,34 @@ def get_artist_venues(artist_id: int, user=Depends(get_current_user), db=Depends
 def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     """Get all booked gigs for an artist at a specific venue (including slot bookings)"""
     
-    # Regular gigs booked by this artist
+    # Regular gigs booked by this artist. Door-deal terms live on the
+    # gig_slots row for single-slot bookings too — pull from the matching
+    # slot when it exists so My Venues can render "$X guarantee + Y% of
+    # door" instead of just the dollar floor.
     regular_gigs = db.execute(
         text("""
-            SELECT 
+            SELECT
                 g.id, g.date, g.start_time, g.end_time, g.pay, g.notes,
                 g.status, g.artist_id, a.name as artist_name,
                 g.title, g.artist_type, g.band_formats, g.styles,
                 COALESCE(g.is_multi_slot, 0) as is_multi_slot,
-                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state
+                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
+                gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at
             FROM gigs g
             LEFT JOIN artists a ON g.artist_id = a.id
             LEFT JOIN venues v ON g.venue_id = v.id
-            WHERE g.artist_id = :artist_id 
-                AND g.venue_id = :venue_id 
+            LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = g.artist_id
+            WHERE g.artist_id = :artist_id
+                AND g.venue_id = :venue_id
                 AND g.status = 'booked'
             ORDER BY g.date ASC
         """),
         {"artist_id": artist_id, "venue_id": venue_id}
     ).mappings().all()
-    
-    # Slot-booked gigs at this venue
+
+    # Slot-booked gigs at this venue. Same deal-info columns so the
+    # frontend can call window.formatPaySummary() on the row directly.
     slot_gigs = db.execute(
         text("""
             SELECT DISTINCT
@@ -592,13 +599,15 @@ def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_curren
                 'booked' as status, gs.artist_id, a.name as artist_name,
                 g.title, g.artist_type, g.band_formats, g.styles,
                 COALESCE(g.is_multi_slot, 0) as is_multi_slot,
-                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state
+                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
+                gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at
             FROM gig_slots gs
             JOIN gigs g ON gs.gig_id = g.id
             LEFT JOIN artists a ON gs.artist_id = a.id
             LEFT JOIN venues v ON g.venue_id = v.id
             WHERE gs.artist_id = :artist_id
-                AND g.venue_id = :venue_id 
+                AND g.venue_id = :venue_id
                 AND gs.status = 'booked'
             ORDER BY g.date ASC
         """),
@@ -632,7 +641,17 @@ def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_curren
         if override_val is not None and override_val > pay:
             pay = override_val
         g["effective_pay"] = round(pay, 2)
-    
+
+    # Stamp pay_summary on each row so the frontend can render the
+    # door-aware string ("$10.00 guarantee + 50% of door") without
+    # rebuilding the logic in JS. _enrich_pay_summary reads deal_type
+    # / guarantee_cents / door_pct off the row and writes pay_summary.
+    try:
+        from backend.routes.gigs import _enrich_pay_summary
+        _enrich_pay_summary(result)
+    except Exception:
+        pass
+
     result.sort(key=lambda x: x.get('date', ''))
     return result
 

@@ -476,14 +476,18 @@ class MyVenuesRedesign {
                   const dateStr = new Date(parseInt(year), parseInt(month) - 1, parseInt(day)).toLocaleDateString();
                   const gigStart = formatTime12Hour(gig.start_time);
                   const gigEnd = formatTime12Hour(gig.end_time);
-                  // Door-deal aware: prefer the artist's specific slot's
-                  // pay_summary if this is a door split, else fall back to
-                  // the effective/listed pay. window.formatPaySummary +
-                  // hasDoorDeal live in api-globals.js.
+                  // Door-deal aware. The /artists/:aid/venues/:vid/gigs
+                  // endpoint now stamps deal_type / guarantee_cents /
+                  // door_pct (and pay_summary) onto each row directly,
+                  // so call formatPaySummary on the gig itself —
+                  // it picks up door terms when present and falls back
+                  // to flat-dollar otherwise. The previous version
+                  // looked at gig.slots[] which this endpoint doesn't
+                  // populate, so door deals always rendered as the
+                  // bare guarantee dollar amount.
                   let payDisp;
-                  const _doorSlot = (gig.slots || []).find(s => window.hasDoorDeal && window.hasDoorDeal(s));
-                  if (_doorSlot && window.formatPaySummary) {
-                    payDisp = window.formatPaySummary(_doorSlot);
+                  if (window.formatPaySummary && (gig.pay_summary || window.hasDoorDeal?.(gig))) {
+                    payDisp = window.formatPaySummary(gig);
                   } else if (gig.effective_pay != null) {
                     payDisp = '$' + parseFloat(gig.effective_pay).toFixed(2);
                   } else if (gig.pay != null) {
