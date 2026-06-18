@@ -1828,11 +1828,13 @@ def check_new_venues(user=Depends(get_current_user), db=Depends(get_db)):
     ), {"uid": user.id}).scalar() or 0
 
     # Stripe Connect must be onboarded for the user to actually receive
-    # affiliate payouts. The same columns are used by /api/affiliate/my-summary
-    # to gate the "Setup Stripe" banner on the dashboard.
+    # affiliate payouts. Lives in entity_payment_settings (entity_type=
+    # 'user', entity_id=user.id) — same row the onboard endpoint writes.
+    # Bug fix Jun 2026: was incorrectly reading FROM users, which doesn't
+    # carry these columns → SELECT raised OperationalError → endpoint 500.
     stripe_row = db.execute(text(
         "SELECT affiliate_stripe_connect_account_id, affiliate_stripe_connect_onboarding_complete "
-        "FROM users WHERE id = :uid"
+        "FROM entity_payment_settings WHERE entity_type = 'user' AND entity_id = :uid"
     ), {"uid": user.id}).mappings().first()
     has_stripe = bool(
         stripe_row
