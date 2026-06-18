@@ -1443,6 +1443,44 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (sub) {
       sub.textContent = `Slot ${slot.slot_number}${slot.artist_name ? ' — ' + slot.artist_name : ''}`;
     }
+    // ITEM 10: surface the settle deadline. Fetch the gig's parent
+    // transaction's scheduled_process_at and show a "X left to
+    // revise" ticker. Cached on the slot data object so re-opens
+    // skip the network call. Server-side enforcement is still the
+    // source of truth — the hint is purely informational.
+    const deadlineHint = document.getElementById('doorSettleDeadlineHint');
+    function _renderDeadline(cutoffMs) {
+      if (!deadlineHint) return;
+      if (!cutoffMs || cutoffMs <= Date.now()) { deadlineHint.style.display = 'none'; return; }
+      const remainMs = cutoffMs - Date.now();
+      const hrs = Math.floor(remainMs / 3_600_000);
+      const mins = Math.floor((remainMs % 3_600_000) / 60_000);
+      const tl = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+      const fmt = new Date(cutoffMs).toLocaleString('en-US', {
+        hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+        month: 'short', day: 'numeric'
+      });
+      deadlineHint.innerHTML = `⏰ <strong>${tl} left</strong> to revise — payout fires ${fmt}`;
+      deadlineHint.style.display = 'block';
+    }
+    if (deadlineHint) deadlineHint.style.display = 'none';
+    if (slot._cutoffMs != null) {
+      _renderDeadline(slot._cutoffMs);
+    } else if (selectedGig && selectedGig.id) {
+      // Lazy fetch — runs once per modal open. Stashes back on the
+      // slot data so subsequent re-opens of THIS slot skip the call.
+      fetch(`/api/stripe/gig/${selectedGig.id}/transaction-status`, { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (d && d.scheduled_process_at) {
+            const _d = new Date(String(d.scheduled_process_at).replace(' ', 'T') + 'Z');
+            const ms = isNaN(_d.getTime()) ? null : _d.getTime();
+            slot._cutoffMs = ms;
+            _renderDeadline(ms);
+          }
+        })
+        .catch(() => {});
+    }
     document.getElementById('doorSettleGuarantee').textContent =
       '$' + ((slot.guarantee_cents || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     document.getElementById('doorSettleDoorPct').textContent = (slot.door_pct || 0) + '%';
@@ -3847,7 +3885,15 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           const txnRes = await fetch('/api/stripe/gig/' + gig.id + '/transaction-status', { credentials: 'include' });
           const txnData = txnRes.ok ? await txnRes.json() : {};
           const alreadyCancelled = txnData.has_transaction && txnData.status === 'payment_cancelled';
-          if (inCancelWindow && !alreadyCancelled) {
+          // ITEM 5: hide button when every artist_payout on the gig
+          // has already been cancelled (cancellable_count from the
+          // multi-slot-aware endpoint = remaining scheduled/test
+          // children). Older snapshot ignores the field gracefully —
+          // defaults to "show".
+          const cancellableCount = txnData.cancellable_count != null
+            ? Number(txnData.cancellable_count) : null;
+          const nothingLeft = cancellableCount === 0;
+          if (inCancelWindow && !alreadyCancelled && !nothingLeft) {
             const container = (cancelGigBtn && cancelGigBtn.parentElement) ? cancelGigBtn.parentElement : document.querySelector('#gigModal .modal-actions');
             if (container) {
               let cancelPayBtn = document.getElementById('cancelGigPaymentBtn');
@@ -6307,24 +6353,31 @@ async function updateBookedGigNotes(gigId) {
 
 window._showCancelPaymentModal = async function(gigId) {
   // Fetch fee config + the gig's slots in parallel. Slots drive the
-  // per-row checkbox + reason UI; without them we can't render the
-  // modal at all. The /slots endpoint lists every slot — we filter
-  // to booked ones in JS (pending / open slots can't have their
-  // payment cancelled since there's no booking yet).
+  // per-row checkbox + reason UI. Also fetch transaction-status so
+  // we can show the venue exactly how long they have to act.
   let feePct = '5';
   let slots = [];
+  let gigMeta = null;
+  let cutoffMs = null;
   try {
-    const [cfgRes, slotsRes] = await Promise.all([
+    const [cfgRes, slotsRes, txStatusRes] = await Promise.all([
       fetch('/api/stripe/config', { credentials: 'include' }),
       fetch(`/api/gigs/${gigId}/slots`, { credentials: 'include' }),
+      fetch(`/api/stripe/gig/${gigId}/transaction-status`, { credentials: 'include' }),
     ]);
     if (cfgRes.ok) {
       const cfg = await cfgRes.json();
       const raw = cfg.platform_fee_percent;
       if (raw != null) feePct = (Number(raw) % 1 === 0) ? String(raw) : Number(raw).toFixed(1);
     }
-    if (slotsRes.ok) {
-      slots = await slotsRes.json();
+    if (slotsRes.ok) slots = await slotsRes.json();
+    if (txStatusRes.ok) {
+      gigMeta = await txStatusRes.json();
+      // gigMeta.scheduled_process_at is the deadline. Convert to ms for the timer.
+      if (gigMeta && gigMeta.scheduled_process_at) {
+        const _d = new Date(gigMeta.scheduled_process_at.replace(' ', 'T') + 'Z');
+        if (!isNaN(_d.getTime())) cutoffMs = _d.getTime();
+      }
     }
   } catch (e) {
     alert('Unable to load slot list.');
@@ -6348,6 +6401,9 @@ window._showCancelPaymentModal = async function(gigId) {
   // Textarea starts disabled; checkbox toggle enables/disables it.
   // Pay column shows the slot's listed pay (with door breakdown
   // inline for door deals so the venue sees what they're saving).
+  // For settled door deals we ALSO surface the guarantee floor +
+  // door-share amount so the venue understands "you settled at $X,
+  // that's the amount being cancelled" — clearer audit context.
   const slotRowsHtml = cancellable.map(s => {
     const slotN = s.slot_number || '?';
     const who = s.artist_name || 'Artist';
@@ -6357,14 +6413,15 @@ window._showCancelPaymentModal = async function(gigId) {
       const gua = _money(s.guarantee_cents || 0);
       const pct = parseInt(s.door_pct, 10) || 0;
       if (s.settled_at && s.settled_pay_cents != null) {
+        const shareCents = Math.floor((Number(s.door_receipts_cents) || 0) * pct / 100);
         payHtml = `<strong>${_money(s.settled_pay_cents)}</strong>
           <span style="color:var(--text-muted, #94a3b8);font-size:0.72rem;display:block;margin-top:1px;">
-            ${gua} guarantee + ${pct}% door (settled)
+            ${gua} guarantee + ${pct}% door (${_money(shareCents)} share)
           </span>`;
       } else {
         payHtml = `<strong>${gua}</strong>
-          <span style="color:var(--text-muted, #94a3b8);font-size:0.72rem;display:block;margin-top:1px;">
-            ${gua} guarantee + ${pct}% door (not yet settled)
+          <span style="color:#fbbf24;font-size:0.72rem;display:block;margin-top:1px;">
+            ${gua} guarantee + ${pct}% door · not yet settled
           </span>`;
       }
     } else {
@@ -6394,10 +6451,13 @@ window._showCancelPaymentModal = async function(gigId) {
   overlay.innerHTML = `
     <div style="background:var(--card-bg,#1a1a2e);border:1px solid rgba(239,68,68,0.3);border-radius:12px;max-width:580px;width:100%;padding:24px 26px;box-shadow:0 20px 60px rgba(0,0,0,0.5);max-height:90vh;overflow-y:auto;">
       <h3 style="margin:0 0 4px 0;color:#ef4444;font-size:1.1rem;">⚠️ Cancel Slot Payments</h3>
-      <p style="color:var(--text-muted,#999);font-size:0.82rem;margin:0 0 16px 0;line-height:1.5;">
+      <p style="color:var(--text-muted,#999);font-size:0.82rem;margin:0 0 6px 0;line-height:1.5;">
         Check each slot whose payment you want to cancel and provide a reason. Unchecked
         slots will continue to be paid as scheduled.
       </p>
+      <div id="cancelPayDeadline" style="display:none;font-size:0.78rem;color:#fbbf24;margin:0 0 14px 0;padding:8px 12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:6px;line-height:1.4;">
+        <!-- populated by _refreshDeadline below -->
+      </div>
       <div id="cancelSlotList">${slotRowsHtml}</div>
       <p style="color:rgba(239,68,68,0.75);font-size:0.74rem;margin:14px 0 6px 0;line-height:1.5;">
         ⚠️ Cancelling a slot's payment still requires the venue to pay the
@@ -6419,7 +6479,9 @@ window._showCancelPaymentModal = async function(gigId) {
   `;
   document.body.appendChild(overlay);
 
+  const confirmBtn = overlay.querySelector('#cancelPayConfirmBtn');
   function closeCancelPaymentAndGigModal() {
+    if (_deadlineTimer) { clearInterval(_deadlineTimer); _deadlineTimer = null; }
     overlay.remove();
     const gigModal = document.getElementById('gigModal');
     if (gigModal) gigModal.classList.add('hidden');
@@ -6427,10 +6489,46 @@ window._showCancelPaymentModal = async function(gigId) {
   overlay.querySelector('#cancelPayOverlayClose').onclick = closeCancelPaymentAndGigModal;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeCancelPaymentAndGigModal(); });
 
+  // Deadline timer — show "5h 23m left" countdown to the venue so they
+  // understand the cancel window is finite. Refresh every minute. When
+  // the window closes the message flips and the Confirm button is
+  // hard-disabled (server-side check is still the source of truth).
+  let _deadlineTimer = null;
+  const deadlineEl = overlay.querySelector('#cancelPayDeadline');
+  function _refreshDeadline() {
+    if (cutoffMs == null) return;
+    const remainMs = cutoffMs - Date.now();
+    const fmt = new Date(cutoffMs).toLocaleString('en-US', {
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+      month: 'short', day: 'numeric'
+    });
+    deadlineEl.style.display = 'block';
+    if (remainMs <= 0) {
+      deadlineEl.innerHTML = `<strong>⏰ The cancel window closed at ${fmt}.</strong> The payout has already fired — refunds require admin action via the Payments console.`;
+      deadlineEl.style.color = '#ef4444';
+      deadlineEl.style.background = 'rgba(239,68,68,0.08)';
+      deadlineEl.style.borderColor = 'rgba(239,68,68,0.3)';
+      // Disable Confirm + show why
+      confirmBtn.disabled = true;
+      confirmBtn.style.background = 'rgba(239,68,68,0.2)';
+      confirmBtn.style.color = 'rgba(255,255,255,0.4)';
+      confirmBtn.style.cursor = 'not-allowed';
+      confirmBtn.textContent = 'Cancel window closed';
+      return;
+    }
+    const hrs = Math.floor(remainMs / 3_600_000);
+    const mins = Math.floor((remainMs % 3_600_000) / 60_000);
+    const timeLeft = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+    deadlineEl.innerHTML = `⏰ <strong>You have ${timeLeft} to act.</strong> The payout fires at ${fmt}; after that the artists are paid and refunds require admin help.`;
+  }
+  _refreshDeadline();
+  if (cutoffMs != null) {
+    _deadlineTimer = setInterval(_refreshDeadline, 60_000);
+  }
+
   // Enable each row's reason textarea when its checkbox is on;
   // update the Confirm button label to show the count of selected
   // slots; disable Confirm when nothing is checked.
-  const confirmBtn = overlay.querySelector('#cancelPayConfirmBtn');
   function _refreshConfirm() {
     const n = overlay.querySelectorAll('.cancel-slot-check:checked').length;
     confirmBtn.disabled = n === 0;
@@ -6504,6 +6602,7 @@ window._showCancelPaymentModal = async function(gigId) {
     // text usefully progressive.
     let totalFee = 0;
     const failures = [];
+    const feeWarnings = [];
     for (let i = 0; i < selected.length; i++) {
       const s = selected[i];
       status.textContent = `Cancelling slot ${s.slot_num} (${s.artist_name})… ${i+1}/${selected.length}`;
@@ -6520,6 +6619,12 @@ window._showCancelPaymentModal = async function(gigId) {
         }
         const result = await res.json();
         totalFee += result.platform_fee_charged || 0;
+        // Partial-success: cancellation recorded, but Stripe charge for
+        // the platform fee failed. Venue needs to know their card wasn't
+        // actually debited and admin will follow up.
+        if (result.fee_charge_error) {
+          feeWarnings.push(`Slot ${s.slot_num} (${s.artist_name}): card not charged — ${result.fee_charge_error}`);
+        }
       } catch (e) {
         failures.push(`Slot ${s.slot_num} (${s.artist_name}): ${e.message}`);
       }
@@ -6534,13 +6639,23 @@ window._showCancelPaymentModal = async function(gigId) {
     }
 
     const okCount = selected.length - failures.length;
-    if (failures.length) {
+    const baseMsg = failures.length
+      ? `Cancelled ${okCount}/${selected.length} slots.`
+      : `✓ Cancelled ${okCount} slot${okCount === 1 ? '' : 's'}.`;
+    const feeMsg = totalFee > 0 ? ` Platform fee charged: $${(totalFee/100).toFixed(2)}.` : '';
+    if (failures.length || feeWarnings.length) {
       status.style.color = '#f59e0b';
-      status.innerHTML = `Cancelled ${okCount}/${selected.length} slots. ${failures.length} failed:<br><em style="font-size:0.75rem;">${failures.join('<br>')}</em>`;
+      let html = baseMsg + feeMsg;
+      if (failures.length) {
+        html += `<br><strong>Failed:</strong><br><em style="font-size:0.75rem;">${failures.join('<br>')}</em>`;
+      }
+      if (feeWarnings.length) {
+        html += `<br><strong>⚠️ Fee charge issues (admin will follow up):</strong><br><em style="font-size:0.75rem;">${feeWarnings.join('<br>')}</em>`;
+      }
+      status.innerHTML = html;
     } else {
       status.style.color = '#22c55e';
-      const feeMsg = totalFee > 0 ? ` Platform fee charged: $${(totalFee/100).toFixed(2)}.` : '';
-      status.textContent = `✓ Cancelled ${okCount} slot${okCount === 1 ? '' : 's'}.${feeMsg}`;
+      status.textContent = baseMsg + feeMsg;
     }
     confirmBtn.style.display = 'none';
     overlay.querySelector('#cancelPayOverlayClose').textContent = 'Close';
@@ -6559,6 +6674,16 @@ window._showCancelPaymentModal = async function(gigId) {
       window.dispatchEvent(new CustomEvent('gigsfill:payments-stale', {
         detail: { reason: 'slot-cancel', gig_id: gigId }
       }));
+    } catch (_) {}
+
+    // ITEM 6: refresh the venue calendar so the gig bubble reflects
+    // the new state. invalidateGigs() drops the gigs cache; the
+    // next renderCalendar() refetches. Both functions are top-level
+    // in this module — same hook used after booking / cancellation
+    // flows.
+    try {
+      if (typeof invalidateGigs === 'function') invalidateGigs();
+      if (typeof renderCalendar === 'function') await renderCalendar();
     } catch (_) {}
   };
 };

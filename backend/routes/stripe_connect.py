@@ -1196,14 +1196,22 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
     # Charge the platform fee immediately. Idempotency key carries
     # both gig_id and slot_id so a double-click never double-charges
     # and cancelling slot 1 doesn't collide with cancelling slot 2.
+    # On Stripe error, we surface the message + still mark the txn
+    # cancelled (the venue's INTENT is recorded; admin can retry the
+    # fee charge via the Payments console). The response carries a
+    # fee_charge_error so the modal can warn the venue that their
+    # card wasn't actually debited.
     payments_live = keys.get('payments_enabled', False)
     platform_fee_pi_id = None
+    fee_charge_error = None
     if payments_live and venue_fee_cents > 0:
         venue_settings = db.execute(
             text("SELECT stripe_customer_id, stripe_payment_method_id FROM entity_payment_settings WHERE entity_type='venue' AND entity_id=:vid"),
             {"vid": venue_id}
         ).mappings().first()
-        if venue_settings and venue_settings.get("stripe_payment_method_id"):
+        if not (venue_settings and venue_settings.get("stripe_payment_method_id")):
+            fee_charge_error = "Venue has no card on file — fee not collected. Add a card to charge the cancellation fee."
+        else:
             try:
                 pi = stripe_mod.PaymentIntent.create(
                     amount=venue_fee_cents,
@@ -1224,6 +1232,7 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
                 platform_fee_pi_id = pi.id
             except Exception as e:
                 logging.error(f"[CancelSlotPayment] Platform fee charge failed for gig {slot['gig_id']} slot {slot_id}: {e}")
+                fee_charge_error = str(e)[:160]
 
     # Mark the child cancelled.
     db.execute(
@@ -1287,13 +1296,76 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
              "gid": slot["gig_id"], "vid": venue_id, "aid": slot["artist_id"]}
         )
     db.commit()
+
+    # Emails to both parties — parity with cancel_gig_payment.
+    try:
+        from backend.email_service import EmailService
+        email_svc = EmailService(db)
+
+        def _get_user_emails(entity_type, entity_id):
+            if entity_type == 'venue':
+                rows = db.execute(text("""
+                    SELECT u.email FROM users u JOIN venues v ON v.user_id = u.id WHERE v.id = :eid
+                    UNION SELECT u.email FROM users u JOIN entity_users eu ON u.id = eu.user_id
+                    WHERE eu.entity_type = 'venue' AND eu.entity_id = :eid
+                """), {"eid": entity_id}).mappings().all()
+            else:
+                rows = db.execute(text("""
+                    SELECT u.email FROM users u JOIN artists a ON a.user_id = u.id WHERE a.id = :eid
+                    UNION SELECT u.email FROM users u JOIN entity_users eu ON u.id = eu.user_id
+                    WHERE eu.entity_type = 'artist' AND eu.entity_id = :eid
+                """), {"eid": entity_id}).mappings().all()
+            return [r["email"] for r in rows if r.get("email")]
+
+        gig_date_str = str(slot.get("gig_date") or "")
+        slot_label = f"Slot {slot['slot_number']}"
+        amount_str = f"${int(txn.get('amount_cents') or 0) / 100:.2f}"
+        fee_str = f"${venue_fee_cents/100:.2f}"
+        fee_note = (
+            f"<p>⚠️ <strong>Note:</strong> Stripe could not charge your card for the platform fee "
+            f"({fee_str}). Reason: {fee_charge_error}. GigsFill staff will reach out to resolve.</p>"
+            if fee_charge_error else
+            f"<p>The GigsFill platform fee of <strong>{fee_str}</strong> has been charged to your card on file.</p>"
+        )
+        venue_html = f"""<p>This confirms that you have cancelled the artist payment for the following slot:</p>
+            <p><strong>Gig:</strong> {gig_label}<br>
+            <strong>Date:</strong> {gig_date_str}<br>
+            <strong>Slot:</strong> {slot_label} — {artist_name}<br>
+            <strong>Amount cancelled:</strong> {amount_str}</p>
+            <p><strong>Your reason:</strong> {reason}</p>
+            {fee_note}
+            <p style="font-size:12px;color:#666;margin-top:18px;border-top:1px solid #eee;padding-top:10px;">
+            <em>Disclaimer: Payment disputes are between the venue and artist. GigsFill is not
+            involved in resolving disputes and is not responsible for the outcome.</em></p>
+            <p>— The GigsFill Team</p>"""
+        artist_html = f"""<p>We're writing to let you know that <strong>{venue_name}</strong> has cancelled the payment for your gig slot:</p>
+            <p><strong>Gig:</strong> {gig_label}<br>
+            <strong>Date:</strong> {gig_date_str}<br>
+            <strong>Slot:</strong> {slot_label}<br>
+            <strong>Amount:</strong> {amount_str}</p>
+            <p><strong>Venue's reason:</strong> <em>{reason}</em></p>
+            <p>Please contact the venue directly to resolve this. GigsFill is not a party to
+            payment disputes.</p>
+            <p>— The GigsFill Team</p>"""
+        subject_venue = f"Slot payment cancelled — {gig_label}"
+        subject_artist = f"{venue_name} cancelled your payment — {gig_label}"
+        for em in _get_user_emails('venue', venue_id):
+            try: email_svc._send_raw_email(em, subject_venue, venue_html)
+            except Exception: pass
+        for em in _get_user_emails('artist', slot["artist_id"]):
+            try: email_svc._send_raw_email(em, subject_artist, artist_html)
+            except Exception: pass
+    except Exception as _ee:
+        logging.error(f"[CancelSlotPayment] Email dispatch error: {_ee}")
+
     return {
         "ok": True,
         "slot_id": slot_id,
         "slot_number": slot["slot_number"],
         "artist_name": artist_name,
-        "platform_fee_charged": venue_fee_cents,
+        "platform_fee_charged": venue_fee_cents if not fee_charge_error else 0,
         "platform_fee_pi_id": platform_fee_pi_id,
+        "fee_charge_error": fee_charge_error,
         "remaining_live_children": _live_count,
     }
 
@@ -1534,25 +1606,53 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
 
 @router.get("/api/stripe/gig/{gig_id}/transaction-status")
 def get_gig_transaction_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Get the transaction status for a gig (for cancel payment button visibility)"""
-    txn = db.execute(
-        text("""SELECT t.id, t.status, t.scheduled_process_at, t.amount_cents, t.cancel_reason
-            FROM transactions t WHERE t.gig_id = :gid ORDER BY t.id DESC LIMIT 1"""),
+    """Get the transaction status for a gig (for cancel payment button visibility).
+
+    Now multi-slot aware:
+      - Prefers the parent venue_charge row's status + scheduled_process_at
+        for the "deadline" question (all children fire on the same tick).
+      - Adds `cancellable_count`: how many artist_payout children are still
+        in 'scheduled' / 'test' state (i.e. cancel button has work to do).
+        0 → frontend hides the button entirely.
+    """
+    # Parent venue_charge: drives the deadline + already-cancelled banner.
+    parent = db.execute(
+        text("""SELECT id, status, scheduled_process_at, amount_cents, cancel_reason
+                FROM transactions
+                WHERE gig_id = :gid AND transaction_type = 'venue_charge'
+                ORDER BY id DESC LIMIT 1"""),
         {"gid": gig_id}
     ).mappings().first()
-    
-    if not txn:
-        return {"has_transaction": False}
-    
-    txn = dict(txn)
-    # Ensure scheduled_process_at is ISO string for frontend date parsing
-    sched = txn.get("scheduled_process_at")
+    # Legacy single-slot / pre-split rows: fall back to "any txn for this
+    # gig" so we don't regress on old rows that don't carry transaction_type.
+    if not parent:
+        parent = db.execute(
+            text("""SELECT id, status, scheduled_process_at, amount_cents, cancel_reason
+                    FROM transactions WHERE gig_id = :gid ORDER BY id DESC LIMIT 1"""),
+            {"gid": gig_id}
+        ).mappings().first()
+    if not parent:
+        return {"has_transaction": False, "cancellable_count": 0}
+
+    cancellable_count = db.execute(
+        text("""SELECT COUNT(*) FROM transactions
+                WHERE gig_id = :gid
+                  AND (transaction_type IS NULL
+                       OR transaction_type IN ('artist_payout', 'single'))
+                  AND status IN ('scheduled', 'test')"""),
+        {"gid": gig_id}
+    ).scalar() or 0
+
+    out = dict(parent)
+    sched = out.get("scheduled_process_at")
     if sched is not None:
         if hasattr(sched, "isoformat"):
-            txn["scheduled_process_at"] = sched.isoformat()
+            out["scheduled_process_at"] = sched.isoformat()
         else:
-            txn["scheduled_process_at"] = str(sched).replace(" ", "T", 1)
-    return {"has_transaction": True, **txn}
+            out["scheduled_process_at"] = str(sched).replace(" ", "T", 1)
+    out["has_transaction"] = True
+    out["cancellable_count"] = int(cancellable_count)
+    return out
 
 
 # =====================================================
