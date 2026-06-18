@@ -241,7 +241,7 @@
       return ''
         + '<div style="display:contents;">'
         +   `<div style="color:#a78bfa;font-weight:600;padding:3px 0;white-space:nowrap;">${esc(label)}</div>`
-        +   `<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text, #e4e7eb);font-weight:700;padding:3px 0 3px 18px;text-align:right;white-space:nowrap;">${payStr}</div>`
+        +   `<div style="color:var(--text, #e4e7eb);font-weight:700;padding:3px 0 3px 18px;text-align:right;white-space:nowrap;">${payStr}</div>`
         +   `<div style="color:var(--text-muted, #94a3b8);padding:3px 0 3px 18px;white-space:nowrap;">${detail}</div>`
         + '</div>';
     }).join('');
