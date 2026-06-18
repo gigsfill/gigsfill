@@ -118,29 +118,31 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
     )
 
     # Update the existing booking transaction so the payout pipeline pays
-    # the settled amount instead of the original guarantee. Match on
-    # (gig_id, artist_id) and pre-charge status — only `scheduled` rows
-    # are safe to revise (we don't want to alter anything already
-    # charged or in flight).
-    # Pre-build the audit note in Python so we don't rely on SQL string ||
-    # int concatenation, which works in SQLite but throws on Postgres
-    # ("operator does not exist: text || integer"). Now a plain TEXT param.
+    # the settled amount instead of the original guarantee.
+    #
+    # IMPORTANT: only update `amount_cents` (and append an audit note).
+    # DO NOT also write artist_payout_cents / venue_charge_cents here —
+    # those need to be re-derived from the platform fee math, not just
+    # set to the new gross. The earlier version of this code wrote
+    # `artist_payout_cents = :final, venue_charge_cents = :final` which:
+    #   - left the artist receiving the full settled pay (no platform
+    #     fee deducted)
+    #   - put venue_charge_cents on what's supposed to be a child row
+    #     (that field belongs to the parent venue_charge)
+    #   - left the parent venue_charge stuck at the booking-time
+    #     amount, so the Venue Payments page showed the old total
+    # _recompute_gig_fees() below handles all of that consistently —
+    # it re-sums the children, recomputes platform fee, redistributes
+    # to each child, and rewrites the parent. Single source of truth.
     audit_note = (
         f" [door-settled receipts={int(receipts)}c "
         f"pct={int(slot['door_pct'] or 0)}% "
         f"guarantee={int(slot['guarantee_cents'] or 0)}c]"
     )
-    # Defensive: restrict to artist-payout-shaped rows. artist_id IS NOT
-    # NULL is already implied by the slot row's artist_id (checked above),
-    # but adding transaction_type filtering makes the intent explicit and
-    # protects against future schema changes that introduce other row
-    # shapes sharing the same (gig_id, artist_id) tuple.
     updated = db.execute(
         text("""
             UPDATE transactions
             SET amount_cents = :final,
-                venue_charge_cents = :final,
-                artist_payout_cents = :final,
                 notes = COALESCE(notes, '') || :audit_note
             WHERE gig_id = :gid
               AND artist_id = :aid
@@ -153,6 +155,22 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
          "gid": gig_id, "aid": slot["artist_id"]}
     )
     txn_updated_count = updated.rowcount or 0
+
+    # Re-derive the parent venue_charge total + per-child platform fees
+    # from the updated children. _recompute_gig_fees is a no-op if the
+    # parent's status has moved past 'scheduled'/'test', which matches
+    # our "money is in flight, freeze the books" rule above. Imported
+    # lazily because backend.routes.gigs has its own import-time work
+    # and door_settle stays a leaf module.
+    if txn_updated_count > 0:
+        try:
+            from backend.routes.gigs import _recompute_gig_fees
+            _recompute_gig_fees(db, gig_id)
+        except Exception as _e:
+            logger.warning(
+                f"[SETTLE] _recompute_gig_fees failed for gig {gig_id}: {_e}",
+                exc_info=True,
+            )
 
     # If we couldn't update any scheduled transaction it means the payout
     # has already fired (charged → paid → transferred). Settle bookkeeping

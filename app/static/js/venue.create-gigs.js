@@ -1489,6 +1489,19 @@ document.addEventListener("DOMContentLoaded", async () => {
             method: 'POST', credentials: 'include',
             headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
           })).json();
+      // Persist what we just settled into the in-memory __doorSlotData
+      // entry too — when the venue re-opens the door receipts dialog
+      // for the same slot without refreshing the page, the input pre-
+      // populates with the prior receipts instead of resetting to 0.00.
+      // (slot here === window.__doorSlotData[slot.slot_id] — same
+      // object reference, mutating it updates both.)
+      try {
+        slot.door_receipts_cents = cents;
+        slot.settled_at = new Date().toISOString();
+        if (res && res.settled_pay_cents != null) {
+          slot.settled_pay_cents = res.settled_pay_cents;
+        }
+      } catch (_) {}
       _closeDoorSettleModal();
       if (res && res.settled_pay_dollars != null) {
         const msg = res.warning

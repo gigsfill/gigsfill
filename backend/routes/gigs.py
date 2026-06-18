@@ -1274,6 +1274,7 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                     SELECT gs.gig_id, gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time, gs.pay, gs.status, gs.artist_id,
                            gs.artist_type, gs.band_formats, gs.styles,
                            gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                           gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
                            a.name as artist_name,
                            a.band_formats as artist_band_formats,
                            a.styles      as artist_styles
@@ -4103,6 +4104,7 @@ def get_gig_slots(gig_id: int, user=Depends(get_current_user), db=Depends(get_db
                        gs.pay, gs.artist_id, gs.status,
                        gs.artist_type, gs.band_formats, gs.styles,
                        gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                       gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
                        a.name as artist_name
                 FROM gig_slots gs
                 LEFT JOIN artists a ON gs.artist_id = a.id
