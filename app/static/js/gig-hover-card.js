@@ -38,13 +38,13 @@
   const HOVER_DELAY_MS = 200;
   const HIDE_DELAY_MS = 180;  // grace window so the user can move into the card
   // Card width is applied INLINE via positionCard() so the flip-to-left
-  // logic can know the exact size before measurement. The CSS max-width
-  // is only a safety net — this value wins. Sized so the type row
+  // logic can know the exact size before measurement. Hard-set (not a
+  // cap) — shrink-to-fit via max-content didn't work because the badges
+  // row's display:flex container reports its UNWRAPPED sum as max-
+  // content, inflating the card. Sized tight so the type row
   // (🎸 Live Band + Solo + Duo + Trio + Full Band) fits on one line
-  // with minimal trailing slack: chips total ~340px + 24px card
-  // padding ≈ 364px, so the cap sits just above. Styles row wraps
-  // naturally onto the next row(s) at this width.
-  const CARD_WIDTH = 370;
+  // with only the symmetric ~12px padding to the right of Full Band.
+  const CARD_WIDTH = 350;
   const GAP = 10;  // px between bubble and card
 
   let currentCard = null;
@@ -462,17 +462,16 @@
   function positionCard(card, anchor) {
     const r = anchor.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
-    // Shrink-to-fit width: cap at CARD_WIDTH but let the card naturally
-    // narrow to whatever its widest line of content needs. Removes the
-    // dead space after "Full Band" that was showing when content was
-    // narrower than the fixed CARD_WIDTH.
-    card.style.width = 'max-content';
+    // Hard width — see CARD_WIDTH comment for why shrink-to-fit didn't
+    // work. The badge row's flex-wrap behavior handles overflow by
+    // wrapping; the type row at ~320-330px content fits at this width
+    // with just the symmetric ~12px padding to either side.
+    card.style.width = CARD_WIDTH + 'px';
     card.style.maxWidth = CARD_WIDTH + 'px';
     document.body.appendChild(card);  // append now to measure height
     const h = card.offsetHeight;
-    const actualW = card.offsetWidth; // shrink-to-fit may be < CARD_WIDTH
     let left = r.right + GAP;
-    if (left + actualW > vw - 8) left = r.left - actualW - GAP;
+    if (left + CARD_WIDTH > vw - 8) left = r.left - CARD_WIDTH - GAP;
     if (left < 8) left = 8;
     let top = r.top + (r.height / 2) - (h / 2);
     if (top + h > vh - 8) top = vh - 8 - h;
