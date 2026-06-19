@@ -35,7 +35,9 @@ def raw_conn():
             id INTEGER PRIMARY KEY,
             venue_name TEXT,
             city TEXT,
-            state TEXT
+            state TEXT,
+            latitude REAL,
+            longitude REAL
         );
         CREATE TABLE gigs (
             id INTEGER PRIMARY KEY,
@@ -48,7 +50,13 @@ def raw_conn():
             title TEXT,
             artist_type TEXT,
             band_formats TEXT,
-            styles TEXT
+            styles TEXT,
+            is_multi_slot INTEGER DEFAULT 0
+        );
+        CREATE TABLE gig_slots (
+            id INTEGER PRIMARY KEY,
+            gig_id INTEGER,
+            status TEXT
         );
         CREATE TABLE platform_settings (
             setting_key TEXT PRIMARY KEY,
@@ -73,11 +81,11 @@ def raw_conn():
             ('open_gig_daily_digest_hour', '9');
         INSERT INTO users VALUES (101, 'artist@test.com');
         INSERT INTO artists VALUES (10, 101, 'Test Band', 'CA');
-        INSERT INTO venues VALUES (1, '14 Cannons', 'Marina del Rey', 'CA');
-        INSERT INTO venues VALUES (2, 'The Echo', 'Los Angeles', 'CA');
-        INSERT INTO gigs VALUES (501, 1, '2026-07-15', '20:00', '23:00', 200, 'open', '', 'Live Band', '', '');
-        INSERT INTO gigs VALUES (502, 1, '2026-07-16', '20:00', '23:00', 200, 'open', '', 'Live Band', '', '');
-        INSERT INTO gigs VALUES (503, 2, '2026-06-20', '20:00', '23:00', 300, 'open', '', 'Live Band', '', '');
+        INSERT INTO venues VALUES (1, '14 Cannons', 'Marina del Rey', 'CA', 33.9806, -118.4517);
+        INSERT INTO venues VALUES (2, 'The Echo', 'Los Angeles', 'CA', 34.0786, -118.2603);
+        INSERT INTO gigs VALUES (501, 1, '2026-07-15', '20:00', '23:00', 200, 'open', '', 'Live Band', '', '', 0);
+        INSERT INTO gigs VALUES (502, 1, '2026-07-16', '20:00', '23:00', 200, 'open', '', 'Live Band', '', '', 0);
+        INSERT INTO gigs VALUES (503, 2, '2026-06-20', '20:00', '23:00', 300, 'open', '', 'Live Band', '', '', 0);
     """)
     conn.commit()
     yield conn
@@ -147,8 +155,9 @@ def test_render_groups_by_venue_and_orders_by_date(raw_conn):
         enqueue_open_gig_for_artist(c, user_id=101, artist_id=10, gig_id=gid, venue_id=venue_id, notification_key=key)
     rows = _fetch_user_queue(c, 101)
     subj, body = _render_digest_email(artist_name="Test Band", rows=rows)
-    # Subject: counts both
-    assert "3 open gigs at 2 venues" in subj
+    # Subject: title-cased, counts both, no trailing CTA
+    assert "3 Open Gigs at 2 Venues" in subj
+    assert "book yours today" not in subj.lower()
     # Venues both present
     assert "14 Cannons" in body
     assert "The Echo" in body

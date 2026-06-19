@@ -131,7 +131,10 @@ def _fetch_user_queue(cursor, user_id: int) -> list[dict]:
         SELECT q.id, q.gig_id, q.venue_id, q.notification_key, q.via_radius,
                g.date, g.start_time, g.end_time, g.pay, g.title, g.status,
                g.artist_type, g.band_formats, g.styles,
-               v.venue_name, v.city, v.state
+               COALESCE(g.is_multi_slot, 0) as is_multi_slot,
+               (SELECT COUNT(*) FROM gig_slots gs
+                  WHERE gs.gig_id = g.id AND gs.status = 'open') as open_slot_count,
+               v.venue_name, v.city, v.state, v.latitude as v_lat, v.longitude as v_lon
         FROM artist_email_digest_queue q
         JOIN gigs g ON g.id = q.gig_id
         JOIN venues v ON v.id = q.venue_id
@@ -145,10 +148,32 @@ def _fetch_user_queue(cursor, user_id: int) -> list[dict]:
             "date": r[5], "start_time": r[6], "end_time": r[7],
             "pay": r[8], "title": r[9], "status": r[10],
             "artist_type": r[11], "band_formats": r[12], "styles": r[13],
-            "venue_name": r[14], "city": r[15], "state": r[16],
+            "is_multi_slot": bool(r[14]),
+            "open_slot_count": int(r[15] or 0),
+            "venue_name": r[16], "city": r[17], "state": r[18],
+            "venue_lat": r[19], "venue_lon": r[20],
         }
         for r in rows
     ]
+
+
+def _haversine_miles(lat1, lon1, lat2, lon2) -> float | None:
+    """Great-circle distance in statute miles. None when any input is
+    None or non-numeric. Inlined here (rather than importing from
+    scheduler.py) so the digest module stays independent of the
+    legacy scheduler-side helpers."""
+    try:
+        import math
+        lat1, lon1 = float(lat1), float(lon1)
+        lat2, lon2 = float(lat2), float(lon2)
+    except (TypeError, ValueError):
+        return None
+    R = 3958.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlon / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
 
 
 def _mark_queue_rows_sent(cursor, queue_ids: list[int]) -> None:
@@ -161,10 +186,11 @@ def _mark_queue_rows_sent(cursor, queue_ids: list[int]) -> None:
     )
 
 
-def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, str]:
+def _render_digest_email(*, artist_name: str, rows: list[dict],
+                         artist_lat=None, artist_lon=None) -> tuple[str, str]:
     """Render subject + HTML body. Groups by venue, sorts gigs within
-    each venue by date. Tags 36h gigs with 🚨 and via_radius gigs with
-    a small "in your area" badge.
+    each venue by date. When artist coordinates are provided, the
+    venue location line shows "(X.X mi)" after the city.
     """
     # Group by venue_id
     by_venue: dict[int, dict] = {}
@@ -172,6 +198,7 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
         v = by_venue.setdefault(r["venue_id"], {
             "venue_name": r["venue_name"],
             "city": r["city"], "state": r["state"],
+            "venue_lat": r.get("venue_lat"), "venue_lon": r.get("venue_lon"),
             "gigs": []
         })
         v["gigs"].append(r)
@@ -180,10 +207,13 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
     for v in by_venue.values():
         v["gigs"].sort(key=lambda g: (str(g["date"] or ""), str(g["start_time"] or "")))
 
-    # Subject
+    # Subject — title-cased per user preference, no trailing CTA.
     gig_count = len(rows)
     venue_count = len(by_venue)
-    subj = f"{gig_count} open gig{'s' if gig_count != 1 else ''} at {venue_count} venue{'s' if venue_count != 1 else ''} — book yours today"
+    subj = (
+        f"{gig_count} Open Gig{'s' if gig_count != 1 else ''} "
+        f"at {venue_count} Venue{'s' if venue_count != 1 else ''}"
+    )
 
     # Body
     def _esc(s):
@@ -220,9 +250,15 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
     sections = []
     for v in by_venue.values():
         loc = ", ".join(filter(None, [_esc(v.get("city")), _esc(v.get("state"))]))
-        # Pull the venue_id off the first gig in this section — every
-        # gig under the venue shares it. Used to link the venue name
-        # to its public profile page.
+        # Distance: only show when artist coords AND venue coords are
+        # both available. Italic, smaller, in parens after the city.
+        dist_html = ""
+        dist_mi = _haversine_miles(artist_lat, artist_lon, v.get("venue_lat"), v.get("venue_lon"))
+        if dist_mi is not None and dist_mi >= 0:
+            dist_html = (
+                f" <em style='color:#6b7280;font-size:12px;'>"
+                f"({dist_mi:.1f} mi)</em>"
+            )
         venue_id = v["gigs"][0]["venue_id"] if v["gigs"] else None
         venue_link_open = (
             f"<a href='https://gigsfill.com/app/venue-profile.html?venue_id={int(venue_id)}' "
@@ -232,29 +268,45 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
         venue_link_close = "</a>" if venue_id else "</span>"
         venue_header = (
             f"<strong>{venue_link_open}{_esc(v['venue_name'])}{venue_link_close}</strong>"
-            + (f" <span style='color:#6b7280;'>· {loc}</span>" if loc else "")
+            + (f" <span style='color:#6b7280;'>· {loc}{dist_html}</span>" if loc else dist_html)
         )
         gig_rows = []
         for g in v["gigs"]:
-            tag_html = ""
+            # Right-column content stacks: title (if set), slot count
+            # (if multi-slot), urgency badge (if 36h). Each on its own
+            # line so the right column reads top-to-bottom in priority.
+            right_parts = []
+            if g.get("title"):
+                right_parts.append(
+                    f"<div style='font-size:13px;color:#374151;font-style:italic;'>"
+                    f"\"{_esc(g['title'])}\"</div>"
+                )
+            if g.get("is_multi_slot") and g.get("open_slot_count"):
+                _n = int(g["open_slot_count"])
+                right_parts.append(
+                    f"<div style='font-size:12px;color:#6b7280;'>"
+                    f"{_n} open slot{'s' if _n != 1 else ''}</div>"
+                )
             if g["notification_key"] == "open_gig_36h":
-                tag_html = "<span style='color:#dc2626;font-weight:600;'>Less Than 36 Hours!</span>"
+                right_parts.append(
+                    "<div style='font-size:13px;color:#dc2626;font-weight:600;'>"
+                    "Less Than 36 Hours!</div>"
+                )
+            right_html = "".join(right_parts)
+
             link_open = (
                 f"<a href='https://gigsfill.com/app/artist-book-gigs.html?gig={g['gig_id']}' "
                 f"style='color:#111827;text-decoration:none;'>"
             )
-            # Time column shows the full window "7:00 PM – 10:00 PM" so
-            # the artist can see whether it conflicts with anything they
-            # already have booked.
             time_str = _fmt_time(g["start_time"])
             if g.get("end_time"):
                 time_str += f" – {_fmt_time(g['end_time'])}"
             gig_rows.append(
                 "<tr>"
-                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#111827;white-space:nowrap;'>{link_open}{_esc(_fmt_date(g['date']))}</a></td>"
-                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(time_str)}</a></td>"
-                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(_fmt_pay(g['pay']))}</a></td>"
-                f"<td style='padding:5px 0;font-size:13px;'>{tag_html}</td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#111827;white-space:nowrap;vertical-align:top;'>{link_open}{_esc(_fmt_date(g['date']))}</a></td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;vertical-align:top;'>{link_open}{_esc(time_str)}</a></td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;vertical-align:top;'>{link_open}{_esc(_fmt_pay(g['pay']))}</a></td>"
+                f"<td style='padding:5px 0;vertical-align:top;'>{right_html}</td>"
                 "</tr>"
             )
         sections.append(
@@ -280,7 +332,7 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
 <td style="padding: 28px 40px;">
 <p style="margin: 0 0 12px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">{_esc(artist_name)}, here's a list of open gigs within the next month:</p>
 {''.join(sections)}
-<p style="margin: 20px 0 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">You're getting this because you have notifications enabled. Update your preferences any time on <a href="https://gigsfill.com/app/user-profile.html?tab=settings" style="color: #3b82f6;">your profile</a>.</p>
+<p style="margin: 20px 0 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">To change which notifications you receive — including turning this digest off — go to <a href="https://gigsfill.com/app/user-profile.html?tab=settings" style="color: #3b82f6;">your notification preferences</a>.</p>
 </td>
 </tr>
 </tbody>
@@ -337,9 +389,10 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
         if not live_rows:
             continue
 
-        # Look up the user's email + first artist's display name.
+        # Look up the user's email + first artist's display name + geo
+        # coords so the digest can show "(X.X mi)" after each venue city.
         meta = cursor.execute(
-            """SELECT u.email, a.name
+            """SELECT u.email, a.name, a.latitude, a.longitude
                  FROM users u
                  JOIN artists a ON a.user_id = u.id
                 WHERE u.id = ?
@@ -347,15 +400,18 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
             (user_id,)
         ).fetchone()
         if not meta or not meta[0]:
-            # No email on the user — mark queue rows sent so we don't
-            # keep trying; admin can re-queue manually if needed.
             _mark_queue_rows_sent(cursor, [r["queue_id"] for r in live_rows])
             cursor.connection.commit()
             continue
-        artist_email, artist_name = meta[0], (meta[1] or "there")
+        artist_email = meta[0]
+        artist_name = meta[1] or "there"
+        artist_lat, artist_lon = meta[2], meta[3]
 
         # Render + send
-        subj, body = _render_digest_email(artist_name=artist_name, rows=live_rows)
+        subj, body = _render_digest_email(
+            artist_name=artist_name, rows=live_rows,
+            artist_lat=artist_lat, artist_lon=artist_lon,
+        )
         try:
             ok = send_email(smtp_config, artist_email, subj, body)
         except Exception as e:
