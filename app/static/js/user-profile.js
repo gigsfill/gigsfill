@@ -61,10 +61,18 @@ function formatModalCapacity(input) {
 }
 
 // Tab switching (same as admin)
-function switchTab(tab) {
+// `srcBtn` optional — pass the tab button directly when calling
+// programmatically (deep-link from email digest, etc.). Inline
+// onclick callers still work via window.event. Without the fallback
+// to a queried button, programmatic .click() in browsers that don't
+// populate window.event for synthetic events would crash here.
+function switchTab(tab, srcBtn) {
   // Update tab buttons
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
+  const _activeBtn = srcBtn
+    || (typeof event !== 'undefined' && event && event.target)
+    || document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
+  if (_activeBtn) _activeBtn.classList.add('active');
   
   // Update tab content — handle both class and display-style tabs
   document.querySelectorAll('.tab-content').forEach(c => {
@@ -1252,7 +1260,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const _tab = (window.location.hash || '').replace(/^#/, '') || _qp.get('tab') || '';
   if (_tab) {
     const btn = document.querySelector(`.tab[onclick*="switchTab('${_tab}')"]`);
-    if (btn) setTimeout(() => btn.click(), 0);
+    if (btn) setTimeout(() => switchTab(_tab, btn), 0);
   }
 });
 
