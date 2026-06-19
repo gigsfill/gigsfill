@@ -220,8 +220,20 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
     sections = []
     for v in by_venue.values():
         loc = ", ".join(filter(None, [_esc(v.get("city")), _esc(v.get("state"))]))
-        venue_header = f"<strong>{_esc(v['venue_name'])}</strong>" + (
-            f" <span style='color:#6b7280;'>· {loc}</span>" if loc else "")
+        # Pull the venue_id off the first gig in this section — every
+        # gig under the venue shares it. Used to link the venue name
+        # to its public profile page.
+        venue_id = v["gigs"][0]["venue_id"] if v["gigs"] else None
+        venue_link_open = (
+            f"<a href='https://gigsfill.com/app/venue-profile.html?venue_id={int(venue_id)}' "
+            f"style='color:#111827;text-decoration:none;border-bottom:1px solid #d1d5db;'>"
+            if venue_id else "<span>"
+        )
+        venue_link_close = "</a>" if venue_id else "</span>"
+        venue_header = (
+            f"<strong>{venue_link_open}{_esc(v['venue_name'])}{venue_link_close}</strong>"
+            + (f" <span style='color:#6b7280;'>· {loc}</span>" if loc else "")
+        )
         gig_rows = []
         for g in v["gigs"]:
             tag_html = ""
@@ -231,10 +243,16 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
                 f"<a href='https://gigsfill.com/app/artist-book-gigs.html?gig={g['gig_id']}' "
                 f"style='color:#111827;text-decoration:none;'>"
             )
+            # Time column shows the full window "7:00 PM – 10:00 PM" so
+            # the artist can see whether it conflicts with anything they
+            # already have booked.
+            time_str = _fmt_time(g["start_time"])
+            if g.get("end_time"):
+                time_str += f" – {_fmt_time(g['end_time'])}"
             gig_rows.append(
                 "<tr>"
                 f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#111827;white-space:nowrap;'>{link_open}{_esc(_fmt_date(g['date']))}</a></td>"
-                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(_fmt_time(g['start_time']))}</a></td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(time_str)}</a></td>"
                 f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(_fmt_pay(g['pay']))}</a></td>"
                 f"<td style='padding:5px 0;font-size:13px;'>{tag_html}</td>"
                 "</tr>"
