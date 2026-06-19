@@ -545,40 +545,42 @@ def process_payouts_now():
                             dest_charge = stripe.Charge.retrieve(
                                 tr.destination_payment, stripe_account=connect_acct
                             )
-                            # FIX (May 26 2026 — pass 8): the destination_payment
-                            # `status='succeeded'` AND `paid=True` is the artist-
-                            # visible "Succeeded" line in their Stripe Express
-                            # dashboard. From the artist's perspective, that's
-                            # "done" — they see it credited the day after the gig.
-                            # The 2-7 day BalanceTransaction `pending → available`
-                            # hold is Stripe's internal accounting (chargeback
-                            # reserve), not a state the artist tracks. Previously
-                            # we waited for `available`, which made gigsfill show
-                            # "Processing" for days/weeks AFTER the artist saw
-                            # "Succeeded" in Stripe — confusing and a steady
-                            # source of support complaints. Now we mark paid as
-                            # soon as the transfer is committed; if a reversal/
-                            # refund happens later, the transfer.reversed /
-                            # charge.refunded webhook handlers flip status back.
-                            _dest_succeeded = (
-                                getattr(dest_charge, "status", "") == "succeeded"
-                                and bool(getattr(dest_charge, "paid", False))
-                                and not bool(getattr(dest_charge, "refunded", False))
-                            )
-                            if _dest_succeeded:
-                                bank_settled = True
-                            # Also keep the original BT-status check as a
-                            # fallback signal — if for some reason dest_charge
-                            # doesn't have the expected fields, the BT-status
-                            # path still works.
+                            # FIX (Jun 19 2026 — pass 9): revert the May 26 2026
+                            # "destination_payment succeeded = paid" shortcut.
+                            # That shortcut marked the row 'paid' as soon as the
+                            # money landed in the artist's Stripe Connect
+                            # account, but the artist hadn't actually received
+                            # anything in their bank yet — Stripe Connect
+                            # holds the funds for the rolling-reserve window
+                            # (default 2 days for new accounts) then queues a
+                            # payout. From the venue+artist's perspective:
+                            #   "transferred" = money sent toward the artist
+                            #   "paid"        = money is in the artist's BANK
+                            # The shortcut conflated the two — so the GigsFill
+                            # page said "Paid ✓" days before the bank deposit
+                            # actually showed up. Users hated this.
+                            # Strict criterion now: only mark paid when Stripe
+                            # has actually consumed the balance transaction in
+                            # a payout (status='paid') OR when the BT has been
+                            # 'available' for at least 3 days (typical max
+                            # rolling reserve — by then a payout has fired in
+                            # any reasonable account configuration).
                             bt_id = getattr(dest_charge, "balance_transaction", None)
-                            if not bank_settled and bt_id:
+                            if bt_id:
                                 bt_id_str = bt_id if isinstance(bt_id, str) else bt_id.id
                                 bt = stripe.BalanceTransaction.retrieve(
                                     bt_id_str, stripe_account=connect_acct
                                 )
-                                if getattr(bt, "status", "") in ("paid", "available"):
+                                _status = getattr(bt, "status", "")
+                                if _status == "paid":
                                     bank_settled = True
+                                elif _status == "available":
+                                    try:
+                                        import time as _time
+                                        if _time.time() - getattr(bt, "created", 0) >= 3 * 86400:
+                                            bank_settled = True
+                                    except Exception:
+                                        pass
                         except stripe.error.PermissionError:
                             # Connected account hasn't granted balance read
                             # permission — fall back to a strict platform-side
