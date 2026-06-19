@@ -151,6 +151,10 @@ def db():
             stripe_payment_intent_id VARCHAR,
             stripe_transfer_id VARCHAR,
             external_transaction_id VARCHAR,
+            cancel_reason TEXT,
+            cancelled_at DATETIME,
+            platform_fee_charged_cents INTEGER DEFAULT 0,
+            slot_id INTEGER,
             notes TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (gig_id) REFERENCES gigs(id)
@@ -264,6 +268,32 @@ def db():
             rating INTEGER,
             review_text TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    # Platform settings — _recompute_gig_fees reads from this table.
+    # Seeded with the production defaults so tests get realistic math.
+    session.execute(text("""
+        CREATE TABLE platform_settings (
+            setting_key VARCHAR PRIMARY KEY,
+            setting_value VARCHAR,
+            description TEXT
+        )
+    """))
+    session.execute(text("""
+        INSERT INTO platform_settings (setting_key, setting_value) VALUES
+            ('platform_fee_percent', '10'),
+            ('platform_fee_split', 'split'),
+            ('platform_min_fee', '0')
+    """))
+    session.execute(text("""
+        CREATE TABLE venue_payment_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            venue_id INTEGER NOT NULL UNIQUE,
+            payments_suspended BOOLEAN DEFAULT 0,
+            fee_pct_override REAL,
+            zero_pay_booking_count INTEGER DEFAULT 0,
+            last_zero_pay_at DATETIME,
+            notes TEXT
         )
     """))
     session.commit()
