@@ -149,7 +149,10 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
     # strip in Python: read the row, trim, write back. Two-step SQL,
     # but the row is tiny.
     slot_note_prefix = f"Slot {int(slot_id)}"
-    # Read current notes for the slot's row so we can rewrite cleanly.
+    # Prefer transactions.slot_id (Jun 2026 audit) — it's an unambiguous
+    # FK on rows booked after the migration. Falls back to the notes-LIKE
+    # pattern for rows from before. Both filters guard against a same-
+    # artist-multiple-slots gig.
     _cur = db.execute(
         text("""
             SELECT id, notes FROM transactions
@@ -158,9 +161,13 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
               AND status = 'scheduled'
               AND (transaction_type IS NULL
                    OR transaction_type IN ('artist_payout', 'single'))
-              AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid)
+              AND (
+                slot_id = :sid
+                OR (slot_id IS NULL
+                    AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid))
+              )
         """),
-        {"gid": gig_id, "aid": slot["artist_id"],
+        {"gid": gig_id, "aid": slot["artist_id"], "sid": int(slot_id),
          "slot_like": slot_note_prefix + '%',
          "slot_like_mid": '%' + slot_note_prefix + ' %'}
     ).mappings().all()

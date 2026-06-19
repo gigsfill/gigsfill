@@ -1184,7 +1184,10 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
     if not venue_check:
         raise HTTPException(403, "Not authorized")
 
-    # Find the artist_payout transaction for THIS slot.
+    # Find the artist_payout transaction for THIS slot. Prefer the
+    # transactions.slot_id FK (Jun 2026 audit); legacy rows fall back
+    # to the notes-LIKE pattern via OR. Both filters guard against
+    # same-artist-multiple-slots.
     txn = db.execute(
         text("""SELECT id, gig_id, artist_id, amount_cents, commission_cents,
                        scheduled_process_at, status, parent_transaction_id, notes
@@ -1193,9 +1196,14 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
                   AND status IN ('scheduled', 'test')
                   AND (transaction_type IS NULL
                        OR transaction_type IN ('artist_payout', 'single'))
-                  AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid)
+                  AND (
+                    slot_id = :sid
+                    OR (slot_id IS NULL
+                        AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid))
+                  )
                 LIMIT 1"""),
         {"gid": slot["gig_id"], "aid": slot["artist_id"],
+         "sid": int(slot_id),
          "slot_like": f"Slot {int(slot_id)}%",
          "slot_like_mid": f"%Slot {int(slot_id)} %"}
     ).mappings().first()
@@ -1503,7 +1511,8 @@ def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depend
     if not venue_check:
         raise HTTPException(403, "Not authorized")
 
-    # Find the cancelled child for this slot.
+    # Find the cancelled child for this slot. Prefer transactions.slot_id
+    # FK; legacy rows fall back to notes-LIKE.
     txn = db.execute(
         text("""SELECT id, amount_cents, commission_cents, platform_fee_charged_cents,
                        stripe_payment_intent_id, notes
@@ -1512,10 +1521,15 @@ def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depend
                   AND status = 'payment_cancelled'
                   AND (transaction_type IS NULL
                        OR transaction_type IN ('artist_payout', 'single'))
-                  AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid
-                       OR notes IS NULL OR notes NOT LIKE 'Slot %')
+                  AND (
+                    slot_id = :sid
+                    OR (slot_id IS NULL
+                        AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid
+                             OR notes NOT LIKE 'Slot %'))
+                  )
                 ORDER BY id DESC LIMIT 1"""),
         {"gid": slot["gig_id"], "aid": slot["artist_id"],
+         "sid": int(slot_id),
          "slot_like": f"Slot {int(slot_id)}%",
          "slot_like_mid": f"%Slot {int(slot_id)} %"}
     ).mappings().first()
@@ -2010,23 +2024,30 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
                        THEN 'paid'
                      ELSE t.status
                    END as effective_status,
-                   -- Cancelled artist_payout rows carry the slot id in
-                   -- their notes ("Slot 123 [audit suffix…]"). Surface
-                   -- it as slot_id so the Payments page can route the
-                   -- Reinstate click through the per-slot endpoint
-                   -- rather than the legacy whole-gig flow.
+                   -- Cancelled artist_payout rows: surface the slot
+                   -- id so the Payments page Reinstate click can
+                   -- route through the per-slot endpoint. Prefer
+                   -- transactions.slot_id (FK column, Jun 2026
+                   -- audit); fall back to parsing the notes prefix
+                   -- "Slot N" for rows from before the migration.
                    CASE
                      WHEN COALESCE(t.transaction_type, '') = 'artist_payout'
                           AND t.status = 'payment_cancelled'
-                          AND t.notes LIKE 'Slot %'
-                       THEN CAST(SUBSTR(
-                              t.notes,
-                              6,
-                              CASE WHEN INSTR(SUBSTR(t.notes, 6), ' ') > 0
-                                   THEN INSTR(SUBSTR(t.notes, 6), ' ') - 1
-                                   ELSE LENGTH(SUBSTR(t.notes, 6))
+                       THEN COALESCE(
+                              t.slot_id,
+                              CASE
+                                WHEN t.notes LIKE 'Slot %'
+                                  THEN CAST(SUBSTR(
+                                         t.notes,
+                                         6,
+                                         CASE WHEN INSTR(SUBSTR(t.notes, 6), ' ') > 0
+                                              THEN INSTR(SUBSTR(t.notes, 6), ' ') - 1
+                                              ELSE LENGTH(SUBSTR(t.notes, 6))
+                                         END
+                                       ) AS INTEGER)
+                                ELSE NULL
                               END
-                            ) AS INTEGER)
+                            )
                      ELSE NULL
                    END as cancelled_slot_id
             FROM transactions t

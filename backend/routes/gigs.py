@@ -725,13 +725,13 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
                      amount_cents, venue_charge_cents, artist_payout_cents, commission_cents,
                      credit_card_fee_cents, payment_method_type, status,
                      scheduled_process_at, created_at, notes,
-                     transaction_type, parent_transaction_id)
+                     transaction_type, parent_transaction_id, slot_id)
                 VALUES
                     (:gig_id, :from_uid, :to_uid, :artist_id,
                      :amount, 0, :artist_payout, :commission,
                      0, 'stripe', 'scheduled',
                      :scheduled, :now, :notes,
-                     'artist_payout', :parent_id)
+                     'artist_payout', :parent_id, :slot_id)
             """),
             {
                 "gig_id":        gig_id,
@@ -745,6 +745,7 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
                 "now":           _utcnow_naive(),
                 "notes":         f"Slot {slot_id}" if slot_id else f"Artist {artist_id}",
                 "parent_id":     parent_id,
+                "slot_id":       slot_id,
             }
         )
         logger.info(f"Created artist_payout txn: gig={gig_id}, artist={artist_id}, payout=${artist_payout_cents/100:.2f}")

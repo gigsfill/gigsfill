@@ -1170,6 +1170,17 @@ def setup_database():
         "platform_fee_charged_cents INTEGER DEFAULT 0",
         "transaction_type VARCHAR DEFAULT 'single'",
         "parent_transaction_id INTEGER",
+        # Jun 2026 audit: replace the "notes LIKE 'Slot {id}%'"
+        # disambiguation pattern with a real column. The notes-LIKE
+        # filter shipped in door_settle.py and cancel_slot_payment
+        # to handle "same artist booked two slots on the same gig"
+        # — it works but is fragile (notes also carries audit
+        # suffixes, regex-style chars in the notes break the LIKE
+        # match). Code that needs to know which slot a child row
+        # represents now reads transactions.slot_id directly.
+        # Booking writes it; legacy rows (NULL) fall back to the
+        # notes parse via the helper in services/payment_helpers.
+        "slot_id INTEGER",
     ])
     
     # ==========================================
