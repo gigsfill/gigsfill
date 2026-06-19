@@ -191,6 +191,29 @@ def get_venue_timezone_str(db, venue_id: int) -> str:
     return get_platform_timezone(db)
 
 
+def get_artist_timezone_str(db, artist_id: int) -> str:
+    """Return the IANA timezone string for an artist.
+
+    Resolution order (same model as get_venue_timezone_str):
+      1. artists.timezone column if set (artist can override in profile)
+      2. Derived from artists.state via US_STATE_TIMEZONES (and persisted
+         back if the column exists)
+      3. Platform timezone fallback
+
+    Used by the daily open-gig digest job to send each artist's email
+    at 9 AM in their LOCAL time, not a single platform-wide send time
+    that would land in the middle of the night for some users.
+    """
+    row = db.execute(text(
+        "SELECT state FROM artists WHERE id = :aid"
+    ), {"aid": artist_id}).mappings().first()
+    state = ((row.get("state") if row else "") or "").strip().upper()
+    derived = US_STATE_TIMEZONES.get(state)
+    if derived:
+        return derived
+    return get_platform_timezone(db)
+
+
 def get_venue_timezone(db, venue_id: int) -> ZoneInfo:
     """Return the venue's timezone as a ZoneInfo object (ready to use with datetime.replace(tzinfo=...))."""
     return ZoneInfo(get_venue_timezone_str(db, venue_id))

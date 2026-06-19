@@ -1272,6 +1272,15 @@ def setup_database():
         ("bounce_check_imap_password", "",      "IMAP password / app password (defaults to platform_email_password if blank)"),
         ("bounce_check_last_run_at",   "",      "Timestamp the scheduler last polled the bounce inbox (set by scheduler)"),
         ("bounce_check_last_result",   "",      "Summary of last poll: '<scanned> scanned, <bounced> bounced' or error reason"),
+        # Jun 19 2026: open-gig notification consolidation. When true (default),
+        # the hourly scheduler ENQUEUES open-gig notifications to
+        # artist_email_digest_queue and the morning digest job sends one
+        # consolidated email per artist (grouped by venue). When false, the
+        # original per-gig per-window send path is used. Flag exists so we can
+        # revert quickly if the digest pipeline has issues — flip to false in
+        # admin Platform Settings without a code change.
+        ("open_gig_daily_digest_enabled", "true", "Bundle open-gig notifications into one morning email per artist (recommended). Set to false to revert to per-gig per-window send."),
+        ("open_gig_daily_digest_hour",    "9",    "Local-time hour (0-23) to send each artist's daily open-gig digest. Defaults to 9 (9 AM)."),
     ]
 
     for setting_key, setting_value, description in default_settings:
@@ -1344,6 +1353,29 @@ def setup_database():
     # ==========================================
     # VENUE PAYMENT OVERRIDES (Admin Free Trial)
     # ==========================================
+    cursor.execute("""
+        -- Jun 19 2026: queue of pending open-gig notifications collapsed
+        -- into a single daily email per artist. Detection (the hourly
+        -- scheduler — process_open_gig_notifications) enqueues here
+        -- instead of sending. The morning digest job (send_daily_artist_digest)
+        -- groups by user, renders one email per venue, sends, and marks
+        -- sent_at. Unique constraint on (user_id, gig_id, notification_key)
+        -- means re-detection across hours/days is a no-op.
+        CREATE TABLE IF NOT EXISTS artist_email_digest_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
+            gig_id INTEGER NOT NULL,
+            venue_id INTEGER NOT NULL,
+            notification_key TEXT NOT NULL,
+            via_radius INTEGER DEFAULT 0,
+            queued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            sent_at DATETIME,
+            UNIQUE(user_id, gig_id, notification_key)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_digest_queue_unsent ON artist_email_digest_queue(sent_at) WHERE sent_at IS NULL")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_digest_queue_user ON artist_email_digest_queue(user_id, sent_at)")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS venue_payment_overrides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -537,6 +537,20 @@ def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gi
 
 
 def process_open_gig_notifications(cursor, smtp_config, notification_key):
+    # Feature flag — when true (default), this function ENQUEUES per
+    # artist into artist_email_digest_queue instead of sending one
+    # email per gig per artist. The morning digest job
+    # send_daily_artist_digest then bundles all queued items into a
+    # single per-artist email at 9 AM (artist-local). Set
+    # open_gig_daily_digest_enabled='false' in platform_settings to
+    # revert to the legacy per-gig per-window send path below.
+    try:
+        _flag = cursor.execute(
+            "SELECT setting_value FROM platform_settings WHERE setting_key='open_gig_daily_digest_enabled'"
+        ).fetchone()
+        _digest_mode = bool(_flag and (_flag[0] or "").strip().lower() in ("true", "1"))
+    except Exception:
+        _digest_mode = True  # safe default — bundle by default if flag missing
     """Process open gig notifications — email all preferred artists"""
     logger.info(f"[SCHED] process_open_gig_notifications: {notification_key}")
     template_key = TEMPLATE_MAP.get(notification_key)
@@ -720,11 +734,24 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                     'slots_html': _build_slots_html_for_scheduler(cursor, gig_id, effective_pay, artist_type, band_formats, styles, artist_override_pay=override_amt),
                     **venue_vars,
                 }
-                subject = render_template(template['subject'], variables)
-                body    = render_template(template['body'], variables)
-                if send_email(smtp_config, artist_email, subject, body):
-                    sent_count += 1
+                if _digest_mode:
+                    # Digest path: enqueue and move on. Send happens
+                    # in send_daily_artist_digest at the artist's
+                    # local 9 AM.
+                    from backend.services.open_gig_digest import enqueue_open_gig_for_artist
+                    if enqueue_open_gig_for_artist(
+                        cursor, user_id=user_id, artist_id=a_id,
+                        gig_id=gig_id, venue_id=venue_id,
+                        notification_key=notification_key, via_radius=False
+                    ):
+                        sent_count += 1
                     notified_user_ids.add(user_id)
+                else:
+                    subject = render_template(template['subject'], variables)
+                    body    = render_template(template['body'], variables)
+                    if send_email(smtp_config, artist_email, subject, body):
+                        sent_count += 1
+                        notified_user_ids.add(user_id)
 
             # ── blast_all: also notify all matching artists within radius ──
             if blast_all_en and vlat and vlon:
@@ -800,10 +827,22 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                         'slots_html': _build_slots_html_for_scheduler(cursor, gig_id, pay, artist_type, band_formats, styles),
                         **venue_vars,
                     }
-                    subject = render_template(template['subject'], variables)
-                    body    = render_template(template['body'], variables)
-                    if send_email(smtp_config, a_email, subject, body):
-                        sent_count += 1
+                    if _digest_mode:
+                        # Radius-blast path — enqueue with via_radius=1
+                        # so the morning digest shows an "in your area"
+                        # badge for these gigs.
+                        from backend.services.open_gig_digest import enqueue_open_gig_for_artist
+                        if enqueue_open_gig_for_artist(
+                            cursor, user_id=user_id, artist_id=a_id,
+                            gig_id=gig_id, venue_id=venue_id,
+                            notification_key=notification_key, via_radius=True
+                        ):
+                            sent_count += 1
+                    else:
+                        subject = render_template(template['subject'], variables)
+                        body    = render_template(template['body'], variables)
+                        if send_email(smtp_config, a_email, subject, body):
+                            sent_count += 1
 
             cursor.execute("""
                 INSERT OR IGNORE INTO gig_email_log (gig_id, venue_id, notification_key, sent_for_date, recipient_count)
@@ -1289,6 +1328,17 @@ def run_scheduled_emails():
         # 'radius_blast'. The function `process_radius_blast` is kept in this file so
         # past references (e.g. log scrapers) don't break, but it's no longer scheduled.
         _run(lambda: process_review_requests(cursor, smtp_config),          "process_review_requests")
+        # Jun 19 2026: morning open-gig digest. Fires per artist when
+        # their local hour matches platform_settings.open_gig_daily_digest_hour
+        # (default 9). Consumes artist_email_digest_queue (enqueued by
+        # process_open_gig_notifications above) and sends one
+        # consolidated email per artist. No-op when the feature flag is
+        # off OR when no artist's local clock matches this hour.
+        def _send_digest():
+            from backend.services.open_gig_digest import send_daily_artist_digest, prune_old_queue_rows
+            send_daily_artist_digest(cursor, smtp_config)
+            prune_old_queue_rows(cursor, days=30)
+        _run(_send_digest, "send_daily_artist_digest")
 
     except Exception as e:
         logger.error(f"[SCHED] Fatal error in run_scheduled_emails: {e}", exc_info=True)
