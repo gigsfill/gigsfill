@@ -213,55 +213,64 @@ def _render_digest_email(*, artist_name: str, rows: list[dict]) -> tuple[str, st
         except Exception:
             return ""
 
+    # Render each venue as a section. Inside the section, gigs sit in a
+    # 4-column table so date / time / pay / urgency-tag line up
+    # vertically across rows. Column widths are explicit so longer pay
+    # strings ($1,250.00) don't push the urgency tag around.
     sections = []
     for v in by_venue.values():
         loc = ", ".join(filter(None, [_esc(v.get("city")), _esc(v.get("state"))]))
-        venue_header = f"<strong>{_esc(v['venue_name'])}</strong>" + (f" <span style='color:#6b7280;'>· {loc}</span>" if loc else "")
-        gig_lines = []
+        venue_header = f"<strong>{_esc(v['venue_name'])}</strong>" + (
+            f" <span style='color:#6b7280;'>· {loc}</span>" if loc else "")
+        gig_rows = []
         for g in v["gigs"]:
-            badges = []
+            tag_html = ""
             if g["notification_key"] == "open_gig_36h":
-                badges.append("<span style='color:#dc2626;font-weight:600;'>🚨 less than 36h!</span>")
-            if g["via_radius"]:
-                badges.append("<span style='color:#7c3aed;font-size:13px;'>in your area</span>")
-            badge_html = (" · " + " · ".join(badges)) if badges else ""
-            time_str = _fmt_time(g["start_time"])
-            line = (
-                f"<li style='margin:6px 0;'>"
+                tag_html = "<span style='color:#dc2626;font-weight:600;'>Less Than 36 Hours!</span>"
+            link_open = (
                 f"<a href='https://gigsfill.com/app/artist-book-gigs.html?gig={g['gig_id']}' "
-                f"style='color:#111827;text-decoration:none;border-bottom:1px solid #e5e7eb;'>"
-                f"{_esc(_fmt_date(g['date']))} · {_esc(time_str)} · {_esc(_fmt_pay(g['pay']))}"
-                f"</a>{badge_html}"
-                f"</li>"
+                f"style='color:#111827;text-decoration:none;'>"
             )
-            gig_lines.append(line)
+            gig_rows.append(
+                "<tr>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#111827;white-space:nowrap;'>{link_open}{_esc(_fmt_date(g['date']))}</a></td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(_fmt_time(g['start_time']))}</a></td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(_fmt_pay(g['pay']))}</a></td>"
+                f"<td style='padding:5px 0;font-size:13px;'>{tag_html}</td>"
+                "</tr>"
+            )
         sections.append(
-            f"<div style='margin:18px 0;padding-bottom:14px;border-bottom:1px solid #e5e7eb;'>"
-            f"<div style='font-size:15px;margin-bottom:6px;'>{venue_header}</div>"
-            f"<ul style='list-style:none;padding:0;margin:0;font-size:14px;color:#374151;'>{''.join(gig_lines)}</ul>"
-            f"</div>"
+            "<div style='margin:18px 0;padding-bottom:14px;border-bottom:1px solid #e5e7eb;'>"
+            f"<div style='font-size:15px;margin-bottom:8px;'>{venue_header}</div>"
+            "<table role='presentation' cellspacing='0' cellpadding='0' border='0' style='border-collapse:collapse;'>"
+            f"{''.join(gig_rows)}"
+            "</table>"
+            "</div>"
         )
 
     body = f"""\
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f8f9fa;">
-<tr><td style="padding:40px 20px;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-<tr><td style="padding:32px 40px 24px 40px;border-bottom:1px solid #eee;">
-<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" style="height:40px;width:160px;display:block;border:0;">
-</td></tr>
-<tr><td style="padding:28px 40px;">
-<h1 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#111827;">Today's open gigs</h1>
-<p style="margin:0 0 8px 0;font-size:15px;line-height:1.6;color:#4b5563;">
-Hi {_esc(artist_name)}, here's everything that's open at venues you're connected to:
-</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tbody>
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tbody>
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;"><img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height: 40px; width: 160px; max-width: 160px; display: block; border: 0; outline: none;"></td>
+</tr>
+<tr>
+<td style="padding: 28px 40px;">
+<p style="margin: 0 0 12px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">{_esc(artist_name)}, here's a list of open gigs within the next month:</p>
 {''.join(sections)}
-<p style="margin:20px 0 0 0;font-size:13px;color:#6b7280;line-height:1.5;">
-You're getting this because you have notifications enabled. Update your preferences any time on
-<a href="https://gigsfill.com/app/user-profile.html?tab=settings" style="color:#3b82f6;">your profile</a>.
-</p>
-</td></tr>
+<p style="margin: 20px 0 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">You're getting this because you have notifications enabled. Update your preferences any time on <a href="https://gigsfill.com/app/user-profile.html?tab=settings" style="color: #3b82f6;">your profile</a>.</p>
+</td>
+</tr>
+</tbody>
 </table>
-</td></tr></table>
+</td>
+</tr>
+</tbody>
+</table>
 """
     return subj, body
 
