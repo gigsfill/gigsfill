@@ -60,7 +60,13 @@
     try {
       document.documentElement.style.visibility = 'visible';
     } catch (_) {}
-    const _ret = encodeURIComponent(window.location.href);
+    // Pass pathname+search+hash (NOT full URL with origin) so the
+    // login page's _safeRedirect — which requires the decoded value
+    // to start with /app/ — accepts it. Previously we encoded
+    // window.location.href which decodes to "https://gigsfill.com/…"
+    // and got rejected, so post-login the user landed on the default
+    // profile page no matter what URL they clicked.
+    const _ret = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
     window.location.href = `/app/index.html?redirect=${_ret}`;
   }, 12000);
 
@@ -110,8 +116,10 @@
     document.cookie = "session_token=; Max-Age=0; path=/";
     document.cookie = "user_id=; Max-Age=0; path=/";
 
-    // Preserve current URL so login can redirect back
-    const returnUrl = encodeURIComponent(window.location.href);
+    // Preserve current URL so login can redirect back. pathname+search+hash
+    // only (same reason as the timeout path above): _safeRedirect on the
+    // login page requires the decoded value to start with /app/.
+    const returnUrl = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
     window.location.href = `/app/index.html?redirect=${returnUrl}`;
   }
 })();

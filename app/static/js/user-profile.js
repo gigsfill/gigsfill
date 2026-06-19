@@ -1240,14 +1240,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === deleteModal) closeDeleteConfirmModal();
   });
 
-  // Deep-link support: open a specific tab when the URL hash matches a tab id.
-  // Used by the booking flow's "Cancel Blackout Date" button — it sends users
-  // here as /app/user-profile.html#availability. switchTab() relies on
-  // event.target, so we trigger an actual click on the tab button rather than
-  // calling switchTab directly.
-  const hash = (window.location.hash || '').replace(/^#/, '');
-  if (hash) {
-    const btn = document.querySelector(`.tab[onclick*="switchTab('${hash}')"]`);
+  // Deep-link support: open a specific tab when the URL hash OR a
+  // ?tab=<id> query param matches a tab id. Hash is the older form
+  // used by the booking flow's "Cancel Blackout Date" link
+  // (/app/user-profile.html#availability); ?tab= is used by the
+  // open-gig digest email's "your notification preferences" link
+  // (/app/user-profile.html?tab=email). switchTab() relies on
+  // event.target, so trigger an actual click on the tab button
+  // rather than calling switchTab directly.
+  const _qp = new URLSearchParams(window.location.search);
+  const _tab = (window.location.hash || '').replace(/^#/, '') || _qp.get('tab') || '';
+  if (_tab) {
+    const btn = document.querySelector(`.tab[onclick*="switchTab('${_tab}')"]`);
     if (btn) setTimeout(() => btn.click(), 0);
   }
 });
