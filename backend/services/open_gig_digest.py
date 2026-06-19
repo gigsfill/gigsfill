@@ -272,27 +272,32 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
         )
         gig_rows = []
         for g in v["gigs"]:
-            # Right-column content stacks: title (if set), slot count
-            # (if multi-slot), urgency badge (if 36h). Each on its own
-            # line so the right column reads top-to-bottom in priority.
+            # Right-column content — all on ONE line, inline, separated
+            # by "·". Order: title → slot count → urgency. Empty when
+            # none apply (the cell just stays empty, keeping the row
+            # compact).
             right_parts = []
             if g.get("title"):
                 right_parts.append(
-                    f"<div style='font-size:13px;color:#374151;font-style:italic;'>"
-                    f"\"{_esc(g['title'])}\"</div>"
+                    f"<span style='color:#374151;font-style:italic;'>"
+                    f"\"{_esc(g['title'])}\"</span>"
                 )
             if g.get("is_multi_slot") and g.get("open_slot_count"):
                 _n = int(g["open_slot_count"])
                 right_parts.append(
-                    f"<div style='font-size:12px;color:#6b7280;'>"
-                    f"{_n} open slot{'s' if _n != 1 else ''}</div>"
+                    f"<span style='color:#6b7280;'>"
+                    f"{_n} open slot{'s' if _n != 1 else ''}</span>"
                 )
             if g["notification_key"] == "open_gig_36h":
                 right_parts.append(
-                    "<div style='font-size:13px;color:#dc2626;font-weight:600;'>"
-                    "Less Than 36 Hours!</div>"
+                    "<span style='color:#dc2626;font-weight:600;'>"
+                    "Less Than 36 Hours!</span>"
                 )
-            right_html = "".join(right_parts)
+            right_html = (
+                "<span style='font-size:13px;'>"
+                + " <span style='color:#9ca3af;'>·</span> ".join(right_parts)
+                + "</span>"
+            ) if right_parts else ""
 
             link_open = (
                 f"<a href='https://gigsfill.com/app/artist-book-gigs.html?gig={g['gig_id']}' "
@@ -303,10 +308,10 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
                 time_str += f" – {_fmt_time(g['end_time'])}"
             gig_rows.append(
                 "<tr>"
-                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#111827;white-space:nowrap;vertical-align:top;'>{link_open}{_esc(_fmt_date(g['date']))}</a></td>"
-                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;vertical-align:top;'>{link_open}{_esc(time_str)}</a></td>"
-                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;vertical-align:top;'>{link_open}{_esc(_fmt_pay(g['pay']))}</a></td>"
-                f"<td style='padding:5px 0;vertical-align:top;'>{right_html}</td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#111827;white-space:nowrap;'>{link_open}{_esc(_fmt_date(g['date']))}</a></td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(time_str)}</a></td>"
+                f"<td style='padding:5px 14px 5px 0;font-size:14px;color:#374151;white-space:nowrap;'>{link_open}{_esc(_fmt_pay(g['pay']))}</a></td>"
+                f"<td style='padding:5px 0;white-space:nowrap;'>{right_html}</td>"
                 "</tr>"
             )
         sections.append(
@@ -332,7 +337,7 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
 <td style="padding: 28px 40px;">
 <p style="margin: 0 0 12px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">{_esc(artist_name)}, here's a list of open gigs within the next month:</p>
 {''.join(sections)}
-<p style="margin: 20px 0 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">To change which notifications you receive — including turning this digest off — go to <a href="https://gigsfill.com/app/user-profile.html?tab=settings" style="color: #3b82f6;">your notification preferences</a>.</p>
+<p style="margin: 20px 0 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">To change which notifications you receive — including turning this digest off — go to <a href="https://gigsfill.com/app/user-profile.html?tab=email" style="color: #3b82f6;">your notification preferences</a>.</p>
 </td>
 </tr>
 </tbody>
