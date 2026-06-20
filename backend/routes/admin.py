@@ -2888,6 +2888,74 @@ def get_digest_stats(admin=Depends(check_admin), db=Depends(get_db)):
     return out
 
 
+@router.post("/api/admin/digest-resend")
+def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_db)):
+    """Resend the EXACT digest a user already received in a given minute.
+    The queue's sent_at column groups send-batches by minute (matches
+    the digest-stats `recent_sends` rows). We re-fetch those rows
+    (sent or not), re-render the email, and send it with [ADMIN-RESEND]
+    in the subject. sent_at is not touched — the original send timestamp
+    stays so the audit trail isn't disturbed.
+
+    Body: {user_id: int, sent_at_minute: 'YYYY-MM-DD HH:MM'}
+    """
+    import sqlite3
+    from backend.db import DB_PATH
+    from backend.services.open_gig_digest import _render_digest_email
+    from backend.scheduler import get_smtp_settings, send_email
+
+    user_id = int(data.get("user_id") or 0)
+    minute = (data.get("sent_at_minute") or "").strip()
+    if not user_id or not minute:
+        raise HTTPException(400, "user_id and sent_at_minute required")
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    try:
+        # Pull queue rows that share user_id + sent_at minute. These ARE
+        # already marked sent — we treat them as a historical batch to
+        # re-render. Reuse the same JOIN-rich shape _fetch_user_queue
+        # builds; can't reuse the function itself because it filters
+        # to sent_at IS NULL.
+        rows = c.execute("""
+            SELECT q.id as queue_id, q.gig_id, q.venue_id, q.notification_key, q.via_radius,
+                   q.artist_id, a.name as artist_name,
+                   g.date, g.start_time, g.end_time, g.pay, g.title, g.status,
+                   g.artist_type, g.band_formats, g.styles,
+                   COALESCE(g.is_multi_slot, 0) as is_multi_slot,
+                   (SELECT COUNT(*) FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.status = 'open') as open_slot_count,
+                   v.venue_name, v.city, v.state, v.latitude as venue_lat, v.longitude as venue_lon
+            FROM artist_email_digest_queue q
+            JOIN artists a ON a.id = q.artist_id
+            JOIN gigs g ON g.id = q.gig_id
+            JOIN venues v ON v.id = q.venue_id
+            WHERE q.user_id = ?
+              AND strftime('%Y-%m-%d %H:%M', q.sent_at) = ?
+            ORDER BY a.id ASC, g.date ASC, q.venue_id ASC
+        """, (user_id, minute)).fetchall()
+        if not rows:
+            return {"ok": False, "error": f"No batch found for user={user_id} at {minute}"}
+        rows = [dict(r) for r in rows]
+        meta = c.execute(
+            "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
+            (user_id,)
+        ).fetchone()
+        if not meta or not meta[0]:
+            return {"ok": False, "error": "user has no email"}
+        subj, body = _render_digest_email(
+            artist_name=meta[1] or "there", rows=rows,
+            artist_lat=meta[2], artist_lon=meta[3],
+        )
+        ok = send_email(get_smtp_settings(c), meta[0], "[ADMIN-RESEND] " + subj, body)
+        if ok:
+            return {"ok": True, "user_id": user_id, "sent_at_minute": minute,
+                    "rows_resent": len(rows), "email": meta[0]}
+        return {"ok": False, "user_id": user_id, "error": "send_email returned False"}
+    finally:
+        conn.close()
+
+
 @router.post("/api/admin/digest-force-send/{user_id}")
 def admin_force_send_digest(user_id: int, admin=Depends(check_admin), db=Depends(get_db)):
     """Force a digest send for one user, bypassing the local-hour gate.

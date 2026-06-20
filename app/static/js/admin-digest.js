@@ -97,7 +97,11 @@
       });
     }
 
-    // Recent sends table
+    // Recent sends table — Resend re-renders the exact batch from the
+    // queue's stored rows and re-sends with [ADMIN-RESEND] in the
+    // subject. Useful when a user reports "I didn't receive it" or
+    // when SMTP swallowed an email and we want to retry without
+    // disturbing the audit trail (sent_at stays).
     if (!data.recent_sends.length) {
       recentEl.innerHTML = '<div style="padding:14px;color:var(--text-gray);font-size:0.82rem;text-align:left;">No digests sent yet.</div>';
     } else {
@@ -108,12 +112,51 @@
           <td style="text-align:right;color:var(--text-gray);">${r.gig_count}</td>
           <td style="text-align:right;color:var(--text-gray);">${r.venue_count}</td>
           <td style="color:var(--text-gray);font-size:0.78rem;">${_fmtAgo(r.sent_at)}</td>
+          <td><button class="digestResendBtn"
+            data-user="${parseInt(r.user_id, 10)}"
+            data-minute="${_esc(r.sent_at)}"
+            title="Re-render the exact batch this user already got at this timestamp and send it again. Subject prefixed [ADMIN-RESEND]. sent_at not modified."
+            style="padding:3px 10px;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.4);border-radius:4px;color:#a78bfa;cursor:pointer;font-size:0.7rem;font-weight:600;">Resend</button></td>
         </tr>`).join('');
       recentEl.innerHTML = `<table class="data-table" style="width:100%;">
         <thead><tr>
           <th>Artist</th><th>Email</th><th style="text-align:right;">Gigs</th>
-          <th style="text-align:right;">Venues</th><th>Sent</th>
+          <th style="text-align:right;">Venues</th><th>Sent</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>`;
+      recentEl.querySelectorAll('.digestResendBtn').forEach(btn => {
+        btn.addEventListener('click', () => _resend(
+          parseInt(btn.dataset.user, 10), btn.dataset.minute, btn));
+      });
+    }
+  }
+
+  async function _resend(userId, minute, btn) {
+    if (!userId || !minute) return;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const res = await fetch('/api/admin/digest-resend', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, sent_at_minute: minute })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        btn.textContent = `✓ Resent (${data.rows_resent})`;
+        btn.style.background = 'rgba(34,197,94,0.15)';
+        btn.style.borderColor = 'rgba(34,197,94,0.45)';
+        btn.style.color = '#22c55e';
+        setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 2500);
+      } else {
+        btn.textContent = '✗ ' + (data.error || `HTTP ${res.status}`);
+        btn.style.color = '#ef4444';
+        setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.color = '#a78bfa'; }, 3000);
+      }
+    } catch (e) {
+      btn.textContent = '✗ ' + e.message;
+      btn.style.color = '#ef4444';
+      setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.color = '#a78bfa'; }, 3000);
     }
   }
 

@@ -572,13 +572,57 @@ async function loadEmailPreferences() {
         var smsOn = sp ? sp.enabled : false;
         html += buildRow(type, artistLabels[type], emailOn, smsOn, smsReady);
       });
-      // Blast notifications section
+      // Blast notifications section. Restructured (Jun 19 2026):
+      //   Daily Open-Gig Digest          ← master parent toggle
+      //     ↳ 36-hour notice              ← children indented under
+      //     ↳ 1-week notice               ← only shown when master is ON
+      //     ↳ 2-week notice
+      //     ↳ 4-week notice
+      //   Cancellation Blast (Preferred)  ← separate (immediate-send, not via digest)
+      //   Cancellation Blast (All Artists)
+      //
+      // The 4 window children are FILTERS for what enters the daily
+      // digest. If master is off, no email is sent regardless of the
+      // children, so we hide them entirely to avoid the impression
+      // they do anything on their own.
       if (Object.keys(blastLabels).length > 0) {
         html += '<div style="border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">' +
           '<h3 style="color: #f59e0b; font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">⚡ Venue Blast Emails</h3>' +
-          '<p style="font-size: 0.76rem; color: var(--text-gray); margin: 4px 0 0;">Control which automated blast emails you receive from venues about open gigs.</p>' +
+          '<p style="font-size: 0.76rem; color: var(--text-gray); margin: 4px 0 0;">Control which automated emails you receive from venues about open gigs.</p>' +
           '</div>';
-        Object.keys(blastLabels).forEach(function(type) {
+
+        var DIGEST_KEY = 'open_gig_daily_digest';
+        var DIGEST_CHILDREN = ['venue_open_gig_36h', 'venue_open_gig_1w',
+                               'venue_open_gig_2w', 'venue_open_gig_4w'];
+        var CANCEL_KEYS = ['cancelled_gig_preferred_blast', 'cancelled_gig_radius_blast'];
+
+        // 1. Master digest toggle.
+        (function() {
+          var ep = emailPrefs.find(function(p) { return p.notification_type === DIGEST_KEY; });
+          var sp = smsPrefs.find(function(p) { return p.notification_type === DIGEST_KEY; });
+          var emailOn = ep ? !!ep.enabled : blastDefaults[DIGEST_KEY];
+          var smsOn = sp ? sp.enabled : false;
+          html += buildRow(DIGEST_KEY, blastLabels[DIGEST_KEY], emailOn, smsOn, smsReady);
+        })();
+
+        // 2. Indented children — wrapped in #digestChildrenWrap so the
+        // master toggle's onchange can show/hide the whole block.
+        var masterEp = emailPrefs.find(function(p) { return p.notification_type === DIGEST_KEY; });
+        var masterOn = masterEp ? !!masterEp.enabled : blastDefaults[DIGEST_KEY];
+        html += '<div id="digestChildrenWrap" style="padding-left:32px;border-left:2px solid rgba(245,158,11,0.25);margin-left:6px;margin-bottom:6px;' + (masterOn ? '' : 'display:none;') + '">' +
+          '<p style="font-size:0.72rem;color:var(--text-gray);margin:6px 0 8px 0;font-style:italic;">Which notices feed your daily digest:</p>';
+        DIGEST_CHILDREN.forEach(function(type) {
+          var ep = emailPrefs.find(function(p) { return p.notification_type === type; });
+          var sp = smsPrefs.find(function(p) { return p.notification_type === type; });
+          var emailOn = ep ? !!ep.enabled : blastDefaults[type];
+          var smsOn = sp ? sp.enabled : false;
+          html += buildRow(type, blastLabels[type], emailOn, smsOn, smsReady);
+        });
+        html += '</div>';
+
+        // 3. Cancellation blasts (independent — sent immediately, not via digest).
+        CANCEL_KEYS.forEach(function(type) {
+          if (!blastLabels[type]) return;
           var ep = emailPrefs.find(function(p) { return p.notification_type === type; });
           var sp = smsPrefs.find(function(p) { return p.notification_type === type; });
           var emailOn = ep ? !!ep.enabled : blastDefaults[type];
@@ -625,6 +669,13 @@ async function toggleEmailPreference(notificationType, enabled) {
       })
     });
     if (response.ok) showSaveIndicator();
+    // Master digest toggle: show/hide the per-window children below it.
+    // Children are filters for the digest — if the master is off, the
+    // children don't do anything, so we hide them to avoid confusion.
+    if (notificationType === 'open_gig_daily_digest') {
+      var wrap = document.getElementById('digestChildrenWrap');
+      if (wrap) wrap.style.display = enabled ? '' : 'none';
+    }
   } catch (error) {
     console.error('Error updating email preference:', error);
   }
