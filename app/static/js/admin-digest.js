@@ -170,12 +170,21 @@
         method: 'POST', credentials: 'include'
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
+      if (res.ok && data.ok && data.sent > 0) {
         btn.textContent = `✓ Sent (${data.sent})`;
         btn.style.background = 'rgba(34,197,94,0.15)';
         btn.style.borderColor = 'rgba(34,197,94,0.45)';
         btn.style.color = '#22c55e';
         setTimeout(loadDigestStats, 800);
+      } else if (res.ok && data.ok && data.sent === 0) {
+        // Endpoint returned success but had nothing to send (queue
+        // emptied between page load and click, or filtered to all-
+        // booked). Tell admin clearly.
+        btn.textContent = '⚠ Nothing queued';
+        btn.style.background = 'rgba(245,158,11,0.12)';
+        btn.style.borderColor = 'rgba(245,158,11,0.4)';
+        btn.style.color = '#fbbf24';
+        setTimeout(loadDigestStats, 1500);
       } else {
         btn.textContent = '✗ ' + (data.error || data.reason || `HTTP ${res.status}`);
         btn.style.background = 'rgba(239,68,68,0.15)';

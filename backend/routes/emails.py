@@ -374,7 +374,20 @@ def my_digest_resend(data: dict, user=Depends(get_current_user), db=Depends(get_
         """, (user.id, minute)).fetchall()
         if not rows:
             raise HTTPException(404, f"No digest batch found for {minute}")
-        rows = [dict(r) for r in rows]
+        # Drop gigs that got booked between the original send and now.
+        # The original digest showed them as open; sending an identical
+        # email now would advertise an already-booked gig — confusing
+        # and potentially embarrassing. If every gig in the batch is
+        # gone, fail with a clear message.
+        all_rows = [dict(r) for r in rows]
+        rows = [r for r in all_rows if r["status"] == "open"]
+        if not rows:
+            raise HTTPException(
+                410,
+                "Every gig in that digest has since been booked or cancelled — "
+                "nothing to resend. Check your inbox for newer digests, or look "
+                "at the open gigs calendar for what's currently available."
+            )
         meta = c.execute(
             "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
             (user.id,)

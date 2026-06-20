@@ -2936,7 +2936,15 @@ def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_d
         """, (user_id, minute)).fetchall()
         if not rows:
             return {"ok": False, "error": f"No batch found for user={user_id} at {minute}"}
-        rows = [dict(r) for r in rows]
+        # Drop gigs that were booked between the original send and now —
+        # resending an identical email would advertise an already-booked
+        # gig. If everything's gone, report so admin knows there's
+        # nothing to send.
+        all_rows = [dict(r) for r in rows]
+        rows = [r for r in all_rows if r["status"] == "open"]
+        if not rows:
+            return {"ok": False, "user_id": user_id,
+                    "error": f"All {len(all_rows)} gigs in that batch have since been booked or cancelled — nothing live to resend"}
         meta = c.execute(
             "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
             (user_id,)
