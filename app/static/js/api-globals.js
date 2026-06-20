@@ -170,16 +170,34 @@
   // Falls back gracefully: never throws, returns "$0.00" if nothing usable.
   function formatPaySummary(slot) {
     if (!slot || typeof slot !== 'object') return '$0.00';
-    if (typeof slot.pay_summary === 'string' && slot.pay_summary) return slot.pay_summary;
     const dealType = String(slot.deal_type || 'flat').toLowerCase();
     if (dealType === 'door') {
       const gua = Math.max(0, Number(slot.guarantee_cents) || 0);
       const pct = Math.max(0, Math.min(100, parseInt(slot.door_pct, 10) || 0));
       if (gua > 0 || pct > 0) {
         const guaDollars = (gua / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        // SETTLED door deal: show the actual dollar share that came
+        // from the door, not the booking-time percentage. Once
+        // settled_at is set + receipts are recorded, the artist
+        // wants to see "$10.00 guarantee + $120.00 from door"
+        // rather than the abstract "+50% of door" deal terms.
+        // Falls back to the unsettled format if settle fields aren't
+        // available (e.g. on an unsettled future gig). Note: this
+        // takes precedence over backend-precomputed pay_summary
+        // because that string was computed at booking time and
+        // doesn't know about subsequent settlement.
+        if (slot.settled_at && slot.door_receipts_cents != null) {
+          const shareCents = Math.floor((Number(slot.door_receipts_cents) || 0) * pct / 100);
+          const shareDollars = (shareCents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          return `$${guaDollars} guarantee + $${shareDollars} from door`;
+        }
+        // Honor backend pre-computed string only when unsettled —
+        // it matches the deal-terms form.
+        if (typeof slot.pay_summary === 'string' && slot.pay_summary) return slot.pay_summary;
         return `$${guaDollars} guarantee + ${pct}% of door`;
       }
     }
+    if (typeof slot.pay_summary === 'string' && slot.pay_summary) return slot.pay_summary;
     const pay = Number(slot.pay) || 0;
     return '$' + pay.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }

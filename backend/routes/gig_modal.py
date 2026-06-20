@@ -242,6 +242,7 @@ def get_gig_modal_data(
         SELECT gs.id, gs.slot_number, gs.start_time, gs.end_time, gs.pay,
                gs.status, gs.artist_id, gs.artist_type, gs.band_formats, gs.styles,
                gs.deal_type, gs.door_pct, gs.guarantee_cents,
+               gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
                a.name as artist_name
         FROM gig_slots gs
         LEFT JOIN artists a ON a.id = gs.artist_id
