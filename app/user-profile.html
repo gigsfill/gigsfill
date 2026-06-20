@@ -511,10 +511,13 @@
              with a Resend button per entry. Populated by
              loadDigestHistory() in user-profile.js after
              loadEmailPreferences runs. Hidden when user has no
-             artists (digest only applies to artists). -->
-        <div id="digestHistorySection" style="display:none;margin-top:24px;">
+             artists (digest only applies to artists). Wrapped in its
+             own bordered card so it reads as a distinct section from
+             the preference toggles above, not just another row of
+             the same list. -->
+        <div id="digestHistorySection" style="display:none;margin-top:32px;padding:20px 22px;background:rgba(6,182,212,0.03);border:1px solid rgba(6,182,212,0.18);border-radius:10px;">
           <div style="border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">
-            <h3 style="color: var(--cyan); font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">📬 Your Digest History</h3>
+            <h3 style="color: var(--cyan); font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">📬 Your Daily Digest Email History</h3>
             <p style="font-size: 0.76rem; color: var(--text-gray); margin: 4px 0 0;">Last 30 days of daily open-gig digests sent to you. Click <strong>Resend</strong> to receive a copy of any one again.</p>
           </div>
           <div id="digestHistoryPending" style="font-size:0.78rem;color:var(--text-gray);margin-bottom:8px;"></div>
