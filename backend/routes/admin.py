@@ -2805,3 +2805,129 @@ def set_venue_fee_pct_override(venue_id: int, data: dict,
         )
     db.commit()
     return {"ok": True, "venue_id": venue_id, "fee_pct_override": new_val}
+
+
+# ==========================================================================
+# Open-gig daily digest — admin visibility (Jun 19 2026). The digest
+# pipeline enqueues per-artist notifications hourly and sends one email
+# per artist per day at their local 9 AM. These endpoints expose the
+# queue state so admin can see "what got bundled today / will be sent /
+# was rejected" without having to grep the scheduler logs.
+# ==========================================================================
+
+@router.get("/api/admin/digest-stats")
+def get_digest_stats(admin=Depends(check_admin), db=Depends(get_db)):
+    """Snapshot of the open-gig digest queue.
+
+    Returns:
+      - master flag state (enabled/disabled)
+      - send-time setting (the local-hour each artist gets their digest)
+      - pending: rows queued but not yet sent
+      - sent_today / sent_7d: counts of digest items consumed
+      - recent_sends: last 25 user-level send batches
+    """
+    out = {}
+    out["digest_enabled"] = (db.execute(
+        text("SELECT setting_value FROM platform_settings WHERE setting_key='open_gig_daily_digest_enabled'")
+    ).scalar() or "true").lower() in ("true", "1")
+    out["digest_hour"] = int((db.execute(
+        text("SELECT setting_value FROM platform_settings WHERE setting_key='open_gig_daily_digest_hour'")
+    ).scalar() or "9"))
+    out["pending_count"] = db.execute(
+        text("SELECT COUNT(*) FROM artist_email_digest_queue WHERE sent_at IS NULL")
+    ).scalar() or 0
+    out["pending_users"] = db.execute(
+        text("SELECT COUNT(DISTINCT user_id) FROM artist_email_digest_queue WHERE sent_at IS NULL")
+    ).scalar() or 0
+    out["sent_today"] = db.execute(
+        text("SELECT COUNT(*) FROM artist_email_digest_queue WHERE sent_at >= datetime('now', '-1 day')")
+    ).scalar() or 0
+    out["sent_7d"] = db.execute(
+        text("SELECT COUNT(*) FROM artist_email_digest_queue WHERE sent_at >= datetime('now', '-7 days')")
+    ).scalar() or 0
+
+    # Per-user recent sends. Group by (user_id, sent_at within the same
+    # minute) so a single send-batch shows as one row, not N items.
+    recent = db.execute(
+        text("""
+            SELECT q.user_id,
+                   u.email,
+                   COALESCE((SELECT a.name FROM artists a WHERE a.user_id = u.id ORDER BY a.id LIMIT 1), '') as artist_name,
+                   COUNT(*) as gig_count,
+                   COUNT(DISTINCT q.venue_id) as venue_count,
+                   strftime('%Y-%m-%d %H:%M', MAX(q.sent_at)) as sent_at
+            FROM artist_email_digest_queue q
+            JOIN users u ON u.id = q.user_id
+            WHERE q.sent_at IS NOT NULL
+            GROUP BY q.user_id, strftime('%Y-%m-%d %H:%M', q.sent_at)
+            ORDER BY MAX(q.sent_at) DESC
+            LIMIT 25
+        """)
+    ).mappings().all()
+    out["recent_sends"] = [dict(r) for r in recent]
+
+    # Pending breakdown by user (so admin can see "user X has 8 queued
+    # waiting for their 9 AM tick").
+    pending = db.execute(
+        text("""
+            SELECT q.user_id,
+                   u.email,
+                   COALESCE((SELECT a.name FROM artists a WHERE a.user_id = u.id ORDER BY a.id LIMIT 1), '') as artist_name,
+                   COUNT(*) as gig_count,
+                   COUNT(DISTINCT q.venue_id) as venue_count,
+                   MIN(q.queued_at) as oldest_queued
+            FROM artist_email_digest_queue q
+            JOIN users u ON u.id = q.user_id
+            WHERE q.sent_at IS NULL
+            GROUP BY q.user_id
+            ORDER BY MIN(q.queued_at) ASC
+            LIMIT 50
+        """)
+    ).mappings().all()
+    out["pending_per_user"] = [dict(r) for r in pending]
+    return out
+
+
+@router.post("/api/admin/digest-force-send/{user_id}")
+def admin_force_send_digest(user_id: int, admin=Depends(check_admin), db=Depends(get_db)):
+    """Force a digest send for one user, bypassing the local-hour gate.
+    Useful for testing — admin can target a user, see if the queue
+    has data, render + send the email immediately.
+    Returns the count of rows sent.
+    """
+    from backend.services.open_gig_digest import (
+        _fetch_user_queue, _mark_queue_rows_sent, _render_digest_email,
+    )
+    from backend.scheduler import get_smtp_settings, send_email
+    import sqlite3
+    from backend.db import DB_PATH
+
+    # Raw connection — the digest helpers use sqlite3 Row cursors
+    # (consistent with how the scheduler invokes them).
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    try:
+        rows = _fetch_user_queue(c, user_id)
+        live_rows = [r for r in rows if r["status"] == "open"]
+        if not live_rows:
+            return {"ok": True, "user_id": user_id, "sent": 0, "reason": "no live queued rows"}
+        meta = c.execute(
+            "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
+            (user_id,)
+        ).fetchone()
+        if not meta or not meta[0]:
+            return {"ok": False, "user_id": user_id, "error": "user has no email"}
+        subj, body = _render_digest_email(
+            artist_name=meta[1] or "there", rows=live_rows,
+            artist_lat=meta[2], artist_lon=meta[3],
+        )
+        smtp = get_smtp_settings(c)
+        ok = send_email(smtp, meta[0], "[ADMIN-FORCE] " + subj, body)
+        if ok:
+            _mark_queue_rows_sent(c, [r["queue_id"] for r in live_rows])
+            conn.commit()
+            return {"ok": True, "user_id": user_id, "sent": len(live_rows), "email": meta[0]}
+        return {"ok": False, "user_id": user_id, "error": "send_email returned False — check journalctl"}
+    finally:
+        conn.close()

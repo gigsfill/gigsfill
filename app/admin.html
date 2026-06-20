@@ -917,6 +917,7 @@
         <button class="ps-subtab" onclick="switchPsTab('payment')">Payment Settings</button>
         <button class="ps-subtab" onclick="switchPsTab('accounting')">Payment Accounting</button>
         <button class="ps-subtab" onclick="switchPsTab('flags')">Venue Flags</button>
+        <button class="ps-subtab" onclick="switchPsTab('digest')">Digest Queue</button>
       </div>
 
       <!-- ── Sub-tab: Email Settings ── -->
@@ -1233,6 +1234,37 @@
         <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:6px;">All transactions processed through GigsFill</div>
         <div id="accountingTable" style="overflow-x:auto;"></div>
         <div id="accountingPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;"></div>
+      </div>
+
+      <!-- ── Sub-tab: Digest Queue — visibility into the open-gig
+           daily-digest pipeline (Jun 19 2026). Two tables: who has
+           items waiting to be sent at their local 9 AM, and who got
+           a digest recently. Force-send button for testing. -->
+      <div class="ps-subtab-content" id="ps-digest">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+          <div>
+            <span style="font-size:0.78rem;font-weight:700;color:var(--text);">Open-Gig Digest Queue</span>
+            <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">
+              Per-artist daily summary of open-gig notifications. Fires at each artist's local 9 AM (configurable).
+            </span>
+          </div>
+          <button onclick="loadDigestStats()"
+            style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">
+            ↺ Refresh
+          </button>
+        </div>
+
+        <div id="digestStatsTop" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:14px;"></div>
+
+        <div style="margin-top:18px;">
+          <div style="font-size:0.74rem;font-weight:700;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">Pending (waiting for local 9 AM)</div>
+          <div id="digestPendingTable" style="overflow-x:auto;min-height:80px;"></div>
+        </div>
+
+        <div style="margin-top:18px;">
+          <div style="font-size:0.74rem;font-weight:700;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">Recent sends</div>
+          <div id="digestRecentTable" style="overflow-x:auto;min-height:80px;"></div>
+        </div>
       </div>
 
       <!-- ── Sub-tab: Venue Flags — venues that booked artists at $0 pay
@@ -2081,6 +2113,7 @@ function switchPsTab(tab) {
   }
   if (tab === 'email') { typeof loadEmailSettings === 'function' && loadEmailSettings(); }
   if (tab === 'flags') { typeof loadFlaggedVenues === 'function' && loadFlaggedVenues(); }
+  if (tab === 'digest') { typeof loadDigestStats === 'function' && loadDigestStats(); }
 }
 
 function switchDbLogsTab(tab) {
@@ -2109,6 +2142,7 @@ function switchDbLogsTab(tab) {
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=2"></script>
 <script src="/app/static/js/admin-flags.js?v=3"></script>
+<script src="/app/static/js/admin-digest.js?v=1"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>
 <script src="/app/static/js/sw-register.js"></script>
 
