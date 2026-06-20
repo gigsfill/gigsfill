@@ -394,6 +394,20 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
         if not live_rows:
             continue
 
+        # Master digest toggle (Jun 2026): user can disable the daily
+        # digest entirely from their Notifications tab. When disabled,
+        # mark queue rows sent (don't strand them across days) but
+        # don't send the email. Absence of the row = enabled (default).
+        _master = cursor.execute(
+            "SELECT enabled FROM email_preferences WHERE user_id = ? AND notification_type = 'open_gig_daily_digest'",
+            (user_id,)
+        ).fetchone()
+        if _master and not _master[0]:
+            _mark_queue_rows_sent(cursor, [r["queue_id"] for r in live_rows])
+            cursor.connection.commit()
+            logger.info(f"[DIGEST] user={user_id} master toggle off — {len(live_rows)} rows marked sent without email")
+            continue
+
         # Look up the user's email + first artist's display name + geo
         # coords so the digest can show "(X.X mi)" after each venue city.
         meta = cursor.execute(
@@ -420,7 +434,11 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
         try:
             ok = send_email(smtp_config, artist_email, subj, body)
         except Exception as e:
-            logger.error(f"digest send failed for user={user_id}: {e}", exc_info=True)
+            logger.error(
+                f"[DIGEST] EXCEPTION sending to user={user_id} email={artist_email} "
+                f"rows={len(live_rows)} — {e} — queue rows left unsent for next hourly retry",
+                exc_info=True,
+            )
             continue
         if ok:
             _mark_queue_rows_sent(cursor, [r["queue_id"] for r in live_rows])
@@ -429,6 +447,18 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
             logger.info(
                 f"[DIGEST] sent to user={user_id} email={artist_email} "
                 f"venues={len({r['venue_id'] for r in live_rows})} gigs={len(live_rows)}"
+            )
+        else:
+            # send_email returned False — SMTP failure (auth, connection,
+            # rejected recipient, etc.). Don't mark sent — they'll retry
+            # on the next hour's tick. Logging loud so the failure is
+            # visible in journalctl. If this fires repeatedly for the
+            # same user, admin should check the artist's email or the
+            # SMTP config.
+            logger.error(
+                f"[DIGEST] SMTP FAILURE for user={user_id} email={artist_email} "
+                f"rows={len(live_rows)} venues={len({r['venue_id'] for r in live_rows})} "
+                f"— queue rows kept unsent for next hourly retry"
             )
     return sent
 

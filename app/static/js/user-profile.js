@@ -499,18 +499,24 @@ async function loadEmailPreferences() {
       'artist_venue_payment_issue':       { title: 'Payment Issue Alert',         desc: 'When there is an issue with your Stripe account affecting payouts' }
     };
 
-    // Blast notification types — separate group, different defaults
+    // Blast notification types — separate group, different defaults.
+    // The first entry is the master "daily digest" toggle (Jun 2026):
+    // when OFF, no consolidated digest email is sent regardless of the
+    // per-window toggles below. Per-window toggles still gate what
+    // gets ENQUEUED — the master toggle gates what gets SENT.
     const blastLabels = {
-      'venue_open_gig_36h':  { title: '36-Hour Gig Blast',   desc: 'Last-minute open gigs at your preferred venues 36 hours before start' },
-      'venue_open_gig_1w':   { title: '1-Week Gig Blast',    desc: 'Open gigs at your preferred venues sent 1 week before the date' },
-      'venue_open_gig_2w':   { title: '2-Week Gig Blast',    desc: 'Open gigs at your preferred venues sent 2 weeks before the date' },
-      'venue_open_gig_4w':   { title: '4-Week Gig Blast',    desc: 'Open gigs at your preferred venues sent 4 weeks before the date' },
-      'cancelled_gig_preferred_blast': { title: 'Cancellation Blast (Preferred)',  desc: 'When a booked gig is cancelled and re-opened for preferred artists' },
-      'cancelled_gig_radius_blast':    { title: 'Cancellation Blast (All Artists)', desc: 'When a booked gig is cancelled and blasted to all nearby artists' },
+      'open_gig_daily_digest': { title: 'Daily Open-Gig Digest', desc: 'One consolidated email per day listing every open gig you\'d be notified about (replaces the individual per-gig emails below). Turn off if you prefer not to receive a daily summary.' },
+      'venue_open_gig_36h':  { title: '36-Hour Gig Notice',   desc: 'Include last-minute open gigs (within 36 hours) in your daily digest' },
+      'venue_open_gig_1w':   { title: '1-Week Gig Notice',    desc: 'Include open gigs 1 week out in your daily digest' },
+      'venue_open_gig_2w':   { title: '2-Week Gig Notice',    desc: 'Include open gigs 2 weeks out in your daily digest' },
+      'venue_open_gig_4w':   { title: '4-Week Gig Notice',    desc: 'Include open gigs 4 weeks out in your daily digest' },
+      'cancelled_gig_preferred_blast': { title: 'Cancellation Blast (Preferred)',  desc: 'When a booked gig is cancelled and re-opened for preferred artists. Sent immediately, not via digest.' },
+      'cancelled_gig_radius_blast':    { title: 'Cancellation Blast (All Artists)', desc: 'When a booked gig is cancelled and blasted to all nearby artists. Sent immediately, not via digest.' },
     };
 
-    // Defaults: 1w and 36h are ON, others are OFF
+    // Defaults: digest master ON; 1w and 36h ON, 2w/4w OFF.
     const blastDefaults = {
+      'open_gig_daily_digest': true,
       'venue_open_gig_1w':   true,
       'venue_open_gig_36h':  true,
       'venue_open_gig_2w':   false,
