@@ -293,3 +293,101 @@ def update_user_sms_carrier(
         except Exception as e2:
             logger.error(f"Failed even after column add: {e2}")
             raise HTTPException(500, "Failed to update carrier. Please try again.")
+
+
+# ==========================================
+# OPEN-GIG DAILY DIGEST — artist-facing
+# ==========================================
+# The admin Digest Queue subtab shows the same data platform-wide.
+# These endpoints scope to the current user so an artist can see
+# their own send history (last 30 days, what's pruned by the
+# scheduler) and resend any historical batch they may have missed.
+# Mirror of /api/admin/digest-stats + /api/admin/digest-resend.
+
+@router.get("/api/me/digest-history")
+def my_digest_history(user=Depends(get_current_user), db=Depends(get_db)):
+    """Return the current user's last 30 digest send batches plus a
+    count of items currently queued (waiting for tomorrow's 9 AM tick).
+    Grouped by minute so multiple queue rows from one send-batch show
+    as a single row in the UI."""
+    recent = db.execute(
+        text("""
+            SELECT COUNT(*) as gig_count,
+                   COUNT(DISTINCT venue_id) as venue_count,
+                   strftime('%Y-%m-%d %H:%M', MAX(sent_at)) as sent_at_minute
+            FROM artist_email_digest_queue
+            WHERE user_id = :uid AND sent_at IS NOT NULL
+            GROUP BY strftime('%Y-%m-%d %H:%M', sent_at)
+            ORDER BY MAX(sent_at) DESC
+            LIMIT 30
+        """),
+        {"uid": user.id}
+    ).mappings().all()
+    pending = db.execute(
+        text("""SELECT COUNT(*) as gig_count,
+                       COUNT(DISTINCT venue_id) as venue_count
+                FROM artist_email_digest_queue
+                WHERE user_id = :uid AND sent_at IS NULL"""),
+        {"uid": user.id}
+    ).mappings().first()
+    return {
+        "recent_sends": [dict(r) for r in recent],
+        "pending_count": int((pending or {}).get("gig_count") or 0),
+        "pending_venue_count": int((pending or {}).get("venue_count") or 0),
+    }
+
+
+@router.post("/api/me/digest-resend")
+def my_digest_resend(data: dict, user=Depends(get_current_user), db=Depends(get_db)):
+    """Re-send the historical digest batch identified by sent_at_minute.
+    Scoped to the calling user — can only resend their own batches.
+    Subject prefixed [RESENT] so it's distinguishable from the
+    original. sent_at column isn't touched."""
+    import sqlite3
+    from backend.db import DB_PATH
+    from backend.services.open_gig_digest import _render_digest_email
+    from backend.scheduler import get_smtp_settings, send_email
+
+    minute = (data.get("sent_at_minute") or "").strip()
+    if not minute:
+        raise HTTPException(400, "sent_at_minute required")
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    try:
+        rows = c.execute("""
+            SELECT q.id as queue_id, q.gig_id, q.venue_id, q.notification_key, q.via_radius,
+                   q.artist_id, a.name as artist_name,
+                   g.date, g.start_time, g.end_time, g.pay, g.title, g.status,
+                   g.artist_type, g.band_formats, g.styles,
+                   COALESCE(g.is_multi_slot, 0) as is_multi_slot,
+                   (SELECT COUNT(*) FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.status = 'open') as open_slot_count,
+                   v.venue_name, v.city, v.state, v.latitude as venue_lat, v.longitude as venue_lon
+            FROM artist_email_digest_queue q
+            JOIN artists a ON a.id = q.artist_id
+            JOIN gigs g ON g.id = q.gig_id
+            JOIN venues v ON v.id = q.venue_id
+            WHERE q.user_id = ?
+              AND strftime('%Y-%m-%d %H:%M', q.sent_at) = ?
+            ORDER BY a.id ASC, g.date ASC, q.venue_id ASC
+        """, (user.id, minute)).fetchall()
+        if not rows:
+            raise HTTPException(404, f"No digest batch found for {minute}")
+        rows = [dict(r) for r in rows]
+        meta = c.execute(
+            "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
+            (user.id,)
+        ).fetchone()
+        if not meta or not meta[0]:
+            raise HTTPException(400, "No email on file")
+        subj, body = _render_digest_email(
+            artist_name=meta[1] or "there", rows=rows,
+            artist_lat=meta[2], artist_lon=meta[3],
+        )
+        ok = send_email(get_smtp_settings(c), meta[0], "[RESENT] " + subj, body)
+        if not ok:
+            raise HTTPException(502, "Email send failed — please try again or contact support")
+        return {"ok": True, "sent_at_minute": minute, "rows_resent": len(rows)}
+    finally:
+        conn.close()

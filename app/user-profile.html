@@ -506,6 +506,20 @@
         
         <div id="artistEmailPreferences"></div>
         <div id="venueEmailPreferences"></div>
+
+        <!-- Digest history — last 30 daily digests this user received,
+             with a Resend button per entry. Populated by
+             loadDigestHistory() in user-profile.js after
+             loadEmailPreferences runs. Hidden when user has no
+             artists (digest only applies to artists). -->
+        <div id="digestHistorySection" style="display:none;margin-top:24px;">
+          <div style="border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">
+            <h3 style="color: var(--cyan); font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">📬 Your Digest History</h3>
+            <p style="font-size: 0.76rem; color: var(--text-gray); margin: 4px 0 0;">Last 30 days of daily open-gig digests sent to you. Click <strong>Resend</strong> to receive a copy of any one again.</p>
+          </div>
+          <div id="digestHistoryPending" style="font-size:0.78rem;color:var(--text-gray);margin-bottom:8px;"></div>
+          <div id="digestHistoryList"></div>
+        </div>
       </div>
 
       <!-- ── Calendar Sync card ─────────────────────────────────────────
@@ -1159,7 +1173,7 @@
   <script src="/app/static/js/modals.js"></script>
   <script src="/app/static/js/gf-modals.js?v=7"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script src="/app/static/js/user-profile.js?v=7"></script>
+  <script src="/app/static/js/user-profile.js?v=8"></script>
   <script src="/app/static/js/user-affiliate.js?v=6"></script>
   <script src="/app/static/js/user-availability.js?v=5"></script>
   

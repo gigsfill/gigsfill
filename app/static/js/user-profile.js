@@ -651,8 +651,124 @@ async function loadEmailPreferences() {
     if (!hasArtists && !hasVenues) {
       artistContainer.innerHTML = '<p style="color: var(--text-gray); text-align: center;">Create an artist or venue to manage notification preferences.</p>';
     }
+    // Digest history (artist-only feature — only renders when the
+    // user has at least one artist profile, since the digest queue
+    // is keyed on artists).
+    if (hasArtists) {
+      loadDigestHistory();
+    } else {
+      const sec = document.getElementById('digestHistorySection');
+      if (sec) sec.style.display = 'none';
+    }
   } catch (error) {
     console.error('Error loading notification preferences:', error);
+  }
+}
+
+// Digest history — last 30 daily digests this user received, with a
+// per-row Resend button that re-sends the historical batch identified
+// by sent_at minute. Backend: /api/me/digest-history + /api/me/digest-resend.
+async function loadDigestHistory() {
+  const sec = document.getElementById('digestHistorySection');
+  const list = document.getElementById('digestHistoryList');
+  const pending = document.getElementById('digestHistoryPending');
+  if (!sec || !list) return;
+  sec.style.display = '';
+  list.innerHTML = '<div style="color:var(--text-gray);font-size:0.82rem;padding:8px 0;">Loading…</div>';
+  if (pending) pending.textContent = '';
+
+  let data;
+  try {
+    const res = await fetch('/api/me/digest-history', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  } catch (e) {
+    list.innerHTML = '<div style="color:#f87171;font-size:0.82rem;">Could not load digest history: ' + (e.message || 'unknown') + '</div>';
+    return;
+  }
+
+  if (pending && data.pending_count > 0) {
+    pending.innerHTML = '<span style="color:#fbbf24;">⏳ ' + data.pending_count + ' notice' +
+      (data.pending_count === 1 ? '' : 's') + ' queued for your next digest (' + data.pending_venue_count +
+      ' venue' + (data.pending_venue_count === 1 ? '' : 's') + ').</span>';
+  }
+
+  if (!data.recent_sends || data.recent_sends.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-gray);font-size:0.82rem;padding:8px 0;">No digests received yet. Your first one will go out at 9 AM your time once we have notices to send.</div>';
+    return;
+  }
+
+  function _fmtSent(s) {
+    if (!s) return '';
+    try {
+      const d = new Date(String(s).replace(' ', 'T') + 'Z');
+      if (isNaN(d.getTime())) return s;
+      return d.toLocaleString(undefined, {
+        weekday: 'short', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit'
+      });
+    } catch (_) { return s; }
+  }
+  function _esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  const rows = data.recent_sends.map(r => `
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+      <td style="padding:8px 12px 8px 0;font-size:0.82rem;color:var(--text);">${_esc(_fmtSent(r.sent_at_minute))}</td>
+      <td style="padding:8px 12px;font-size:0.78rem;color:var(--text-gray);text-align:right;">${r.gig_count} gig${r.gig_count === 1 ? '' : 's'}</td>
+      <td style="padding:8px 12px;font-size:0.78rem;color:var(--text-gray);text-align:right;">${r.venue_count} venue${r.venue_count === 1 ? '' : 's'}</td>
+      <td style="padding:8px 0;text-align:right;">
+        <button class="digestMyResendBtn" data-minute="${_esc(r.sent_at_minute)}"
+          title="Re-send this digest to your inbox. Subject prefixed [RESENT]."
+          style="padding:4px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.4);border-radius:5px;color:var(--cyan);cursor:pointer;font-size:0.75rem;font-weight:600;">Resend</button>
+      </td>
+    </tr>
+  `).join('');
+  list.innerHTML = '<table style="width:100%;border-collapse:collapse;">' +
+    '<thead><tr><th style="text-align:left;padding:4px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;">Sent</th>' +
+    '<th style="text-align:right;padding:4px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;">Gigs</th>' +
+    '<th style="text-align:right;padding:4px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;">Venues</th>' +
+    '<th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+  list.querySelectorAll('.digestMyResendBtn').forEach(btn => {
+    btn.addEventListener('click', () => _myDigestResend(btn.dataset.minute, btn));
+  });
+}
+
+async function _myDigestResend(minute, btn) {
+  if (!minute) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/me/digest-resend', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sent_at_minute: minute })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      btn.textContent = '✓ Sent';
+      btn.style.background = 'rgba(34,197,94,0.15)';
+      btn.style.borderColor = 'rgba(34,197,94,0.45)';
+      btn.style.color = '#22c55e';
+      setTimeout(() => {
+        btn.disabled = false; btn.textContent = orig;
+        btn.style.background = 'rgba(6,182,212,0.12)';
+        btn.style.borderColor = 'rgba(6,182,212,0.4)';
+        btn.style.color = 'var(--cyan)';
+      }, 2500);
+    } else {
+      btn.textContent = '✗ Failed';
+      btn.style.color = '#ef4444';
+      setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.color = 'var(--cyan)'; }, 3000);
+    }
+  } catch (e) {
+    btn.textContent = '✗ Error';
+    btn.style.color = '#ef4444';
+    setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.color = 'var(--cyan)'; }, 3000);
   }
 }
 
