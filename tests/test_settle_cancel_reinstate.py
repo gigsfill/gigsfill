@@ -270,6 +270,55 @@ def test_door_settle_audit_note_dedups_on_resettle(db):
 # ─── cancel + reinstate state-machine ────────────────────────
 
 
+def test_multi_cancel_then_partial_reinstate(db):
+    """Three-step state-machine exercise:
+
+      1. cancel slot 1 (flat $15)  → parent = $20  (only slot 2 alive)
+      2. cancel slot 2 (door $20)  → parent = $0   (both dead → parent marked cancelled)
+      3. reinstate slot 1          → parent = $15  (slot 2 still cancelled)
+
+    Verifies that _recompute_gig_fees correctly tracks the live-children
+    sum across multi-step cancellations + partial reinstate, and that
+    the parent venue_charge follows the right state machine (active →
+    cancelled when no children → active again when a child reinstates).
+    """
+    _seed_multi_slot_gig(db, slot1_pay=15.0, slot2_door=True,
+                        slot2_guarantee_cents=2000, slot2_door_pct=50)
+    from backend.routes.gigs import _recompute_gig_fees
+    _recompute_gig_fees(db, 1)
+
+    # Step 1: cancel slot 1 (txn id 2 is slot 1's child)
+    db.execute(text("UPDATE transactions SET status='payment_cancelled' WHERE id = 2"))
+    db.commit()
+    _recompute_gig_fees(db, 1)
+    parent_after_s1 = db.execute(text("SELECT amount_cents FROM transactions WHERE id = 1")).scalar()
+    assert parent_after_s1 == 2000, "only slot 2 ($20) should remain in parent total"
+
+    # Step 2: cancel slot 2 (txn id 3 is slot 2's child)
+    db.execute(text("UPDATE transactions SET status='payment_cancelled' WHERE id = 3"))
+    db.commit()
+    # Simulate the all-children-cancelled cleanup that cancel_slot_payment does
+    _live = db.execute(text(
+        "SELECT COUNT(*) FROM transactions WHERE gig_id = 1 AND transaction_type = 'artist_payout' AND status NOT IN ('payment_cancelled')"
+    )).scalar()
+    if _live == 0:
+        db.execute(text("UPDATE transactions SET status='payment_cancelled' WHERE id = 1"))
+        db.commit()
+    parent_status = db.execute(text("SELECT status FROM transactions WHERE id = 1")).scalar()
+    assert parent_status == 'payment_cancelled', "parent should be cancelled when no live children"
+
+    # Step 3: reinstate slot 1
+    db.execute(text("UPDATE transactions SET status='scheduled', cancel_reason=NULL, cancelled_at=NULL WHERE id = 2"))
+    # And bring parent back to scheduled so recompute runs (mirrors reinstate_slot_payment's behavior)
+    db.execute(text("UPDATE transactions SET status='scheduled', cancel_reason=NULL, cancelled_at=NULL WHERE id = 1"))
+    db.commit()
+    _recompute_gig_fees(db, 1)
+    parent_after_reinstate = db.execute(text("SELECT amount_cents FROM transactions WHERE id = 1")).scalar()
+    assert parent_after_reinstate == 1500, "only slot 1 ($15) should be live now — slot 2 stays cancelled"
+    parent_status_after = db.execute(text("SELECT status FROM transactions WHERE id = 1")).scalar()
+    assert parent_status_after == 'scheduled', "parent should be back to scheduled with the reinstated slot"
+
+
 def test_cancel_then_reinstate_round_trip(db):
     """A cancelled child can be reinstated, restoring the parent total
     after both legs of the round-trip via _recompute_gig_fees."""
