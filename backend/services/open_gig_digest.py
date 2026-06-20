@@ -126,9 +126,13 @@ def _fetch_user_queue(cursor, user_id: int) -> list[dict]:
     the digest needs. Filters out gigs that are no longer 'open' (got
     booked between enqueue and send) — those rows are still marked
     sent_at so the queue stays clean.
+
+    Each row also carries the ARTIST's identity (id + name) so the
+    digest renderer can group by artist when a user owns multiple.
     """
     rows = cursor.execute("""
         SELECT q.id, q.gig_id, q.venue_id, q.notification_key, q.via_radius,
+               q.artist_id, a.name as artist_name,
                g.date, g.start_time, g.end_time, g.pay, g.title, g.status,
                g.artist_type, g.band_formats, g.styles,
                COALESCE(g.is_multi_slot, 0) as is_multi_slot,
@@ -136,22 +140,24 @@ def _fetch_user_queue(cursor, user_id: int) -> list[dict]:
                   WHERE gs.gig_id = g.id AND gs.status = 'open') as open_slot_count,
                v.venue_name, v.city, v.state, v.latitude as v_lat, v.longitude as v_lon
         FROM artist_email_digest_queue q
+        JOIN artists a ON a.id = q.artist_id
         JOIN gigs g ON g.id = q.gig_id
         JOIN venues v ON v.id = q.venue_id
         WHERE q.user_id = ? AND q.sent_at IS NULL
-        ORDER BY g.date ASC, q.venue_id ASC
+        ORDER BY a.id ASC, g.date ASC, q.venue_id ASC
     """, (user_id,)).fetchall()
     return [
         {
             "queue_id": r[0], "gig_id": r[1], "venue_id": r[2],
             "notification_key": r[3], "via_radius": bool(r[4]),
-            "date": r[5], "start_time": r[6], "end_time": r[7],
-            "pay": r[8], "title": r[9], "status": r[10],
-            "artist_type": r[11], "band_formats": r[12], "styles": r[13],
-            "is_multi_slot": bool(r[14]),
-            "open_slot_count": int(r[15] or 0),
-            "venue_name": r[16], "city": r[17], "state": r[18],
-            "venue_lat": r[19], "venue_lon": r[20],
+            "artist_id": r[5], "artist_name": r[6] or "",
+            "date": r[7], "start_time": r[8], "end_time": r[9],
+            "pay": r[10], "title": r[11], "status": r[12],
+            "artist_type": r[13], "band_formats": r[14], "styles": r[15],
+            "is_multi_slot": bool(r[16]),
+            "open_slot_count": int(r[17] or 0),
+            "venue_name": r[18], "city": r[19], "state": r[20],
+            "venue_lat": r[21], "venue_lon": r[22],
         }
         for r in rows
     ]
@@ -188,20 +194,41 @@ def _mark_queue_rows_sent(cursor, queue_ids: list[int]) -> None:
 
 def _render_digest_email(*, artist_name: str, rows: list[dict],
                          artist_lat=None, artist_lon=None) -> tuple[str, str]:
-    """Render subject + HTML body. Groups by venue, sorts gigs within
-    each venue by date. When artist coordinates are provided, the
-    venue location line shows "(X.X mi)" after the city.
+    """Render subject + HTML body. Two grouping modes:
+
+      - Single-artist users (the common case): one section per venue.
+      - Multi-artist users (a user owns multiple artist profiles, e.g.
+        a band alias + a DJ alias): top-level groups by ARTIST so the
+        user sees "for Fridays Past: …", "for DJ Fridays: …". Within
+        each artist, gigs are still grouped by venue.
+
+    When artist coords are provided, the venue line shows "(X.X mi)"
+    after the city — computed against each venue's geo.
     """
-    # Group by venue_id
-    by_venue: dict[int, dict] = {}
+    # First pass: partition rows by artist_id. If there's only one,
+    # we render single-section style (matches the original behavior).
+    by_artist: dict[int, dict] = {}
     for r in rows:
-        v = by_venue.setdefault(r["venue_id"], {
+        aid = int(r.get("artist_id") or 0)
+        a = by_artist.setdefault(aid, {
+            "artist_name": r.get("artist_name") or artist_name,
+            "by_venue": {},
+        })
+        v = a["by_venue"].setdefault(r["venue_id"], {
             "venue_name": r["venue_name"],
             "city": r["city"], "state": r["state"],
             "venue_lat": r.get("venue_lat"), "venue_lon": r.get("venue_lon"),
             "gigs": []
         })
         v["gigs"].append(r)
+
+    multi_artist = len(by_artist) > 1
+
+    # Backwards-compat alias used by the existing rendering loop below.
+    # Single-artist path collapses to one venue map.
+    by_venue: dict[int, dict] = (
+        next(iter(by_artist.values()))["by_venue"] if not multi_artist else {}
+    )
 
     # Sort gigs within each venue
     for v in by_venue.values():
@@ -247,11 +274,8 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
     # 4-column table so date / time / pay / urgency-tag line up
     # vertically across rows. Column widths are explicit so longer pay
     # strings ($1,250.00) don't push the urgency tag around.
-    sections = []
-    for v in by_venue.values():
+    def _render_venue_section(v):
         loc = ", ".join(filter(None, [_esc(v.get("city")), _esc(v.get("state"))]))
-        # Distance: only show when artist coords AND venue coords are
-        # both available. Italic, smaller, in parens after the city.
         dist_html = ""
         dist_mi = _haversine_miles(artist_lat, artist_lon, v.get("venue_lat"), v.get("venue_lon"))
         if dist_mi is not None and dist_mi >= 0:
@@ -272,10 +296,6 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
         )
         gig_rows = []
         for g in v["gigs"]:
-            # Right-column content — all on ONE line, inline, separated
-            # by "·". Order: title → slot count → urgency. Empty when
-            # none apply (the cell just stays empty, keeping the row
-            # compact).
             right_parts = []
             if g.get("title"):
                 right_parts.append(
@@ -298,7 +318,6 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
                 + " <span style='color:#9ca3af;'>·</span> ".join(right_parts)
                 + "</span>"
             ) if right_parts else ""
-
             link_open = (
                 f"<a href='https://gigsfill.com/app/artist-book-gigs.html?gig={g['gig_id']}' "
                 f"style='color:#111827;text-decoration:none;'>"
@@ -314,7 +333,7 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
                 f"<td style='padding:5px 0;white-space:nowrap;'>{right_html}</td>"
                 "</tr>"
             )
-        sections.append(
+        return (
             "<div style='margin:18px 0;padding-bottom:14px;border-bottom:1px solid #e5e7eb;'>"
             f"<div style='font-size:15px;margin-bottom:8px;'>{venue_header}</div>"
             "<table role='presentation' cellspacing='0' cellpadding='0' border='0' style='border-collapse:collapse;'>"
@@ -322,6 +341,26 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
             "</table>"
             "</div>"
         )
+
+    sections = []
+    if multi_artist:
+        # Multi-artist user: outer group per artist with a header line
+        # ("for Fridays Past"), then the venue sections nested under.
+        # Same gig may appear under two artists if it triggered both —
+        # we don't dedup (per user note: they may be different types
+        # and the artist column makes the relevance explicit).
+        for a in by_artist.values():
+            sub_sections = "".join(_render_venue_section(v) for v in a["by_venue"].values())
+            sections.append(
+                "<div style='margin:24px 0 8px 0;font-size:14px;color:#6b7280;"
+                "text-transform:uppercase;letter-spacing:0.05em;font-weight:700;'>"
+                f"For {_esc(a['artist_name'])}"
+                "</div>"
+                f"{sub_sections}"
+            )
+    else:
+        for v in by_venue.values():
+            sections.append(_render_venue_section(v))
 
     body = f"""\
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">

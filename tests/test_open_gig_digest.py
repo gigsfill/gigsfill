@@ -175,6 +175,37 @@ def test_render_groups_by_venue_and_orders_by_date(raw_conn):
     assert pos_715 < pos_716
 
 
+def test_multi_artist_user_renders_grouped_sections(raw_conn):
+    """A user with two artist profiles should see digest sections
+    headed by 'For <Artist Name>'. Single-artist users get the
+    original flat venue listing (no artist header)."""
+    from backend.services.open_gig_digest import _render_digest_email, _fetch_user_queue, enqueue_open_gig_for_artist
+    c = raw_conn.cursor()
+    # Add a second artist under the same user account
+    c.execute("INSERT INTO artists VALUES (11, 101, 'DJ Alias', 'CA')")
+    # Each artist gets an open-gig notice
+    enqueue_open_gig_for_artist(c, user_id=101, artist_id=10, gig_id=501, venue_id=1, notification_key='open_gig_1w')
+    enqueue_open_gig_for_artist(c, user_id=101, artist_id=11, gig_id=503, venue_id=2, notification_key='open_gig_1w')
+    rows = _fetch_user_queue(c, 101)
+    assert len(rows) == 2
+    _, body = _render_digest_email(artist_name="Test Band", rows=rows)
+    # Multi-artist mode renders 'For <name>' headers
+    assert "For Test Band" in body
+    assert "For DJ Alias" in body
+
+
+def test_single_artist_user_renders_no_artist_header(raw_conn):
+    from backend.services.open_gig_digest import _render_digest_email, _fetch_user_queue, enqueue_open_gig_for_artist
+    c = raw_conn.cursor()
+    enqueue_open_gig_for_artist(c, user_id=101, artist_id=10, gig_id=501, venue_id=1, notification_key='open_gig_1w')
+    rows = _fetch_user_queue(c, 101)
+    _, body = _render_digest_email(artist_name="Test Band", rows=rows)
+    # Single-artist mode skips the 'For <name>' artist header
+    assert "For Test Band" not in body
+    # Still has the venue
+    assert "14 Cannons" in body
+
+
 def test_render_does_not_include_in_your_area_badge(raw_conn):
     """User feedback (Jun 19 2026): the 'in your area' tag was
     confusing. The digest renders radius-blast gigs the same as
