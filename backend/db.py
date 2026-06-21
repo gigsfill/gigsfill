@@ -1904,6 +1904,15 @@ def setup_database():
         c4.execute("CREATE INDEX IF NOT EXISTS idx_transactions_gig_artist_status ON transactions(gig_id, artist_id, status)")
     except Exception:
         pass
+    # Hot path: payout_scheduler hourly sweep does
+    #   SELECT * FROM transactions WHERE status='scheduled' AND scheduled_process_at <= ?
+    # At 10K artists × N transactions/month this grows fast. The
+    # composite (status, scheduled_process_at) makes the sweep an
+    # index-range scan instead of a table scan.
+    try:
+        c4.execute("CREATE INDEX IF NOT EXISTS idx_transactions_status_scheduled ON transactions(status, scheduled_process_at)")
+    except Exception:
+        pass
     try:
         c4.execute("CREATE INDEX IF NOT EXISTS idx_users_calendar_token ON users(calendar_token)")
     except Exception:
