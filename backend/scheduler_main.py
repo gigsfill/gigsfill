@@ -38,6 +38,33 @@ logging.getLogger("gigsfill").setLevel(logging.INFO)
 logger = logging.getLogger("gigsfill.scheduler_main")
 
 
+def _maybe_init_sentry():
+    """Mirror main.py: init Sentry only when SENTRY_DSN is set. The
+    scheduler is the most important process to instrument — when an
+    email blast or payout job throws at 3 AM, we want to know without
+    grepping journalctl. No-op when DSN is unset."""
+    dsn = os.environ.get("SENTRY_DSN", "").strip()
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+        sentry_sdk.init(
+            dsn=dsn,
+            integrations=[SqlalchemyIntegration()],
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES", "0.0")),
+            send_default_pii=False,
+            environment=os.environ.get("GIGSFILL_ENV", "production"),
+            release=os.environ.get("GIGSFILL_RELEASE") or None,
+            # Tag the process so we can split scheduler errors from
+            # API errors in the Sentry UI.
+            server_name="gigsfill-scheduler",
+        )
+        logger.info("[SENTRY] scheduler error tracking initialized")
+    except Exception as e:
+        logger.warning(f"[SENTRY] scheduler init failed: {e}")
+
+
 def _ensure_db_and_templates():
     """Run the same setup main.py runs — safe if the API service is also up."""
     try:
@@ -91,6 +118,7 @@ def main():
         )
         sys.exit(2)
 
+    _maybe_init_sentry()
     _ensure_db_and_templates()
 
     # Start the two scheduler threads (both daemon=True, so they die when this

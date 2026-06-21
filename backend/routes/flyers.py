@@ -330,6 +330,11 @@ async def upload_flyer_image(venue_id: int, file: UploadFile = File(...), user=D
         # both the RIFF header AND the "WEBP" four-CC at byte offset 8.
         if not (content.startswith(b"RIFF") and len(content) >= 12 and content[8:12] == b"WEBP"):
             raise HTTPException(status_code=400, detail="File content doesn't match its extension")
+    # Downscale to MAX_DIM (2400px long edge) + strip EXIF before
+    # writing to disk. Saves bandwidth + protects user privacy
+    # (phone uploads default-embed GPS coords in EXIF).
+    from backend.services.image_resize import resize_if_needed
+    content = resize_if_needed(content, ext.lstrip("."))
     venue_dir = os.path.join(UPLOAD_DIR, str(venue_id))
     os.makedirs(venue_dir, exist_ok=True)
     fname = f"{uuid.uuid4().hex[:12]}{ext}"

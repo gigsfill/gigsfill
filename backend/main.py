@@ -203,6 +203,30 @@ def ensure_vanity_backfill():
 
 ensure_vanity_backfill()
 
+# ─── Error tracking (Sentry) ─────────────────────────────────────────
+# Gated on SENTRY_DSN env var. When unset (default for dev + current
+# prod), the SDK is imported but never initialized — runtime overhead
+# is one missed env var read per startup. The day we provision a
+# Sentry project, set SENTRY_DSN in the systemd drop-in and it lights
+# up automatically. No code change needed at cutover.
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES", "0.0")),
+            send_default_pii=False,
+            environment=os.environ.get("GIGSFILL_ENV", "production"),
+            release=os.environ.get("GIGSFILL_RELEASE") or None,
+        )
+        logger.info(f"[SENTRY] initialized — env={os.environ.get('GIGSFILL_ENV','production')}")
+    except Exception as _se:
+        logger.warning(f"[SENTRY] init failed: {_se} — continuing without error tracking")
+
 # Create FastAPI app
 app = FastAPI(title="GigsFill API", version="1.0.0")
 
@@ -293,6 +317,47 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 # Security headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+
+# ─── Request-ID middleware ───────────────────────────────────────────
+# Stamps every request with a short uuid that propagates into log
+# records via a contextvar. Lets you grep journalctl for one user's
+# trail without thread-id guessing. Echoed back to the client as
+# `X-Request-ID` so support can paste it from a screenshot and we
+# pull the matching log lines. Negligible overhead.
+import contextvars
+import uuid as _uuid_mod
+
+_request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "gigsfill_request_id", default="-"
+)
+
+
+class _RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = _request_id_ctx.get()
+        return True
+
+
+# Attach the filter to the gigsfill logger tree and the root uvicorn
+# loggers so existing log lines pick up `%(request_id)s` automatically
+# once the formatter is changed (formatter change is opt-in via env).
+for _ln in ("gigsfill", "uvicorn.access", "uvicorn.error"):
+    try:
+        logging.getLogger(_ln).addFilter(_RequestIdFilter())
+    except Exception:
+        pass
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        rid = request.headers.get("x-request-id") or _uuid_mod.uuid4().hex[:12]
+        token = _request_id_ctx.set(rid)
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = rid
+            return response
+        finally:
+            _request_id_ctx.reset(token)
 
 
 class RollingSessionMiddleware(BaseHTTPMiddleware):
@@ -414,6 +479,10 @@ class MaintenanceModeMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 app.add_middleware(MaintenanceModeMiddleware)
+# Request-ID — registered LAST so it runs FIRST (Starlette inverts
+# middleware order). Every other middleware then sees the contextvar
+# populated.
+app.add_middleware(RequestIdMiddleware)
 
 # Cache headers for static assets
 class StaticCacheMiddleware(BaseHTTPMiddleware):
@@ -445,6 +514,39 @@ def robots_txt():
 def service_worker():
     return _FileResponse("app/static/js/sw.js", media_type="application/javascript",
                          headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+
+# ─── Health check ────────────────────────────────────────────────────
+# Cheap endpoint for uptime monitors (UptimeRobot, Better Uptime,
+# DigitalOcean's load balancer, etc). Pings the DB with SELECT 1 so
+# we catch the "API up but DB unreachable" failure mode that a TCP
+# port check would miss. Returns 200 + JSON on success, 503 + JSON
+# on failure so monitors can route on status code OR JSON body.
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    from starlette.responses import JSONResponse
+    try:
+        import sqlite3
+        from backend.db import DB_PATH
+        # Skip SQLAlchemy entirely — we want the cheapest possible
+        # round-trip so the monitor's 5s timeout never trips during
+        # incidents that block the ORM pool.
+        c = sqlite3.connect(str(DB_PATH), timeout=1.0)
+        c.execute("SELECT 1").fetchone()
+        c.close()
+        db_ok = True
+        db_err = None
+    except Exception as e:
+        db_ok = False
+        db_err = str(e)[:120]
+    payload = {
+        "ok": db_ok,
+        "version": os.environ.get("GIGSFILL_RELEASE", "dev"),
+        "db": "ok" if db_ok else "fail",
+    }
+    if db_err:
+        payload["db_error"] = db_err
+    return JSONResponse(status_code=200 if db_ok else 503, content=payload)
 
 # Audit fix (May 2026 part 10): block direct browser access to legal-contract
 # PDFs. They live under app/static/uploads/contracts/ which would otherwise be

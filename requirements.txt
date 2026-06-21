@@ -19,3 +19,5 @@ email-validator>=2.0.0
 redis>=5.0.0           # Rate limiter backend + caching
 psycopg2-binary>=2.9.0 # PostgreSQL driver
 alembic>=1.13.0        # DB migrations (future use)
+Pillow>=10.0.0         # Image resize on upload (flyer/media)
+sentry-sdk>=2.0.0      # Error tracking (gated on SENTRY_DSN env var; no-op when unset)

@@ -255,8 +255,19 @@ def upload_media(
         filename = f"{uuid.uuid4()}.{ext}"
         path = f"{folder}/{filename}"
 
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # For image uploads: read into memory, downscale + strip EXIF,
+        # then write the processed bytes. For audio: stream directly to
+        # disk (audio doesn't get resized).
+        if media_type in ("profile", "picture") and ext in ("png", "jpg", "jpeg", "gif", "webp"):
+            file.file.seek(0)
+            raw = file.file.read()
+            from backend.services.image_resize import resize_if_needed
+            processed = resize_if_needed(raw, ext)
+            with open(path, "wb") as buffer:
+                buffer.write(processed)
+        else:
+            with open(path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
         if media_type == "profile":
             # Delete old profile file(s) from disk before replacing
@@ -498,8 +509,16 @@ def upload_venue_media(
         filename = f"{uuid.uuid4()}.{ext}"
         path = f"{folder}/{filename}"
 
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if media_type in ("profile", "picture") and ext in ("png", "jpg", "jpeg", "gif", "webp"):
+            file.file.seek(0)
+            raw = file.file.read()
+            from backend.services.image_resize import resize_if_needed
+            processed = resize_if_needed(raw, ext)
+            with open(path, "wb") as buffer:
+                buffer.write(processed)
+        else:
+            with open(path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
         if media_type == "profile":
             # Delete old profile file(s) from disk before replacing
