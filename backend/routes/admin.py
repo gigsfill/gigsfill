@@ -2957,6 +2957,17 @@ def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_d
         )
         ok = send_email(get_smtp_settings(c), meta[0], "[ADMIN-RESEND] " + subj, body)
         if ok:
+            try:
+                from backend.utils import log_admin_action
+                log_admin_action(
+                    db, admin, "digest_resend",
+                    target_table="artist_email_digest_queue",
+                    target_id=user_id,
+                    metadata={"sent_at_minute": minute, "rows_resent": len(rows),
+                              "email": meta[0], "filtered_booked": len(all_rows) - len(rows)},
+                )
+            except Exception:
+                pass
             return {"ok": True, "user_id": user_id, "sent_at_minute": minute,
                     "rows_resent": len(rows), "email": meta[0]}
         return {"ok": False, "user_id": user_id, "error": "send_email returned False"}
@@ -3003,6 +3014,16 @@ def admin_force_send_digest(user_id: int, admin=Depends(check_admin), db=Depends
         if ok:
             _mark_queue_rows_sent(c, [r["queue_id"] for r in live_rows])
             conn.commit()
+            try:
+                from backend.utils import log_admin_action
+                log_admin_action(
+                    db, admin, "digest_force_send",
+                    target_table="artist_email_digest_queue",
+                    target_id=user_id,
+                    metadata={"sent": len(live_rows), "email": meta[0]},
+                )
+            except Exception:
+                pass
             return {"ok": True, "user_id": user_id, "sent": len(live_rows), "email": meta[0]}
         return {"ok": False, "user_id": user_id, "error": "send_email returned False — check journalctl"}
     finally:

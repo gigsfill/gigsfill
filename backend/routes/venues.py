@@ -215,12 +215,17 @@ def list_public_venues(db=Depends(get_db)):
 # v97: Public single venue endpoint for profile viewing
 @router.get("/api/venues/{venue_id}/public")
 def get_venue_public(venue_id: int, db=Depends(get_db)):
-    """Public endpoint to view any venue profile"""
+    """Public endpoint to view any venue profile.
+
+    Audit fix (Jun 2026): `user_id` was exposed in the response,
+    enabling venue→user enumeration from anonymous traffic.
+    Authed routes still surface user_id where needed; only the
+    public endpoint drops it.
+    """
     row = db.execute(
         text("""
             SELECT
                 id,
-                user_id,
                 venue_name,
                 description,
                 address_line_1,

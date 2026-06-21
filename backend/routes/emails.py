@@ -1,11 +1,12 @@
 """
 Email management routes
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 import logging
 from sqlalchemy import text
 from .auth import get_current_user
 from backend.db import get_db
+from backend.routes.rate_limiter import limiter
 logger = logging.getLogger("gigsfill.emails")
 
 router = APIRouter()
@@ -338,7 +339,8 @@ def my_digest_history(user=Depends(get_current_user), db=Depends(get_db)):
 
 
 @router.post("/api/me/digest-resend")
-def my_digest_resend(data: dict, user=Depends(get_current_user), db=Depends(get_db)):
+@limiter.limit("5/minute")
+def my_digest_resend(request: Request, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     """Re-send the historical digest batch identified by sent_at_minute.
     Scoped to the calling user — can only resend their own batches.
     Subject prefixed [RESENT] so it's distinguishable from the

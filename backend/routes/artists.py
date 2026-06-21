@@ -210,12 +210,18 @@ def check_artist_access(artist_id: int, user=Depends(get_current_user), db=Depen
 # -----------------------------
 @router.get("/api/artists/{artist_id}")
 def get_artist_public(artist_id: int, db=Depends(get_db)):
-    """Public endpoint to view any artist profile"""
+    """Public endpoint to view any artist profile.
+
+    Audit fix (Jun 2026): `user_id` was exposed in the response,
+    letting an attacker enumerate artist→user mappings from
+    public traffic. Owner-only client code uses /api/artists/{id}
+    via authed routes (line 134) which still returns user_id —
+    only the public endpoint drops it.
+    """
     row = db.execute(
         text("""
             SELECT
                 id,
-                user_id,
                 name,
                 city,
                 state,

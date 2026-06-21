@@ -99,6 +99,14 @@ async function login() {
       // backslash tricks, etc. Only accept app paths.
       if (!decoded.startsWith('/app/')) return null;
       if (decoded.includes('//') || decoded.includes('\\')) return null;
+      // Audit fix (Jun 2026): defense-in-depth — normalize path via URL()
+      // and re-check the prefix. Catches `/app/../admin.html` style
+      // traversal that startsWith allowed (browser resolves it to
+      // `/admin.html` which leaves the /app/ namespace).
+      try {
+        const normalized = new URL(decoded, window.location.origin).pathname;
+        if (!normalized.startsWith('/app/')) return null;
+      } catch (_) { return null; }
       return decoded;
     }
     let destination = _safeRedirect(rawRedirect) || '/app/user-profile.html';

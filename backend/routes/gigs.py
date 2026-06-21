@@ -4989,8 +4989,15 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
                 text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid"),
                 {"gid": gig_id, "aid": artist_id}
             )
-        except Exception:
-            pass
+        except Exception as _ptcleanup_err:
+            # Audit fix (Jun 2026): was silently swallowed. If the row
+            # stays, the approval link can be replayed. Log loudly so
+            # the failure surfaces in journalctl instead of vanishing.
+            logger.warning(
+                f"[APPROVE] pending_approval_tokens cleanup failed for "
+                f"gig={gig_id} artist={artist_id}: {_ptcleanup_err} — "
+                f"approval link MAY be replayable until cleanup succeeds"
+            )
         # Check if all slots booked → mark gig booked; otherwise reset to 'open'
         # (parent gig was set to pending_venue_approval during slot booking — must reset it)
         open_slots = db.execute(
@@ -5206,8 +5213,15 @@ def deny_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depends
                 text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid"),
                 {"gid": gig_id, "aid": artist_id}
             )
-        except Exception:
-            pass
+        except Exception as _ptcleanup_err:
+            # Audit fix (Jun 2026): was silently swallowed. If the row
+            # stays, the approval link can be replayed. Log loudly so
+            # the failure surfaces in journalctl instead of vanishing.
+            logger.warning(
+                f"[APPROVE] pending_approval_tokens cleanup failed for "
+                f"gig={gig_id} artist={artist_id}: {_ptcleanup_err} — "
+                f"approval link MAY be replayable until cleanup succeeds"
+            )
         slot_info_str = f"Slot {slot['slot_number']}: {format_time_12hr(slot['start_time'])} – {format_time_12hr(slot['end_time'])}"
     elif gig["status"] == "pending_venue_approval" and gig["artist_id"] == artist_id:
         # Audit fix (May 2026): conditional UPDATE so a token-replay race
