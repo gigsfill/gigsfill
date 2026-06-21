@@ -243,12 +243,22 @@ def get_venue_users(
 # LOOKUP USER BY EMAIL (for invite pre-fill)
 # ============================================
 @router.get("/api/users/lookup-by-email")
+@limiter.limit("20/minute")
 def lookup_user_by_email(
+    request: Request,
     email: str,
     user=Depends(get_current_user),
     db=Depends(get_db)
 ):
-    """Check if an email belongs to an existing GigsFill user and return safe public fields."""
+    """Check if an email belongs to an existing GigsFill user and return safe public fields.
+
+    Audit fix (Jun 2026): added 20/min rate limit. Pre-fix, any
+    authenticated user could scrape (first_name, last_name, phone)
+    for arbitrary emails at unlimited speed — easy PII harvesting
+    given a credentials list of emails. 20/min keeps the legitimate
+    invite-flow lookup (one call per blur on the email input) working
+    while closing the bulk-scrape path.
+    """
     if not email or '@' not in email:
         raise HTTPException(400, "Valid email required")
     found = db.execute(

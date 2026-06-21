@@ -315,7 +315,6 @@ async def upload_flyer_image(venue_id: int, file: UploadFile = File(...), user=D
         ".jpg":  b"\xff\xd8\xff",
         ".jpeg": b"\xff\xd8\xff",
         ".gif":  (b"GIF87a", b"GIF89a"),
-        ".webp": b"RIFF",  # WEBP starts with RIFF....WEBP
     }
     _expected = _MAGIC.get(ext)
     if _expected:
@@ -325,6 +324,12 @@ async def upload_flyer_image(venue_id: int, file: UploadFile = File(...), user=D
         else:
             if not content.startswith(_expected):
                 raise HTTPException(status_code=400, detail="File content doesn't match its extension")
+    elif ext == ".webp":
+        # Audit fix (Jun 2026): WebP shares the RIFF container with WAV
+        # and AVI. RIFF alone matched any of those; tighten to require
+        # both the RIFF header AND the "WEBP" four-CC at byte offset 8.
+        if not (content.startswith(b"RIFF") and len(content) >= 12 and content[8:12] == b"WEBP"):
+            raise HTTPException(status_code=400, detail="File content doesn't match its extension")
     venue_dir = os.path.join(UPLOAD_DIR, str(venue_id))
     os.makedirs(venue_dir, exist_ok=True)
     fname = f"{uuid.uuid4().hex[:12]}{ext}"

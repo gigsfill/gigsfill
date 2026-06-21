@@ -47,7 +47,15 @@ MAX_FILE_SIZES = {
 
 
 def validate_upload(file: UploadFile, media_type: str):
-    """Validate an uploaded file for extension, MIME type, and size. Raises HTTPException on failure."""
+    """Validate an uploaded file for extension, MIME type, size, AND magic bytes.
+
+    Audit fix (Jun 2026): added magic-byte verification. The extension
+    and Content-Type are both client-controlled — without inspecting
+    bytes, a renamed binary (or .html) could be saved with an .png/.mp3
+    extension and served from the uploads directory. Same-origin XSS
+    risk closed for images; the audio path now confirms an MP3 frame
+    header is present.
+    """
     if not file or not file.filename:
         raise HTTPException(400, "File required")
 
@@ -69,6 +77,38 @@ def validate_upload(file: UploadFile, media_type: str):
     if size > max_size:
         max_mb = max_size / (1024 * 1024)
         raise HTTPException(400, f"File too large. Maximum size: {max_mb:.0f} MB")
+
+    # Magic-byte sniff. Read the first 16 bytes, then seek back so the
+    # caller can re-read the full file (validate_upload returns the ext
+    # and the upload site does shutil.copyfileobj from file.file).
+    head = file.file.read(16)
+    file.file.seek(0)
+    _IMG_MAGIC = {
+        "png":  [b"\x89PNG\r\n\x1a\n"],
+        "jpg":  [b"\xff\xd8\xff"],
+        "jpeg": [b"\xff\xd8\xff"],
+        "gif":  [b"GIF87a", b"GIF89a"],
+        # webp is RIFF + "WEBP" at offset 8 — RIFF alone would also
+        # match .wav / .avi so we require both.
+        "webp": None,
+    }
+    if ext in _IMG_MAGIC:
+        if ext == "webp":
+            ok = head.startswith(b"RIFF") and len(head) >= 12 and head[8:12] == b"WEBP"
+        else:
+            ok = any(head.startswith(m) for m in _IMG_MAGIC[ext])
+        if not ok:
+            raise HTTPException(400, "File content doesn't match its extension")
+    elif ext == "mp3":
+        # MP3: either an ID3 tag header ("ID3") or an MPEG frame sync
+        # (0xFF followed by 0xFB / 0xFA / 0xF3 / 0xF2 — common MPEG-1/2
+        # Layer III headers). Anything else is rejected.
+        ok = (
+            head.startswith(b"ID3")
+            or (len(head) >= 2 and head[0] == 0xFF and head[1] in (0xFB, 0xFA, 0xF3, 0xF2, 0xE3, 0xE2))
+        )
+        if not ok:
+            raise HTTPException(400, "File content doesn't match its extension")
 
     return ext
 
