@@ -809,6 +809,44 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_log_target ON admin_audit_log(target_table, target_id)")
 
     # ==========================================
+    # SYSTEM ALERTS (Jun 2026)
+    # ==========================================
+    # Operational issues that need admin attention — surfaced as a banner
+    # on admin.html. Self-clearing: when the underlying condition is
+    # detected as resolved (e.g. a stripe webhook successfully verifies
+    # again), `resolved_at` is set automatically. Admin can also manually
+    # acknowledge to dismiss before auto-resolve catches up.
+    #
+    # Grouping: one ACTIVE row per (alert_type) at a time. Repeated
+    # incidents increment `count` and bump `last_seen_at` instead of
+    # spawning duplicate rows — keeps the banner from spamming when a
+    # condition fires once per minute for an hour.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS system_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            message TEXT NOT NULL,
+            details TEXT,
+            first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            count INTEGER DEFAULT 1,
+            resolved_at DATETIME,
+            resolved_by TEXT,
+            acknowledged_at DATETIME,
+            acknowledged_by TEXT
+        )
+    """)
+    # The partial index makes the "active alert per type" lookup an
+    # index seek instead of a scan. Filtering on resolved_at IS NULL
+    # at the index level matches the hot read pattern.
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_system_alerts_active_type
+        ON system_alerts(alert_type) WHERE resolved_at IS NULL
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_alerts_resolved ON system_alerts(resolved_at)")
+
+    # ==========================================
     # USED RESET TOKENS (H9 single-use guard, May 2026)
     # ==========================================
     # Reset password tokens carry a `jti` claim (random uuid). After a token

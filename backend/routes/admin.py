@@ -3028,3 +3028,76 @@ def admin_force_send_digest(user_id: int, admin=Depends(check_admin), db=Depends
         return {"ok": False, "user_id": user_id, "error": "send_email returned False — check journalctl"}
     finally:
         conn.close()
+
+
+
+# ============================================================
+# SYSTEM ALERTS — operational alerts surfaced to admin banner
+# ============================================================
+# Self-clearing: when the underlying condition is detected as fixed
+# (e.g. stripe webhook signature verifies successfully again) the
+# alert auto-resolves and the banner clears. Admin can also manually
+# acknowledge to dismiss an alert that hasn't auto-cleared.
+
+@router.get("/api/admin/system-alerts")
+def admin_system_alerts(admin=Depends(check_admin), db=Depends(get_db)):
+    """Return unresolved alerts + recent resolved ones (last 7 days).
+    The polling banner on admin.html hits this every 60s."""
+    active = db.execute(
+        text("""SELECT id, alert_type, severity, message, details,
+                       first_seen_at, last_seen_at, count,
+                       acknowledged_at, acknowledged_by
+                FROM system_alerts
+                WHERE resolved_at IS NULL
+                ORDER BY
+                  CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+                  last_seen_at DESC""")
+    ).mappings().all()
+    recent_resolved = db.execute(
+        text("""SELECT id, alert_type, severity, message,
+                       first_seen_at, resolved_at, resolved_by, count
+                FROM system_alerts
+                WHERE resolved_at IS NOT NULL
+                  AND resolved_at >= datetime('now', '-7 days')
+                ORDER BY resolved_at DESC
+                LIMIT 20""")
+    ).mappings().all()
+    return {
+        "active": [dict(r) for r in active],
+        "recent_resolved": [dict(r) for r in recent_resolved],
+    }
+
+
+@router.post("/api/admin/system-alerts/{alert_id}/acknowledge")
+def admin_acknowledge_alert(alert_id: int, admin=Depends(check_admin), db=Depends(get_db)):
+    """Manually dismiss an alert. Sets acknowledged_at + acknowledged_by
+    on the row but leaves resolved_at NULL — the banner respects
+    acknowledged status (hides the row) but the alert is still
+    'active' for diagnostic purposes. Next fire of the same alert_type
+    will re-surface it (clears acknowledged_at via record_alert's
+    UPDATE)."""
+    row = db.execute(
+        text("SELECT id, alert_type FROM system_alerts WHERE id = :id AND resolved_at IS NULL"),
+        {"id": alert_id}
+    ).mappings().first()
+    if not row:
+        raise HTTPException(404, "Alert not found or already resolved")
+    db.execute(
+        text("""UPDATE system_alerts
+                SET acknowledged_at = CURRENT_TIMESTAMP,
+                    acknowledged_by = :who
+                WHERE id = :id"""),
+        {"id": alert_id, "who": admin.email or f"user_id={admin.id}"}
+    )
+    db.commit()
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "acknowledge_alert",
+            target_table="system_alerts",
+            target_id=alert_id,
+            metadata={"alert_type": row["alert_type"]},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "alert_id": alert_id}

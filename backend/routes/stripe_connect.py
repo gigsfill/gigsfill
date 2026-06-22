@@ -2422,11 +2422,41 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
             "Webhooks for endpoint /api/stripe/webhook. The most common cause "
             "is a rotated/regenerated secret on Stripe's side."
         )
+        # Surface to admin UI via system_alerts so it doesn't get buried
+        # in journalctl. The banner clears automatically the next time
+        # a webhook verifies successfully.
+        try:
+            from backend.services.system_alerts import record_alert, SEVERITY_CRITICAL
+            _alert_conn = _webhook_sqlite_conn()
+            record_alert(
+                _alert_conn,
+                alert_type="stripe_webhook_signature",
+                severity=SEVERITY_CRITICAL,
+                message="Stripe webhooks are failing signature verification — events are being dropped",
+                details=(
+                    f"Configured secret prefix: {_secret_fp}. "
+                    f"Likely cause: secret rotated on Stripe Dashboard but our DB still has the old one. "
+                    "Fix: Stripe Dashboard → Developers → Webhooks → /api/stripe/webhook → Reveal "
+                    "Signing secret → update admin_stripe_webhook_secret in Platform Settings."
+                ),
+            )
+            _alert_conn.close()
+        except Exception as _ae:
+            logger.warning(f"system_alerts record failed: {_ae}")
         raise HTTPException(400, "Invalid webhook signature")
 
     event_type = _webhook_get(event, "type")
     event_id   = _webhook_get(event, "id")
     logger.info(f"Stripe webhook: {event_type} (id={event_id})")
+    # Signature succeeded — auto-resolve any active webhook-signature
+    # alerts so the admin banner clears without manual acknowledgement.
+    try:
+        from backend.services.system_alerts import resolve_alert
+        _ar_conn = _webhook_sqlite_conn()
+        resolve_alert(_ar_conn, alert_type="stripe_webhook_signature", resolved_by="auto-success")
+        _ar_conn.close()
+    except Exception:
+        pass
 
     # Use direct SQLite for writes (same pattern as payout_scheduler)
     conn = _webhook_sqlite_conn()

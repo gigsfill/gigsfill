@@ -775,6 +775,13 @@
 
   <div class="admin-container">
 
+    <!-- System alerts banner — populated by admin-alerts.js polling
+         /api/admin/system-alerts every 60s. Hidden by default (empty
+         innerHTML); each active alert renders a red-bordered card
+         with a Dismiss button. Auto-clears when the underlying
+         condition resolves (e.g. stripe webhook succeeds). -->
+    <div id="systemAlertsBanner" style="margin-bottom: 20px;"></div>
+
     <div class="tabs">
       <button class="tab active" onclick="switchTab('platform')">Platform Settings</button>
       <button class="tab" onclick="switchTab('payments')">Payments</button>
@@ -2143,6 +2150,7 @@ function switchDbLogsTab(tab) {
 <script src="/app/static/js/admin-affiliate.js?v=2"></script>
 <script src="/app/static/js/admin-flags.js?v=3"></script>
 <script src="/app/static/js/admin-digest.js?v=3"></script>
+<script src="/app/static/js/admin-alerts.js?v=1"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>
 <script src="/app/static/js/sw-register.js"></script>
 
