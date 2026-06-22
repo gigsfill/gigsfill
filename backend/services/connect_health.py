@@ -49,6 +49,38 @@ ARTIST_EMAIL_DEBOUNCE_DAYS = 7
 AUTO_SUSPEND_THRESHOLD_DAYS = 30
 
 
+def _get_or_create_onboarding_url_for_artist(conn, artist_id: int) -> Optional[str]:
+    """Return https://gigsfill.com/api/stripe/onboarding/<token> for
+    this artist, minting + storing the token if missing. Used by
+    both the regular debounced reminder email and the 30-day final
+    warning email.
+
+    Stores token on entity_payment_settings.stripe_onboarding_token
+    (added in db.py migration). The endpoint at that path generates
+    a fresh Stripe AccountLink on each click."""
+    import secrets
+    row = conn.execute(
+        "SELECT stripe_onboarding_token FROM entity_payment_settings "
+        "WHERE entity_type='artist' AND entity_id = ?",
+        (artist_id,),
+    ).fetchone()
+    if row and row[0]:
+        return f"https://gigsfill.com/api/stripe/onboarding/{row[0]}"
+    tok = secrets.token_urlsafe(24)
+    try:
+        conn.execute(
+            """UPDATE entity_payment_settings
+               SET stripe_onboarding_token = ?, updated_at = datetime('now')
+               WHERE entity_type='artist' AND entity_id = ?""",
+            (tok, artist_id),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"[CONNECT_HEALTH] token store failed for artist={artist_id}: {e}")
+        return None
+    return f"https://gigsfill.com/api/stripe/onboarding/{tok}"
+
+
 def _safe_json(obj):
     """Stripe SDK objects can be Stripe object models, not plain
     dicts/lists — coerce to JSON-serializable form."""
@@ -268,23 +300,15 @@ def _maybe_email_artist(conn, artist_id: int, snapshot: dict):
             return False
         artist_name, artist_email = meta[0], meta[1]
 
-        # Build a fresh Stripe Account Link so the artist can resolve
-        # the issue without us telling them what's wrong (Stripe's
-        # onboarding flow knows exactly what's needed).
-        import stripe as stripe_lib
-        skey = conn.execute(
-            "SELECT setting_value FROM platform_settings WHERE setting_key='admin_stripe_secret_key'"
-        ).fetchone()
-        if not skey or not skey[0]:
+        # Build a tokenized redirect URL that mints a FRESH Stripe
+        # AccountLink each click. Stripe AccountLinks are single-use
+        # + ~10-min lifetime; embedding one directly in email broke
+        # for any artist who didn't click within minutes (Stripe
+        # redirected to our refresh_url = login page, which made
+        # the email feel broken).
+        action_url = _get_or_create_onboarding_url_for_artist(conn, artist_id)
+        if not action_url:
             return False
-        stripe_lib.api_key = skey[0]
-        link = stripe_lib.AccountLink.create(
-            account=snapshot.get("connect_account_id") or "",
-            type="account_onboarding",
-            refresh_url="https://gigsfill.com/app/user-profile.html",
-            return_url="https://gigsfill.com/app/user-profile.html",
-        )
-        action_url = link.url
 
         # Send via the platform SMTP path (mirror what other artist
         # emails use — get_smtp_settings + send_email from scheduler).
@@ -423,17 +447,7 @@ def _maybe_auto_suspend(conn, artist_id: int, snapshot: dict):
         artist_email = meta[1] if meta else None
         if artist_email:
             try:
-                import stripe as stripe_lib
-                skey = conn.execute(
-                    "SELECT setting_value FROM platform_settings WHERE setting_key='admin_stripe_secret_key'"
-                ).fetchone()
-                stripe_lib.api_key = skey[0]
-                link = stripe_lib.AccountLink.create(
-                    account=snapshot.get("connect_account_id"),
-                    type="account_onboarding",
-                    refresh_url="https://gigsfill.com/app/user-profile.html",
-                    return_url="https://gigsfill.com/app/user-profile.html",
-                )
+                action_url = _get_or_create_onboarding_url_for_artist(conn, artist_id)
                 from backend.scheduler import get_smtp_settings, send_email
                 smtp = get_smtp_settings(conn.cursor())
                 subj = "⚠ Final notice: your GigsFill payout account"
@@ -441,7 +455,7 @@ def _maybe_auto_suspend(conn, artist_id: int, snapshot: dict):
 <p>Your GigsFill payout account has been incomplete for over 30 days.
 We've paused new payouts to this account until it's resolved — venues
 booking you after today will see a warning.</p>
-<p><a href="{link.url}" style="display:inline-block;padding:10px 16px;
+<p><a href="{action_url}" style="display:inline-block;padding:10px 16px;
 background:#ef4444;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">
 Complete account setup now</a></p>
 <p>Once Stripe verifies your information, your account is automatically

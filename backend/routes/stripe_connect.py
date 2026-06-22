@@ -379,6 +379,80 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
     return {"url": account_link.url, "account_id": account_id}
 
 
+def _get_or_create_onboarding_token(db, artist_id: int) -> str:
+    """Mint a per-artist persistent token for the email-link redirect.
+    Stored on entity_payment_settings.stripe_onboarding_token. Unlike
+    Stripe AccountLinks (single-use, ~10 min lifetime), this token
+    survives clicks and time — each click hits /api/stripe/onboarding/
+    <token> which mints a FRESH AccountLink and redirects."""
+    import secrets
+    row = db.execute(
+        text("SELECT stripe_onboarding_token FROM entity_payment_settings "
+             "WHERE entity_type='artist' AND entity_id=:aid"),
+        {"aid": artist_id}
+    ).mappings().first()
+    if row and row.get("stripe_onboarding_token"):
+        return row["stripe_onboarding_token"]
+    tok = secrets.token_urlsafe(24)
+    db.execute(
+        text("""UPDATE entity_payment_settings
+                SET stripe_onboarding_token = :t, updated_at = datetime('now')
+                WHERE entity_type='artist' AND entity_id=:aid"""),
+        {"t": tok, "aid": artist_id}
+    )
+    db.commit()
+    return tok
+
+
+@router.get("/api/stripe/onboarding/{token}")
+def stripe_onboarding_redirect(token: str, db=Depends(get_db)):
+    """Public redirect — the URL we embed in artist emails. Looks up
+    the artist by their persistent token, mints a fresh single-use
+    Stripe AccountLink, redirects to it.
+
+    Why this isn't gated behind auth:
+      - The user just clicked a link in THEIR email; forcing a login
+        first defeats the purpose (the original bug we're fixing)
+      - The token is unguessable (secrets.token_urlsafe(24) = 192 bits)
+        and only enables Stripe-side onboarding for ONE specific
+        Connect account — an attacker with the token can't redirect
+        money, only help the artist set up
+      - Stripe's onboarding page is itself secured
+    """
+    from fastapi.responses import RedirectResponse
+    row = db.execute(
+        text("""SELECT entity_id as artist_id, stripe_connect_account_id
+                FROM entity_payment_settings
+                WHERE entity_type='artist' AND stripe_onboarding_token=:t"""),
+        {"t": token}
+    ).mappings().first()
+    if not row or not row.get("stripe_connect_account_id"):
+        raise HTTPException(404, "Onboarding link not valid")
+    stripe_keys = db.execute(
+        text("SELECT setting_value FROM platform_settings WHERE setting_key='admin_stripe_secret_key'")
+    ).scalar()
+    if not stripe_keys:
+        raise HTTPException(503, "Stripe not configured")
+    try:
+        import stripe as stripe_lib
+        stripe_lib.api_key = stripe_keys
+        link = stripe_lib.AccountLink.create(
+            account=row["stripe_connect_account_id"],
+            type="account_onboarding",
+            # Stripe redirects here when the artist needs a NEW link
+            # (e.g., the one they were given expired before they
+            # finished). Pointing it BACK at this redirect endpoint
+            # makes the loop self-repair — they get a fresh link and
+            # never hit our login page.
+            refresh_url=f"https://gigsfill.com/api/stripe/onboarding/{token}",
+            return_url="https://gigsfill.com/app/user-profile.html",
+        )
+        return RedirectResponse(url=link.url, status_code=302)
+    except Exception as e:
+        logger.error(f"[ONBOARDING_REDIRECT] failed for token={token[:8]}...: {e}")
+        raise HTTPException(502, "Could not generate Stripe onboarding link — please try again or contact support")
+
+
 @router.get("/api/stripe/artist/{artist_id}/connect-status")
 def get_artist_connect_status(artist_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     """Check artist's Stripe Connect onboarding status"""

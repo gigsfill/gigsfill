@@ -1212,6 +1212,15 @@ def setup_database():
         "stripe_payment_method_id VARCHAR",
         "stripe_connect_account_id VARCHAR",
         "stripe_connect_onboarding_complete BOOLEAN DEFAULT 0",
+        # Persistent token embedded in the onboarding email URL. Per
+        # entity, unguessable, reusable. The redirect endpoint
+        # /api/stripe/onboarding/<token> mints a FRESH Stripe
+        # AccountLink on each click — Stripe AccountLinks are
+        # single-use + short-lived (~10 min), so embedding one
+        # directly in email broke as soon as the artist clicked it
+        # twice or after a delay (Stripe redirected to refresh_url
+        # → gigsfill.com login screen).
+        "stripe_onboarding_token VARCHAR",
     ])
     
     # ==========================================

@@ -1524,7 +1524,7 @@ def _scheduler_loop():
                 logger.error(f"Connect-health audit error: {e}")
             last_connect_audit = time.time()
 
-        # Weekly admin digest — Mondays at 9 AM platform local time.
+        # Weekly admin digest — Mondays at 6 AM platform local time.
         # Guard via platform_settings.last_weekly_admin_digest so the
         # send is durable across scheduler restarts (we don't want to
         # re-send on every reboot during the window). The send itself
@@ -1534,7 +1534,7 @@ def _scheduler_loop():
             from datetime import datetime as _dt
             from zoneinfo import ZoneInfo as _Zi
             import sqlite3 as _sq
-            _now_dt = _dt.utcnow()
+            _now_dt = _dt.now(_Zi("UTC")).replace(tzinfo=None)
             # Read platform tz; fall back to UTC
             _c = _sq.connect(str(__import__('backend.db', fromlist=['DB_PATH']).DB_PATH))
             try:
@@ -1544,7 +1544,7 @@ def _scheduler_loop():
                 _tz = _Zi(_tz_row[0]) if _tz_row and _tz_row[0] else _Zi("UTC")
                 _local = _now_dt.replace(tzinfo=_Zi("UTC")).astimezone(_tz)
                 # Monday=0 in Python, fire when local hour == 9
-                if _local.weekday() == 0 and _local.hour == 9:
+                if _local.weekday() == 0 and _local.hour == 6:
                     _last = _c.execute(
                         "SELECT setting_value FROM platform_settings "
                         "WHERE setting_key='last_weekly_admin_digest'"
