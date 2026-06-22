@@ -2732,7 +2732,18 @@ async function renderCalendar() {
     const gigInputFields = document.querySelectorAll(".gig-input-field");
     const gigArtistInfo = document.getElementById("gigArtistInfo");
     const cancelGigBtn = document.getElementById("cancelGig");
-  
+
+    // ── HOLD GIG management panel (Phase 4) ─────────────────────────
+    // If this gig has a hold (active or exhausted), render the venue
+    // management panel at the top of the modal body. Hidden for all
+    // other gigs. Lazy-loads via /api/gigs/{id}/hold-status.
+    if (gig && gig.id && window._renderHoldMgmtPanel) {
+      window._renderHoldMgmtPanel(gig.id);
+    } else {
+      const existing = document.getElementById('holdMgmtPanel');
+      if (existing) existing.remove();
+    }
+
     const recurringBlock = document.getElementById("recurringBlock");
     if (recurringBlock) {
       recurringBlock.style.display = "block";

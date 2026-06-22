@@ -7537,3 +7537,315 @@ def _hold_slot_picker_page(token: str, row, open_slots) -> str:
 </td></tr>
 </table></td></tr></table>
 </body></html>"""
+
+
+# ============================================================
+# HOLD GIG — Phase 4: venue management endpoints
+# ============================================================
+# Venue sees the live state of the hold + can intervene mid-cycle.
+# All require check_venue_access (state-changing — only the venue
+# that created the gig can touch the hold).
+
+@router.get("/api/gigs/{gig_id}/hold-status")
+def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+    """Returns the live hold state + waitlist for venue UI rendering.
+    Read-only; safe to poll. Per-row state derived from gig_waitlist
+    flags + open slot count, so the venue sees who's been offered,
+    who declined/expired, who's still queued, who accepted (and into
+    which slot)."""
+    from backend.utils import check_venue_access
+    gig = db.execute(
+        text("""SELECT id, venue_id, hold_status, hold_offer_window_hours,
+                       date, status
+                FROM gigs WHERE id = :gid"""),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if not gig["hold_status"]:
+        return {"is_held": False}
+
+    # Waitlist with per-row state derivation
+    rows = db.execute(
+        text("""SELECT wl.artist_id, wl.position, wl.offer_sent,
+                       wl.offer_sent_at, wl.offer_expires_at,
+                       wl.offer_declined, wl.reminder_sent_at,
+                       a.name as artist_name
+                FROM gig_waitlist wl
+                LEFT JOIN artists a ON a.id = wl.artist_id
+                WHERE wl.gig_id = :gid AND wl.source = 'hold'
+                ORDER BY wl.position ASC"""),
+        {"gid": gig_id}
+    ).mappings().all()
+
+    # Which artists actually booked a slot via the hold? Cross-reference
+    # gig_slots — any booked slot whose artist_id is in our waitlist
+    # was an acceptance.
+    slot_rows = db.execute(
+        text("""SELECT gs.id, gs.slot_number, gs.start_time, gs.end_time,
+                       gs.pay, gs.status, gs.artist_id,
+                       a.name as artist_name
+                FROM gig_slots gs LEFT JOIN artists a ON a.id = gs.artist_id
+                WHERE gs.gig_id = :gid ORDER BY gs.slot_number"""),
+        {"gid": gig_id}
+    ).mappings().all()
+    accepted_artist_ids = set(
+        s["artist_id"] for s in slot_rows
+        if s["status"] == "booked" and s["artist_id"]
+    )
+
+    from datetime import datetime as _dt
+    now = _dt.utcnow()
+    waitlist_out = []
+    current_offer = None
+    for r in rows:
+        if r["artist_id"] in accepted_artist_ids:
+            state = "accepted"
+        elif not r["offer_sent"]:
+            state = "queued"
+        elif r["offer_declined"]:
+            state = "declined"  # also covers expired (we set offer_declined=1 on expire)
+        else:
+            # Active offer — still in flight
+            state = "current_offer"
+        hours_remaining = None
+        if r["offer_expires_at"] and state == "current_offer":
+            try:
+                exp = _dt.strptime(str(r["offer_expires_at"]).replace("T"," ").split(".")[0], "%Y-%m-%d %H:%M:%S")
+                hours_remaining = max(0, round((exp - now).total_seconds() / 3600, 1))
+            except Exception:
+                pass
+        row_out = {
+            "artist_id": r["artist_id"],
+            "artist_name": r["artist_name"],
+            "position": r["position"],
+            "state": state,
+            "offer_sent_at": str(r["offer_sent_at"]) if r["offer_sent_at"] else None,
+            "offer_expires_at": str(r["offer_expires_at"]) if r["offer_expires_at"] else None,
+            "hours_remaining": hours_remaining,
+            "reminder_sent": bool(r["reminder_sent_at"]),
+        }
+        if state == "current_offer":
+            current_offer = row_out
+        waitlist_out.append(row_out)
+
+    open_slots = [s for s in slot_rows if s["status"] == "open"]
+    booked_slots = [s for s in slot_rows if s["status"] == "booked"]
+
+    return {
+        "is_held": True,
+        "hold_status": gig["hold_status"],
+        "offer_window_hours": gig["hold_offer_window_hours"] or 24,
+        "current_offer": current_offer,
+        "waitlist": waitlist_out,
+        "open_slot_count": len(open_slots),
+        "booked_slot_count": len(booked_slots),
+        "open_slots": [dict(s) for s in open_slots],
+        "booked_slots": [dict(s) for s in booked_slots],
+        "venue_id": gig["venue_id"],
+    }
+
+
+@router.post("/api/gigs/{gig_id}/hold/release")
+def release_hold(gig_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+    """Venue chooses to abandon the hold and open the gig to all.
+    Used from BOTH the active-hold state (early release) and the
+    exhausted state (post-waitlist 'Open to All' button). Cancels
+    any in-flight offer + clears hold_status. Existing booking flow
+    handles the now-open gig from here.
+    """
+    from backend.utils import check_venue_access
+    gig = db.execute(
+        text("SELECT venue_id, hold_status FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if not gig["hold_status"]:
+        return {"ok": True, "noop": True, "message": "This gig isn't held."}
+    # Mark all in-flight offers as declined so the scheduler doesn't
+    # try to advance after release.
+    db.execute(
+        text("""UPDATE gig_waitlist SET offer_declined = 1
+                WHERE gig_id = :gid AND source = 'hold' AND offer_declined = 0"""),
+        {"gid": gig_id}
+    )
+    db.execute(
+        text("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
+        {"gid": gig_id}
+    )
+    db.commit()
+    logger.info(f"[HOLD] gig={gig_id} released to open by venue user={user.id}")
+    return {"ok": True, "message": "Hold released. Gig is now open to all artists."}
+
+
+@router.post("/api/gigs/{gig_id}/hold/skip-current")
+def skip_current_offer(gig_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+    """Force-advance: mark the current in-flight offer as declined +
+    immediately offer to next artist. Useful when venue talks to the
+    current artist offline ('hey can you confirm?' → 'no'), saves the
+    24h wait."""
+    from backend.utils import check_venue_access
+    from backend.services.gig_hold import send_next_hold_offer
+    gig = db.execute(
+        text("SELECT venue_id, hold_status FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if gig["hold_status"] != "active":
+        raise HTTPException(400, "No active offer to skip")
+    db.execute(
+        text("""UPDATE gig_waitlist SET offer_declined = 1
+                WHERE gig_id = :gid AND source = 'hold'
+                  AND offer_sent = 1 AND offer_declined = 0"""),
+        {"gid": gig_id}
+    )
+    db.commit()
+    next_aid = send_next_hold_offer(db, gig_id)
+    return {"ok": True, "next_artist_id": next_aid,
+            "message": "Moved on to next artist." if next_aid else "Waitlist exhausted — see the gig modal for next steps."}
+
+
+@router.post("/api/gigs/{gig_id}/hold/reorder")
+def reorder_hold_waitlist(gig_id: int, data: dict,
+                          user=Depends(get_current_user), db=Depends(get_db)):
+    """Venue reorders or adds/removes artists in the hold waitlist
+    mid-cycle. The current in-flight offer (offer_sent=1 and not
+    declined) is preserved at position 0; venue can only edit the
+    queued (not-yet-offered) portion.
+
+    Body: {"queued_ids": [artist_id, artist_id, ...]}
+    """
+    from backend.utils import check_venue_access
+    gig = db.execute(
+        text("SELECT venue_id, hold_status FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if gig["hold_status"] != "active":
+        raise HTTPException(400, "Hold not active")
+    new_ids = data.get("queued_ids") or []
+    new_ids = [int(x) for x in new_ids]
+
+    # Current in-flight + already-completed (declined/accepted) artists
+    # → those stay where they are. We're rewriting only the not-yet-
+    # offered portion.
+    locked_rows = db.execute(
+        text("""SELECT artist_id FROM gig_waitlist
+                WHERE gig_id = :gid AND source = 'hold'
+                  AND (offer_sent = 1)"""),
+        {"gid": gig_id}
+    ).fetchall()
+    locked_ids = {r[0] for r in locked_rows}
+
+    # Strip already-locked artists from the new_ids (venue can't move
+    # the active offer or re-queue a declined artist via reorder)
+    new_ids = [aid for aid in new_ids if aid not in locked_ids]
+
+    # Delete the queued (un-offered) rows
+    db.execute(
+        text("""DELETE FROM gig_waitlist
+                WHERE gig_id = :gid AND source = 'hold' AND offer_sent = 0"""),
+        {"gid": gig_id}
+    )
+    # Re-insert in new order. Position numbers: continue past the
+    # locked rows so the locked artists keep their order.
+    max_pos = db.execute(
+        text("""SELECT COALESCE(MAX(position), -1) FROM gig_waitlist
+                WHERE gig_id = :gid AND source = 'hold' AND offer_sent = 1"""),
+        {"gid": gig_id}
+    ).scalar()
+    next_pos = (max_pos or -1) + 1
+    for aid in new_ids:
+        try:
+            db.execute(
+                text("""INSERT INTO gig_waitlist (gig_id, artist_id, source, position, notified)
+                        VALUES (:gid, :aid, 'hold', :pos, 0)"""),
+                {"gid": gig_id, "aid": aid, "pos": next_pos}
+            )
+            next_pos += 1
+        except Exception as e:
+            logger.warning(f"[HOLD] reorder skip duplicate gig={gig_id} artist={aid}: {e}")
+    db.commit()
+    return {"ok": True, "queued_count": len(new_ids)}
+
+
+@router.post("/api/gigs/{gig_id}/hold/resolve-exhausted")
+def resolve_exhausted_hold(gig_id: int, data: dict,
+                           user=Depends(get_current_user), db=Depends(get_db)):
+    """Venue's response to the hold_exhausted state. Body action:
+       'open_all'     — clear hold_status, gig opens to public for the
+                         remaining empty slots (existing booked slots
+                         stay booked). Gig.status stays 'open'.
+       'cancel_empty' — cancel each empty slot individually via the
+                         existing slot cancel path. Booked slots
+                         survive. (Note: full-gig cancel uses the
+                         existing /cancel endpoint, not this one.)
+    """
+    from backend.utils import check_venue_access
+    gig = db.execute(
+        text("SELECT venue_id, hold_status FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if gig["hold_status"] != "exhausted":
+        raise HTTPException(400, "Hold is not in exhausted state")
+    action = (data.get("action") or "").lower()
+
+    if action == "open_all":
+        db.execute(
+            text("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
+            {"gid": gig_id}
+        )
+        db.commit()
+        return {"ok": True, "message": "Empty slots are now open to all artists."}
+
+    if action == "cancel_empty":
+        # Find and cancel each open slot via the existing slot-cancel
+        # path. For simplicity here we update gig_slots.status = 'cancelled'
+        # directly — no payment cleanup needed because these slots were
+        # never booked (no transaction rows exist).
+        open_slots = db.execute(
+            text("SELECT id FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
+            {"gid": gig_id}
+        ).fetchall()
+        for s in open_slots:
+            db.execute(
+                text("UPDATE gig_slots SET status = 'cancelled' WHERE id = :sid"),
+                {"sid": s[0]}
+            )
+        # Clear hold_status. If ALL slots are now non-open, also flip
+        # gig.status to 'booked' (or 'cancelled' if every slot got cancelled).
+        remaining_open = db.execute(
+            text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
+            {"gid": gig_id}
+        ).scalar()
+        booked = db.execute(
+            text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'booked'"),
+            {"gid": gig_id}
+        ).scalar()
+        if remaining_open == 0:
+            new_status = "booked" if booked else "cancelled"
+            db.execute(
+                text("UPDATE gigs SET status = :s, hold_status = NULL WHERE id = :gid"),
+                {"s": new_status, "gid": gig_id}
+            )
+        else:
+            db.execute(
+                text("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
+                {"gid": gig_id}
+            )
+        db.commit()
+        return {"ok": True,
+                "cancelled_count": len(open_slots),
+                "message": f"Cancelled {len(open_slots)} empty slot(s)."}
+
+    raise HTTPException(400, "Unknown action — expected 'open_all' or 'cancel_empty'")
