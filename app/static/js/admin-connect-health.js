@@ -69,15 +69,25 @@
       return;
     }
 
+    // Stash for the drill-down modal lookup
+    window._connectHealthRows = {};
+    data.unhealthy.forEach(u => { window._connectHealthRows[u.artist_id] = u; });
+
     list.innerHTML = `<table class="data-table" style="width:100%;">
       <thead><tr>
         <th>Artist</th><th>Status</th><th>What Stripe needs</th>
-        <th>Last polled</th><th>Last emailed</th><th></th>
+        <th>Unhealthy since</th><th>Last emailed</th><th></th>
       </tr></thead>
       <tbody>${data.unhealthy.map(rowHtml).join('')}</tbody>
     </table>`;
     list.querySelectorAll('.connEmailBtn').forEach(btn => {
-      btn.addEventListener('click', () => _emailOnboarding(parseInt(btn.dataset.artist, 10), btn));
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _emailOnboarding(parseInt(btn.dataset.artist, 10), btn);
+      });
+    });
+    list.querySelectorAll('.connRowClickable').forEach(row => {
+      row.addEventListener('click', () => _openDetailModal(parseInt(row.dataset.artist, 10)));
     });
   }
 
@@ -97,15 +107,19 @@
     if (!u.details_submitted) statusBits.push('<span style="color:#f59e0b;">Setup incomplete</span>');
     if (hasErrors) statusBits.push('<span style="color:#ef4444;">Errors</span>');
     if (!statusBits.length) statusBits.push('<span style="color:#f59e0b;">Missing info</span>');
+    const suspendedBadge = u.auto_suspended_at
+      ? '<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:3px;color:#f87171;font-size:0.6rem;font-weight:700;">SUSPENDED</span>'
+      : '';
     return `
-      <tr>
+      <tr class="connRowClickable" data-artist="${parseInt(u.artist_id, 10)}"
+        style="cursor:pointer;" title="Click row for full Stripe requirement details.">
         <td>
-          <div style="font-weight:600;color:var(--text);">${_esc(u.artist_name || ('Artist #' + u.artist_id))}</div>
+          <div style="font-weight:600;color:var(--text);">${_esc(u.artist_name || ('Artist #' + u.artist_id))}${suspendedBadge}</div>
           <div style="font-size:0.7rem;color:var(--text-gray);">${_esc(u.artist_email || '')}</div>
         </td>
         <td style="font-size:0.78rem;">${statusBits.join(' · ')}</td>
         <td style="font-size:0.78rem;color:var(--text-gray);">${dueText}</td>
-        <td style="font-size:0.7rem;color:var(--text-gray);">${_fmtAgo(u.last_polled_at)}</td>
+        <td style="font-size:0.7rem;color:var(--text-gray);">${_fmtAgo(u.unhealthy_since)}</td>
         <td style="font-size:0.7rem;color:var(--text-gray);">${_fmtAgo(u.artist_emailed_at)}</td>
         <td>
           <button class="connEmailBtn" data-artist="${parseInt(u.artist_id, 10)}"
@@ -113,6 +127,95 @@
             style="padding:4px 10px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.4);border-radius:4px;color:var(--cyan);cursor:pointer;font-size:0.7rem;font-weight:600;white-space:nowrap;">Email link</button>
         </td>
       </tr>`;
+  }
+
+  // Drill-down modal — shows full Stripe requirements + errors + direct
+  // Stripe Dashboard link for an admin doing deep investigation.
+  function _openDetailModal(artistId) {
+    const u = (window._connectHealthRows || {})[artistId];
+    if (!u) return;
+    const due = (u.currently_due || []).concat(u.past_due || []);
+    const dueList = due.length
+      ? `<ul style="margin:4px 0 12px;padding-left:18px;">${due.map(k => `<li style="color:var(--text);font-family:monospace;font-size:0.78rem;">${_esc(k)}</li>`).join('')}</ul>`
+      : '<p style="color:var(--text-gray);font-size:0.78rem;margin:4px 0 12px;">None — disabled for other reason.</p>';
+    const errsList = (u.errors || []).length
+      ? `<ul style="margin:4px 0 12px;padding-left:18px;">${u.errors.map(e =>
+          `<li style="color:#f87171;font-size:0.78rem;"><b>${_esc(e.code || '?')}</b>: ${_esc(e.reason || '—')} <span style="color:var(--text-gray);">(${_esc(e.requirement || '')})</span></li>`
+        ).join('')}</ul>`
+      : '<p style="color:var(--text-gray);font-size:0.78rem;margin:4px 0 12px;">No validation errors reported.</p>';
+    const acctId = u.stripe_connect_account_id || '';
+    const dashUrl = acctId
+      ? `https://dashboard.stripe.com/connect/accounts/${encodeURIComponent(acctId)}`
+      : 'https://dashboard.stripe.com/connect/accounts';
+    // Find/create the modal container
+    let m = document.getElementById('connectHealthModal');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'connectHealthModal';
+      m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+      m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+      document.body.appendChild(m);
+    }
+    m.innerHTML = `
+      <div style="max-width:560px;width:100%;max-height:85vh;overflow:auto;background:#0f1419;border:1px solid var(--border);border-radius:10px;padding:22px 24px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px;">
+          <div>
+            <div style="font-size:1.05rem;font-weight:700;color:var(--text);">${_esc(u.artist_name || ('Artist #' + u.artist_id))}</div>
+            <div style="font-size:0.72rem;color:var(--text-gray);margin-top:2px;">${_esc(u.artist_email || '—')}</div>
+            <div style="font-size:0.7rem;color:var(--text-gray);font-family:monospace;margin-top:2px;">${_esc(acctId)}</div>
+          </div>
+          <button id="connectModalClose" style="background:transparent;border:none;color:var(--text-gray);font-size:1.4rem;cursor:pointer;line-height:1;">×</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:5px;">
+            <div style="font-size:0.6rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Payouts</div>
+            <div style="font-size:0.85rem;color:${u.payouts_enabled ? '#22c55e' : '#ef4444'};font-weight:600;">${u.payouts_enabled ? 'Enabled ✓' : 'Disabled ✗'}</div>
+          </div>
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:5px;">
+            <div style="font-size:0.6rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Charges</div>
+            <div style="font-size:0.85rem;color:${u.charges_enabled ? '#22c55e' : '#ef4444'};font-weight:600;">${u.charges_enabled ? 'Enabled ✓' : 'Disabled ✗'}</div>
+          </div>
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:5px;">
+            <div style="font-size:0.6rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Onboarding</div>
+            <div style="font-size:0.85rem;color:${u.details_submitted ? '#22c55e' : '#f59e0b'};font-weight:600;">${u.details_submitted ? 'Submitted' : 'Incomplete'}</div>
+          </div>
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:5px;">
+            <div style="font-size:0.6rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Unhealthy since</div>
+            <div style="font-size:0.85rem;color:var(--text);font-weight:600;">${_fmtAgo(u.unhealthy_since)}</div>
+          </div>
+        </div>
+
+        ${u.disabled_reason ? `<div style="padding:8px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:5px;margin-bottom:14px;font-size:0.78rem;color:#f87171;"><b>Disabled reason:</b> ${_esc(u.disabled_reason)}</div>` : ''}
+
+        ${u.auto_suspended_at ? `<div style="padding:8px 10px;background:rgba(239,68,68,0.10);border:1px solid #ef4444;border-radius:5px;margin-bottom:14px;font-size:0.78rem;color:#f87171;"><b>🔒 Auto-suspended:</b> account has been unhealthy for 30+ days. stripe_connect_onboarding_complete cleared. Will auto-reinstate when Stripe reports healthy.</div>` : ''}
+
+        <h4 style="margin:14px 0 4px;font-size:0.7rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Stripe requirements outstanding</h4>
+        ${dueList}
+
+        <h4 style="margin:14px 0 4px;font-size:0.7rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Validation errors</h4>
+        ${errsList}
+
+        <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;">
+          <a href="${dashUrl}" target="_blank" rel="noopener noreferrer"
+            style="padding:6px 14px;background:rgba(124,107,255,0.12);border:1px solid rgba(124,107,255,0.4);border-radius:5px;color:#a78bfa;text-decoration:none;font-size:0.78rem;font-weight:600;">Open in Stripe Dashboard ↗</a>
+          <button id="connectModalEmailBtn"
+            style="padding:6px 14px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.4);border-radius:5px;color:var(--cyan);cursor:pointer;font-size:0.78rem;font-weight:600;">Email onboarding link</button>
+        </div>
+
+        <div style="font-size:0.66rem;color:var(--text-gray);margin-top:14px;">
+          Last polled ${_fmtAgo(u.last_polled_at)} · Last admin alert ${_fmtAgo(u.admin_alerted_at)}
+        </div>
+      </div>
+    `;
+    m.querySelector('#connectModalClose').addEventListener('click', () => m.remove());
+    m.querySelector('#connectModalEmailBtn').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Sending…';
+      await _emailOnboarding(artistId, btn);
+      setTimeout(() => { if (m.parentNode) m.remove(); }, 1500);
+    });
   }
 
   async function _emailOnboarding(artistId, btn) {

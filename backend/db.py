@@ -830,9 +830,25 @@ def setup_database():
             requirements_count INTEGER DEFAULT 0,
             last_polled_at DATETIME,
             last_changed_at DATETIME,
-            artist_emailed_at DATETIME
+            artist_emailed_at DATETIME,
+            -- When the account FIRST became unhealthy in this run.
+            -- Cleared back to NULL when account becomes healthy.
+            -- Used to (a) email admin once per incident,
+            -- (b) drive the 30-day auto-suspend timer.
+            unhealthy_since DATETIME,
+            -- One admin notification per incident (de-dup on
+            -- per-artist basis between unhealthy → healthy cycles)
+            admin_alerted_at DATETIME,
+            -- Set when the 30-day auto-suspend fires for this account
+            -- so we don't repeatedly trigger the "final warning" flow
+            auto_suspended_at DATETIME
         )
     """)
+    _add_columns(cursor, "connect_account_health", [
+        "unhealthy_since DATETIME",
+        "admin_alerted_at DATETIME",
+        "auto_suspended_at DATETIME",
+    ])
     # Hot queries: count of unhealthy accounts (admin dashboard) +
     # "accounts not polled recently" (scheduler picks next batch).
     cursor.execute(

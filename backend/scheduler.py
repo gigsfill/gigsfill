@@ -1524,6 +1524,54 @@ def _scheduler_loop():
                 logger.error(f"Connect-health audit error: {e}")
             last_connect_audit = time.time()
 
+        # Weekly admin digest — Mondays at 9 AM platform local time.
+        # Guard via platform_settings.last_weekly_admin_digest so the
+        # send is durable across scheduler restarts (we don't want to
+        # re-send on every reboot during the window). The send itself
+        # is fast (one query bundle + one SMTP); the dispatch is gated
+        # so it fires at most once per calendar week.
+        try:
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _Zi
+            import sqlite3 as _sq
+            _now_dt = _dt.utcnow()
+            # Read platform tz; fall back to UTC
+            _c = _sq.connect(str(__import__('backend.db', fromlist=['DB_PATH']).DB_PATH))
+            try:
+                _tz_row = _c.execute(
+                    "SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'"
+                ).fetchone()
+                _tz = _Zi(_tz_row[0]) if _tz_row and _tz_row[0] else _Zi("UTC")
+                _local = _now_dt.replace(tzinfo=_Zi("UTC")).astimezone(_tz)
+                # Monday=0 in Python, fire when local hour == 9
+                if _local.weekday() == 0 and _local.hour == 9:
+                    _last = _c.execute(
+                        "SELECT setting_value FROM platform_settings "
+                        "WHERE setting_key='last_weekly_admin_digest'"
+                    ).fetchone()
+                    _last_iso = _last[0] if _last and _last[0] else None
+                    _should = True
+                    if _last_iso:
+                        try:
+                            _last_dt = _dt.fromisoformat(_last_iso)
+                            _should = (_now_dt - _last_dt).total_seconds() > 6 * 86400
+                        except Exception:
+                            pass
+                    if _should:
+                        from backend.services.connect_health import send_weekly_admin_digest
+                        send_weekly_admin_digest()
+                        _c.execute(
+                            "INSERT INTO platform_settings (setting_key, setting_value) "
+                            "VALUES ('last_weekly_admin_digest', ?) "
+                            "ON CONFLICT(setting_key) DO UPDATE SET setting_value=?",
+                            (_now_dt.isoformat(), _now_dt.isoformat()),
+                        )
+                        _c.commit()
+            finally:
+                _c.close()
+        except Exception as e:
+            logger.error(f"Weekly admin digest error: {e}")
+
         # Full email blast run: once per hour
         if now - last_email_run >= 3600:
             try:

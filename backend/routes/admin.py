@@ -3124,6 +3124,7 @@ def admin_connect_health(admin=Depends(check_admin), db=Depends(get_db)):
             cah.disabled_reason, cah.requirements_count,
             cah.currently_due_json, cah.past_due_json, cah.errors_json,
             cah.last_polled_at, cah.last_changed_at, cah.artist_emailed_at,
+            cah.unhealthy_since, cah.admin_alerted_at, cah.auto_suspended_at,
             a.name as artist_name, u.email as artist_email
         FROM connect_account_health cah
         LEFT JOIN artists a ON a.id = cah.artist_id
