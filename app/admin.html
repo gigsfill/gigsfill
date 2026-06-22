@@ -925,6 +925,7 @@
         <button class="ps-subtab" onclick="switchPsTab('accounting')">Payment Accounting</button>
         <button class="ps-subtab" onclick="switchPsTab('flags')">Venue Flags</button>
         <button class="ps-subtab" onclick="switchPsTab('digest')">Digest Queue</button>
+        <button class="ps-subtab" onclick="switchPsTab('connect-health')">Account Health</button>
       </div>
 
       <!-- ── Sub-tab: Email Settings ── -->
@@ -1281,6 +1282,28 @@
            here to recoup the cut on this venue's future real bookings.
            Data: GET  /api/admin/zero-pay-flagged-venues
            Edit: PUT  /api/admin/venues/{vid}/fee-pct-override ── -->
+      <!-- ── Sub-tab: Account Health — daily Stripe Connect audit ── -->
+      <div class="ps-subtab-content" id="ps-connect-health">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+          <div>
+            <span style="font-size:0.78rem;font-weight:700;color:var(--text);">Artist Stripe Connect Account Health</span>
+            <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">
+              Daily-polled snapshot. Catches restrictions / verification holds that webhooks miss. Artists with issues are auto-emailed (debounced 7 days).
+            </span>
+          </div>
+          <button type="button" id="connectHealthAuditBtn"
+            title="Run a fresh audit cycle right now — calls Stripe.Account.retrieve for every artist with a Connect account. Takes ~10s at 1000 artists. Useful after an admin remediation action."
+            style="padding:6px 14px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.4);border-radius:5px;color:var(--cyan);cursor:pointer;font-size:0.78rem;font-weight:600;">↻ Audit now</button>
+        </div>
+
+        <div id="connectHealthStats" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:10px;margin-bottom:14px;">
+          <div style="padding:10px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+            <div style="font-size:0.62rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;">Loading…</div>
+          </div>
+        </div>
+        <div id="connectHealthList"></div>
+      </div>
+
       <div class="ps-subtab-content" id="ps-flags">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
           <div>
@@ -2121,6 +2144,7 @@ function switchPsTab(tab) {
   if (tab === 'email') { typeof loadEmailSettings === 'function' && loadEmailSettings(); }
   if (tab === 'flags') { typeof loadFlaggedVenues === 'function' && loadFlaggedVenues(); }
   if (tab === 'digest') { typeof loadDigestStats === 'function' && loadDigestStats(); }
+  if (tab === 'connect-health') { typeof loadConnectHealth === 'function' && loadConnectHealth(); }
 }
 
 function switchDbLogsTab(tab) {
@@ -2151,6 +2175,7 @@ function switchDbLogsTab(tab) {
 <script src="/app/static/js/admin-flags.js?v=3"></script>
 <script src="/app/static/js/admin-digest.js?v=3"></script>
 <script src="/app/static/js/admin-alerts.js?v=1"></script>
+<script src="/app/static/js/admin-connect-health.js?v=1"></script>
 <script src="/app/static/js/admin-init.js?v=2"></script>
 <script src="/app/static/js/sw-register.js"></script>
 

@@ -1477,6 +1477,7 @@ def _scheduler_loop():
     bounce-inbox poll every 30 minutes when enabled."""
     last_email_run = 0
     last_bounce_run = 0
+    last_connect_audit = 0
     while True:
         now = time.time()
 
@@ -1505,6 +1506,23 @@ def _scheduler_loop():
             run_periodic_health_checks()
         except Exception as e:
             logger.error(f"Periodic health check error: {e}")
+
+        # Daily Stripe Connect account audit + dispute reconciliation.
+        # Hits the Stripe API once per artist — 1000 artists ≈ 10 seconds
+        # at Stripe's 100/sec read limit. Daily cadence is fine; bumping
+        # to hourly would still be safe at < 50K artists. Catches account
+        # restrictions / verification holds / disputes that webhooks
+        # could miss during a delivery outage.
+        if now - last_connect_audit >= 86400:
+            try:
+                from backend.services.connect_health import (
+                    audit_all_accounts, reconcile_recent_disputes,
+                )
+                audit_all_accounts()
+                reconcile_recent_disputes()
+            except Exception as e:
+                logger.error(f"Connect-health audit error: {e}")
+            last_connect_audit = time.time()
 
         # Full email blast run: once per hour
         if now - last_email_run >= 3600:

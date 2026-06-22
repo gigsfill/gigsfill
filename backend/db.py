@@ -809,6 +809,42 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_log_target ON admin_audit_log(target_table, target_id)")
 
     # ==========================================
+    # CONNECT ACCOUNT HEALTH (Jun 2026)
+    # ==========================================
+    # Per-artist cache of Stripe Connect account state. Refreshed
+    # daily by services/connect_health.audit_all_accounts() — covers
+    # the gap when account.updated webhooks miss (the June 19→22
+    # outage made this need obvious). One row per artist with a
+    # Connect account.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS connect_account_health (
+            artist_id INTEGER PRIMARY KEY,
+            stripe_connect_account_id TEXT NOT NULL,
+            charges_enabled INTEGER,
+            payouts_enabled INTEGER,
+            details_submitted INTEGER,
+            disabled_reason TEXT,
+            currently_due_json TEXT,
+            past_due_json TEXT,
+            errors_json TEXT,
+            requirements_count INTEGER DEFAULT 0,
+            last_polled_at DATETIME,
+            last_changed_at DATETIME,
+            artist_emailed_at DATETIME
+        )
+    """)
+    # Hot queries: count of unhealthy accounts (admin dashboard) +
+    # "accounts not polled recently" (scheduler picks next batch).
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conn_health_payouts_enabled "
+        "ON connect_account_health(payouts_enabled)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conn_health_last_polled "
+        "ON connect_account_health(last_polled_at)"
+    )
+
+    # ==========================================
     # SYSTEM ALERTS (Jun 2026)
     # ==========================================
     # Operational issues that need admin attention — surfaced as a banner

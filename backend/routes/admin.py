@@ -3101,3 +3101,133 @@ def admin_acknowledge_alert(alert_id: int, admin=Depends(check_admin), db=Depend
     except Exception:
         pass
     return {"ok": True, "alert_id": alert_id}
+
+
+# ============================================================
+# CONNECT ACCOUNT HEALTH — admin visibility for Stripe Connect
+# ============================================================
+# Cached snapshot updated daily by the scheduler
+# (services/connect_health.audit_all_accounts). Avoids manual
+# Stripe Dashboard checks at scale — one screen shows every
+# artist whose account needs attention + remediation actions.
+
+@router.get("/api/admin/connect-health")
+def admin_connect_health(admin=Depends(check_admin), db=Depends(get_db)):
+    """Returns aggregated Connect account health + per-artist
+    detail of unhealthy accounts. Healthy accounts collapsed into
+    a count so the response stays small at 1000+ artists."""
+    rows = db.execute(text("""
+        SELECT
+            cah.artist_id,
+            cah.stripe_connect_account_id,
+            cah.charges_enabled, cah.payouts_enabled, cah.details_submitted,
+            cah.disabled_reason, cah.requirements_count,
+            cah.currently_due_json, cah.past_due_json, cah.errors_json,
+            cah.last_polled_at, cah.last_changed_at, cah.artist_emailed_at,
+            a.name as artist_name, u.email as artist_email
+        FROM connect_account_health cah
+        LEFT JOIN artists a ON a.id = cah.artist_id
+        LEFT JOIN users u ON u.id = a.user_id
+        ORDER BY
+          CASE WHEN cah.payouts_enabled = 0 OR cah.disabled_reason IS NOT NULL THEN 0 ELSE 1 END,
+          cah.requirements_count DESC,
+          cah.last_changed_at DESC NULLS LAST
+    """)).mappings().all()
+    import json as _json
+    healthy = 0
+    unhealthy = []
+    for r in rows:
+        is_healthy = (
+            bool(r["payouts_enabled"])
+            and not (r["disabled_reason"] or "")
+            and int(r["requirements_count"] or 0) == 0
+        )
+        if is_healthy:
+            healthy += 1
+            continue
+        d = dict(r)
+        for k in ("currently_due_json", "past_due_json", "errors_json"):
+            try:
+                d[k.replace("_json", "")] = _json.loads(d.get(k) or "[]")
+            except Exception:
+                d[k.replace("_json", "")] = []
+            d.pop(k, None)
+        unhealthy.append(d)
+    last_audit = db.execute(text(
+        "SELECT MAX(last_polled_at) FROM connect_account_health"
+    )).scalar()
+    return {
+        "healthy_count": healthy,
+        "unhealthy_count": len(unhealthy),
+        "total": healthy + len(unhealthy),
+        "last_audit_at": last_audit,
+        "unhealthy": unhealthy,
+    }
+
+
+@router.post("/api/admin/connect-health/audit-now")
+def admin_connect_health_audit_now(admin=Depends(check_admin), db=Depends(get_db)):
+    """Force a fresh audit cycle. Useful when an admin just took an
+    action and wants to confirm the state without waiting for the
+    daily tick. Runs synchronously — at 1000+ artists this takes a
+    few seconds, but admin endpoints are expected to block."""
+    try:
+        from backend.services.connect_health import audit_all_accounts
+        audit_all_accounts()
+        try:
+            from backend.utils import log_admin_action
+            log_admin_action(db, admin, "connect_health_audit_now",
+                             target_table="connect_account_health")
+        except Exception:
+            pass
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, f"Audit failed: {e}")
+
+
+@router.post("/api/admin/connect-health/{artist_id}/email-onboarding")
+def admin_email_onboarding_link(artist_id: int, admin=Depends(check_admin), db=Depends(get_db)):
+    """Force-send the Stripe onboarding email to this artist
+    immediately, bypassing the per-artist debounce. Useful when the
+    artist says "I never got the email"."""
+    import sqlite3 as _sq
+    from backend.db import DB_PATH
+    conn = _sq.connect(str(DB_PATH))
+    try:
+        # Clear the debounce timer so _maybe_email_artist actually fires
+        conn.execute(
+            "UPDATE connect_account_health SET artist_emailed_at = NULL WHERE artist_id = ?",
+            (artist_id,),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT stripe_connect_account_id, payouts_enabled, charges_enabled, "
+            "disabled_reason, requirements_count "
+            "FROM connect_account_health WHERE artist_id = ?",
+            (artist_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "No health record for this artist")
+        snap = {
+            "artist_id": artist_id,
+            "connect_account_id": row[0],
+            "payouts_enabled": bool(row[1]),
+            "charges_enabled": bool(row[2]),
+            "disabled_reason": row[3],
+            "requirements_count": int(row[4] or 0),
+            "is_healthy": False,
+        }
+        from backend.services.connect_health import _maybe_email_artist
+        sent = _maybe_email_artist(conn, artist_id, snap)
+        try:
+            from backend.utils import log_admin_action
+            log_admin_action(
+                db, admin, "connect_email_onboarding",
+                target_table="connect_account_health", target_id=artist_id,
+                metadata={"sent": bool(sent)},
+            )
+        except Exception:
+            pass
+        return {"ok": bool(sent), "artist_id": artist_id}
+    finally:
+        conn.close()
