@@ -540,6 +540,18 @@ def setup_database():
         "styles VARCHAR",
         "radius_blast_token VARCHAR",
         "last_cancelled_artist_id INTEGER",
+        # Jun 2026: Hold feature. When venue holds a gig at creation
+        # time, the gig stays status='open' (so existing booking flow
+        # works after acceptance) but hold_status='active' hides it
+        # from the artist search and shows it as 'held' to other
+        # artists. On waitlist exhaustion → hold_status='exhausted'
+        # (venue must choose Cancel or Open). On acceptance → hold_status
+        # cleared, normal booking flow proceeds. `hold_offer_window_hours`
+        # is venue-configurable (default 24).
+        "hold_status TEXT",
+        "hold_offer_window_hours INTEGER DEFAULT 24",
+        "hold_email_artists INTEGER DEFAULT 1",
+        "hold_created_at DATETIME",
     ])
 
     # Add PRO certification columns to venues
@@ -2081,6 +2093,16 @@ def setup_database():
         "offer_expires_at DATETIME",
         "offer_token TEXT",
         "offer_declined INTEGER DEFAULT 0",
+        # Jun 2026: the Hold feature reuses gig_waitlist instead of
+        # creating a parallel table. `source='cancellation'` (default,
+        # legacy) is the post-cancellation backfill flow. `source='hold'`
+        # is venue-initiated at gig creation. `position` is the explicit
+        # offer order set by venue at creation (0 = top of waitlist).
+        # `reminder_sent_at` tracks the 12h nudge sent during the 24h
+        # offer window.
+        "source TEXT DEFAULT 'cancellation'",
+        "position INTEGER DEFAULT 0",
+        "reminder_sent_at DATETIME",
     ])
 
     # gig_cancelled_artists (May 2026 part 9):

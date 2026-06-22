@@ -3174,6 +3174,40 @@
         </div>
       </div>
 
+      <!-- ── HOLD GIG (Jun 2026) ──────────────────────────────────────────
+           Venue can pre-offer this gig to one or more preferred artists in
+           sequential order before opening it to all. Each artist gets 24h
+           (configurable) to accept/decline. While the hold is active, the
+           gig is visible to all artists as 'booked' (same as awaiting-
+           contract gigs). Single-gig only in Phase 1 — hidden when the
+           Recurring toggle is on.
+
+           Frontend builds an ordered list of artist IDs from the checkbox
+           grid below + ships them as `hold_artist_ids` in the POST body.
+      ──────────────────────────────────────────────────────────────────── -->
+      <div class="recurring-toggle-row" id="holdGigToggleRow">
+        <label class="recurring-master-pill" style="background:rgba(245,158,11,0.15);border-color:rgba(245,158,11,0.4);">
+          <input type="checkbox" id="holdGigCheckbox" hidden>
+          <span>🔒 Hold Gig</span>
+        </label>
+      </div>
+      <div id="holdGigPanel" class="recur-panel" style="display:none;border-color:rgba(245,158,11,0.25);">
+        <p style="font-size:0.78rem;color:var(--text-gray);margin:6px 0 12px;">
+          Offer this gig privately to your preferred artists first. Top of list goes first; each gets <b>24h</b> to accept before the next is offered. While the hold is active the gig is hidden from other artists.
+        </p>
+        <div class="modal-row">
+          <label style="font-size:0.8rem;">
+            <input type="checkbox" id="holdEmailArtists" checked>
+            Email artist(s) immediately
+          </label>
+        </div>
+        <div style="font-size:0.7rem;color:var(--text-muted, #94a3b8);margin:8px 0 4px;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;">Pick artists in offer order</div>
+        <div id="holdArtistPickerList" style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px;">
+          <div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">Loading your preferred artists…</div>
+        </div>
+        <div id="holdArtistOrderSummary" style="font-size:0.74rem;color:var(--text-gray);margin-top:8px;"></div>
+      </div>
+
       <!-- Recurring master toggle — a single pill that turns the whole
            recurring panel on/off. The hidden checkbox keeps its id so the
            existing JS (recurringCheckbox.checked / change event) still works. -->
@@ -3298,7 +3332,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=187"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=188"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>

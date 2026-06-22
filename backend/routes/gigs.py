@@ -1116,6 +1116,28 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
         except Exception:
             pass
 
+        # ── Hold feature (Jun 2026) ──
+        # Venue can mark a single gig (not series — Phase 5) as held at
+        # creation time with an ordered list of preferred-artist IDs.
+        # If `hold_email_artists` is true the first artist receives the
+        # offer immediately; otherwise the waitlist is staged but
+        # nobody's been notified yet.
+        _hold_artist_ids = data.get("hold_artist_ids") or []
+        if _hold_artist_ids and not data.get("is_recurring"):
+            try:
+                from backend.services.gig_hold import create_hold_waitlist
+                create_hold_waitlist(
+                    db,
+                    gig_id=gig_id,
+                    artist_ids=_hold_artist_ids,
+                    send_email_now=bool(data.get("hold_email_artists", True)),
+                    offer_window_hours=int(data.get("hold_offer_window_hours") or 24),
+                )
+            except Exception as _he:
+                # Hold setup failure shouldn't kill the gig creation —
+                # log and let admin set it up manually.
+                logger.error(f"[HOLD] create_hold_waitlist failed for gig {gig_id}: {_he}")
+
         return {"ok": True, "gig_id": gig_id}
 
     except Exception as e:
@@ -1144,6 +1166,8 @@ def list_gigs(db=Depends(get_db)):
                     COALESCE(g.is_multi_slot, 0) as is_multi_slot,
                     g.contract_hold_expires_at,
                     g.contract_hold_artist_id,
+                    g.hold_status,
+                    g.hold_offer_window_hours,
                     (SELECT gc.artist_id FROM gig_contracts gc WHERE gc.gig_id = g.id ORDER BY gc.id DESC LIMIT 1) as contract_artist_id,
                     (SELECT gc.status FROM gig_contracts gc WHERE gc.gig_id = g.id ORDER BY gc.id DESC LIMIT 1) as contract_status,
                     CASE WHEN g.radius_blast_token IS NOT NULL AND g.status = 'open' THEN 1 ELSE 0 END as is_blast_open,
@@ -1340,6 +1364,10 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
                 WHERE COALESCE(v.payment_status, 'active') != 'suspended'
                   AND g.date >= date('now', '-7 days')
                   AND g.date <= date('now', '+90 days')
+                  -- Hide active/exhausted holds from artist search.
+                  -- They become visible (and bookable) only after the
+                  -- venue resolves the hold (accept → 'booked', open → NULL).
+                  AND (g.hold_status IS NULL OR g.hold_status NOT IN ('active','exhausted'))
                 ORDER BY g.date ASC
             """)
         ).mappings().all()

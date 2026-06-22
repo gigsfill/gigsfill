@@ -180,10 +180,98 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Will be populated when modal opens
   }
 
+  // ── HOLD GIG (Jun 2026) ─────────────────────────────────────────────
+  // Single-gig only in Phase 1: hide the entire Hold panel + toggle row
+  // when Recurring is active, restore when it's off. Phase 5 will
+  // extend this to series with per-gig hold assignment.
+  const holdCheckbox = document.getElementById('holdGigCheckbox');
+  const holdPanel = document.getElementById('holdGigPanel');
+  const holdToggleRow = document.getElementById('holdGigToggleRow');
+  const holdPickerList = document.getElementById('holdArtistPickerList');
+  const holdOrderSummary = document.getElementById('holdArtistOrderSummary');
+  // Ordered selection state — array of artist_id ints.
+  // Click on a checkbox appends; uncheck removes; re-check appends to end.
+  window._holdArtistOrder = [];
+
+  function _updateHoldOrderSummary() {
+    if (!holdOrderSummary) return;
+    const n = window._holdArtistOrder.length;
+    if (n === 0) {
+      holdOrderSummary.innerHTML = '<span style="color:#f59e0b;">⚠ Pick at least one artist to enable the hold.</span>';
+    } else {
+      const names = window._holdArtistOrder.map((aid, i) => {
+        const row = holdPickerList?.querySelector(`[data-aid="${aid}"]`);
+        const nm = row ? row.dataset.aname : '?';
+        return `<b>${i+1}.</b> ${nm}`;
+      }).join('  ·  ');
+      holdOrderSummary.innerHTML = `Offer order: ${names}`;
+    }
+  }
+
+  async function _loadHoldPicker() {
+    if (!holdPickerList) return;
+    try {
+      const res = await fetch(`/api/venues/${venueId}/preferred-artists`, { credentials: 'include' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const approved = (Array.isArray(data) ? data : (data.preferred_artists || []))
+        .filter(a => (a.status || 'approved') === 'approved');
+      if (!approved.length) {
+        holdPickerList.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">No preferred artists yet. Add them under <b>My Artists</b> tab first.</div>';
+        return;
+      }
+      holdPickerList.innerHTML = approved.map(a => {
+        const aid = parseInt(a.artist_id || a.id, 10);
+        const nm = (a.name || a.artist_name || ('Artist ' + aid)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        return `<label data-aid="${aid}" data-aname="${nm}" style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;font-size:0.82rem;border-radius:4px;">
+          <input type="checkbox" class="holdArtistCb" data-aid="${aid}" style="margin:0;">
+          <span>${nm}</span>
+        </label>`;
+      }).join('');
+      holdPickerList.querySelectorAll('.holdArtistCb').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const aid = parseInt(cb.dataset.aid, 10);
+          if (cb.checked) {
+            // append (preserve previously chosen order)
+            if (!window._holdArtistOrder.includes(aid)) window._holdArtistOrder.push(aid);
+          } else {
+            window._holdArtistOrder = window._holdArtistOrder.filter(x => x !== aid);
+          }
+          _updateHoldOrderSummary();
+        });
+      });
+    } catch (e) {
+      holdPickerList.innerHTML = `<div style="padding:14px;text-align:center;color:#ef4444;font-size:0.78rem;">Could not load preferred artists: ${e.message}</div>`;
+    }
+  }
+
+  if (holdCheckbox && holdPanel) {
+    holdCheckbox.addEventListener('change', async () => {
+      if (holdCheckbox.checked) {
+        holdPanel.style.display = 'block';
+        // Lazy-load the artist picker the first time
+        if (!holdPickerList._loaded) {
+          await _loadHoldPicker();
+          holdPickerList._loaded = true;
+        }
+        _updateHoldOrderSummary();
+      } else {
+        holdPanel.style.display = 'none';
+      }
+    });
+  }
+
   // Recurring checkbox: toggle options, and confirm before detaching an existing gig from series
   if (recurringCheckbox && recurringOptions) {
     recurringCheckbox.addEventListener('change', () => {
+      // Hide / restore the Hold pill when recurring is toggled
+      if (holdToggleRow) {
+        holdToggleRow.style.display = recurringCheckbox.checked ? 'none' : '';
+      }
       if (recurringCheckbox.checked) {
+        // Force-off the hold + collapse panel so it doesn't ship in the POST
+        if (holdCheckbox) holdCheckbox.checked = false;
+        if (holdPanel) holdPanel.style.display = 'none';
         recurringOptions.style.display = 'block';
         // Reset end type inputs to clean state when showing for the first time
         resetEndType();
@@ -4382,6 +4470,13 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     }
     // ──────────────────────────────────────────────────────────────────────
 
+    // Hold params (Phase 1): single-gig only. Send the ordered artist
+    // list + the "email now?" flag if the venue enabled Hold mode.
+    // Empty array → backend treats this as a regular open gig.
+    const holdEnabled = document.getElementById('holdGigCheckbox')?.checked;
+    const holdEmail = document.getElementById('holdEmailArtists')?.checked !== false;
+    const holdArtistIds = holdEnabled ? (window._holdArtistOrder || []) : [];
+
     await api(`/venues/${venueId}/gigs`, {
       method: "POST",
       body: JSON.stringify({
@@ -4393,7 +4488,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         band_formats: bandFormats,
         styles: gigStyles,
         is_recurring: 0,
-        slots: slots
+        slots: slots,
+        hold_artist_ids: holdArtistIds,
+        hold_email_artists: holdEmail,
+        hold_offer_window_hours: 24
       })
     });
 
