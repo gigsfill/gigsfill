@@ -1088,6 +1088,78 @@
     border-color: rgba(168, 85, 247, 0.65);
   }
 
+  /* Hold-feature drag-and-drop row in the selected list.
+     Black default, amber border on hover, opacity dip while dragging. */
+  .hold-sel-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 5px;
+    cursor: grab;
+    font-size: 0.84rem;
+    color: var(--text);
+    margin-bottom: 4px;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .hold-sel-row:hover {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  .hold-sel-row:active { cursor: grabbing; }
+  .hold-sel-row.dragging {
+    opacity: 0.4;
+    background: rgba(245, 158, 11, 0.15);
+    border-color: rgba(245, 158, 11, 0.5);
+  }
+  .hold-sel-row.drag-over {
+    border-top: 2px solid #f59e0b;
+  }
+  .hold-sel-row .hold-handle {
+    color: var(--text-gray);
+    cursor: grab;
+    user-select: none;
+    line-height: 1;
+  }
+  .hold-sel-row .hold-pos {
+    display: inline-block;
+    min-width: 18px;
+    color: #f59e0b;
+    font-weight: 700;
+    font-size: 0.78rem;
+  }
+  .hold-sel-row .hold-remove {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    color: var(--text-gray);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .hold-sel-row .hold-remove:hover { color: #ef4444; }
+  /* Master-list checkbox rows — kept simple, consistent with the existing
+     preferred-artist list visuals. */
+  .hold-master-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .hold-master-row:hover { background: rgba(255, 255, 255, 0.04); }
+  .hold-master-row input[type="checkbox"] { margin: 0; }
+  .hold-master-row.is-selected {
+    background: rgba(245, 158, 11, 0.10);
+  }
+
   /* A11y: restore a visible focus ring on every form control that the
      site's earlier `outline: none` reset stripped. Uses :focus-visible
      so mouse clicks don't surround the field with a ring, but keyboard
@@ -3195,17 +3267,42 @@
         <p style="font-size:0.78rem;color:var(--text-gray);margin:6px 0 12px;">
           Offer this gig privately to your preferred artists first. Top of list goes first; each gets <b>24h</b> to accept before the next is offered. While the hold is active the gig is hidden from other artists.
         </p>
-        <div class="modal-row">
-          <label style="font-size:0.8rem;">
-            <input type="checkbox" id="holdEmailArtists" checked>
-            Email artist(s) immediately
-          </label>
+
+        <!-- Email-artists toggle styled as a header-pill: black (off) /
+             green (on). Same vocabulary as 'Save as Template' so users
+             read it as a peer button, not a stray form checkbox. -->
+        <div style="margin:8px 0 14px;">
+          <button type="button" id="holdEmailArtistsBtn"
+            class="header-pill"
+            data-on="true"
+            style="background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.40);color:#86efac;">
+            ✉ Email artist(s) immediately
+          </button>
         </div>
-        <div style="font-size:0.7rem;color:var(--text-muted, #94a3b8);margin:8px 0 4px;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;">Pick artists in offer order</div>
-        <div id="holdArtistPickerList" style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px;">
-          <div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">Loading your preferred artists…</div>
+
+        <!-- Two-column picker.
+             Right: master list of approved preferred artists (in venue's
+                    My Artists order — drag-rank). Checkbox each row.
+             Left:  selected artists in offer order. Drag rows to reorder.
+        -->
+        <div id="holdArtistPicker" style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px;align-items:start;">
+          <!-- Left: drag-to-reorder selection -->
+          <div style="display:flex;flex-direction:column;">
+            <div style="font-size:0.66rem;color:var(--text-muted, #94a3b8);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:700;">Offer order (drag to reorder)</div>
+            <div id="holdSelectedList" style="border:1px solid var(--border);border-radius:6px;padding:6px;min-height:120px;background:rgba(245,158,11,0.04);">
+              <div class="holdSelectedEmpty" style="padding:18px;text-align:center;color:var(--text-gray);font-size:0.76rem;font-style:italic;">
+                Check artists on the right to add them here.
+              </div>
+            </div>
+          </div>
+          <!-- Right: all preferred artists with checkboxes -->
+          <div style="display:flex;flex-direction:column;">
+            <div style="font-size:0.66rem;color:var(--text-muted, #94a3b8);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:700;">Your preferred artists</div>
+            <div id="holdArtistPickerList" style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px;">
+              <div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">Loading…</div>
+            </div>
+          </div>
         </div>
-        <div id="holdArtistOrderSummary" style="font-size:0.74rem;color:var(--text-gray);margin-top:8px;"></div>
       </div>
 
       <!-- Recurring master toggle — a single pill that turns the whole
@@ -3332,7 +3429,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=188"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=189"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>

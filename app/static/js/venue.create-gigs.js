@@ -184,32 +184,146 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Single-gig only in Phase 1: hide the entire Hold panel + toggle row
   // when Recurring is active, restore when it's off. Phase 5 will
   // extend this to series with per-gig hold assignment.
+  //
+  // UI redesigned to match other site interactions:
+  //   - Email-artists toggle: header-pill button (off = black, on = green)
+  //   - Two-column picker:
+  //       right column: master list of preferred artists with checkboxes
+  //                     (in venue's My Artists drag-rank order)
+  //       left column:  selected artists, drag-and-drop to reorder
+  //   - Master-list rows highlight when their checkbox is on (visual
+  //     parity with the left column)
+  //   - window._holdArtistOrder remains the canonical ordered list
+  //     of artist_id ints; both columns re-render off it.
   const holdCheckbox = document.getElementById('holdGigCheckbox');
   const holdPanel = document.getElementById('holdGigPanel');
   const holdToggleRow = document.getElementById('holdGigToggleRow');
-  const holdPickerList = document.getElementById('holdArtistPickerList');
-  const holdOrderSummary = document.getElementById('holdArtistOrderSummary');
-  // Ordered selection state — array of artist_id ints.
-  // Click on a checkbox appends; uncheck removes; re-check appends to end.
+  const holdMasterList = document.getElementById('holdArtistPickerList');
+  const holdSelectedList = document.getElementById('holdSelectedList');
+  const holdEmailBtn = document.getElementById('holdEmailArtistsBtn');
+  // Master data fetched from /preferred-artists, keyed by artist_id
+  window._holdArtistMap = {};
   window._holdArtistOrder = [];
 
-  function _updateHoldOrderSummary() {
-    if (!holdOrderSummary) return;
-    const n = window._holdArtistOrder.length;
-    if (n === 0) {
-      holdOrderSummary.innerHTML = '<span style="color:#f59e0b;">⚠ Pick at least one artist to enable the hold.</span>';
-    } else {
-      const names = window._holdArtistOrder.map((aid, i) => {
-        const row = holdPickerList?.querySelector(`[data-aid="${aid}"]`);
-        const nm = row ? row.dataset.aname : '?';
-        return `<b>${i+1}.</b> ${nm}`;
-      }).join('  ·  ');
-      holdOrderSummary.innerHTML = `Offer order: ${names}`;
+  // ── Email-artists toggle ─────────
+  if (holdEmailBtn) {
+    holdEmailBtn.addEventListener('click', () => {
+      const on = holdEmailBtn.dataset.on === 'true';
+      if (on) {
+        holdEmailBtn.dataset.on = 'false';
+        holdEmailBtn.style.background = 'rgba(0,0,0,0.35)';
+        holdEmailBtn.style.borderColor = 'rgba(255,255,255,0.15)';
+        holdEmailBtn.style.color = 'var(--text-gray)';
+      } else {
+        holdEmailBtn.dataset.on = 'true';
+        holdEmailBtn.style.background = 'rgba(34,197,94,0.12)';
+        holdEmailBtn.style.borderColor = 'rgba(34,197,94,0.40)';
+        holdEmailBtn.style.color = '#86efac';
+      }
+    });
+  }
+
+  function _escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  // Render the LEFT column (selected, ordered). Each row is draggable;
+  // dragging onto another row inserts before/after based on cursor Y.
+  function _renderHoldSelected() {
+    if (!holdSelectedList) return;
+    if (!window._holdArtistOrder.length) {
+      holdSelectedList.innerHTML = '<div class="holdSelectedEmpty" style="padding:18px;text-align:center;color:var(--text-gray);font-size:0.76rem;font-style:italic;">Check artists on the right to add them here.</div>';
+      return;
     }
+    holdSelectedList.innerHTML = window._holdArtistOrder.map((aid, i) => {
+      const nm = _escHtml(window._holdArtistMap[aid] || ('Artist ' + aid));
+      return `<div class="hold-sel-row" draggable="true" data-aid="${parseInt(aid, 10)}">
+        <span class="hold-handle" aria-hidden="true">⋮⋮</span>
+        <span class="hold-pos">${i + 1}.</span>
+        <span class="hold-name" style="flex:1;">${nm}</span>
+        <button type="button" class="hold-remove" data-aid="${parseInt(aid, 10)}" title="Remove from offer list" aria-label="Remove">×</button>
+      </div>`;
+    }).join('');
+    _wireHoldDnd();
+    _wireHoldRemove();
+  }
+
+  function _wireHoldRemove() {
+    holdSelectedList.querySelectorAll('.hold-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const aid = parseInt(btn.dataset.aid, 10);
+        window._holdArtistOrder = window._holdArtistOrder.filter(x => x !== aid);
+        // Uncheck the master-list checkbox + remove highlight
+        const masterCb = holdMasterList?.querySelector(`input[data-aid="${aid}"]`);
+        if (masterCb) {
+          masterCb.checked = false;
+          masterCb.closest('.hold-master-row')?.classList.remove('is-selected');
+        }
+        _renderHoldSelected();
+      });
+    });
+  }
+
+  function _wireHoldDnd() {
+    let draggingEl = null;
+    holdSelectedList.querySelectorAll('.hold-sel-row').forEach(row => {
+      row.addEventListener('dragstart', (e) => {
+        draggingEl = row;
+        row.classList.add('dragging');
+        // Firefox requires dataTransfer.setData to start the drag
+        try { e.dataTransfer.setData('text/plain', row.dataset.aid); } catch(_) {}
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        holdSelectedList.querySelectorAll('.drag-over').forEach(r => r.classList.remove('drag-over'));
+        draggingEl = null;
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        // Visual marker: row that the dragging item will land before
+        holdSelectedList.querySelectorAll('.drag-over').forEach(r => r.classList.remove('drag-over'));
+        if (row !== draggingEl) row.classList.add('drag-over');
+      });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        if (!draggingEl || draggingEl === row) return;
+        const from = parseInt(draggingEl.dataset.aid, 10);
+        const to = parseInt(row.dataset.aid, 10);
+        const fromIdx = window._holdArtistOrder.indexOf(from);
+        let toIdx = window._holdArtistOrder.indexOf(to);
+        if (fromIdx < 0 || toIdx < 0) return;
+        // Move `from` to position `toIdx`. If dragging downward, the
+        // removed item shifts indices — adjust.
+        window._holdArtistOrder.splice(fromIdx, 1);
+        if (fromIdx < toIdx) toIdx -= 1;
+        window._holdArtistOrder.splice(toIdx, 0, from);
+        _renderHoldSelected();
+      });
+    });
+    // Also accept drops on the list container itself → append to end
+    holdSelectedList.addEventListener('dragover', (e) => { e.preventDefault(); });
+    holdSelectedList.addEventListener('drop', (e) => {
+      if (!draggingEl) return;
+      // If dropped on the container's padding (not on a row), append
+      if (e.target === holdSelectedList) {
+        const from = parseInt(draggingEl.dataset.aid, 10);
+        const fromIdx = window._holdArtistOrder.indexOf(from);
+        if (fromIdx >= 0) {
+          window._holdArtistOrder.splice(fromIdx, 1);
+          window._holdArtistOrder.push(from);
+          _renderHoldSelected();
+        }
+      }
+    });
   }
 
   async function _loadHoldPicker() {
-    if (!holdPickerList) return;
+    if (!holdMasterList) return;
     try {
       const res = await fetch(`/api/venues/${venueId}/preferred-artists`, { credentials: 'include' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -217,31 +331,40 @@ document.addEventListener("DOMContentLoaded", async () => {
       const approved = (Array.isArray(data) ? data : (data.preferred_artists || []))
         .filter(a => (a.status || 'approved') === 'approved');
       if (!approved.length) {
-        holdPickerList.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">No preferred artists yet. Add them under <b>My Artists</b> tab first.</div>';
+        holdMasterList.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">No preferred artists yet. Add them under <b>My Artists</b> tab first.</div>';
         return;
       }
-      holdPickerList.innerHTML = approved.map(a => {
+      // Cache the name lookup so the left-column rows can render
+      window._holdArtistMap = {};
+      approved.forEach(a => {
         const aid = parseInt(a.artist_id || a.id, 10);
-        const nm = (a.name || a.artist_name || ('Artist ' + aid)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        return `<label data-aid="${aid}" data-aname="${nm}" style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;font-size:0.82rem;border-radius:4px;">
-          <input type="checkbox" class="holdArtistCb" data-aid="${aid}" style="margin:0;">
+        window._holdArtistMap[aid] = a.name || a.artist_name || ('Artist ' + aid);
+      });
+      holdMasterList.innerHTML = approved.map(a => {
+        const aid = parseInt(a.artist_id || a.id, 10);
+        const nm = _escHtml(window._holdArtistMap[aid]);
+        return `<label class="hold-master-row" data-aid="${aid}">
+          <input type="checkbox" data-aid="${aid}">
           <span>${nm}</span>
         </label>`;
       }).join('');
-      holdPickerList.querySelectorAll('.holdArtistCb').forEach(cb => {
+      holdMasterList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.addEventListener('change', () => {
           const aid = parseInt(cb.dataset.aid, 10);
+          const row = cb.closest('.hold-master-row');
           if (cb.checked) {
-            // append (preserve previously chosen order)
+            // append to order if not present
             if (!window._holdArtistOrder.includes(aid)) window._holdArtistOrder.push(aid);
+            row?.classList.add('is-selected');
           } else {
             window._holdArtistOrder = window._holdArtistOrder.filter(x => x !== aid);
+            row?.classList.remove('is-selected');
           }
-          _updateHoldOrderSummary();
+          _renderHoldSelected();
         });
       });
     } catch (e) {
-      holdPickerList.innerHTML = `<div style="padding:14px;text-align:center;color:#ef4444;font-size:0.78rem;">Could not load preferred artists: ${e.message}</div>`;
+      holdMasterList.innerHTML = `<div style="padding:14px;text-align:center;color:#ef4444;font-size:0.78rem;">Could not load preferred artists: ${_escHtml(e.message)}</div>`;
     }
   }
 
@@ -249,12 +372,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     holdCheckbox.addEventListener('change', async () => {
       if (holdCheckbox.checked) {
         holdPanel.style.display = 'block';
-        // Lazy-load the artist picker the first time
-        if (!holdPickerList._loaded) {
+        if (!holdMasterList._loaded) {
           await _loadHoldPicker();
-          holdPickerList._loaded = true;
+          holdMasterList._loaded = true;
         }
-        _updateHoldOrderSummary();
+        _renderHoldSelected();
       } else {
         holdPanel.style.display = 'none';
       }
@@ -4474,7 +4596,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     // list + the "email now?" flag if the venue enabled Hold mode.
     // Empty array → backend treats this as a regular open gig.
     const holdEnabled = document.getElementById('holdGigCheckbox')?.checked;
-    const holdEmail = document.getElementById('holdEmailArtists')?.checked !== false;
+    const holdEmail = document.getElementById('holdEmailArtistsBtn')?.dataset.on === 'true';
     const holdArtistIds = holdEnabled ? (window._holdArtistOrder || []) : [];
 
     await api(`/venues/${venueId}/gigs`, {
