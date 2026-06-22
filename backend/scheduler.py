@@ -1495,6 +1495,17 @@ def _scheduler_loop():
                 logger.error(f"Bounce inbox poll error: {e}")
             last_bounce_run = time.time()
 
+        # Periodic operational health checks — disk space, stuck payouts,
+        # stale digest queue, scheduler heartbeat. Each check self-records
+        # into system_alerts and auto-clears when the condition resolves.
+        # Runs every loop iteration (cheap — all indexed queries + one
+        # shutil.disk_usage call).
+        try:
+            from backend.services.system_alerts import run_periodic_health_checks
+            run_periodic_health_checks()
+        except Exception as e:
+            logger.error(f"Periodic health check error: {e}")
+
         # Full email blast run: once per hour
         if now - last_email_run >= 3600:
             try:
