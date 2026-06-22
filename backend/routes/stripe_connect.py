@@ -2403,7 +2403,25 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
         import stripe as stripe_lib
         event = stripe_lib.Webhook.construct_event(payload, sig_header, webhook_secret)
     except Exception as e:
+        # Audit fix (Jun 2026): the prior single-line WARNING was easy to
+        # miss in journalctl when the failure ran for days. This block
+        # now also logs an ERROR with full diagnostic context — the
+        # configured-secret prefix (to compare against Stripe dashboard
+        # without exposing the full value), the inbound sig-header
+        # prefix, payload size, and a remediation pointer.
+        _secret_fp = (webhook_secret[:10] + "...") if webhook_secret else "<empty>"
+        _sig_fp = (sig_header[:32] + "...") if sig_header else "<missing>"
         logger.warning(f"Stripe webhook signature failed: {e}")
+        logger.error(
+            "[STRIPE WEBHOOK] Signature verification failed. "
+            f"Configured-secret prefix={_secret_fp} "
+            f"sig-header prefix={_sig_fp} "
+            f"payload-size={len(payload)}B. "
+            "ACTION: verify admin_stripe_webhook_secret in platform_settings "
+            "matches the Signing secret on Stripe Dashboard → Developers → "
+            "Webhooks for endpoint /api/stripe/webhook. The most common cause "
+            "is a rotated/regenerated secret on Stripe's side."
+        )
         raise HTTPException(400, "Invalid webhook signature")
 
     event_type = _webhook_get(event, "type")
