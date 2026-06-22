@@ -1147,15 +1147,29 @@
   .hold-master-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 5px 6px;
+    gap: 6px;
+    padding: 3px 5px;
     border-radius: 4px;
-    font-size: 0.82rem;
+    font-size: 0.72rem;
+    line-height: 1.2;
     cursor: pointer;
     transition: background 0.1s;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .hold-master-row > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
   }
   .hold-master-row:hover { background: rgba(255, 255, 255, 0.04); }
-  .hold-master-row input[type="checkbox"] { margin: 0; }
+  .hold-master-row input[type="checkbox"] {
+    margin: 0;
+    flex-shrink: 0;
+    width: 13px;
+    height: 13px;
+  }
   .hold-master-row.is-selected {
     background: rgba(245, 158, 11, 0.10);
   }
@@ -3429,7 +3443,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=189"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=190"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
