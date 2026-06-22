@@ -1144,20 +1144,31 @@
   .hold-sel-row .hold-remove:hover { color: #ef4444; }
   /* Master-list checkbox rows — dense single-line per artist
      (looks like a tight dropdown's option panel). 8-10 artists fit
-     without scrolling. Long band names truncate with ellipsis. */
+     without scrolling. Long band names truncate with ellipsis.
+     The !important overrides defeat modals-legacy.css which injects
+     flex-direction:column + 8px gap + 16px margin-bottom on every
+     `.modal label` — without these, checkbox stacks above the name
+     and rows balloon to ~50px tall (see the venue's June 2026
+     screenshot). Same defeat-pattern as #slotList .slot-pill above. */
   .hold-master-row {
-    display: flex;
-    align-items: center;
-    gap: 5px;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 5px !important;
+    margin: 0 !important;
     padding: 1px 4px;
     border-radius: 3px;
-    font-size: 0.7rem;
+    font-size: 0.7rem !important;
+    font-weight: 400 !important;
+    text-align: left !important;
     line-height: 1.15;
     cursor: pointer;
     transition: background 0.1s;
     white-space: nowrap;
     overflow: hidden;
-    color: var(--text);
+    color: var(--text) !important;
+    text-transform: none !important;
   }
   .hold-master-row > span {
     overflow: hidden;
@@ -3466,7 +3477,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=191"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=192"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
