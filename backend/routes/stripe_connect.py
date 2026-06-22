@@ -1875,7 +1875,17 @@ def _enrich_venue_txns_with_slot_details(db, txns):
     """Mutates each txn dict in `txns`, adding a `slot_details` list
     of dicts {slot_number, artist_name, pay, deal_type, door_pct,
     guarantee_cents, door_receipts_cents, settled_pay_cents,
-    settled_at} — one entry per booked/pending slot on the gig.
+    settled_at, payout_status, bank_settlement_status,
+    payout_expected_at} — one entry per booked/pending slot on the gig.
+
+    Jun 2026: extended to also surface per-slot artist_payout state
+    so the venue Payments-tab tooltip can show a "payment status"
+    column alongside the pay breakdown ("Paid ✓" / "At Stripe
+    (hold)" / "Payout queued Jun 24"). The LEFT JOIN to transactions
+    is filtered to (gig_id, slot_id) on the slot_id column added in
+    May 2026; rows that pre-date that column won't match and the
+    fields stay NULL — frontend treats that as "—".
+
     Single batched query for all gig_ids in the result.
     """
     if not txns:
@@ -1885,12 +1895,23 @@ def _enrich_venue_txns_with_slot_details(db, txns):
         return
     rows = db.execute(
         text("""
-            SELECT gs.gig_id, gs.slot_number, gs.pay,
+            SELECT gs.gig_id, gs.id as slot_id, gs.slot_number, gs.pay,
                    gs.deal_type, gs.door_pct, gs.guarantee_cents,
                    gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
-                   a.name as artist_name
+                   a.name as artist_name,
+                   ap.status as payout_status,
+                   ap.bank_settlement_status,
+                   ap.payout_expected_at
             FROM gig_slots gs
             LEFT JOIN artists a ON a.id = gs.artist_id
+            LEFT JOIN transactions ap
+              ON ap.gig_id = gs.gig_id
+             AND (
+                ap.slot_id = gs.id
+                OR (ap.slot_id IS NULL AND ap.artist_id = gs.artist_id)
+             )
+             AND ap.transaction_type = 'artist_payout'
+             AND ap.status NOT IN ('payment_cancelled')
             WHERE gs.gig_id IN :gids
               AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
             ORDER BY gs.gig_id ASC, gs.slot_number ASC

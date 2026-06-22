@@ -228,6 +228,61 @@
   // Returns HTML that should be placed INSIDE a relatively-positioned
   // host span carrying class .gf-pay-hover-host. The :hover rule
   // injected below flips display:none → block.
+  // Per-slot payment status pill renderer — shared between the
+  // tooltip + future inline UI. Reads (payout_status,
+  // bank_settlement_status, payout_expected_at) from a slot_details
+  // entry. Returns null when no payout data available (slot booked
+  // but not yet charged → pay isn't owed yet).
+  //
+  // States mirror what the artist's earnings UI shows so the venue
+  // can speak the artist's language:
+  //
+  //   paid                             → "Paid ✓"             green
+  //   transferred + bss='pending'      → "At Stripe (hold)"   amber
+  //   transferred + bss='available'    → "Payout queued Jun 24" blue
+  //   transferred + bss=null/unknown   → "Transferring"        amber
+  //   pending_transfer / charged       → "Processing"          amber
+  //   scheduled                        → "Awaiting payout"     purple
+  //   transfer_failed / payment_failed → "✗ Failed"            red
+  function _payoutStatusForSlot(sd) {
+    const ps = sd && sd.payout_status;
+    if (!ps) return null;
+    const bss = sd.bank_settlement_status;
+    if (ps === 'paid') {
+      return { label: 'Paid ✓', color: '#10b981' };
+    }
+    if (ps === 'transferred') {
+      if (bss === 'pending') {
+        return { label: 'At Stripe (hold)', color: '#f59e0b' };
+      }
+      if (bss === 'available') {
+        let dateStr = '';
+        if (sd.payout_expected_at) {
+          try {
+            const d = new Date(sd.payout_expected_at + 'T00:00:00');
+            dateStr = ' ' + d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+          } catch (_) {}
+        }
+        return { label: 'Payout queued' + dateStr, color: '#3b82f6' };
+      }
+      return { label: 'Transferring', color: '#f59e0b' };
+    }
+    if (ps === 'pending_transfer' || ps === 'charged') {
+      return { label: 'Processing', color: '#f59e0b' };
+    }
+    if (ps === 'scheduled' || ps === 'test') {
+      return { label: 'Awaiting payout', color: '#8b5cf6' };
+    }
+    if (ps === 'transfer_failed' || ps === 'payment_failed') {
+      return { label: '✗ Failed', color: '#ef4444' };
+    }
+    if (ps === 'charge_retry') {
+      return { label: 'Retrying', color: '#f97316' };
+    }
+    return null;
+  }
+  window._payoutStatusForSlot = _payoutStatusForSlot;
+
   window.buildPaySlotTooltip = function (slots, counterparty) {
     if (!Array.isArray(slots) || !slots.length) return '';
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
@@ -235,6 +290,10 @@
     }[c]));
     const money = (c) => '$' + ((Number(c) || 0) / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
     const dollars = (d) => '$' + (Number(d) || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    // Only render the 4th "Status" column if at least one slot has
+    // a payout_status (i.e. has been booked + had a transaction
+    // created). For pre-booking gigs the column is dead weight.
+    const showStatusCol = slots.some(sd => _payoutStatusForSlot(sd) !== null);
     const rows = slots.map((sd) => {
       const slotN = sd.slot_number != null ? `Slot ${parseInt(sd.slot_number, 10)}` : '';
       const who = sd.artist_name || counterparty || '';
@@ -256,23 +315,42 @@
       } else {
         detail = '<span style="color:var(--text-muted, #94a3b8);">flat</span>';
       }
+      let statusCell = '';
+      if (showStatusCol) {
+        const st = _payoutStatusForSlot(sd);
+        statusCell = st
+          ? `<div style="color:${st.color};font-weight:600;padding:3px 0 3px 18px;text-align:right;white-space:nowrap;">${esc(st.label)}</div>`
+          : `<div style="color:var(--text-muted, #94a3b8);padding:3px 0 3px 18px;text-align:right;">—</div>`;
+      }
       return ''
         + '<div style="display:contents;">'
         +   `<div style="color:#a78bfa;font-weight:600;padding:3px 0;white-space:nowrap;">${esc(label)}</div>`
         +   `<div style="color:var(--text, #e4e7eb);font-weight:700;padding:3px 0 3px 18px;text-align:right;white-space:nowrap;">${payStr}</div>`
         +   `<div style="color:var(--text-muted, #94a3b8);padding:3px 0 3px 18px;white-space:nowrap;">${detail}</div>`
+        +   statusCell
         + '</div>';
     }).join('');
+    const gridTemplate = showStatusCol
+      ? 'max-content max-content 1fr max-content'
+      : 'max-content max-content 1fr';
+    const headerRow = showStatusCol
+      ? '<div style="display:contents;">'
+      + '<div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted, #94a3b8);padding:0 0 4px 0;">Slot</div>'
+      + '<div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted, #94a3b8);padding:0 0 4px 18px;text-align:right;">Pay</div>'
+      + '<div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted, #94a3b8);padding:0 0 4px 18px;">Deal</div>'
+      + '<div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted, #94a3b8);padding:0 0 4px 18px;text-align:right;">Payout</div>'
+      + '</div>'
+      : '';
     return ''
       + '<div class="gf-pay-hover-popover" style="'
       +   'position:absolute;bottom:100%;left:50%;transform:translateX(-50%);'
       +   'margin-bottom:8px;display:none;z-index:9000;pointer-events:none;'
       +   'background:#151b28;border:1px solid rgba(6,182,212,0.35);border-radius:8px;'
       +   'box-shadow:0 10px 24px rgba(0,0,0,0.45);padding:10px 14px;'
-      +   'font-size:0.74rem;line-height:1.35;min-width:280px;max-width:520px;'
+      +   'font-size:0.74rem;line-height:1.35;min-width:280px;max-width:640px;'
       +   '">'
       +   '<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--cyan, #06b6d4);font-weight:700;margin-bottom:6px;">Pay Breakdown</div>'
-      +   '<div style="display:grid;grid-template-columns:max-content max-content 1fr;column-gap:14px;row-gap:2px;align-items:baseline;">' + rows + '</div>'
+      +   `<div style="display:grid;grid-template-columns:${gridTemplate};column-gap:14px;row-gap:2px;align-items:baseline;">${headerRow}${rows}</div>`
       + '</div>';
   };
 
