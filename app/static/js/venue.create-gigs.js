@@ -239,10 +239,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     holdSelectedList.innerHTML = window._holdArtistOrder.map((aid, i) => {
       const nm = _escHtml(window._holdArtistMap[aid] || ('Artist ' + aid));
+      const paySuffix = (window._holdPayForArtist ? window._holdPayForArtist(aid) : '');
       return `<div class="hold-sel-row" draggable="true" data-aid="${parseInt(aid, 10)}">
         <span class="hold-handle" aria-hidden="true">⋮⋮</span>
         <span class="hold-pos">${i + 1}.</span>
-        <span class="hold-name" style="flex:1;">${nm}</span>
+        <span class="hold-name" style="flex:1;">${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>
         <button type="button" class="hold-remove" data-aid="${parseInt(aid, 10)}" title="Remove from offer list" aria-label="Remove">×</button>
       </div>`;
     }).join('');
@@ -332,20 +333,53 @@ document.addEventListener("DOMContentLoaded", async () => {
         holdMasterList.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">No preferred artists yet. Add them under <b>My Artists</b> tab first.</div>';
         return;
       }
-      // Cache the name lookup so the left-column rows can render
+      // Cache the name + pay-override for the left-column rows + the
+      // pay-suffix shown on each master row (e.g. "Fridays Past ($150)"
+      // for an artist with an override, or the gig's default pay for
+      // artists with no override set).
       window._holdArtistMap = {};
+      window._holdArtistPay = {};
       approved.forEach(a => {
         const aid = parseInt(a.artist_id || a.id, 10);
         window._holdArtistMap[aid] = a.name || a.artist_name || ('Artist ' + aid);
+        const od = a.pay_dollars_override;
+        const oc = a.pay_cents_override;
+        // override_pay is null when neither field is set; otherwise
+        // combine dollars + cents into a float so the renderer can
+        // display it as $XX or $XX.YY consistently.
+        if (od != null || oc != null) {
+          window._holdArtistPay[aid] = (Number(od) || 0) + (Number(oc) || 0) / 100;
+        }
       });
+      // Pay-suffix helper. Always reads the current default-pay input
+      // live so a change after the picker is rendered still shows
+      // up if the user re-opens the panel; for inline updates the
+      // re-render below picks up the latest value.
+      window._holdPayForArtist = function (aid) {
+        const ov = window._holdArtistPay[aid];
+        let v = ov;
+        if (v == null) {
+          // Fall back to the gig's default pay — read from slot 1 (the
+          // first row of the slot grid). The "Default gig fee" input
+          // for the slot is .slot-pay-dollars in the first slot row.
+          const slotPayEl = document.querySelector('#slotList .slot-pay-dollars');
+          v = parseFloat(slotPayEl?.value || '0') || 0;
+        }
+        // Strip trailing .00 → just "$200" rather than "$200.00"
+        const s = v % 1 === 0 ? '$' + Math.round(v) : '$' + v.toFixed(2);
+        return s;
+      };
       holdMasterList.innerHTML = approved.map(a => {
         const aid = parseInt(a.artist_id || a.id, 10);
         const nm = _escHtml(window._holdArtistMap[aid]);
+        const paySuffix = window._holdPayForArtist(aid);
         // Render as a button — black/off by default, green when selected.
         // Reuses the .hold-master-row CSS hooks (same dimensions as the
         // Email Artist pill so all three visual elements read as peers).
+        // Pay suffix in muted color so the artist name remains the
+        // primary read.
         return `<button type="button" class="hold-master-row" data-aid="${aid}">
-          <span>${nm}</span>
+          <span>${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>
         </button>`;
       }).join('');
       holdMasterList.querySelectorAll('.hold-master-row').forEach(btn => {
