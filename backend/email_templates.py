@@ -2774,6 +2774,228 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 ''',
     },
 
+    # ── HOLD GIG (Jun 2026) ────────────────────────────────────────────
+    # 5 templates wired into services/gig_hold.py for the venue-initiated
+    # private offer cycle. Visual vocabulary matches the existing
+    # waitlist + invitation templates above: 560px white card on
+    # #f8f9fa, GigsFill logo header, padded content section, footer.
+    # Accept = green (#16a34a). Decline = white w/ red border (#dc2626).
+    # Matches entity_invitation pattern.
+    # ────────────────────────────────────────────────────────────────────
+
+    "hold_offer_artist": {
+        "subject": "{{venue_name}} wants to book you — {{date}}",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr><td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td></tr>
+<tr><td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #d97706;">You&#39;ve got a private offer</h1>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, <strong>{{venue_name}}</strong> is offering you this gig before opening it to anyone else. {{slots_pitch}}</p>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">You have <strong>24 hours</strong> to accept{{multi_slot_pick_note}} or decline. If we don&#39;t hear back, the offer moves to the next artist on the venue&#39;s list.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 24px;">
+<tr><td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 80px;">Venue</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
+</tr>
+{{#title}}<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Title</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{title}}</td>
+</tr>{{/title}}
+{{slots_table_rows}}
+</table>
+</td></tr>
+</table>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto;">
+<tr>
+<td style="padding-right: 12px;">
+<a href="{{respond_url}}" style="display: inline-block; background: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">{{accept_label}}</a>
+</td>
+<td>
+<a href="{{decline_url}}" style="display: inline-block; background: #ffffff; color: #dc2626; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600; border: 1px solid #dc2626;">Decline</a>
+</td>
+</tr>
+</table>
+<p style="margin: 24px 0 0 0; font-size: 13px; color: #9ca3af;">Offer expires {{offer_expires_human}}.</p>
+</td></tr>
+<tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
+    "hold_offer_reminder_artist": {
+        "subject": "Reminder: {{venue_name}} private offer expires in 12 hours",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr><td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td></tr>
+<tr><td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #d97706;">12 hours left on your offer</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, just a heads up — the private gig offer from <strong>{{venue_name}}</strong> for {{date}} expires in 12 hours. After that, it moves to the next artist on the venue&#39;s list.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto;">
+<tr>
+<td style="padding-right: 12px;">
+<a href="{{respond_url}}" style="display: inline-block; background: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">{{accept_label}}</a>
+</td>
+<td>
+<a href="{{decline_url}}" style="display: inline-block; background: #ffffff; color: #dc2626; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600; border: 1px solid #dc2626;">Decline</a>
+</td>
+</tr>
+</table>
+</td></tr>
+<tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
+    "hold_accept_venue": {
+        "subject": "{{artist_name}} accepted your hold — {{date}}",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr><td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td></tr>
+<tr><td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #059669;">Hold Accepted</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> accepted your private offer for the gig on <strong>{{date}}</strong>{{slot_info_phrase}}.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; margin-bottom: 24px;">
+<tr><td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 80px;">Artist</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artist_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
+</tr>
+{{#slot_info}}<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Slot</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{slot_info}}</td>
+</tr>{{/slot_info}}
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Pay</td>
+<td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">${{pay}}</td>
+</tr>
+</table>
+</td></tr>
+</table>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">{{remaining_slots_note}}</p>
+<a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Calendar</a>
+</td></tr>
+<tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
+    "hold_decline_venue": {
+        "subject": "{{artist_name}} declined your hold — moving on",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr><td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td></tr>
+<tr><td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #6b7280;">Offer Declined</h1>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> {{decline_reason_phrase}} the private offer for the gig on <strong>{{date}}</strong>.</p>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">{{next_step_note}}</p>
+<a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Calendar</a>
+</td></tr>
+<tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
+    "hold_exhausted_venue": {
+        "subject": "Action needed: your hold for {{date}} ran out of artists",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr><td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td></tr>
+<tr><td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #d97706;">Your hold ran out of artists</h1>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{venue_name}}, every artist on your hold list for the gig on <strong>{{date}}</strong> has either declined or let the offer expire.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 24px;">
+<tr><td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 130px;">Open slots</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{open_slot_summary}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Artists tried</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artists_tried_count}}</td>
+</tr>
+</table>
+</td></tr>
+</table>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">Open it up to all artists, or cancel the slots that didn&#39;t fill — your call. Manage from your calendar:</p>
+<a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">Decide What to Do</a>
+</td></tr>
+<tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
 }
 
 def run_migration():

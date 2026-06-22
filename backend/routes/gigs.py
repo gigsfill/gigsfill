@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import text, bindparam
 from backend.db import get_db
 from datetime import date, timedelta, datetime, timezone
@@ -7358,3 +7358,182 @@ def venue_ical(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)
         media_type="text/calendar; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+
+# ============================================================
+# HOLD GIG — Phase 2: artist-facing accept/decline endpoints
+# ============================================================
+# Token-based public endpoints (no auth) so the artist can act from
+# their email without logging in. Tokens are 24-byte URL-safe random
+# (~192 bits entropy), one-use semantics (offer_declined=1 set on
+# both accept + decline), expire 24h after the offer is sent.
+
+@router.get("/hold/respond/{token}", include_in_schema=False)
+def hold_respond_landing(token: str, db=Depends(get_db)):
+    """Artist clicks the green Accept button in the email. Two flows:
+       - Single open slot: book it immediately + show a confirmation page
+       - Multi-slot: show a slot picker page so the artist chooses
+
+    Returns HTML directly (not a JSON response) since this is a public
+    email-link endpoint, not a JS-driven page.
+    """
+    from sqlalchemy import text
+    from fastapi.responses import HTMLResponse
+    from backend.services.gig_hold import respond_to_hold_offer, _list_open_hold_slots, _fmt_time
+
+    # Look up the offer to see how many slots are open
+    row = db.execute(
+        text("""SELECT wl.gig_id, wl.artist_id, wl.offer_expires_at, wl.offer_declined,
+                       g.hold_status, g.date, g.title, g.is_multi_slot, v.venue_name
+                FROM gig_waitlist wl
+                JOIN gigs g ON g.id = wl.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                WHERE wl.offer_token = :tok AND wl.source = 'hold'
+                LIMIT 1"""),
+        {"tok": token}
+    ).mappings().first()
+    if not row:
+        return HTMLResponse(_hold_simple_page(
+            "Link no longer valid",
+            "This offer link isn't valid. It may have been replaced by a newer one — check your inbox for the latest."
+        ))
+    if row["offer_declined"]:
+        return HTMLResponse(_hold_simple_page(
+            "Already responded",
+            "Thanks — you've already responded to this offer."
+        ))
+    if row["hold_status"] != "active":
+        return HTMLResponse(_hold_simple_page(
+            "Offer no longer active",
+            "This hold is no longer active. The venue may have cancelled or opened the gig already."
+        ))
+    open_slots = _list_open_hold_slots(db, row["gig_id"])
+    if not open_slots:
+        return HTMLResponse(_hold_simple_page(
+            "All slots booked",
+            "Every slot on this gig has already been booked. Thanks for the quick response — sorry we missed you on this one."
+        ))
+
+    # Single-slot path: book + confirm in one shot
+    if len(open_slots) == 1:
+        result = respond_to_hold_offer(db, token=token, action="accept", slot_id=int(open_slots[0]["id"]))
+        if result.get("ok"):
+            s = open_slots[0]
+            return HTMLResponse(_hold_simple_page(
+                "Booked!",
+                f"You're confirmed for <b>{row['venue_name']}</b> on <b>{row['date']}</b> ({_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}). The venue's been notified.",
+                color="#059669"
+            ))
+        return HTMLResponse(_hold_simple_page("Something went wrong", result.get("message") or "Please try again or contact support."))
+
+    # Multi-slot: show a picker
+    return HTMLResponse(_hold_slot_picker_page(token, row, open_slots))
+
+
+@router.get("/hold/decline/{token}", include_in_schema=False)
+def hold_decline_landing(token: str, db=Depends(get_db)):
+    """One-click decline from email. Marks offer declined, advances
+    to next artist on the waitlist."""
+    from fastapi.responses import HTMLResponse
+    from backend.services.gig_hold import respond_to_hold_offer
+    result = respond_to_hold_offer(db, token=token, action="decline")
+    if result.get("ok"):
+        return HTMLResponse(_hold_simple_page(
+            "Thanks for letting us know",
+            "We've told the venue — they'll offer the gig to the next artist on their list. Catch you on the next one.",
+            color="#6b7280"
+        ))
+    return HTMLResponse(_hold_simple_page("Already responded", result.get("message") or "This offer has already been handled."))
+
+
+@router.post("/hold/accept/{token}", include_in_schema=False)
+def hold_accept_slot(token: str, slot_id: int = Query(...), db=Depends(get_db)):
+    """Form POST from the multi-slot picker page. Returns HTML."""
+    from fastapi.responses import HTMLResponse
+    from backend.services.gig_hold import respond_to_hold_offer
+    result = respond_to_hold_offer(db, token=token, action="accept", slot_id=int(slot_id))
+    if result.get("ok"):
+        return HTMLResponse(_hold_simple_page(
+            "Booked!",
+            "You're confirmed. The venue's been notified.",
+            color="#059669"
+        ))
+    return HTMLResponse(_hold_simple_page("Could not book", result.get("message") or "Please try again."))
+
+
+def _hold_simple_page(title: str, body_html: str, color: str = "#111827") -> str:
+    """Minimal styled HTML response page — matches the email visual
+    vocabulary (white card on grey, GigsFill logo header, footer)."""
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>{title} — GigsFill</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>body{{margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}}</style>
+</head>
+<body>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f8f9fa;">
+<tr><td style="padding:40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background-color:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding:32px 40px 24px 40px;border-bottom:1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td></tr>
+<tr><td style="padding:32px 40px;">
+<h1 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:{color};">{title}</h1>
+<p style="margin:0;font-size:15px;line-height:1.6;color:#4b5563;">{body_html}</p>
+</td></tr>
+<tr><td style="padding:24px 40px;background-color:#f8f9fa;border-top:1px solid #eee;">
+<p style="margin:0;color:#6b7280;font-size:12px;text-align:center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color:#1a1a2e;text-decoration:none;">gigsfill.com</a></p>
+</td></tr>
+</table></td></tr></table>
+</body></html>"""
+
+
+def _hold_slot_picker_page(token: str, row, open_slots) -> str:
+    """Multi-slot landing page: list each open slot with a Book button."""
+    from backend.services.gig_hold import _fmt_time
+    venue = (row["venue_name"] or "the venue").replace("<", "&lt;").replace(">", "&gt;")
+    date = str(row["date"])
+    title_html = ""
+    if row.get("title"):
+        _t = str(row["title"]).replace("<", "&lt;").replace(">", "&gt;")
+        title_html = f'<tr><td style="padding:6px 0;font-size:14px;color:#6b7280;width:80px;">Title</td><td style="padding:6px 0;font-size:14px;color:#111827;font-weight:500;">{_t}</td></tr>'
+    rows_html = ""
+    for s in open_slots:
+        time_str = f"{_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}"
+        pay = int(s["pay"]) if s["pay"] and s["pay"] == int(s["pay"]) else s["pay"]
+        rows_html += f"""
+<form method="POST" action="/hold/accept/{token}?slot_id={int(s['id'])}" style="margin:0 0 12px 0;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;">
+<tr><td style="padding:14px 18px;">
+<div style="font-size:14px;color:#111827;font-weight:600;">Slot {s['slot_number']}</div>
+<div style="font-size:14px;color:#4b5563;margin-top:2px;">{time_str}  ·  <span style="color:#059669;font-weight:600;">${pay}</span></div>
+</td><td style="padding:14px 18px;text-align:right;width:120px;">
+<button type="submit" style="display:inline-block;background:#16a34a;color:#ffffff;padding:10px 18px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">Book this slot</button>
+</td></tr></table></form>"""
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Pick a slot — GigsFill</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>body{{margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}}</style>
+</head>
+<body>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f8f9fa;">
+<tr><td style="padding:40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background-color:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding:32px 40px 24px 40px;border-bottom:1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
+</td></tr>
+<tr><td style="padding:32px 40px;">
+<h1 style="margin:0 0 8px 0;font-size:22px;font-weight:600;color:#d97706;">Pick the slot you want</h1>
+<p style="margin:0 0 20px 0;font-size:15px;line-height:1.5;color:#4b5563;"><b>{venue}</b> &middot; {date}</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin-bottom:18px;">
+<tr><td style="padding:14px 18px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">{title_html}
+<tr><td style="padding:4px 0;font-size:14px;color:#6b7280;width:80px;">Open slots</td><td style="padding:4px 0;font-size:14px;color:#111827;font-weight:500;">{len(open_slots)}</td></tr>
+</table></td></tr></table>
+{rows_html}
+<p style="margin:18px 0 0 0;font-size:13px;color:#6b7280;">Or <a href="/hold/decline/{token}" style="color:#dc2626;text-decoration:underline;">decline this offer</a> and we'll move on to the next artist.</p>
+</td></tr>
+<tr><td style="padding:24px 40px;background-color:#f8f9fa;border-top:1px solid #eee;">
+<p style="margin:0;color:#6b7280;font-size:12px;text-align:center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color:#1a1a2e;text-decoration:none;">gigsfill.com</a></p>
+</td></tr>
+</table></td></tr></table>
+</body></html>"""

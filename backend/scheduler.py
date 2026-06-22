@@ -1507,6 +1507,22 @@ def _scheduler_loop():
         except Exception as e:
             logger.error(f"Periodic health check error: {e}")
 
+        # Hold-offer advancement: send 12h reminders, expire 24h offers,
+        # roll to next artist on the waitlist. Runs every 10 min so a
+        # 24h offer expires within 10 min of its window — the artist
+        # gets the reminder ~12h after creation and the venue's hold
+        # advances within 10 min of expiry.
+        try:
+            from backend.services.gig_hold import process_hold_offers
+            from backend.db import SessionLocal as _HSL
+            _hdb = _HSL()
+            try:
+                process_hold_offers(_hdb)
+            finally:
+                _hdb.close()
+        except Exception as e:
+            logger.error(f"Hold-offer advancement error: {e}")
+
         # Daily Stripe Connect account audit + dispute reconciliation.
         # Hits the Stripe API once per artist — 1000 artists ≈ 10 seconds
         # at Stripe's 100/sec read limit. Daily cadence is fine; bumping
