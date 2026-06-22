@@ -159,6 +159,39 @@ async function loadArtistEarningsHistory() {
       var colorMap = { paid:'#10b981', transferred:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charged:'#f59e0b', pending_transfer:'#f59e0b', charge_retry:'#f97316', payment_failed:'#dc2626', transfer_failed:'#dc2626', payment_cancelled:'#f97316', free_trial:'#f59e0b' };
       var statusTip = { transferred:'Transfer sent to your Stripe account — funds held while the venue payment settles, then released to your bank (typically 5–7 business days after the gig)', paid:'Deposited in your bank account', scheduled:'Scheduled for processing after the gig', pending:'Pending processing', charged:'Venue charged — transfer in progress (bank deposit typically 5–7 business days after the gig)', pending_transfer:'Payment processing — payout typically arrives within 5–7 business days of the gig', charge_retry:'Retrying — last attempt failed, scheduler will try again soon', payment_failed:'⚠ Venue charge failed — contact GigsFill support to resolve', transfer_failed:'⚠ Transfer to your Stripe account failed — your bank/account info may need updating. Contact GigsFill support.', upcoming:'Gig is upcoming — payout will process after the gig completes', free_trial:'Free Trial venue — GigsFill is comping platform fees. The venue pays you directly for this gig.' };
       window._artistEarnStatusTip = statusTip;
+      // Jun 2026: split "transferred" into 3 user-visible sub-states using
+      // the bank_settlement_status snapshot the payout poller writes
+      // hourly. Lets the artist see WHY a payout is taking days instead
+      // of the opaque "Processing" they used to see.
+      //   bank_settlement_status='pending'   → 'At Stripe (review hold)'
+      //                                          Stripe holds new-account
+      //                                          funds for 2–7 days; common.
+      //   bank_settlement_status='available' → 'Available — payout {date}'
+      //                                          Funds released, payout
+      //                                          queued (often visible
+      //                                          on Stripe Dashboard).
+      //   (no snapshot yet)                  → 'Processing' (fallback)
+      if (t.status === 'transferred') {
+        var bss = t.bank_settlement_status;
+        if (bss === 'pending') {
+          statusMap.transferred = 'At Stripe (review hold)';
+          statusTip.transferred = 'Money transferred to your Stripe Connect account on the gig day. Stripe is holding the funds during their standard review period (typically 2–7 days for new accounts). Once released, the next scheduled payout to your bank will follow automatically.';
+        } else if (bss === 'available') {
+          var expIso = t.payout_expected_at;
+          var dateStr = '';
+          if (expIso) {
+            try {
+              var d = new Date(expIso + 'T00:00:00');
+              dateStr = ' (arrives ' + d.toLocaleDateString(undefined, {month:'short', day:'numeric'}) + ')';
+            } catch (_) {}
+          }
+          statusMap.transferred = 'Available — payout queued' + dateStr;
+          colorMap.transferred = '#3b82f6'; // blue — closer to done than "processing" orange
+          statusTip.transferred = 'Funds have cleared Stripe\'s hold and are queued for the next payout to your bank' + (expIso ? ', expected on ' + expIso + '.' : '. Watch your bank account in the next 1–3 business days.');
+        }
+        // else → leave default "Processing" — covers legacy rows
+        // before the poller writes a snapshot.
+      }
       // Format time from "HH:MM" 24h or similar to 12h display
       var rawTime = t.gig_time || t.start_time || '';
       var displayTime = rawTime;

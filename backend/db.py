@@ -1219,6 +1219,17 @@ def setup_database():
         # Booking writes it; legacy rows (NULL) fall back to the
         # notes parse via the helper in services/payment_helpers.
         "slot_id INTEGER",
+        # Jun 2026: bank-settlement state cached from the hourly poller.
+        # Lets the artist UI render an honest 3-state label instead of
+        # the binary "Processing/Paid":
+        #   bank_settlement_status='pending'   → 'At Stripe (review hold)'
+        #   bank_settlement_status='available' → 'Available — payout queued'
+        #                                          (plus payout_expected_at)
+        #   our status='paid'                  → 'Paid (in artist bank)'
+        # The poller updates these every hour; UI just reads.
+        "bank_settlement_status TEXT",
+        "bank_settlement_status_at DATETIME",
+        "payout_expected_at DATETIME",
     ])
     
     # ==========================================

@@ -540,6 +540,14 @@ def process_payouts_now():
                     # goes pending → available → paid (= consumed by a real
                     # Stripe payout to bank).
                     bank_settled = False
+                    # Capture the BT status + the artist account's
+                    # next-payout estimate so the artist UI can render
+                    # a 3-state label ("at Stripe (hold)" / "available
+                    # — payout queued <date>" / "paid"). Written below
+                    # regardless of bank_settled outcome.
+                    bt_status_snapshot = None
+                    bt_created_snapshot = None
+                    payout_expected_at = None
                     if connect_acct and getattr(tr, "destination_payment", None):
                         try:
                             dest_charge = stripe.Charge.retrieve(
@@ -572,6 +580,8 @@ def process_payouts_now():
                                     bt_id_str, stripe_account=connect_acct
                                 )
                                 _status = getattr(bt, "status", "")
+                                bt_status_snapshot = _status
+                                bt_created_snapshot = getattr(bt, "created", None)
                                 if _status == "paid":
                                     bank_settled = True
                                 elif _status == "available":
@@ -579,6 +589,24 @@ def process_payouts_now():
                                         import time as _time
                                         if _time.time() - getattr(bt, "created", 0) >= 3 * 86400:
                                             bank_settled = True
+                                    except Exception:
+                                        pass
+                                # Pull the artist account's next-payout
+                                # estimate while we have it open. Only
+                                # write it if this BT is 'available'
+                                # (i.e. eligible to be in the next
+                                # payout) — otherwise the date is
+                                # misleading.
+                                if _status == "available":
+                                    try:
+                                        payouts = stripe.Payout.list(
+                                            limit=1, status="pending",
+                                            stripe_account=connect_acct
+                                        )
+                                        if payouts and payouts.data:
+                                            payout_expected_at = getattr(
+                                                payouts.data[0], "arrival_date", None
+                                            )
                                     except Exception:
                                         pass
                         except stripe.error.PermissionError:
@@ -602,6 +630,33 @@ def process_payouts_now():
                                     pass
                         except Exception as pe:
                             logger.warning(f"Txn {txn['id']}: bal_tx check failed — {pe}")
+
+                    # Cache the bank-settlement snapshot for the UI even
+                    # when bank_settled=False — so the artist sees
+                    # "pending review at Stripe" vs "available, payout
+                    # expected Jun 24" instead of a generic "Processing".
+                    # Convert Stripe's epoch arrival_date to ISO date.
+                    payout_expected_iso = None
+                    if payout_expected_at:
+                        try:
+                            from datetime import datetime as _dt, timezone as _tz
+                            payout_expected_iso = _dt.fromtimestamp(
+                                int(payout_expected_at), tz=_tz.utc
+                            ).date().isoformat()
+                        except Exception:
+                            pass
+                    try:
+                        conn.execute(
+                            """UPDATE transactions
+                               SET bank_settlement_status = ?,
+                                   bank_settlement_status_at = CURRENT_TIMESTAMP,
+                                   payout_expected_at = ?
+                               WHERE id = ?""",
+                            (bt_status_snapshot, payout_expected_iso, txn["id"]),
+                        )
+                        conn.commit()
+                    except Exception as _se:
+                        logger.warning(f"Txn {txn['id']}: snapshot write failed — {_se}")
 
                     if bank_settled:
                         conn.execute(
