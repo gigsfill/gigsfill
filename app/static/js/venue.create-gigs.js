@@ -234,7 +234,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function _renderHoldSelected() {
     if (!holdSelectedList) return;
     if (!window._holdArtistOrder.length) {
-      holdSelectedList.innerHTML = '<div class="holdSelectedEmpty" style="padding:18px;text-align:center;color:var(--text-gray);font-size:0.76rem;font-style:italic;">Check artists on the right to add them here.</div>';
+      holdSelectedList.innerHTML = '<div class="holdSelectedEmpty" style="padding:18px;text-align:center;color:var(--text-gray);font-size:0.76rem;font-style:italic;">Click artists on the right to add them here.</div>';
       return;
     }
     holdSelectedList.innerHTML = window._holdArtistOrder.map((aid, i) => {
@@ -256,12 +256,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         e.stopPropagation();
         const aid = parseInt(btn.dataset.aid, 10);
         window._holdArtistOrder = window._holdArtistOrder.filter(x => x !== aid);
-        // Uncheck the master-list checkbox + remove highlight
-        const masterCb = holdMasterList?.querySelector(`input[data-aid="${aid}"]`);
-        if (masterCb) {
-          masterCb.checked = false;
-          masterCb.closest('.hold-master-row')?.classList.remove('is-selected');
-        }
+        // Flip the master-list button back to its off state so the
+        // two columns stay in lockstep.
+        const masterBtn = holdMasterList?.querySelector(`.hold-master-row[data-aid="${aid}"]`);
+        if (masterBtn) masterBtn.classList.remove('is-selected');
         _renderHoldSelected();
       });
     });
@@ -343,22 +341,23 @@ document.addEventListener("DOMContentLoaded", async () => {
       holdMasterList.innerHTML = approved.map(a => {
         const aid = parseInt(a.artist_id || a.id, 10);
         const nm = _escHtml(window._holdArtistMap[aid]);
-        return `<label class="hold-master-row" data-aid="${aid}">
-          <input type="checkbox" data-aid="${aid}">
+        // Render as a button — black/off by default, green when selected.
+        // Reuses the .hold-master-row CSS hooks (same dimensions as the
+        // Email Artist pill so all three visual elements read as peers).
+        return `<button type="button" class="hold-master-row" data-aid="${aid}">
           <span>${nm}</span>
-        </label>`;
+        </button>`;
       }).join('');
-      holdMasterList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        cb.addEventListener('change', () => {
-          const aid = parseInt(cb.dataset.aid, 10);
-          const row = cb.closest('.hold-master-row');
-          if (cb.checked) {
-            // append to order if not present
-            if (!window._holdArtistOrder.includes(aid)) window._holdArtistOrder.push(aid);
-            row?.classList.add('is-selected');
-          } else {
+      holdMasterList.querySelectorAll('.hold-master-row').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const aid = parseInt(btn.dataset.aid, 10);
+          const isOn = btn.classList.contains('is-selected');
+          if (isOn) {
             window._holdArtistOrder = window._holdArtistOrder.filter(x => x !== aid);
-            row?.classList.remove('is-selected');
+            btn.classList.remove('is-selected');
+          } else {
+            if (!window._holdArtistOrder.includes(aid)) window._holdArtistOrder.push(aid);
+            btn.classList.add('is-selected');
           }
           _renderHoldSelected();
         });
