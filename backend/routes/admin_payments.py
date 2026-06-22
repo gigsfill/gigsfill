@@ -406,6 +406,8 @@ def search_payments(
             t.stripe_payment_intent_id, t.stripe_transfer_id,
             t.scheduled_process_at, t.processed_at, t.created_at,
             t.notes,
+            t.bank_settlement_status, t.bank_settlement_status_at,
+            t.payout_expected_at,
             g.date as gig_date, g.start_time as gig_start_time,
             g.title as gig_title, g.status as gig_status,
             v.venue_name,

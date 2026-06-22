@@ -132,8 +132,41 @@
     dispute_won:         { label: 'Dispute won', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
   };
   function statusPill(s) {
-    const cfg = STATUS_STYLE[s] || { label: s || '—', color: '#94a3b8', bg: 'rgba(148,163,184,0.10)' };
-    return `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:600;color:${cfg.color};background:${cfg.bg};white-space:nowrap;">${esc(cfg.label)}</span>`;
+    // Accepts either a status string (legacy callers) or a full row
+    // object (preferred). When given a row with status='transferred'
+    // AND bank_settlement_status set, swaps the generic 'Transferred'
+    // pill for a specific sub-state ('At Stripe (review hold)' /
+    // 'Available — payout queued (date)') — same logic the artist
+    // earnings view uses. Admins reviewing a stuck payout can see
+    // the Stripe-side reality without leaving the page.
+    let statusKey = s;
+    let dynamicLabel = null;
+    let dynamicColor = null;
+    if (s && typeof s === 'object') {
+      const row = s;
+      statusKey = row.status;
+      if (row.status === 'transferred' && row.bank_settlement_status) {
+        if (row.bank_settlement_status === 'pending') {
+          dynamicLabel = 'At Stripe (hold)';
+          dynamicColor = { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
+        } else if (row.bank_settlement_status === 'available') {
+          let dateStr = '';
+          if (row.payout_expected_at) {
+            try {
+              const d = new Date(row.payout_expected_at + 'T00:00:00');
+              dateStr = ' ' + d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+            } catch (_) {}
+          }
+          dynamicLabel = 'Payout queued' + dateStr;
+          dynamicColor = { color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
+        }
+      }
+    }
+    const cfg = STATUS_STYLE[statusKey] || { label: statusKey || '—', color: '#94a3b8', bg: 'rgba(148,163,184,0.10)' };
+    const label = dynamicLabel || cfg.label;
+    const color = dynamicColor ? dynamicColor.color : cfg.color;
+    const bg = dynamicColor ? dynamicColor.bg : cfg.bg;
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:600;color:${color};background:${bg};white-space:nowrap;">${esc(label)}</span>`;
   }
 
   const TYPE_LABEL = {
@@ -295,7 +328,7 @@
           </td>
           <td style="padding:6px 8px;font-size:0.72rem;color:var(--text-gray);white-space:nowrap;">${indent}#${r.id}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:var(--text);white-space:nowrap;">${esc(TYPE_LABEL[r.transaction_type] || r.transaction_type)}</td>
-          <td style="padding:6px 8px;">${statusPill(r.status)}</td>
+          <td style="padding:6px 8px;">${statusPill(r)}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${venue}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${artist}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:var(--text-gray);white-space:nowrap;">${fmtDate(r.gig_date)}</td>
@@ -638,7 +671,7 @@
           <td style="padding:5px;">${time}</td>
           <td style="padding:5px;">${esc(TYPE_LABEL[s.transaction_type] || s.transaction_type)}</td>
           <td style="padding:5px;">${counterparty}</td>
-          <td style="padding:5px;">${statusPill(s.status)}</td>
+          <td style="padding:5px;">${statusPill(s)}</td>
           <td style="padding:5px;font-family:monospace;">${gigDollarsFor(s)}</td>
           <td style="padding:5px;font-family:monospace;font-weight:600;">${paidFor(s)}</td>
           <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(fmtDateTime(s.processed_at || s.scheduled_process_at))}</td>
@@ -814,7 +847,7 @@
         : '—';
       const gigTime = t.gig_start_time ? ' · ' + esc(fmtTime12(t.gig_start_time)) : '';
       const gigLine = '#' + t.gig_id + (t.gig_title ? ' — ' + esc(t.gig_title) : '');
-      const selectedLine = `#${t.id} (${esc(TYPE_LABEL[t.transaction_type_resolved] || t.transaction_type_resolved)} · ${statusPill(t.status)})`
+      const selectedLine = `#${t.id} (${esc(TYPE_LABEL[t.transaction_type_resolved] || t.transaction_type_resolved)} · ${statusPill(t)})`
         + (stripeRef ? ` · ${stripeLink}` : '');
 
       const overviewRow = (label, val) => `
@@ -911,7 +944,7 @@
           <input type="checkbox" class="apMrkCb" data-cid="${r.id}" style="width:auto;flex-shrink:0;cursor:pointer;">
           <span style="flex:0 0 56px;font-size:0.72rem;color:var(--text-gray);">#${r.id}</span>
           <span style="flex:1;min-width:0;font-size:0.78rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>
-          <span style="flex:0 0 110px;font-size:0.72rem;">${statusPill(r.status)}</span>
+          <span style="flex:0 0 110px;font-size:0.72rem;">${statusPill(r)}</span>
           <span style="font-size:0.7rem;color:var(--text-gray);">→</span>
           <select class="apMrkNew" data-cid="${r.id}"
             style="flex:0 0 170px;padding:5px 8px;background:#151b28;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:0.75rem;box-sizing:border-box;">
@@ -1053,7 +1086,7 @@
             style="width:auto;flex-shrink:0;cursor:${canResend ? 'pointer' : 'not-allowed'};">
           <span style="flex:0 0 56px;font-size:0.72rem;color:var(--text-gray);">#${r.id}</span>
           <span style="flex:0 0 220px;font-size:0.78rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>
-          <span style="flex:0 0 110px;font-size:0.72rem;">${statusPill(r.status)}</span>
+          <span style="flex:0 0 110px;font-size:0.72rem;">${statusPill(r)}</span>
           <span style="flex:1;min-width:0;">→ ${tmplDisplay}</span>
         </div>`;
     }
@@ -2328,7 +2361,7 @@
         <td style="padding:5px;">${esc(x.venue_name || '—')}</td>
         <td style="padding:5px;">${esc(x.artist_name || '—')}</td>
         <td style="padding:5px;">${esc(TYPE_LABEL[x.transaction_type] || x.transaction_type)}</td>
-        <td style="padding:5px;">${statusPill(x.our_status)}</td>
+        <td style="padding:5px;">${statusPill({status: x.our_status, bank_settlement_status: x.bank_settlement_status, payout_expected_at: x.payout_expected_at})}</td>
         <td style="padding:5px;color:${x.match ? '#22c55e' : '#ef4444'};">${esc(x.stripe_state || '—')}</td>
         <td style="padding:5px;font-size:0.7rem;color:var(--text-gray);">${esc(x.summary || (x.match ? '✓' : ''))}</td>
         <td style="padding:5px;">${syncBtn}</td>
