@@ -1142,20 +1142,22 @@
     line-height: 1;
   }
   .hold-sel-row .hold-remove:hover { color: #ef4444; }
-  /* Master-list checkbox rows — kept simple, consistent with the existing
-     preferred-artist list visuals. */
+  /* Master-list checkbox rows — dense single-line per artist
+     (looks like a tight dropdown's option panel). 8-10 artists fit
+     without scrolling. Long band names truncate with ellipsis. */
   .hold-master-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 5px;
-    border-radius: 4px;
-    font-size: 0.72rem;
-    line-height: 1.2;
+    gap: 5px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    line-height: 1.15;
     cursor: pointer;
     transition: background 0.1s;
     white-space: nowrap;
     overflow: hidden;
+    color: var(--text);
   }
   .hold-master-row > span {
     overflow: hidden;
@@ -1167,11 +1169,11 @@
   .hold-master-row input[type="checkbox"] {
     margin: 0;
     flex-shrink: 0;
-    width: 13px;
-    height: 13px;
+    width: 11px;
+    height: 11px;
   }
   .hold-master-row.is-selected {
-    background: rgba(245, 158, 11, 0.10);
+    background: rgba(245, 158, 11, 0.08);
   }
 
   /* A11y: restore a visible focus ring on every form control that the
@@ -1520,6 +1522,27 @@
     background: rgba(124, 107, 255, 0.22);
     border-color: rgba(124, 107, 255, 0.65);
     color: #c4b5fd;
+  }
+  /* Hold Gig pill — same dimensions as Recurring (height, padding,
+     font, min-width) but amber theme. Both pills get a min-width so
+     they line up at the same length regardless of label text. */
+  .recurring-master-pill,
+  .hold-master-pill {
+    min-width: 170px;
+  }
+  .hold-master-pill {
+    border-color: rgba(245, 158, 11, 0.30);
+    background: rgba(245, 158, 11, 0.06);
+    color: rgba(252, 211, 77, 0.85);
+  }
+  .hold-master-pill:hover {
+    background: rgba(245, 158, 11, 0.14);
+    border-color: rgba(245, 158, 11, 0.55);
+  }
+  .hold-master-pill:has(input:checked) {
+    background: rgba(245, 158, 11, 0.24);
+    border-color: rgba(245, 158, 11, 0.70);
+    color: #fcd34d;
   }
 
   /* Custom dark date picker — the native input[type=date] popup couldn't
@@ -3272,7 +3295,7 @@
            grid below + ships them as `hold_artist_ids` in the POST body.
       ──────────────────────────────────────────────────────────────────── -->
       <div class="recurring-toggle-row" id="holdGigToggleRow">
-        <label class="recurring-master-pill" style="background:rgba(245,158,11,0.15);border-color:rgba(245,158,11,0.4);">
+        <label class="recurring-master-pill hold-master-pill">
           <input type="checkbox" id="holdGigCheckbox" hidden>
           <span>🔒 Hold Gig</span>
         </label>
@@ -3443,7 +3466,7 @@
 <script src="/app/static/js/artist-reviews.js"></script>
 <script src="/app/static/js/gig-modal.js?v=16"></script>
 <script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=190"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=191"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=3" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
