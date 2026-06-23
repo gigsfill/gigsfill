@@ -511,10 +511,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       approved.forEach(a => {
         const aid = parseInt(a.artist_id || a.id, 10);
         window._holdArtistMap[aid] = a.name || a.artist_name || ('Artist ' + aid);
-        const od = a.pay_dollars_override;
-        const oc = a.pay_cents_override;
-        if (od != null || oc != null) {
-          window._holdArtistPay[aid] = (Number(od) || 0) + (Number(oc) || 0) / 100;
+        // "Has override" = real positive value. The DB stores
+        // (pay_dollars_override=0, pay_cents_override=NULL) for rows
+        // that were inserted without an explicit override; treating
+        // that as "$0 override" was misleading. Now: 0 dollars AND
+        // 0 cents → no override → "$--" in the picker.
+        const dollars = Number(a.pay_dollars_override) || 0;
+        const cents = Number(a.pay_cents_override) || 0;
+        if (dollars > 0 || cents > 0) {
+          window._holdArtistPay[aid] = dollars + cents / 100;
         }
       });
       // Pay-suffix helper. The column header reads "(Override Pay)" so
