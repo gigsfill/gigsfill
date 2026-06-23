@@ -68,24 +68,21 @@
     }
     banner.style.marginBottom = '20px';
     banner.innerHTML = `
-      <div style="background:rgba(245,158,11,0.08);border:1.5px solid rgba(245,158,11,0.5);border-radius:10px;padding:14px 18px;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-          <span style="font-size:1.2rem;">🔒</span>
-          <span style="font-size:0.92rem;font-weight:700;color:#fcd34d;text-transform:uppercase;letter-spacing:0.06em;">
-            ${offers.length} pending offer${offers.length === 1 ? '' : 's'} from venue${offers.length === 1 ? '' : 's'}
+      <div style="background:rgba(245,158,11,0.08);border:1.5px solid rgba(245,158,11,0.5);border-radius:10px;padding:10px 14px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="font-size:1rem;">🔒</span>
+          <span style="font-size:0.78rem;font-weight:700;color:#fcd34d;text-transform:uppercase;letter-spacing:0.06em;">
+            ${offers.length} pending offer${offers.length === 1 ? '' : 's'}
           </span>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          ${offers.map(_cardHtml).join('')}
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          ${offers.map(_rowHtml).join('')}
         </div>
       </div>
     `;
     banner.querySelectorAll('.hob-decline').forEach(btn => {
       btn.addEventListener('click', () => _decline(btn.dataset.token, btn));
     });
-    // Multi-slot: clicking a slot button opens a confirmation modal
-    // [Book] [Cancel]. Cancel just closes — doesn't decline the
-    // offer. The artist can pick a different slot or hit Decline all.
     banner.querySelectorAll('.hob-slot').forEach(btn => {
       btn.addEventListener('click', () => _confirmBook({
         token: btn.dataset.token, slotId: btn.dataset.slot,
@@ -93,13 +90,23 @@
         slotNum: btn.dataset.slotNum, time: btn.dataset.time, pay: btn.dataset.pay,
       }, btn));
     });
-    // Single-slot: 'Book' button → same confirmation flow.
     banner.querySelectorAll('.hob-book-one').forEach(btn => {
       btn.addEventListener('click', () => _confirmBook({
         token: btn.dataset.token, slotId: null,
         venue: btn.dataset.venue, date: btn.dataset.date,
         time: btn.dataset.time, pay: btn.dataset.pay,
       }, btn));
+    });
+    // Toggle the expanded slot picker on multi-slot rows
+    banner.querySelectorAll('.hob-expand-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tok = btn.dataset.token;
+        const panel = banner.querySelector(`.hob-expand-panel[data-token="${tok}"]`);
+        if (!panel) return;
+        const open = panel.style.display === 'block';
+        panel.style.display = open ? 'none' : 'block';
+        btn.textContent = open ? 'Pick a slot ▾' : 'Pick a slot ▴';
+      });
     });
   }
 
@@ -128,58 +135,83 @@
     }
   }
 
-  function _cardHtml(o) {
-    const title = o.gig_title ? ` · "${_esc(o.gig_title)}"` : '';
+  // One-line row per offer (Jun 2026): keeps the banner compact when
+  // there are several pending. Layout:
+  //
+  //   🎸 Fridays Past │ 14 Cannons · Jul 5 · 7-11 PM · $200 · 18h    [Book] [Decline]
+  //
+  // For multi-slot offers, the time/pay column is replaced by
+  //   N slots · 18h    [Pick a slot ▾] [Decline]
+  // and an inline expand panel appears below with the per-slot buttons.
+  // Flex-wraps gracefully on narrow viewports — long venue/title text
+  // wraps to a second visual line without breaking the row.
+  function _rowHtml(o) {
+    const title = o.gig_title ? ` "${_esc(o.gig_title)}"` : '';
     const expires = o.hours_remaining != null
-      ? `<span style="color:${o.hours_remaining < 6 ? '#ef4444' : '#fcd34d'};font-weight:600;">${_fmtHours(o.hours_remaining)} left</span>`
+      ? `<span style="color:${o.hours_remaining < 6 ? '#ef4444' : '#fcd34d'};font-weight:700;font-size:0.74rem;white-space:nowrap;">${_fmtHours(o.hours_remaining)} left</span>`
       : '';
-    let slotsHtml = '';
+    // Artist chip on the left so the venue knows WHICH of their
+    // artists got the offer (vs. the prior "offered to X" sentence
+    // which read awkwardly). Icon = artist's type, label = artist name.
+    const primaryIcon = (o.slots && o.slots[0] && o.slots[0].artist_type) ? _typeIcon(o.slots[0].artist_type) : '🎵';
+    const artistChip = `<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(124,107,255,0.18);border:1px solid rgba(124,107,255,0.4);border-radius:4px;padding:2px 8px;font-size:0.74rem;font-weight:600;color:#c4b5fd;white-space:nowrap;">
+        ${primaryIcon} ${_esc(o.artist_name)}
+      </span>`;
+
+    // Center column varies by single-slot vs multi-slot.
+    let centerHtml = '';
+    let actionsHtml = '';
+    let expandedHtml = '';
+
     if (!o.slots || o.slots.length === 0) {
-      // Shouldn't happen — the backend already auto-declines empty-match
-      // offers — but render defensively just in case.
-      slotsHtml = '<div style="font-size:0.78rem;color:var(--text-gray);font-style:italic;">No slots match your artist type.</div>';
+      centerHtml = `<span style="font-size:0.78rem;color:var(--text-gray);font-style:italic;">No slots match your type</span>`;
+      actionsHtml = `<button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
+        style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>`;
     } else if (o.slots.length === 1) {
       const s = o.slots[0];
       const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
-      // Stash venue/date on the button so the confirm modal can show
-      // them in the prompt without re-fetching.
-      slotsHtml = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <span style="font-size:0.85rem;color:var(--text);">
-          ${_typeIcon(s.artist_type)} ${_esc(s.time)} <span style="color:#22c55e;font-weight:600;">${payStr}</span>
-        </span>
+      centerHtml = `<span style="font-size:0.8rem;color:var(--text);">
+        ${_esc(o.venue_name)}${title} · ${_fmtDate(o.gig_date)} · ${_esc(s.time)} · <span style="color:#22c55e;font-weight:600;">${payStr}</span>
+      </span>`;
+      actionsHtml = `
         <button type="button" class="hob-book-one" data-token="${_esc(o.offer_token)}"
           data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
-          style="padding:6px 16px;background:#16a34a;border:none;border-radius:5px;color:#fff;cursor:pointer;font-size:0.8rem;font-weight:600;">Book</button>
+          style="padding:5px 14px;background:#16a34a;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;">Book</button>
         <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
-          style="padding:6px 14px;background:transparent;border:1px solid #dc2626;border-radius:5px;color:#f87171;cursor:pointer;font-size:0.8rem;font-weight:600;">Decline</button>
-      </div>`;
+          style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>`;
     } else {
-      slotsHtml = `<div style="font-size:0.74rem;color:var(--text-gray);margin-bottom:5px;">Pick the slot you want:</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+      centerHtml = `<span style="font-size:0.8rem;color:var(--text);">
+        ${_esc(o.venue_name)}${title} · ${_fmtDate(o.gig_date)} · <span style="color:#fcd34d;font-weight:600;">${o.slots.length} slots</span>
+      </span>`;
+      actionsHtml = `
+        <button type="button" class="hob-expand-btn" data-token="${_esc(o.offer_token)}"
+          style="padding:5px 12px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.45);border-radius:4px;color:#86efac;cursor:pointer;font-size:0.74rem;font-weight:600;">Pick a slot ▾</button>
+        <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
+          style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>`;
+      // Hidden expand panel — toggled by the "Pick a slot" button.
+      expandedHtml = `<div class="hob-expand-panel" data-token="${_esc(o.offer_token)}" style="display:none;margin-top:6px;padding-left:12px;border-left:2px solid rgba(34,197,94,0.4);">
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">
           ${o.slots.map(s => {
             const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
             return `<button type="button" class="hob-slot" data-token="${_esc(o.offer_token)}" data-slot="${parseInt(s.id, 10)}"
               data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}"
               data-slot-num="${s.slot_number}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
-              style="padding:6px 12px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.45);border-radius:5px;color:#86efac;cursor:pointer;font-size:0.78rem;font-weight:600;">
+              style="padding:5px 10px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.4);border-radius:4px;color:#86efac;cursor:pointer;font-size:0.72rem;font-weight:600;">
               ${_typeIcon(s.artist_type)} Slot ${s.slot_number} · ${_esc(s.time)} · ${payStr}
             </button>`;
           }).join('')}
         </div>
-        <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
-          style="padding:5px 14px;background:transparent;border:1px solid #dc2626;border-radius:5px;color:#f87171;cursor:pointer;font-size:0.78rem;font-weight:600;">Decline all</button>`;
+      </div>`;
     }
-    return `<div style="background:rgba(0,0,0,0.2);border-radius:8px;padding:12px 14px;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-        <div>
-          <div style="font-size:0.95rem;color:var(--text);font-weight:600;">${_esc(o.venue_name)}${title}</div>
-          <div style="font-size:0.78rem;color:var(--text-gray);margin-top:2px;">
-            ${_fmtDate(o.gig_date)} · offered to <b>${_esc(o.artist_name)}</b>
-          </div>
-        </div>
-        <div style="font-size:0.78rem;">${expires}</div>
+
+    return `<div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${artistChip}
+        <span style="flex:1;min-width:200px;">${centerHtml}</span>
+        ${expires}
+        <span style="display:inline-flex;gap:6px;">${actionsHtml}</span>
       </div>
-      ${slotsHtml}
+      ${expandedHtml}
     </div>`;
   }
 
