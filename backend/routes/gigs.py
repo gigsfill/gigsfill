@@ -7395,7 +7395,8 @@ def hold_respond_landing(token: str, db=Depends(get_db)):
     # Look up the offer to see how many slots are open
     row = db.execute(
         text("""SELECT wl.gig_id, wl.artist_id, wl.offer_expires_at, wl.offer_declined,
-                       g.hold_status, g.date, g.title, g.is_multi_slot, v.venue_name
+                       g.hold_status, g.date, g.title, g.is_multi_slot,
+                       g.venue_id, v.venue_name
                 FROM gig_waitlist wl
                 JOIN gigs g ON g.id = wl.gig_id
                 JOIN venues v ON v.id = g.venue_id
@@ -7534,7 +7535,22 @@ def _hold_slot_picker_page(token: str, row, open_slots) -> str:
     from backend.services.gig_hold import _fmt_time
     def _esc(s):
         return str(s or '').replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
-    venue = _esc(row["venue_name"] or "the venue")
+    venue_name = _esc(row["venue_name"] or "the venue")
+    # Hyperlink the venue name to their public profile so the artist
+    # can size up the venue before accepting (per user request).
+    venue_id = None
+    try:
+        from sqlalchemy import text as _vt
+        venue_id = row["venue_id"] if "venue_id" in row.keys() else None
+    except Exception:
+        pass
+    if venue_id:
+        venue = (f'<a href="https://gigsfill.com/app/venue-profile.html?venue_id={int(venue_id)}" '
+                 f'target="_blank" rel="noopener" '
+                 f'style="color:#a78bfa;text-decoration:none;border-bottom:1px dashed rgba(167,139,250,0.45);font-weight:700;">'
+                 f'{venue_name}</a>')
+    else:
+        venue = venue_name
     date = _esc(str(row["date"]))
     title_html = ""
     if row.get("title"):

@@ -214,10 +214,14 @@ def get_gig_modal_data(
                g.radius_blast_token, g.contract_hold_artist_id, g.contract_hold_expires_at,
                g.recurring_group_id, g.is_recurring,
                CASE WHEN g.radius_blast_token IS NOT NULL AND g.status='open' THEN 1 ELSE 0 END as is_blast_open,
+               -- has_active_waitlist excludes hold-source rows (Jun 2026).
+               -- The legacy gig_modal 'Booking Locked' UI keyed off this
+               -- and was firing for held gigs incorrectly.
                CASE WHEN (
                  EXISTS (SELECT 1 FROM gig_waitlist wl WHERE wl.gig_id=g.id AND wl.offer_sent=1
                    AND (wl.offer_declined=0 OR wl.offer_declined IS NULL)
-                   AND (wl.offer_expires_at IS NULL OR wl.offer_expires_at > datetime('now')))
+                   AND (wl.offer_expires_at IS NULL OR wl.offer_expires_at > datetime('now'))
+                   AND (wl.source IS NULL OR wl.source = 'cancellation'))
                  OR EXISTS (SELECT 1 FROM waitlist_offered wo WHERE wo.gig_id=g.id AND wo.offer_expires_at > datetime('now'))
                ) THEN 1 ELSE 0 END as has_active_waitlist,
                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,

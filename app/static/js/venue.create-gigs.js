@@ -3324,6 +3324,17 @@ async function renderCalendar() {
         const existingBlastBanner = document.getElementById('venue-blast-banner');
         if (existingBlastBanner) existingBlastBanner.remove();
 
+        // Skip the blast banner entirely for held gigs (Jun 2026).
+        // The Hold-management panel is the primary surface; showing
+        // 'Next Blast: 1 week' alongside it implies blasts will fire,
+        // but the hold-skip logic in scheduler.py specifically
+        // excludes hold_status active/exhausted from blast queries.
+        // The banner naturally returns once the venue releases the
+        // hold (hold_status → NULL).
+        if (gig.hold_status === 'active' || gig.hold_status === 'exhausted') {
+          // Fall through past the blast-banner section entirely.
+        } else {
+
         const _nk = gig.last_notification_key;
         // Calculate HOURS until gig start — match how the scheduler fires (by start time, not midnight)
         const _gigStartTime = gig.start_time || '19:00';
@@ -3497,7 +3508,8 @@ async function renderCalendar() {
           `;
           modalSection.insertAdjacentElement('beforebegin', blastBanner);
         }
-        
+        } // closes the `else` branch for non-hold gigs (Jun 2026 hold-skip)
+
         // Show all input fields
         gigInputFields.forEach(field => field.style.display = "flex");
         
@@ -4815,6 +4827,15 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     invalidateGigs(); renderCalendar();
 
     modal.classList.add('hidden');
+    // Skip the blast prompt when the gig was created with Hold mode
+    // — the venue is privately offering the gig to a specific list of
+    // artists; blasting the public would defeat the purpose. The
+    // blast prompt naturally re-appears later if the hold exhausts
+    // and the venue chooses "Open to all" from the exhausted-hold UI.
+    if (holdArtistIds.length > 0) {
+      showGigSuccess(`Gig created on hold for ${holdArtistIds.length} artist${holdArtistIds.length !== 1 ? 's' : ''}.`);
+      return;
+    }
     // Show blast prompt immediately — it IS the success confirmation
     // Don't show showGigSuccess first (it would cover the blast modal)
     if (newGig && daysUntil >= 0) {
