@@ -265,7 +265,23 @@ async function renderGigModal(data, callbacks = {}) {
           else { const d = Math.round(hrs/24); timeLeft = `${d} ${d===1?'day':'days'} left to book`; }
         }
         const _typeIcon = t => ({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'❓'}[t] || '🎵');
-        const _payStr = p => (p && p === Math.round(p)) ? `$${Math.round(p)}` : `$${Number(p).toFixed(2)}`;
+        // Pay string respects door-deal terms so the artist sees the
+        // CURRENT slot config when the venue swaps a slot to door
+        // mid-cycle. '$10 + 50% door' instead of just '$10'.
+        const _payStr = (s) => {
+          if (s && typeof s === 'object') {
+            if (s.deal_type === 'door') {
+              const gua = (Number(s.guarantee_cents) || 0) / 100;
+              const guaFmt = gua % 1 === 0 ? `$${Math.round(gua)}` : `$${gua.toFixed(2)}`;
+              return `${guaFmt} + ${parseInt(s.door_pct, 10) || 0}% door`;
+            }
+            const p = Number(s.pay) || 0;
+            return p % 1 === 0 ? `$${Math.round(p)}` : `$${p.toFixed(2)}`;
+          }
+          // Backward compat: scalar pay
+          const p = Number(s) || 0;
+          return p % 1 === 0 ? `$${Math.round(p)}` : `$${p.toFixed(2)}`;
+        };
         const slots = hi.my_matching_slots || [];
         let slotsHtml = '';
         if (slots.length === 0) {
@@ -289,11 +305,11 @@ async function renderGigModal(data, callbacks = {}) {
                 <span style="display:inline-block;width:18px;text-align:center;flex:0 0 18px;font-size:0.95rem;">${_typeIcon(s.artist_type)}</span>
                 ${slotLabel ? `<span style="display:inline-block;width:60px;flex:0 0 60px;font-size:0.84rem;color:var(--text);font-weight:600;white-space:nowrap;">${slotLabel}</span>` : ''}
                 <span style="display:inline-block;width:18ch;flex:0 0 18ch;font-size:0.84rem;color:var(--text);white-space:nowrap;font-variant-numeric:tabular-nums;">${s.time}</span>
-                <span style="display:inline-block;flex:1;text-align:center;font-size:0.86rem;color:#22c55e;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;">${_payStr(s.pay)}</span>
+                <span style="display:inline-block;flex:1;text-align:center;font-size:0.86rem;color:#22c55e;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;">${_payStr(s)}</span>
                 <span style="display:inline-flex;gap:6px;flex:0 0 auto;">
                   <button type="button" data-token="${hi.offer_token}" data-slot="${s.id}"
                     data-venue="${(data.venue_name||'').replace(/"/g,'&quot;')}" data-date="${data.date||''}"
-                    data-slot-num="${s.slot_number}" data-time="${s.time}" data-pay="${_payStr(s.pay)}"
+                    data-slot-num="${s.slot_number}" data-time="${s.time}" data-pay="${_payStr(s)}"
                     onclick="window.gmHoldBook && window.gmHoldBook(this)"
                     title="Book this slot now."
                     style="padding:5px 18px;background:#7c6bff;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:72px;">Book</button>

@@ -7997,6 +7997,13 @@ def my_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
                 "time": f"{_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}",
                 "pay": s["pay"],
                 "artist_type": s["artist_type"],
+                # Deal info — lets the artist banner render door deals
+                # correctly when the venue mid-cycle swaps a slot's
+                # deal_type. Without these the banner could only show
+                # a flat $ amount.
+                "deal_type": s.get("deal_type") or "flat",
+                "door_pct": s.get("door_pct") or 0,
+                "guarantee_cents": s.get("guarantee_cents") or 0,
             } for s in matching
         ]
         offers.append({

@@ -192,7 +192,17 @@
     const widestTime = Math.max(...o.slots.map(s => (s.time || '').length));
 
     const slotBubbles = o.slots.map(s => {
-      const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
+      // Door deal slots render as '$10 + 50% door' instead of just '$X'.
+      // Falls back to the flat pay number when deal_type is 'flat' or
+      // unset.
+      let payStr;
+      if (s.deal_type === 'door') {
+        const gua = (Number(s.guarantee_cents) || 0) / 100;
+        const guaFmt = gua % 1 === 0 ? `$${Math.round(gua)}` : `$${gua.toFixed(2)}`;
+        payStr = `${guaFmt} + ${parseInt(s.door_pct, 10) || 0}% door`;
+      } else {
+        payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
+      }
       const slotLabel = o.slots.length > 1 ? `Slot ${s.slot_number}` : '';
       return `<div class="hob-slot-bubble"
         style="display:inline-flex;align-items:center;gap:10px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:7px 12px;flex-wrap:nowrap;">

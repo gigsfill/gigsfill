@@ -511,6 +511,9 @@ def get_gig_modal_data(
                         "time": f"{_hfmt(s['start_time'])} – {_hfmt(s['end_time'])}",
                         "pay": s["pay"],
                         "artist_type": s["artist_type"],
+                        "deal_type": s.get("deal_type") or "flat",
+                        "door_pct": s.get("door_pct") or 0,
+                        "guarantee_cents": s.get("guarantee_cents") or 0,
                     } for s in _matching
                 ]
 

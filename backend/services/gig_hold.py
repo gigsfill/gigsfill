@@ -325,12 +325,13 @@ def process_hold_offers(db):
 
 def _list_open_hold_slots(db, gig_id: int):
     """Return the list of currently-open slots on this gig as dicts
-    with id, slot_number, start_time, end_time, pay + type fields
-    (artist_type, band_formats, styles) so the artist match filter
-    can run on the result."""
+    with id, slot_number, start_time, end_time, pay + deal info (so
+    door-deal slots render correctly in the artist's banner / modal)
+    + type fields for the match filter."""
     from sqlalchemy import text
     return db.execute(
         text("""SELECT id, slot_number, start_time, end_time, pay,
+                       deal_type, door_pct, guarantee_cents,
                        artist_type, band_formats, styles
                 FROM gig_slots WHERE gig_id = :gid AND status = 'open'
                 ORDER BY slot_number ASC"""),
