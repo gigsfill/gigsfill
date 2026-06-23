@@ -1280,6 +1280,7 @@
 <script src="/app/static/js/activity-center.js?v=102"></script>
 <script src="https://js.stripe.com/v3/" async></script>
 <script src="/app/static/js/artist-stripe-payment.js?v=15" defer></script>
+<script src="/app/static/js/hold-offers-banner.js?v=1" defer></script>
 <script src="/app/static/js/flyer-overlay.js"></script>
 <!-- Block all artist-specific API calls until artist.book-gigs.js confirms access -->
 <script>
@@ -1310,6 +1311,13 @@
 <script src="/app/static/js/user-dropdown.js?v=9"></script>
 
 <div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
+
+<!-- Pending hold-gig offers banner (Phase 3, Jun 2026).
+     Populated by hold-offers-banner.js polling /api/me/hold-offers.
+     Stays visible until the artist accepts or declines every active
+     offer — sees it on every page-load until they act. Hidden when
+     no offers in flight. -->
+<div id="holdOffersBanner"></div>
 
 <!-- Tabs -->
 <div class="tabs">

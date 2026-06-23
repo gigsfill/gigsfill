@@ -7861,3 +7861,87 @@ def resolve_exhausted_hold(gig_id: int, data: dict,
                 "message": f"Cancelled {len(open_slots)} empty slot(s)."}
 
     raise HTTPException(400, "Unknown action — expected 'open_all' or 'cancel_empty'")
+
+
+# ============================================================
+# HOLD GIG — Phase 3: artist-facing pending-offers endpoint
+# ============================================================
+# Powers the "Pending Offers" banner at the top of artist-book-gigs.html.
+# Returns active hold offers across ALL artists the user owns or has
+# entity_user access to. Each offer carries enough info to render the
+# banner card without a second fetch: venue name, gig date, slot list,
+# token (for the accept/decline links), expiry.
+
+@router.get("/api/me/hold-offers")
+def my_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
+    """Active hold offers for every artist this user has access to.
+    Excludes already-responded (declined/expired) offers; only rows
+    in flight + not yet expired.
+
+    Includes the per-artist matching-slot filter so a DJ user with
+    an offer on a Live Band + DJ multi-slot gig only sees the DJ
+    slot in the banner."""
+    from backend.services.gig_hold import _list_matching_open_slots, _fmt_time
+    rows = db.execute(
+        text("""SELECT wl.artist_id, wl.gig_id, wl.offer_token,
+                       wl.offer_sent_at, wl.offer_expires_at,
+                       a.name as artist_name,
+                       g.date as gig_date, g.title as gig_title,
+                       g.is_multi_slot, g.venue_id,
+                       v.venue_name
+                FROM gig_waitlist wl
+                JOIN artists a ON a.id = wl.artist_id
+                JOIN gigs g ON g.id = wl.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                WHERE wl.source = 'hold'
+                  AND wl.offer_sent = 1
+                  AND wl.offer_declined = 0
+                  AND wl.offer_expires_at > CURRENT_TIMESTAMP
+                  AND g.hold_status = 'active'
+                  AND (a.user_id = :uid
+                       OR EXISTS (SELECT 1 FROM entity_users eu
+                                  WHERE eu.entity_type = 'artist'
+                                    AND eu.entity_id = a.id
+                                    AND eu.user_id = :uid))
+                ORDER BY wl.offer_expires_at ASC"""),
+        {"uid": user.id}
+    ).mappings().all()
+
+    from datetime import datetime as _dt
+    now = _dt.utcnow()
+    offers = []
+    for r in rows:
+        # Hours remaining
+        hours_remaining = None
+        if r["offer_expires_at"]:
+            try:
+                exp = _dt.strptime(str(r["offer_expires_at"]).replace("T", " ").split(".")[0], "%Y-%m-%d %H:%M:%S")
+                hours_remaining = max(0, round((exp - now).total_seconds() / 3600, 1))
+            except Exception:
+                pass
+        # Slots the artist can actually fill (mirrors offer email + picker)
+        matching = _list_matching_open_slots(db, r["gig_id"], r["artist_id"])
+        slots_out = [
+            {
+                "id": int(s["id"]),
+                "slot_number": s["slot_number"],
+                "time": f"{_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}",
+                "pay": s["pay"],
+                "artist_type": s["artist_type"],
+            } for s in matching
+        ]
+        offers.append({
+            "artist_id": r["artist_id"],
+            "artist_name": r["artist_name"],
+            "gig_id": r["gig_id"],
+            "gig_date": str(r["gig_date"]),
+            "gig_title": r["gig_title"],
+            "venue_id": r["venue_id"],
+            "venue_name": r["venue_name"],
+            "is_multi_slot": bool(r["is_multi_slot"]),
+            "offer_token": r["offer_token"],
+            "offer_expires_at": str(r["offer_expires_at"]) if r["offer_expires_at"] else None,
+            "hours_remaining": hours_remaining,
+            "slots": slots_out,
+        })
+    return {"offers": offers}

@@ -516,6 +516,30 @@ def _send_hold_offer_email(db, gig_id: int, artist_id: int, token: str, is_remin
         "offer_expires_human": offer_expires_human,
     }
     _dispatch_template(db, to_email=artist["email"], template_key=template_key, vars=vars_dict)
+    # Activity Center notification — drop a record for every user with
+    # artist access so they see "1 pending offer" in their dropdown even
+    # when they're not on the book-gigs page. Banner on book-gigs is the
+    # primary surface; this is the backup channel.
+    if not is_reminder:
+        _create_artist_notification(
+            db, artist_id,
+            f"Offer from {gig['venue_name']} — {gig['date']}",
+            f"You've got 24 hours to accept or decline. Open the Calendar page to respond.",
+            gig_id=gig_id
+        )
+
+
+def _create_artist_notification(db, artist_id: int, title: str, body: str, gig_id: int = None):
+    """Activity Center entry for every user with access to this artist."""
+    try:
+        from backend.services.notification_service import create_notification
+        from backend.utils import get_all_entity_users
+        users = get_all_entity_users(db, "artist", artist_id)
+        for u in users:
+            create_notification(db, u["user_id"], "hold_offer", title, body, gig_id=gig_id)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"[HOLD] artist notification failed for artist={artist_id}: {e}")
 
 
 def _notify_venue_accept(db, gig_id: int, artist_id: int, slot, remaining_open: int):
