@@ -108,15 +108,16 @@
           ${data.booked_slot_count} booked · ${data.open_slot_count} still open
         </div>`;
       }
-      // Waitlist — queued rows are draggable to reorder; current_offer
-      // (in flight) + accepted + declined are locked at their positions.
-      if (data.waitlist && data.waitlist.length > 1) {
-        const queuedCount = data.waitlist.filter(w => w.state === 'queued').length;
-        const dragHint = queuedCount > 1
-          ? '<span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);margin-left:8px;font-size:0.68rem;">(drag queued rows to reorder)</span>'
-          : '';
-        html += `<div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin:10px 0 6px 0;">Waitlist${dragHint}</div>`;
-        html += '<div id="holdMgmtWaitlist" style="display:flex;flex-direction:column;gap:3px;margin-bottom:12px;">';
+      // Waitlist — initial order is locked in at gig creation. Each row
+      // shows its state badge. Queued rows (not yet offered) can be
+      // REMOVED via × — they haven't received an email yet. Already-
+      // offered rows are immutable since the artist has the email.
+      // Original positions never change: venue can only add artists at
+      // the end (via the "Add artist" button below) or remove queued
+      // ones from the tail.
+      if (data.waitlist && data.waitlist.length > 0) {
+        html += `<div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin:10px 0 6px 0;">Waitlist <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);margin-left:8px;font-size:0.68rem;">(order is locked once the gig is created)</span></div>`;
+        html += '<div id="holdMgmtWaitlist" style="display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">';
         data.waitlist.forEach((w, i) => {
           const state = w.state;
           let badge = '';
@@ -134,25 +135,29 @@
             badge = 'Queued';
             badgeColor = 'var(--text-gray)';
           }
-          // Only the queued rows are draggable.
-          const isDraggable = state === 'queued';
-          const dragAttrs = isDraggable
-            ? `draggable="true" data-aid="${parseInt(w.artist_id, 10)}"`
+          // Only queued (un-offered) rows can be removed.
+          const removeBtn = state === 'queued'
+            ? `<button type="button" class="hold-mgmt-remove" data-aid="${parseInt(w.artist_id, 10)}"
+                title="Remove this artist from the waitlist (they haven't been emailed yet)"
+                style="margin-left:6px;background:transparent;border:none;color:var(--text-gray);cursor:pointer;font-size:0.9rem;line-height:1;padding:0 4px;">×</button>`
             : '';
-          const cursor = isDraggable ? 'grab' : 'default';
-          const handle = isDraggable
-            ? '<span class="hold-mgmt-handle" style="color:var(--text-muted);cursor:grab;font-size:0.85rem;user-select:none;">⋮⋮</span>'
-            : '<span style="display:inline-block;width:14px;"></span>';
-          html += `<div class="hold-mgmt-row ${isDraggable ? 'is-draggable' : ''}"
-              ${dragAttrs}
-              style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:rgba(255,255,255,0.02);border-radius:4px;font-size:0.78rem;cursor:${cursor};">
-            ${handle}
+          html += `<div class="hold-mgmt-row" data-aid="${parseInt(w.artist_id, 10)}"
+              style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:rgba(255,255,255,0.02);border-radius:4px;font-size:0.78rem;">
             <span style="color:var(--text-muted);min-width:18px;">${i + 1}.</span>
             <span style="flex:1;color:var(--text);">${_esc(w.artist_name || 'Artist #'+w.artist_id)}</span>
             <span style="color:${badgeColor};font-size:0.7rem;font-weight:600;">${badge}</span>
+            ${removeBtn}
           </div>`;
         });
         html += '</div>';
+        // Add-artist affordance: a button that opens a dropdown of
+        // preferred artists not already on the waitlist. Appends to
+        // the END of the queue when chosen.
+        html += `<div style="margin:6px 0 12px 0;">
+          <button type="button" id="holdAddArtistBtn"
+            style="padding:5px 12px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.35);border-radius:5px;color:#86efac;cursor:pointer;font-size:0.74rem;font-weight:600;">+ Add artist to waitlist</button>
+          <div id="holdAddArtistPicker" style="display:none;margin-top:6px;border:1px solid var(--border);border-radius:5px;padding:6px;max-height:140px;overflow:auto;background:rgba(0,0,0,0.2);"></div>
+        </div>`;
       }
       // Action buttons
       html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
@@ -198,63 +203,116 @@
       if (!ok) return;
       _action(gigId, 'cancel_empty', cancelEmpty);
     });
-    _wireDragReorder(gigId, panel);
+    _wireWaitlistEditing(gigId, panel);
   }
 
-  // Drag-and-drop reorder on the queued portion of the waitlist.
-  // POSTs the new order to /hold/reorder; current_offer and declined
-  // rows are immutable (backend rejects attempts to touch them).
-  function _wireDragReorder(gigId, panel) {
-    const list = panel.querySelector('#holdMgmtWaitlist');
-    if (!list) return;
-    let dragEl = null;
-    list.querySelectorAll('.hold-mgmt-row.is-draggable').forEach(row => {
-      row.addEventListener('dragstart', (e) => {
-        dragEl = row;
-        row.style.opacity = '0.4';
-        try { e.dataTransfer.setData('text/plain', row.dataset.aid); } catch(_) {}
-        e.dataTransfer.effectAllowed = 'move';
-      });
-      row.addEventListener('dragend', () => {
-        row.style.opacity = '';
-        list.querySelectorAll('.hold-mgmt-row').forEach(r => { r.style.borderTop = ''; });
-        dragEl = null;
-      });
-      row.addEventListener('dragover', (e) => {
-        if (!dragEl || dragEl === row) return;
-        // Only allow drop onto OTHER queued rows
-        if (!row.classList.contains('is-draggable')) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        list.querySelectorAll('.hold-mgmt-row').forEach(r => { r.style.borderTop = ''; });
-        row.style.borderTop = '2px solid #f59e0b';
-      });
-      row.addEventListener('drop', async (e) => {
-        e.preventDefault();
-        if (!dragEl || dragEl === row || !row.classList.contains('is-draggable')) return;
-        // Compute the new order of queued rows
-        const allQueued = Array.from(list.querySelectorAll('.hold-mgmt-row.is-draggable'));
-        const fromIdx = allQueued.indexOf(dragEl);
-        let toIdx = allQueued.indexOf(row);
-        if (fromIdx < 0 || toIdx < 0) return;
-        // Move element in array
-        allQueued.splice(fromIdx, 1);
-        if (fromIdx < toIdx) toIdx -= 1;
-        allQueued.splice(toIdx, 0, dragEl);
-        const newOrder = allQueued.map(r => parseInt(r.dataset.aid, 10));
-        // POST to backend
+  // Add/remove queued artists. Original ordered list is locked — venue
+  // can only append to the end (via "+ Add artist to waitlist") or remove
+  // queued artists who haven't been offered yet. Already-offered artists
+  // can't be removed (they have the email; pulling them mid-cycle would
+  // be confusing).
+  function _wireWaitlistEditing(gigId, panel) {
+    // Remove handlers on the × buttons
+    panel.querySelectorAll('.hold-mgmt-remove').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const aid = parseInt(btn.dataset.aid, 10);
+        const ok = window.showConfirm
+          ? await new Promise(res => window.showConfirm(
+              'Remove from waitlist?',
+              'This artist hasn\'t been emailed yet — they won\'t know they were ever on the list.',
+              () => res(true), () => res(false),
+              { confirmLabel: 'Remove', confirmStyle: 'danger' }
+            ))
+          : confirm('Remove this artist from the waitlist?');
+        if (!ok) return;
         try {
-          const res = await fetch(`/api/gigs/${gigId}/hold/reorder`, {
+          // Get current queued list, drop the targeted artist, POST.
+          const data = await (await fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' })).json();
+          const remaining = (data.waitlist || [])
+            .filter(w => w.state === 'queued' && w.artist_id !== aid)
+            .map(w => w.artist_id);
+          await fetch(`/api/gigs/${gigId}/hold/reorder`, {
             method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ queued_ids: newOrder })
+            body: JSON.stringify({ queued_ids: remaining })
           });
-          if (res.ok) {
-            await renderPanel(gigId);
-          }
+          await renderPanel(gigId);
         } catch (_) {}
       });
     });
+
+    // + Add artist: reveal a picker of approved preferred artists who
+    // aren't already on the waitlist. Click one → append to queued tail.
+    const addBtn = panel.querySelector('#holdAddArtistBtn');
+    const addPicker = panel.querySelector('#holdAddArtistPicker');
+    if (addBtn && addPicker) {
+      addBtn.addEventListener('click', async () => {
+        if (addPicker.style.display === 'block') {
+          addPicker.style.display = 'none';
+          return;
+        }
+        addPicker.style.display = 'block';
+        addPicker.innerHTML = '<div style="padding:8px;color:var(--text-gray);font-size:0.74rem;">Loading…</div>';
+        try {
+          const venueId = await _resolveVenueId(gigId);
+          const res = await fetch(`/api/venues/${venueId}/preferred-artists`, { credentials: 'include' });
+          if (!res.ok) throw new Error();
+          const data = await res.json();
+          const approved = (Array.isArray(data) ? data : (data.preferred_artists || []))
+            .filter(a => (a.status || 'approved') === 'approved');
+          // Already-on-waitlist ids
+          const onList = new Set(
+            Array.from(panel.querySelectorAll('.hold-mgmt-row[data-aid]'))
+              .map(r => parseInt(r.dataset.aid, 10))
+          );
+          const candidates = approved.filter(a => !onList.has(parseInt(a.artist_id || a.id, 10)));
+          if (!candidates.length) {
+            addPicker.innerHTML = '<div style="padding:8px;color:var(--text-gray);font-size:0.74rem;font-style:italic;">All your preferred artists are already on the list.</div>';
+            return;
+          }
+          addPicker.innerHTML = candidates.map(a => {
+            const aid = parseInt(a.artist_id || a.id, 10);
+            const nm = _esc(a.name || ('Artist ' + aid));
+            return `<button type="button" class="hold-mgmt-add" data-aid="${aid}"
+              style="display:block;width:100%;text-align:left;padding:5px 8px;background:transparent;border:none;color:var(--text);cursor:pointer;font-size:0.78rem;border-radius:3px;">
+              + ${nm}
+            </button>`;
+          }).join('');
+          addPicker.querySelectorAll('.hold-mgmt-add').forEach(b => {
+            b.addEventListener('mouseenter', () => b.style.background = 'rgba(34,197,94,0.10)');
+            b.addEventListener('mouseleave', () => b.style.background = 'transparent');
+            b.addEventListener('click', async () => {
+              const newAid = parseInt(b.dataset.aid, 10);
+              try {
+                const status = await (await fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' })).json();
+                const queued = (status.waitlist || [])
+                  .filter(w => w.state === 'queued')
+                  .map(w => w.artist_id);
+                queued.push(newAid);
+                await fetch(`/api/gigs/${gigId}/hold/reorder`, {
+                  method: 'POST', credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ queued_ids: queued })
+                });
+                await renderPanel(gigId);
+              } catch (_) {}
+            });
+          });
+        } catch (e) {
+          addPicker.innerHTML = '<div style="padding:8px;color:#ef4444;font-size:0.74rem;">Could not load preferred artists.</div>';
+        }
+      });
+    }
+  }
+
+  // Look up the gig's venue_id so we can fetch its preferred artists.
+  // Cached on the panel — the hold-status response carries venue_id.
+  async function _resolveVenueId(gigId) {
+    try {
+      const r = await fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' });
+      const d = await r.json();
+      return d.venue_id;
+    } catch (_) { return null; }
   }
 
   async function _action(gigId, kind, btn) {

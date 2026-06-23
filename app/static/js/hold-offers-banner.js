@@ -83,12 +83,49 @@
     banner.querySelectorAll('.hob-decline').forEach(btn => {
       btn.addEventListener('click', () => _decline(btn.dataset.token, btn));
     });
+    // Multi-slot: clicking a slot button opens a confirmation modal
+    // [Book] [Cancel]. Cancel just closes — doesn't decline the
+    // offer. The artist can pick a different slot or hit Decline all.
     banner.querySelectorAll('.hob-slot').forEach(btn => {
-      btn.addEventListener('click', () => _accept(btn.dataset.token, btn.dataset.slot, btn));
+      btn.addEventListener('click', () => _confirmBook({
+        token: btn.dataset.token, slotId: btn.dataset.slot,
+        venue: btn.dataset.venue, date: btn.dataset.date,
+        slotNum: btn.dataset.slotNum, time: btn.dataset.time, pay: btn.dataset.pay,
+      }, btn));
     });
-    banner.querySelectorAll('.hob-accept-one').forEach(btn => {
-      btn.addEventListener('click', () => _accept(btn.dataset.token, null, btn));
+    // Single-slot: 'Book' button → same confirmation flow.
+    banner.querySelectorAll('.hob-book-one').forEach(btn => {
+      btn.addEventListener('click', () => _confirmBook({
+        token: btn.dataset.token, slotId: null,
+        venue: btn.dataset.venue, date: btn.dataset.date,
+        time: btn.dataset.time, pay: btn.dataset.pay,
+      }, btn));
     });
+  }
+
+  // Show [Book] [Cancel] confirmation before doing the actual booking.
+  // Cancel just closes the dialog — doesn't decline the offer. Safety
+  // net for misclicks per user request.
+  function _confirmBook(args, btn) {
+    const slotPart = args.slotNum ? `<b>Slot ${args.slotNum}</b> · ` : '';
+    const msg = `${slotPart}${_esc(args.time)} at <b>${_esc(args.venue)}</b> on ${_esc(args.date)}<br><span style="color:#22c55e;font-weight:600;">${_esc(args.pay)}</span>`;
+    if (typeof window.showConfirm === 'function') {
+      window.showConfirm(
+        'Book this slot?',
+        // showConfirm's content is HTML-escaped via its _esc — pass
+        // a plain string. The simple version below loses the bold
+        // formatting but the modal still reads clearly.
+        `${args.slotNum ? `Slot ${args.slotNum} · ` : ''}${args.time} at ${args.venue} on ${args.date} for ${args.pay}.`,
+        () => _accept(args.token, args.slotId, btn),
+        () => { /* Cancel = dismiss, no decline */ },
+        { confirmLabel: 'Book', cancelLabel: 'Cancel', confirmStyle: 'success' }
+      );
+    } else {
+      // Fallback if gf-modals.js failed to load
+      if (confirm(`Book ${args.slotNum ? 'Slot ' + args.slotNum + ' ' : ''}at ${args.venue} on ${args.date} for ${args.pay}?`)) {
+        _accept(args.token, args.slotId, btn);
+      }
+    }
   }
 
   function _cardHtml(o) {
@@ -104,12 +141,15 @@
     } else if (o.slots.length === 1) {
       const s = o.slots[0];
       const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
+      // Stash venue/date on the button so the confirm modal can show
+      // them in the prompt without re-fetching.
       slotsHtml = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span style="font-size:0.85rem;color:var(--text);">
           ${_typeIcon(s.artist_type)} ${_esc(s.time)} <span style="color:#22c55e;font-weight:600;">${payStr}</span>
         </span>
-        <button type="button" class="hob-accept-one" data-token="${_esc(o.offer_token)}"
-          style="padding:6px 16px;background:#16a34a;border:none;border-radius:5px;color:#fff;cursor:pointer;font-size:0.8rem;font-weight:600;">Accept</button>
+        <button type="button" class="hob-book-one" data-token="${_esc(o.offer_token)}"
+          data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
+          style="padding:6px 16px;background:#16a34a;border:none;border-radius:5px;color:#fff;cursor:pointer;font-size:0.8rem;font-weight:600;">Book</button>
         <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
           style="padding:6px 14px;background:transparent;border:1px solid #dc2626;border-radius:5px;color:#f87171;cursor:pointer;font-size:0.8rem;font-weight:600;">Decline</button>
       </div>`;
@@ -119,6 +159,8 @@
           ${o.slots.map(s => {
             const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
             return `<button type="button" class="hob-slot" data-token="${_esc(o.offer_token)}" data-slot="${parseInt(s.id, 10)}"
+              data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}"
+              data-slot-num="${s.slot_number}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
               style="padding:6px 12px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.45);border-radius:5px;color:#86efac;cursor:pointer;font-size:0.78rem;font-weight:600;">
               ${_typeIcon(s.artist_type)} Slot ${s.slot_number} · ${_esc(s.time)} · ${payStr}
             </button>`;

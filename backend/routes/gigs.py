@@ -1173,8 +1173,12 @@ def list_gigs(db=Depends(get_db)):
                     CASE WHEN g.radius_blast_token IS NOT NULL AND g.status = 'open' THEN 1 ELSE 0 END as is_blast_open,
                     COALESCE(ven.radius_miles, 20) as blast_radius_miles,
                     COALESCE(g.frequency_exempt, 0) as frequency_exempt,
+                    -- has_active_waitlist drives the old 'WAITLIST IN PROGRESS'
+                    -- purple banner. Filter out hold-source rows (Jun 2026) —
+                    -- hold gigs render the new amber hold-management panel
+                    -- via window._renderHoldMgmtPanel instead.
                     CASE WHEN (
-                        EXISTS (SELECT 1 FROM gig_waitlist wl WHERE wl.gig_id = g.id AND wl.offer_sent = 1 AND (wl.offer_declined = 0 OR wl.offer_declined IS NULL) AND (wl.offer_expires_at IS NULL OR wl.offer_expires_at > datetime('now')))
+                        EXISTS (SELECT 1 FROM gig_waitlist wl WHERE wl.gig_id = g.id AND wl.offer_sent = 1 AND (wl.offer_declined = 0 OR wl.offer_declined IS NULL) AND (wl.offer_expires_at IS NULL OR wl.offer_expires_at > datetime('now')) AND (wl.source IS NULL OR wl.source = 'cancellation'))
                         OR EXISTS (SELECT 1 FROM waitlist_offered wo WHERE wo.gig_id = g.id AND wo.offer_expires_at > datetime('now'))
                     ) THEN 1 ELSE 0 END as has_active_waitlist,
                     (SELECT el.notification_key FROM gig_email_log el
@@ -1413,8 +1417,12 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                     COALESCE(g.is_multi_slot, 0) as is_multi_slot,
                     CASE WHEN g.radius_blast_token IS NOT NULL AND g.status = 'open' THEN 1 ELSE 0 END as is_blast_open,
                     COALESCE(g.frequency_exempt, 0) as frequency_exempt,
+                    -- has_active_waitlist drives the old 'WAITLIST IN PROGRESS'
+                    -- purple banner. Filter out hold-source rows (Jun 2026) —
+                    -- hold gigs render the new amber hold-management panel
+                    -- via window._renderHoldMgmtPanel instead.
                     CASE WHEN (
-                        EXISTS (SELECT 1 FROM gig_waitlist wl WHERE wl.gig_id = g.id AND wl.offer_sent = 1 AND (wl.offer_declined = 0 OR wl.offer_declined IS NULL) AND (wl.offer_expires_at IS NULL OR wl.offer_expires_at > datetime('now')))
+                        EXISTS (SELECT 1 FROM gig_waitlist wl WHERE wl.gig_id = g.id AND wl.offer_sent = 1 AND (wl.offer_declined = 0 OR wl.offer_declined IS NULL) AND (wl.offer_expires_at IS NULL OR wl.offer_expires_at > datetime('now')) AND (wl.source IS NULL OR wl.source = 'cancellation'))
                         OR EXISTS (SELECT 1 FROM waitlist_offered wo WHERE wo.gig_id = g.id AND wo.offer_expires_at > datetime('now'))
                     ) THEN 1 ELSE 0 END as has_active_waitlist,
                     (SELECT el.notification_key FROM gig_email_log el
