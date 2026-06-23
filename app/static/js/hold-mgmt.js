@@ -95,21 +95,26 @@
       </div>`;
     } else {
       // ── Active state: show current offer + waitlist ──
+      // 'CURRENTLY OFFERED TO: Fridays Past (23 hours remaining)' on
+      // one line. Generic-message style + tabular spacing so multiple
+      // offers/rerenders don't shift the layout. Slot summary
+      // 'X booked · Y still open' was removed per user — the slots
+      // themselves are visible below so the count was redundant.
       if (data.current_offer) {
         const co = data.current_offer;
-        const hours = co.hours_remaining != null ? `${co.hours_remaining}h` : '—';
-        html += `<div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:10px 14px;margin-bottom:12px;">
-          <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:4px;">Currently offered to</div>
-          <div style="font-size:0.95rem;color:var(--text);font-weight:600;">${_esc(co.artist_name || 'Artist #'+co.artist_id)}</div>
-          <div style="font-size:0.74rem;color:var(--text-gray);margin-top:2px;">
-            ${hours} remaining ${co.reminder_sent ? '· reminder sent' : ''}
-          </div>
-        </div>`;
-      }
-      // Slot summary
-      if (data.booked_slot_count > 0 || data.open_slot_count > 0) {
-        html += `<div style="font-size:0.78rem;color:var(--text-gray);margin-bottom:10px;">
-          ${data.booked_slot_count} booked · ${data.open_slot_count} still open
+        let timeStr = '—';
+        if (co.hours_remaining != null) {
+          const h = co.hours_remaining;
+          const totalMins = Math.round(h * 60);
+          if (totalMins <= 0) timeStr = 'expiring now';
+          else if (totalMins < 60) timeStr = `${totalMins} ${totalMins === 1 ? 'minute' : 'minutes'} remaining`;
+          else if (h < 24) { const hh = Math.round(h); timeStr = `${hh} ${hh === 1 ? 'hour' : 'hours'} remaining`; }
+          else { const dd = Math.round(h/24); timeStr = `${dd} ${dd === 1 ? 'day' : 'days'} remaining`; }
+        }
+        html += `<div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:9px 14px;margin-bottom:12px;font-size:0.84rem;color:var(--text);">
+          <span style="font-size:0.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-right:8px;">Currently offered to:</span>
+          <span style="font-weight:700;color:var(--text);">${_esc(co.artist_name || 'Artist #'+co.artist_id)}</span>
+          <span style="color:var(--text-gray);margin-left:6px;">(${timeStr}${co.reminder_sent ? ', reminder sent' : ''})</span>
         </div>`;
       }
       // Waitlist — original artists (added_post_creation=0) are LOCKED:
@@ -168,8 +173,8 @@
         // Add-artist affordance
         html += `<div style="margin:6px 0 12px 0;">
           <button type="button" id="holdAddArtistBtn"
-            style="padding:5px 12px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.35);border-radius:5px;color:#86efac;cursor:pointer;font-size:0.74rem;font-weight:600;">+ Add artist to waitlist</button>
-          <div id="holdAddArtistPicker" style="display:none;margin-top:6px;border:1px solid var(--border);border-radius:5px;padding:6px;max-height:140px;overflow:auto;background:rgba(0,0,0,0.2);"></div>
+            style="padding:5px 12px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.35);border-radius:5px;color:#86efac;cursor:pointer;font-size:0.74rem;font-weight:600;">+ Add Artist(s) to Waitlist</button>
+          <div id="holdAddArtistPicker" style="display:none;margin-top:6px;border:1px solid var(--border);border-radius:5px;padding:6px;max-height:200px;overflow:auto;background:rgba(0,0,0,0.2);"></div>
         </div>`;
       }
       // Action buttons
@@ -178,12 +183,12 @@
         <button type="button" id="holdSkipCurrentBtn"
           title="Mark the current offer as declined and immediately move on to the next artist. Use when the artist tells you offline they can't make it."
           style="padding:6px 12px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:5px;color:#fcd34d;cursor:pointer;font-size:0.78rem;font-weight:600;">
-          Skip current artist
+          Skip Current Artist
         </button>` : ''}
         <button type="button" id="holdReleaseBtn"
           title="End the hold immediately and open the gig to all artists. The current offer (if any) is cancelled."
           style="padding:6px 12px;background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.4);border-radius:5px;color:#93c5fd;cursor:pointer;font-size:0.78rem;font-weight:600;">
-          Release hold (open to all)
+          Release Hold (Open to All)
         </button>
       </div>`;
     }
@@ -314,9 +319,15 @@
         addPicker.innerHTML = '<div style="padding:8px;color:var(--text-gray);font-size:0.74rem;">Loading…</div>';
         try {
           const venueId = await _resolveVenueId(gigId);
-          const res = await fetch(`/api/venues/${venueId}/preferred-artists`, { credentials: 'include' });
-          if (!res.ok) throw new Error();
-          const data = await res.json();
+          const [artistsRes, gigRes] = await Promise.all([
+            fetch(`/api/venues/${venueId}/preferred-artists`, { credentials: 'include' }),
+            // Fetch the gig's slots so we can filter artists by type
+            // match — same UX as the Hold Gig create picker.
+            fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' }),
+          ]);
+          if (!artistsRes.ok) throw new Error();
+          const data = await artistsRes.json();
+          const gigData = gigRes.ok ? await gigRes.json() : {};
           const approved = (Array.isArray(data) ? data : (data.preferred_artists || []))
             .filter(a => (a.status || 'approved') === 'approved');
           // Already-on-waitlist ids
@@ -324,22 +335,60 @@
             Array.from(panel.querySelectorAll('.hold-mgmt-row[data-aid]'))
               .map(r => parseInt(r.dataset.aid, 10))
           );
-          const candidates = approved.filter(a => !onList.has(parseInt(a.artist_id || a.id, 10)));
+          // Type-match candidates against any open slot (mirrors the
+          // create-flow picker — adding an artist who doesn't match
+          // any slot would just auto-decline).
+          const openSlots = gigData.open_slots || [];
+          const _csvSet = s => s ? new Set(String(s).split(/[,;]/).map(x => x.trim().toLowerCase()).filter(Boolean)) : new Set();
+          function _matches(artist, slot) {
+            if (!slot.artist_type || !artist.artist_type) return false;
+            if (artist.artist_type !== slot.artist_type) return false;
+            const sf = _csvSet(slot.band_formats);
+            if (sf.size > 0 && ![..._csvSet(artist.band_formats)].some(x => sf.has(x))) return false;
+            const ss = _csvSet(slot.styles);
+            if (ss.size > 0 && ![..._csvSet(artist.styles)].some(x => ss.has(x))) return false;
+            return true;
+          }
+          const candidates = approved.filter(a => {
+            if (onList.has(parseInt(a.artist_id || a.id, 10))) return false;
+            if (!openSlots.length) return true;  // no open slots = no filter
+            return openSlots.some(s => _matches(a, s));
+          });
           if (!candidates.length) {
-            addPicker.innerHTML = '<div style="padding:8px;color:var(--text-gray);font-size:0.74rem;font-style:italic;">All your preferred artists are already on the list.</div>';
+            addPicker.innerHTML = '<div style="padding:8px;color:var(--text-gray);font-size:0.74rem;font-style:italic;">No more preferred artists match the open slots\' type.</div>';
             return;
           }
-          addPicker.innerHTML = candidates.map(a => {
-            const aid = parseInt(a.artist_id || a.id, 10);
-            const nm = _esc(a.name || ('Artist ' + aid));
-            return `<button type="button" class="hold-mgmt-add" data-aid="${aid}"
-              style="display:block;width:100%;text-align:left;padding:5px 8px;background:transparent;border:none;color:var(--text);cursor:pointer;font-size:0.78rem;border-radius:3px;">
-              + ${nm}
-            </button>`;
-          }).join('');
+          // Render the picker with the same vocabulary as the create
+          // modal: type icon, name, (Override Pay), click toggles.
+          // Per user note: only artists matching a slot are listed +
+          // pay override shown.
+          const ICON = { 'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'❓' };
+          function _payFor(a) {
+            const dollars = Number(a.pay_dollars_override) || 0;
+            const cents = Number(a.pay_cents_override) || 0;
+            if (dollars > 0 || cents > 0) {
+              const v = dollars + cents / 100;
+              return v % 1 === 0 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`;
+            }
+            return '$--';
+          }
+          addPicker.innerHTML = '<div style="font-size:0.66rem;color:var(--text-gray);margin:2px 4px 6px;font-style:italic;">Click an artist to add them to the waitlist (matched to your open slots).</div>' +
+            candidates.map(a => {
+              const aid = parseInt(a.artist_id || a.id, 10);
+              const nm = _esc(a.name || ('Artist ' + aid));
+              const icon = ICON[a.artist_type] || '🎵';
+              const pay = _payFor(a);
+              return `<button type="button" class="hold-mgmt-add" data-aid="${aid}"
+                title="${_esc(a.artist_type || 'Artist')}"
+                style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:5px 8px;margin-bottom:3px;background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--text);cursor:pointer;font-size:0.78rem;border-radius:4px;">
+                <span style="flex:0 0 auto;">${icon}</span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${nm}</span>
+                <span style="flex:0 0 auto;opacity:0.7;font-weight:500;color:var(--text-gray);">(${pay})</span>
+              </button>`;
+            }).join('');
           addPicker.querySelectorAll('.hold-mgmt-add').forEach(b => {
-            b.addEventListener('mouseenter', () => b.style.background = 'rgba(34,197,94,0.10)');
-            b.addEventListener('mouseleave', () => b.style.background = 'transparent');
+            b.addEventListener('mouseenter', () => { b.style.background = 'rgba(34,197,94,0.10)'; b.style.borderColor = 'rgba(34,197,94,0.35)'; });
+            b.addEventListener('mouseleave', () => { b.style.background = 'transparent'; b.style.borderColor = 'rgba(255,255,255,0.06)'; });
             b.addEventListener('click', async () => {
               const newAid = parseInt(b.dataset.aid, 10);
               try {

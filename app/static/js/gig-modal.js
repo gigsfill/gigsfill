@@ -277,16 +277,19 @@ async function renderGigModal(data, callbacks = {}) {
           // (sized to '12:00 PM – 12:00 PM') keeps the pay column
           // aligned even when one slot is '1:00 PM' and another is
           // '12:00 PM'.
+          // Vertical layout with generous column widths. Time column
+          // uses 18ch so 'XX:XX PM – XX:XX PM' (max 18 chars) fits
+          // without bleeding into the pay column. Pay is centered
+          // between time and buttons via flex distribution + auto
+          // margin on both sides.
           slotsHtml = '<div style="display:flex;flex-direction:column;gap:6px;">'
             + slots.map(s => {
               const slotLabel = slots.length > 1 ? `Slot ${s.slot_number}` : '';
-              return `<div style="display:flex;align-items:center;gap:10px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:8px 12px;">
-                <span style="display:inline-flex;align-items:center;gap:8px;flex:1;font-size:0.84rem;color:var(--text);white-space:nowrap;">
-                  <span style="display:inline-block;width:18px;text-align:center;flex:0 0 18px;">${_typeIcon(s.artist_type)}</span>
-                  ${slotLabel ? `<span style="display:inline-block;min-width:54px;flex:0 0 54px;font-weight:600;">${slotLabel}</span>` : ''}
-                  <span style="display:inline-block;min-width:11ch;font-variant-numeric:tabular-nums;flex:0 0 11ch;">${s.time}</span>
-                  <span style="color:#22c55e;font-weight:600;font-variant-numeric:tabular-nums;display:inline-block;min-width:7ch;flex:0 0 7ch;">${_payStr(s.pay)}</span>
-                </span>
+              return `<div style="display:flex;align-items:center;gap:14px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:8px 14px;">
+                <span style="display:inline-block;width:18px;text-align:center;flex:0 0 18px;font-size:0.95rem;">${_typeIcon(s.artist_type)}</span>
+                ${slotLabel ? `<span style="display:inline-block;width:60px;flex:0 0 60px;font-size:0.84rem;color:var(--text);font-weight:600;white-space:nowrap;">${slotLabel}</span>` : ''}
+                <span style="display:inline-block;width:18ch;flex:0 0 18ch;font-size:0.84rem;color:var(--text);white-space:nowrap;font-variant-numeric:tabular-nums;">${s.time}</span>
+                <span style="display:inline-block;flex:1;text-align:center;font-size:0.86rem;color:#22c55e;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;">${_payStr(s.pay)}</span>
                 <span style="display:inline-flex;gap:6px;flex:0 0 auto;">
                   <button type="button" data-token="${hi.offer_token}" data-slot="${s.id}"
                     data-venue="${(data.venue_name||'').replace(/"/g,'&quot;')}" data-date="${data.date||''}"
@@ -297,7 +300,7 @@ async function renderGigModal(data, callbacks = {}) {
                   <button type="button" data-token="${hi.offer_token}"
                     onclick="window.gmHoldDecline && window.gmHoldDecline(this)"
                     title="Decline if you are unable to perform on this day."
-                    style="padding:5px 14px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:72px;">Decline</button>
+                    style="padding:5px 14px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:78px;">Decline</button>
                 </span>
               </div>`;
             }).join('') + '</div>';
