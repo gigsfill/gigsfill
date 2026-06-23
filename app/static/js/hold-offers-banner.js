@@ -251,8 +251,22 @@
 
   async function _decline(token, btn) {
     if (!token) return;
+    // Promise-wrap showConfirm so we actually wait for the user's
+    // click. tone:'warning' paints the modal red-toned;
+    // confirmStyle:'danger' makes the Confirm button red.
+    // Bug before: showConfirm was awaited as if it returned a Promise,
+    // but it uses callbacks — the await resolved to the modal element
+    // (truthy) and the decline fired regardless of what the user
+    // clicked in the dialog.
     const ok = window.showConfirm
-      ? await window.showConfirm('Decline this offer? The venue will be told and they\'ll move on to the next artist on their list.')
+      ? await new Promise(res => window.showConfirm(
+          'Decline this offer?',
+          'The venue will be told and they\'ll move on to the next artist on their list.',
+          () => res(true),
+          () => res(false),
+          { tone: 'warning', confirmStyle: 'danger',
+            confirmLabel: 'Decline Offer', cancelLabel: 'Keep Offer' }
+        ))
       : confirm('Decline this offer?');
     if (!ok) return;
     const orig = btn.textContent;
@@ -260,7 +274,20 @@
     try {
       const res = await fetch(`/hold/decline/${encodeURIComponent(token)}`, { credentials: 'include' });
       if (res.ok) {
+        // Close the parent gig modal if this decline came from inside
+        // it (gmHoldDecline path). The page's calendar/banner refresh
+        // below handles the rest.
+        if (typeof window.closeAllModals === 'function') {
+          try { window.closeAllModals(); } catch (_) {}
+        }
         await load();
+        // Refresh the artist calendar so the gig bubble flips from
+        // blinking blue → black (it no longer has an active offer
+        // for this artist). Drives shouldBlinkForArtist via the
+        // refreshed holdOfferGigIds set.
+        if (typeof window.refreshArtistGigs === 'function') {
+          try { window.refreshArtistGigs(); } catch (_) {}
+        }
       } else {
         btn.textContent = '✗ Failed';
         setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 2500);

@@ -2517,6 +2517,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   window.loadGigs = loadGigs;
   window.loadMyGigs = loadMyGigs;
   window.renderCalendar = renderCalendar;
+  // Compound refresh used by the hold-offers banner after a Book/
+  // Decline — reloads gigs (refreshes the holdOfferGigIds set as a
+  // side effect) and re-paints the calendar so the bubble color
+  // matches the new offer state.
+  window.refreshArtistGigs = async function () {
+    try {
+      await loadGigs();
+      if (typeof renderCalendar === 'function') renderCalendar();
+    } catch (_) {}
+  };
   // Expose gigs array so waitlist functions (defined on window) can access it
   Object.defineProperty(window, '_abgGigs', { get: () => gigs, configurable: true });
 
