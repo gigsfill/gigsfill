@@ -611,6 +611,13 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
               AND g.date = ?
               AND g.status = 'open'
               AND (g.artist_id IS NULL OR g.artist_id = '')
+              -- Skip held gigs (Hold feature, Jun 2026). The venue is
+              -- privately offering to their preferred list; firing the
+              -- 36h/1w/2w/4w blasts would defeat the whole point of the
+              -- hold. Once the hold resolves to 'open' (via venue
+              -- release or exhaustion → Open to All), hold_status is
+              -- NULL again and blasts can fire normally.
+              AND (g.hold_status IS NULL OR g.hold_status NOT IN ('active', 'exhausted'))
               AND g.id NOT IN (
                   SELECT gig_id FROM gig_email_log
                   WHERE notification_key = ?
@@ -909,6 +916,8 @@ def process_radius_blast(cursor, smtp_config):
             WHERE g.venue_id = ?
               AND g.status = 'open'
               AND (g.artist_id IS NULL OR g.artist_id = '')
+              -- Skip held gigs — see explanation in process_open_gig_notifications.
+              AND (g.hold_status IS NULL OR g.hold_status NOT IN ('active', 'exhausted'))
               AND g.id NOT IN (
                   SELECT gig_id FROM gig_email_log WHERE notification_key = 'radius_blast'
               )
@@ -1262,6 +1271,10 @@ def process_waitlist_expirations():
                   AND (w.offer_declined = 0 OR w.offer_declined IS NULL)
                   AND datetime(w.offer_expires_at) < datetime('now')
                   AND g.status = 'open'
+                  -- Hold-source rows are handled by gig_hold.process_hold_offers
+                  -- (different lifecycle: offer_declined=1 marker, not row delete).
+                  -- This block only handles the legacy cancellation waitlist.
+                  AND (w.source IS NULL OR w.source = 'cancellation')
             """)).mappings().all()
 
             for row in expired:
