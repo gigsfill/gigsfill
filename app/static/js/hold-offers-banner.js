@@ -27,11 +27,22 @@
     }[c]));
   }
 
-  function _fmtHours(h) {
+  // Human-friendly "time left to book" string. Rounded to nearest unit.
+  // Per user spec: 'X hours left to book' / 'Y minutes left to book',
+  // round up or down to nearest integer.
+  function _fmtTimeLeft(h) {
     if (h == null) return '';
-    if (h < 1) return Math.round(h * 60) + 'm';
-    if (h < 24) return h + 'h';
-    return Math.round(h / 24) + 'd';
+    const totalMins = Math.round(h * 60);
+    if (totalMins <= 0) return 'expiring now';
+    if (totalMins < 60) {
+      return `${totalMins} ${totalMins === 1 ? 'minute' : 'minutes'} left to book`;
+    }
+    const hrs = Math.round(h);
+    if (hrs < 24) {
+      return `${hrs} ${hrs === 1 ? 'hour' : 'hours'} left to book`;
+    }
+    const days = Math.round(h / 24);
+    return `${days} ${days === 1 ? 'day' : 'days'} left to book`;
   }
 
   function _fmtDate(d) {
@@ -135,67 +146,79 @@
     }
   }
 
-  // One-step row layout (Jun 2026): each open slot is its own line
-  // with inline Book + Decline buttons. No expand step, no modal —
-  // user opens the calendar page, sees the slots, clicks Book on the
-  // one they want OR Decline on any to drop the whole offer. Per
-  // user request: avoids the prior 'clicked Pick a slot, it booked'
-  // confusion since slots are visible immediately.
+  // Bubble-style row (Jun 2026): each slot is its own pill-card with
+  // inline Book + Decline buttons. Bubbles flow left-to-right and wrap
+  // to a second row when too many to fit. Within each bubble, the time
+  // and pay use fixed-width columns so they align across bubbles.
   //
-  // Each slot's Decline is the SAME action — declines the whole
-  // offer (not just one slot) — but venue UX is clearer when both
-  // buttons sit next to every slot.
+  // Decline on any slot declines the whole offer (only one response is
+  // supported per offer); the dual buttons in each bubble are a UX
+  // convenience.
   function _rowHtml(o) {
-    const title = o.gig_title ? ` "${_esc(o.gig_title)}"` : '';
+    const title = o.gig_title ? ` <span style="color:var(--text-gray);font-weight:400;">"${_esc(o.gig_title)}"</span>` : '';
     const expires = o.hours_remaining != null
-      ? `<span style="color:${o.hours_remaining < 6 ? '#ef4444' : '#fcd34d'};font-weight:700;font-size:0.74rem;white-space:nowrap;">${_fmtHours(o.hours_remaining)} left</span>`
+      ? `<span style="color:${o.hours_remaining < 6 ? '#ef4444' : '#fcd34d'};font-weight:600;font-size:0.78rem;white-space:nowrap;">${_fmtTimeLeft(o.hours_remaining)}</span>`
       : '';
+    // Venue name → purple/blue, hyperlinked to public profile page.
+    // Matches the site's existing purple accent vocabulary
+    // (rgba(124,107,255,...) / #a78bfa) used on My Artists / venue
+    // chips elsewhere.
+    const venueLink = o.venue_id
+      ? `<a href="/app/venue-profile.html?venue_id=${parseInt(o.venue_id, 10)}" target="_blank" rel="noopener"
+            style="color:#a78bfa;text-decoration:none;font-weight:700;border-bottom:1px dashed rgba(167,139,250,0.45);">${_esc(o.venue_name)}</a>`
+      : `<span style="color:#a78bfa;font-weight:700;">${_esc(o.venue_name)}</span>`;
 
-    // Header line: venue + date + time-remaining badge. The artist
-    // identity is implied (the banner is filtered to the current
-    // page's artist), so no artist chip needed.
-    const header = `<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-bottom:6px;">
-      <span style="font-size:0.85rem;color:var(--text);font-weight:600;">
-        ${_esc(o.venue_name)}${title} · ${_fmtDate(o.gig_date)}
+    const header = `<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px;">
+      <span style="font-size:0.88rem;color:var(--text);">
+        ${venueLink}${title} · ${_fmtDate(o.gig_date)}
       </span>
       ${expires}
     </div>`;
 
     if (!o.slots || o.slots.length === 0) {
-      return `<div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+      return `<div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px 14px;">
         ${header}
         <div style="font-size:0.78rem;color:var(--text-gray);font-style:italic;display:flex;align-items:center;justify-content:space-between;gap:10px;">
           <span>No slots match your artist type</span>
           <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
+            title="Decline if you are unable to perform on this day."
             style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>
         </div>
       </div>`;
     }
 
-    // One row per slot, inline Book + Decline.
-    const slotRows = o.slots.map(s => {
+    // Pick the widest time string so each bubble's time column matches.
+    // Lets the pay column line up vertically across bubbles in the row.
+    const widestTime = Math.max(...o.slots.map(s => (s.time || '').length));
+
+    const slotBubbles = o.slots.map(s => {
       const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
-      // For multi-slot, label includes 'Slot N'; for single-slot,
-      // skip the slot number since it's the only one.
-      const slotLabel = o.slots.length > 1 ? `Slot ${s.slot_number} · ` : '';
-      return `<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;padding:5px 0;">
-        <span style="font-size:0.82rem;color:var(--text);">
-          ${_typeIcon(s.artist_type)} ${slotLabel}${_esc(s.time)} · <span style="color:#22c55e;font-weight:600;">${payStr}</span>
+      const slotLabel = o.slots.length > 1 ? `Slot ${s.slot_number}` : '';
+      return `<div class="hob-slot-bubble"
+        style="display:inline-flex;align-items:center;gap:10px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:7px 12px;flex-wrap:nowrap;">
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text);white-space:nowrap;">
+          <span style="font-size:0.95em;">${_typeIcon(s.artist_type)}</span>
+          ${slotLabel ? `<span style="color:var(--text);font-weight:600;">${slotLabel}</span><span style="color:var(--text-muted);">·</span>` : ''}
+          <span style="font-variant-numeric:tabular-nums;display:inline-block;min-width:${widestTime}ch;">${_esc(s.time)}</span>
+          <span style="color:var(--text-muted);">·</span>
+          <span style="color:#22c55e;font-weight:600;font-variant-numeric:tabular-nums;">${payStr}</span>
         </span>
-        <span style="display:inline-flex;gap:6px;">
+        <span style="display:inline-flex;gap:5px;flex-shrink:0;">
           <button type="button" class="hob-slot-book" data-token="${_esc(o.offer_token)}" data-slot="${parseInt(s.id, 10)}"
             data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}"
             data-slot-num="${s.slot_number}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
-            style="padding:5px 14px;background:#16a34a;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;">Book</button>
+            title="Book this slot now."
+            style="padding:5px 14px;background:#7c6bff;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;">Book</button>
           <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
+            title="Decline if you are unable to perform on this day."
             style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>
         </span>
       </div>`;
     }).join('');
 
-    return `<div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+    return `<div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px 14px;">
       ${header}
-      <div style="display:flex;flex-direction:column;">${slotRows}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">${slotBubbles}</div>
     </div>`;
   }
 
