@@ -396,11 +396,17 @@ def get_gig_modal_data(
                 except Exception:
                     pass
 
-        # Waitlist status
+        # Waitlist status — exclude hold-source rows (Jun 2026). Hold
+        # offers are surfaced via the Pending Offers banner at the top
+        # of artist-book-gigs and shouldn't trigger the OLD
+        # 'You're next on the waitlist' / 'Not Available' UX in the
+        # gig modal. (User report: clicking 'Not Available' on a held
+        # gig declined it under confusing legacy labeling.)
         wl_row = db.execute(text("""
             SELECT id, offer_sent, offer_declined, offer_expires_at
             FROM gig_waitlist WHERE gig_id=:gid AND artist_id=:aid
             AND (offer_declined=0 OR offer_declined IS NULL)
+            AND (source IS NULL OR source = 'cancellation')
         """), {"gid": gig_id, "aid": viewer_id}).mappings().first()
 
         offered_row = db.execute(text("""

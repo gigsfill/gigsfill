@@ -734,7 +734,14 @@ def _build_open_slots_html(db, gig_id: int, gig: dict) -> str:
 
 def _send_sequential_offer(db, gig_id: int, gig, hours_until: float = 999):
     """Send an exclusive offer to the top unnotified artist on the waitlist.
-    Offer window is tiered: >36h=24h, 36h-4h=2h, <4h=30min."""
+    Offer window is tiered: >36h=24h, 36h-4h=2h, <4h=30min.
+
+    Defense-in-depth (Jun 2026): excludes source='hold' rows so the
+    legacy cancellation-waitlist email + 'waitlist_offer' Activity
+    Center notification never fire for hold-feature rows. Hold
+    advancement runs through services/gig_hold.send_next_hold_offer
+    which uses the proper 'hold_offer_artist' template.
+    """
     try:
         # Find the top artist who hasn't been offered yet and hasn't declined
         entry = db.execute(
@@ -746,6 +753,7 @@ def _send_sequential_offer(db, gig_id: int, gig, hours_until: float = 999):
                 WHERE w.gig_id = :gid
                   AND (w.offer_sent = 0 OR w.offer_sent IS NULL)
                   AND (w.offer_declined = 0 OR w.offer_declined IS NULL)
+                  AND (w.source IS NULL OR w.source = 'cancellation')
                 ORDER BY w.id ASC
                 LIMIT 1
             """),

@@ -7481,82 +7481,93 @@ def hold_accept_slot(token: str, slot_id: int = Query(...), db=Depends(get_db)):
     return HTMLResponse(_hold_simple_page("Could not book", result.get("message") or "Please try again."))
 
 
-def _hold_simple_page(title: str, body_html: str, color: str = "#111827") -> str:
-    """Minimal styled HTML response page — matches the email visual
-    vocabulary (white card on grey, GigsFill logo header, footer)."""
+def _hold_page_shell(title: str, inner_html: str, accent: str = "#a78bfa") -> str:
+    """Dark-themed landing page matching the site (bg #0a0e17, card
+    #151b28, purple accent). Replaced the prior white-on-grey email
+    look (Jun 2026) since clicking an email link should land on a
+    page that feels like GigsFill, not a transactional-email card."""
     return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>{title} — GigsFill</title>
+<html lang="en"><head>
+<meta charset="utf-8"><title>{title} — GigsFill</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>body{{margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}}</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  body{{margin:0;padding:0;background:#0a0e17;color:#f8fafc;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;line-height:1.5;}}
+  a{{color:{accent};}}
+  .hold-card{{max-width:580px;margin:48px auto;background:#151b28;border:1px solid rgba(148,163,184,0.12);border-radius:12px;overflow:hidden;}}
+  .hold-card-header{{padding:24px 32px;border-bottom:1px solid rgba(148,163,184,0.12);}}
+  .hold-card-body{{padding:28px 32px;}}
+  .hold-card-footer{{padding:18px 32px;border-top:1px solid rgba(148,163,184,0.10);text-align:center;}}
+  .hold-card-footer p{{margin:0;color:#94a3b8;font-size:12px;}}
+  .hold-card-footer a{{color:#a78bfa;text-decoration:none;}}
+  h1{{margin:0 0 12px 0;font-size:1.4rem;font-weight:700;color:#f8fafc;}}
+  .accent{{color:{accent};font-weight:700;}}
+  .muted{{color:#94a3b8;font-size:0.86rem;}}
+</style>
 </head>
 <body>
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f8f9fa;">
-<tr><td style="padding:40px 20px;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background-color:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-<tr><td style="padding:32px 40px 24px 40px;border-bottom:1px solid #eee;">
-<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
-</td></tr>
-<tr><td style="padding:32px 40px;">
-<h1 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:{color};">{title}</h1>
-<p style="margin:0;font-size:15px;line-height:1.6;color:#4b5563;">{body_html}</p>
-</td></tr>
-<tr><td style="padding:24px 40px;background-color:#f8f9fa;border-top:1px solid #eee;">
-<p style="margin:0;color:#6b7280;font-size:12px;text-align:center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color:#1a1a2e;text-decoration:none;">gigsfill.com</a></p>
-</td></tr>
-</table></td></tr></table>
+<div class="hold-card">
+  <div class="hold-card-header">
+    <img src="https://gigsfill.com/app/static/img/gigsfill-logo.png" alt="GigsFill" width="160" style="display:block;height:auto;">
+  </div>
+  <div class="hold-card-body">
+    {inner_html}
+  </div>
+  <div class="hold-card-footer">
+    <p>&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com">gigsfill.com</a></p>
+  </div>
+</div>
 </body></html>"""
 
 
+def _hold_simple_page(title: str, body_html: str, color: str = "#a78bfa") -> str:
+    """Simple confirmation page in the dark site theme."""
+    inner = f"""<h1 style="color:{color};">{title}</h1>
+<p style="margin:0;color:#cbd5e1;font-size:0.95rem;line-height:1.6;">{body_html}</p>"""
+    return _hold_page_shell(title=title, inner_html=inner, accent=color)
+
+
 def _hold_slot_picker_page(token: str, row, open_slots) -> str:
-    """Multi-slot landing page: list each open slot with a Book button."""
+    """Multi-slot landing page in the dark site theme. Each slot is a
+    purple-bordered card with one 'Book' button + a Decline link at
+    the bottom."""
     from backend.services.gig_hold import _fmt_time
-    venue = (row["venue_name"] or "the venue").replace("<", "&lt;").replace(">", "&gt;")
-    date = str(row["date"])
+    def _esc(s):
+        return str(s or '').replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
+    venue = _esc(row["venue_name"] or "the venue")
+    date = _esc(str(row["date"]))
     title_html = ""
     if row.get("title"):
-        _t = str(row["title"]).replace("<", "&lt;").replace(">", "&gt;")
-        title_html = f'<tr><td style="padding:6px 0;font-size:14px;color:#6b7280;width:80px;">Title</td><td style="padding:6px 0;font-size:14px;color:#111827;font-weight:500;">{_t}</td></tr>'
+        title_html = f'<div class="muted" style="margin-bottom:4px;">"{_esc(row["title"])}"</div>'
     rows_html = ""
     for s in open_slots:
         time_str = f"{_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}"
         pay = int(s["pay"]) if s["pay"] and s["pay"] == int(s["pay"]) else s["pay"]
         rows_html += f"""
-<form method="POST" action="/hold/accept/{token}?slot_id={int(s['id'])}" style="margin:0 0 12px 0;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;">
-<tr><td style="padding:14px 18px;">
-<div style="font-size:14px;color:#111827;font-weight:600;">Slot {s['slot_number']}</div>
-<div style="font-size:14px;color:#4b5563;margin-top:2px;">{time_str}  ·  <span style="color:#059669;font-weight:600;">${pay}</span></div>
-</td><td style="padding:14px 18px;text-align:right;width:120px;">
-<button type="submit" style="display:inline-block;background:#16a34a;color:#ffffff;padding:10px 18px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">Book this slot</button>
-</td></tr></table></form>"""
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Pick a slot — GigsFill</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>body{{margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}}</style>
-</head>
-<body>
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f8f9fa;">
-<tr><td style="padding:40px 20px;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background-color:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-<tr><td style="padding:32px 40px 24px 40px;border-bottom:1px solid #eee;">
-<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
-</td></tr>
-<tr><td style="padding:32px 40px;">
-<h1 style="margin:0 0 8px 0;font-size:22px;font-weight:600;color:#d97706;">Pick the slot you want</h1>
-<p style="margin:0 0 20px 0;font-size:15px;line-height:1.5;color:#4b5563;"><b>{venue}</b> &middot; {date}</p>
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin-bottom:18px;">
-<tr><td style="padding:14px 18px;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">{title_html}
-<tr><td style="padding:4px 0;font-size:14px;color:#6b7280;width:80px;">Open slots</td><td style="padding:4px 0;font-size:14px;color:#111827;font-weight:500;">{len(open_slots)}</td></tr>
-</table></td></tr></table>
+<form method="POST" action="/hold/accept/{token}?slot_id={int(s['id'])}" style="margin:0 0 10px 0;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:rgba(124,107,255,0.08);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:14px 16px;">
+    <div>
+      <div style="font-size:0.95rem;font-weight:600;color:#f8fafc;">Slot {s['slot_number']}</div>
+      <div style="font-size:0.86rem;color:#cbd5e1;margin-top:2px;">{time_str}  ·  <span style="color:#22c55e;font-weight:700;">${pay}</span></div>
+    </div>
+    <button type="submit"
+      title="Book this slot now."
+      style="background:#7c6bff;color:#fff;border:none;padding:9px 18px;border-radius:6px;font-size:0.86rem;font-weight:600;cursor:pointer;">Book this slot</button>
+  </div>
+</form>"""
+    inner = f"""<h1 style="color:#fcd34d;">Pick the slot you want</h1>
+<p style="margin:0 0 14px 0;color:#cbd5e1;font-size:0.95rem;">
+  <span class="accent">{venue}</span> &middot; <span style="color:#f8fafc;font-weight:600;">{date}</span>
+</p>
+{title_html}
+<div class="muted" style="margin-bottom:18px;">{len(open_slots)} open slot{'s' if len(open_slots) != 1 else ''} — pick the one you want.</div>
 {rows_html}
-<p style="margin:18px 0 0 0;font-size:13px;color:#6b7280;">Or <a href="/hold/decline/{token}" style="color:#dc2626;text-decoration:underline;">decline this offer</a> and we'll move on to the next artist.</p>
-</td></tr>
-<tr><td style="padding:24px 40px;background-color:#f8f9fa;border-top:1px solid #eee;">
-<p style="margin:0;color:#6b7280;font-size:12px;text-align:center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color:#1a1a2e;text-decoration:none;">gigsfill.com</a></p>
-</td></tr>
-</table></td></tr></table>
-</body></html>"""
+<p style="margin:18px 0 0 0;font-size:0.84rem;color:#94a3b8;">
+  Or <a href="/hold/decline/{token}" style="color:#f87171;text-decoration:underline;font-weight:600;"
+      title="Decline if you are unable to perform on this day.">decline this offer</a>
+  and we'll move on to the next artist.
+</p>"""
+    return _hold_page_shell(title="Pick the slot you want", inner_html=inner, accent="#fcd34d")
 
 
 # ============================================================
