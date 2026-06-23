@@ -108,9 +108,14 @@
           ${data.booked_slot_count} booked · ${data.open_slot_count} still open
         </div>`;
       }
-      // Waitlist
+      // Waitlist — queued rows are draggable to reorder; current_offer
+      // (in flight) + accepted + declined are locked at their positions.
       if (data.waitlist && data.waitlist.length > 1) {
-        html += `<div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin:10px 0 6px 0;">Waitlist</div>`;
+        const queuedCount = data.waitlist.filter(w => w.state === 'queued').length;
+        const dragHint = queuedCount > 1
+          ? '<span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);margin-left:8px;font-size:0.68rem;">(drag queued rows to reorder)</span>'
+          : '';
+        html += `<div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin:10px 0 6px 0;">Waitlist${dragHint}</div>`;
         html += '<div id="holdMgmtWaitlist" style="display:flex;flex-direction:column;gap:3px;margin-bottom:12px;">';
         data.waitlist.forEach((w, i) => {
           const state = w.state;
@@ -129,7 +134,19 @@
             badge = 'Queued';
             badgeColor = 'var(--text-gray)';
           }
-          html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:rgba(255,255,255,0.02);border-radius:4px;font-size:0.78rem;">
+          // Only the queued rows are draggable.
+          const isDraggable = state === 'queued';
+          const dragAttrs = isDraggable
+            ? `draggable="true" data-aid="${parseInt(w.artist_id, 10)}"`
+            : '';
+          const cursor = isDraggable ? 'grab' : 'default';
+          const handle = isDraggable
+            ? '<span class="hold-mgmt-handle" style="color:var(--text-muted);cursor:grab;font-size:0.85rem;user-select:none;">⋮⋮</span>'
+            : '<span style="display:inline-block;width:14px;"></span>';
+          html += `<div class="hold-mgmt-row ${isDraggable ? 'is-draggable' : ''}"
+              ${dragAttrs}
+              style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:rgba(255,255,255,0.02);border-radius:4px;font-size:0.78rem;cursor:${cursor};">
+            ${handle}
             <span style="color:var(--text-muted);min-width:18px;">${i + 1}.</span>
             <span style="flex:1;color:var(--text);">${_esc(w.artist_name || 'Artist #'+w.artist_id)}</span>
             <span style="color:${badgeColor};font-size:0.7rem;font-weight:600;">${badge}</span>
@@ -180,6 +197,63 @@
         : confirm('Cancel the empty slots? (Booked slots stay.)');
       if (!ok) return;
       _action(gigId, 'cancel_empty', cancelEmpty);
+    });
+    _wireDragReorder(gigId, panel);
+  }
+
+  // Drag-and-drop reorder on the queued portion of the waitlist.
+  // POSTs the new order to /hold/reorder; current_offer and declined
+  // rows are immutable (backend rejects attempts to touch them).
+  function _wireDragReorder(gigId, panel) {
+    const list = panel.querySelector('#holdMgmtWaitlist');
+    if (!list) return;
+    let dragEl = null;
+    list.querySelectorAll('.hold-mgmt-row.is-draggable').forEach(row => {
+      row.addEventListener('dragstart', (e) => {
+        dragEl = row;
+        row.style.opacity = '0.4';
+        try { e.dataTransfer.setData('text/plain', row.dataset.aid); } catch(_) {}
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      row.addEventListener('dragend', () => {
+        row.style.opacity = '';
+        list.querySelectorAll('.hold-mgmt-row').forEach(r => { r.style.borderTop = ''; });
+        dragEl = null;
+      });
+      row.addEventListener('dragover', (e) => {
+        if (!dragEl || dragEl === row) return;
+        // Only allow drop onto OTHER queued rows
+        if (!row.classList.contains('is-draggable')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        list.querySelectorAll('.hold-mgmt-row').forEach(r => { r.style.borderTop = ''; });
+        row.style.borderTop = '2px solid #f59e0b';
+      });
+      row.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        if (!dragEl || dragEl === row || !row.classList.contains('is-draggable')) return;
+        // Compute the new order of queued rows
+        const allQueued = Array.from(list.querySelectorAll('.hold-mgmt-row.is-draggable'));
+        const fromIdx = allQueued.indexOf(dragEl);
+        let toIdx = allQueued.indexOf(row);
+        if (fromIdx < 0 || toIdx < 0) return;
+        // Move element in array
+        allQueued.splice(fromIdx, 1);
+        if (fromIdx < toIdx) toIdx -= 1;
+        allQueued.splice(toIdx, 0, dragEl);
+        const newOrder = allQueued.map(r => parseInt(r.dataset.aid, 10));
+        // POST to backend
+        try {
+          const res = await fetch(`/api/gigs/${gigId}/hold/reorder`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ queued_ids: newOrder })
+          });
+          if (res.ok) {
+            await renderPanel(gigId);
+          }
+        } catch (_) {}
+      });
     });
   }
 

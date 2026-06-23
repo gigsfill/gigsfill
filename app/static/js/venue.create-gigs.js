@@ -205,6 +205,75 @@ document.addEventListener("DOMContentLoaded", async () => {
   window._holdArtistMap = {};
   window._holdArtistOrder = [];
 
+  // ── Disabled-state check (Jun 2026) ──
+  // The Hold Gig pill stays muted/inactive until the gig has enough
+  // info to be a real offer. "Enough info" = at least one slot with
+  // start, end, pay (or door guarantee), AND artist_type set.
+  // Without this, venues could open the panel before they've typed
+  // anything, see no matching artists (Phase 4 type-filter), and
+  // get confused.
+  function _gigReadyForHold() {
+    const rows = document.querySelectorAll('#slotList .slot-row');
+    for (const row of rows) {
+      const start = row.querySelector('.slot-start')?.value;
+      const end = row.querySelector('.slot-end')?.value;
+      const type = row.querySelector('.slot-artist-type')?.value;
+      const doorOn = !!row.querySelector('.slot-door-checkbox')?.checked;
+      const pay = parseFloat((row.querySelector('.slot-pay-amount')?.value || '0').replace(/,/g, '')) || 0;
+      const guarRaw = parseFloat((row.querySelector('.slot-door-guarantee')?.value || '0').replace(/,/g, '')) || 0;
+      const hasMoney = doorOn ? guarRaw > 0 : pay > 0;
+      if (start && end && type && hasMoney) return true;
+    }
+    return false;
+  }
+
+  function _updateHoldPillState() {
+    if (!holdCheckbox) return;
+    const pill = holdCheckbox.closest('.recurring-master-pill');
+    if (!pill) return;
+    const ready = _gigReadyForHold();
+    if (ready) {
+      pill.style.opacity = '';
+      pill.style.cursor = 'pointer';
+      pill.style.pointerEvents = '';
+      pill.title = '';
+    } else {
+      // Muted + non-interactive
+      pill.style.opacity = '0.4';
+      pill.style.cursor = 'not-allowed';
+      pill.style.pointerEvents = 'none';
+      pill.title = 'Set the time, pay, and artist type on at least one slot first.';
+      // Force-off if it was enabled before
+      if (holdCheckbox.checked) {
+        holdCheckbox.checked = false;
+        if (holdPanel) holdPanel.style.display = 'none';
+      }
+    }
+  }
+
+  // Re-check whenever slot fields change. Delegated listener handles
+  // dynamically-added slot rows too.
+  function _wireHoldReadinessWatchers() {
+    const slotList = document.getElementById('slotList');
+    if (!slotList) return;
+    const handler = () => {
+      _updateHoldPillState();
+      // Also re-filter + re-render the preferred-artist picker if it's
+      // already loaded (slot type changes the set of matching artists)
+      if (holdMasterList && holdMasterList._loaded && holdPanel?.style.display === 'block') {
+        _renderHoldMasterFromCache();
+      }
+    };
+    ['change', 'input', 'blur'].forEach(evt => {
+      slotList.addEventListener(evt, handler, true);
+    });
+    // First call
+    _updateHoldPillState();
+  }
+  // Run once on load + once per slot mutation. We hook via a setTimeout
+  // since the slot DOM is built later in DOMContentLoaded.
+  setTimeout(_wireHoldReadinessWatchers, 0);
+
   // ── Email-artists toggle ─────────
   if (holdEmailBtn) {
     holdEmailBtn.addEventListener('click', () => {
@@ -321,6 +390,74 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  // Type-match: an artist is eligible for a slot when their artist_type
+  // matches the slot's artist_type. If the slot specifies band_formats
+  // and/or styles, we ALSO require overlap (any of slot's formats/styles
+  // appears in the artist's). This mirrors backend _check_artist_matches_gig.
+  function _csvSet(s) {
+    if (!s) return null;
+    return new Set(String(s).split(/[,;]/).map(x => x.trim()).filter(Boolean));
+  }
+  function _artistMatchesSlot(artist, slot) {
+    if (!slot.artist_type) return false;
+    if (!artist.artist_type) return false;
+    if (artist.artist_type !== slot.artist_type) return false;
+    // Slot formats: optional refinement
+    const slotFmt = _csvSet(slot.band_formats);
+    if (slotFmt && slotFmt.size > 0) {
+      const aFmt = _csvSet(artist.band_formats) || new Set();
+      const hit = [...aFmt].some(x => slotFmt.has(x));
+      if (!hit) return false;
+    }
+    const slotStyles = _csvSet(slot.styles);
+    if (slotStyles && slotStyles.size > 0) {
+      const aStyles = _csvSet(artist.styles) || new Set();
+      const hit = [...aStyles].some(x => slotStyles.has(x));
+      if (!hit) return false;
+    }
+    return true;
+  }
+  function _artistMatchesAnySlot(artist) {
+    const slots = (typeof getSlotData === 'function' ? getSlotData() : []);
+    if (!slots.length) return true;  // no slots yet → show all
+    return slots.some(s => _artistMatchesSlot(artist, s));
+  }
+
+  // Cache the loaded approved list so we can re-filter without
+  // re-fetching when slot types change.
+  let _holdApprovedCache = null;
+
+  function _renderHoldMasterFromCache() {
+    if (!_holdApprovedCache || !holdMasterList) return;
+    const eligible = _holdApprovedCache.filter(_artistMatchesAnySlot);
+    if (!eligible.length) {
+      holdMasterList.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">None of your preferred artists match the artist type set on the slot(s) above.</div>';
+      return;
+    }
+    holdMasterList.innerHTML = eligible.map(a => {
+      const aid = parseInt(a.artist_id || a.id, 10);
+      const nm = _escHtml(window._holdArtistMap[aid]);
+      const paySuffix = window._holdPayForArtist(aid);
+      return `<button type="button" class="hold-master-row${(window._holdArtistOrder || []).includes(aid) ? ' is-selected' : ''}" data-aid="${aid}">
+        <span>${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>
+      </button>`;
+    }).join('');
+    holdMasterList.querySelectorAll('.hold-master-row').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const aid = parseInt(btn.dataset.aid, 10);
+        const isOn = btn.classList.contains('is-selected');
+        if (isOn) {
+          window._holdArtistOrder = window._holdArtistOrder.filter(x => x !== aid);
+          btn.classList.remove('is-selected');
+        } else {
+          if (!window._holdArtistOrder.includes(aid)) window._holdArtistOrder.push(aid);
+          btn.classList.add('is-selected');
+        }
+        _renderHoldSelected();
+      });
+    });
+  }
+
   async function _loadHoldPicker() {
     if (!holdMasterList) return;
     try {
@@ -333,10 +470,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         holdMasterList.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">No preferred artists yet. Add them under <b>My Artists</b> tab first.</div>';
         return;
       }
-      // Cache the name + pay-override for the left-column rows + the
-      // pay-suffix shown on each master row (e.g. "Fridays Past ($150)"
-      // for an artist with an override, or the gig's default pay for
-      // artists with no override set).
+      // Cache the name + pay-override for the left-column rows.
+      // Type/format fields stay on the approved cache so the filter
+      // can use them after the initial fetch.
+      _holdApprovedCache = approved;
       window._holdArtistMap = {};
       window._holdArtistPay = {};
       approved.forEach(a => {
@@ -344,58 +481,21 @@ document.addEventListener("DOMContentLoaded", async () => {
         window._holdArtistMap[aid] = a.name || a.artist_name || ('Artist ' + aid);
         const od = a.pay_dollars_override;
         const oc = a.pay_cents_override;
-        // override_pay is null when neither field is set; otherwise
-        // combine dollars + cents into a float so the renderer can
-        // display it as $XX or $XX.YY consistently.
         if (od != null || oc != null) {
           window._holdArtistPay[aid] = (Number(od) || 0) + (Number(oc) || 0) / 100;
         }
       });
-      // Pay-suffix helper. Always reads the current default-pay input
-      // live so a change after the picker is rendered still shows
-      // up if the user re-opens the panel; for inline updates the
-      // re-render below picks up the latest value.
+      // Pay-suffix helper. The column header reads "(Override Pay)" so
+      // the suffix shows ONLY the venue's per-artist override — falls
+      // back to "$--" (not the gig default) when no override exists.
+      // The default pay is shown at the top of the gig modal already,
+      // so duplicating it here would be misleading.
       window._holdPayForArtist = function (aid) {
         const ov = window._holdArtistPay[aid];
-        let v = ov;
-        if (v == null) {
-          // Fall back to the gig's default pay — read from slot 1 (the
-          // first row of the slot grid). The "Default gig fee" input
-          // for the slot is .slot-pay-dollars in the first slot row.
-          const slotPayEl = document.querySelector('#slotList .slot-pay-dollars');
-          v = parseFloat(slotPayEl?.value || '0') || 0;
-        }
-        // Strip trailing .00 → just "$200" rather than "$200.00"
-        const s = v % 1 === 0 ? '$' + Math.round(v) : '$' + v.toFixed(2);
-        return s;
+        if (ov == null) return '$--';
+        return ov % 1 === 0 ? '$' + Math.round(ov) : '$' + ov.toFixed(2);
       };
-      holdMasterList.innerHTML = approved.map(a => {
-        const aid = parseInt(a.artist_id || a.id, 10);
-        const nm = _escHtml(window._holdArtistMap[aid]);
-        const paySuffix = window._holdPayForArtist(aid);
-        // Render as a button — black/off by default, green when selected.
-        // Reuses the .hold-master-row CSS hooks (same dimensions as the
-        // Email Artist pill so all three visual elements read as peers).
-        // Pay suffix in muted color so the artist name remains the
-        // primary read.
-        return `<button type="button" class="hold-master-row" data-aid="${aid}">
-          <span>${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>
-        </button>`;
-      }).join('');
-      holdMasterList.querySelectorAll('.hold-master-row').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const aid = parseInt(btn.dataset.aid, 10);
-          const isOn = btn.classList.contains('is-selected');
-          if (isOn) {
-            window._holdArtistOrder = window._holdArtistOrder.filter(x => x !== aid);
-            btn.classList.remove('is-selected');
-          } else {
-            if (!window._holdArtistOrder.includes(aid)) window._holdArtistOrder.push(aid);
-            btn.classList.add('is-selected');
-          }
-          _renderHoldSelected();
-        });
-      });
+      _renderHoldMasterFromCache();
     } catch (e) {
       holdMasterList.innerHTML = `<div style="padding:14px;text-align:center;color:#ef4444;font-size:0.78rem;">Could not load preferred artists: ${_escHtml(e.message)}</div>`;
     }

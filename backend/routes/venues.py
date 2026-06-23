@@ -734,10 +734,11 @@ def get_venue_preferred_artists(
     if not access:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Get all preferred artists with full data
+    # Get all preferred artists with full data + type/format/styles
+    # for the Hold-Gig filter on the create modal (Jun 2026).
     preferred = db.execute(
         text("""
-            SELECT 
+            SELECT
                 pa.artist_id,
                 pa.status,
                 pa.pay_dollars_override,
@@ -745,7 +746,10 @@ def get_venue_preferred_artists(
                 a.name as artist_name,
                 u.email as artist_email,
                 a.city,
-                a.state
+                a.state,
+                a.artist_type,
+                a.band_formats,
+                a.styles
             FROM preferred_artists pa
             JOIN artists a ON pa.artist_id = a.id
             JOIN users u ON a.user_id = u.id
