@@ -49,6 +49,17 @@
     return { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '❓' }[t] || '🎵';
   }
 
+  // Read current artist_id from URL — banner only shows offers for the
+  // artist whose page the user is viewing. Avoids the confusion of an
+  // offer for Artist B appearing on Artist A's page (per user feedback).
+  function _currentArtistId() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const v = parseInt(params.get('artist_id'), 10);
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch (_) { return null; }
+  }
+
   async function load() {
     const banner = document.getElementById(BANNER_ID);
     if (!banner) return;
@@ -60,7 +71,11 @@
     } catch (_) {
       return;
     }
-    const offers = (data && data.offers) || [];
+    const aid = _currentArtistId();
+    let offers = (data && data.offers) || [];
+    if (aid != null) {
+      offers = offers.filter(o => parseInt(o.artist_id, 10) === aid);
+    }
     if (!offers.length) {
       banner.innerHTML = '';
       banner.style.marginBottom = '';
@@ -83,30 +98,15 @@
     banner.querySelectorAll('.hob-decline').forEach(btn => {
       btn.addEventListener('click', () => _decline(btn.dataset.token, btn));
     });
-    banner.querySelectorAll('.hob-slot').forEach(btn => {
+    // Book button per slot. Confirmation modal stays as the safety net
+    // (the click directly books — modal asks "are you sure?" with
+    // [Book] / [Cancel]) since this IS a destructive action.
+    banner.querySelectorAll('.hob-slot-book').forEach(btn => {
       btn.addEventListener('click', () => _confirmBook({
         token: btn.dataset.token, slotId: btn.dataset.slot,
         venue: btn.dataset.venue, date: btn.dataset.date,
         slotNum: btn.dataset.slotNum, time: btn.dataset.time, pay: btn.dataset.pay,
       }, btn));
-    });
-    banner.querySelectorAll('.hob-book-one').forEach(btn => {
-      btn.addEventListener('click', () => _confirmBook({
-        token: btn.dataset.token, slotId: null,
-        venue: btn.dataset.venue, date: btn.dataset.date,
-        time: btn.dataset.time, pay: btn.dataset.pay,
-      }, btn));
-    });
-    // Toggle the expanded slot picker on multi-slot rows
-    banner.querySelectorAll('.hob-expand-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const tok = btn.dataset.token;
-        const panel = banner.querySelector(`.hob-expand-panel[data-token="${tok}"]`);
-        if (!panel) return;
-        const open = panel.style.display === 'block';
-        panel.style.display = open ? 'none' : 'block';
-        btn.textContent = open ? 'Pick a slot ▾' : 'Pick a slot ▴';
-      });
     });
   }
 
@@ -135,83 +135,67 @@
     }
   }
 
-  // One-line row per offer (Jun 2026): keeps the banner compact when
-  // there are several pending. Layout:
+  // One-step row layout (Jun 2026): each open slot is its own line
+  // with inline Book + Decline buttons. No expand step, no modal —
+  // user opens the calendar page, sees the slots, clicks Book on the
+  // one they want OR Decline on any to drop the whole offer. Per
+  // user request: avoids the prior 'clicked Pick a slot, it booked'
+  // confusion since slots are visible immediately.
   //
-  //   🎸 Fridays Past │ 14 Cannons · Jul 5 · 7-11 PM · $200 · 18h    [Book] [Decline]
-  //
-  // For multi-slot offers, the time/pay column is replaced by
-  //   N slots · 18h    [Pick a slot ▾] [Decline]
-  // and an inline expand panel appears below with the per-slot buttons.
-  // Flex-wraps gracefully on narrow viewports — long venue/title text
-  // wraps to a second visual line without breaking the row.
+  // Each slot's Decline is the SAME action — declines the whole
+  // offer (not just one slot) — but venue UX is clearer when both
+  // buttons sit next to every slot.
   function _rowHtml(o) {
     const title = o.gig_title ? ` "${_esc(o.gig_title)}"` : '';
     const expires = o.hours_remaining != null
       ? `<span style="color:${o.hours_remaining < 6 ? '#ef4444' : '#fcd34d'};font-weight:700;font-size:0.74rem;white-space:nowrap;">${_fmtHours(o.hours_remaining)} left</span>`
       : '';
-    // Artist chip on the left so the venue knows WHICH of their
-    // artists got the offer (vs. the prior "offered to X" sentence
-    // which read awkwardly). Icon = artist's type, label = artist name.
-    const primaryIcon = (o.slots && o.slots[0] && o.slots[0].artist_type) ? _typeIcon(o.slots[0].artist_type) : '🎵';
-    const artistChip = `<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(124,107,255,0.18);border:1px solid rgba(124,107,255,0.4);border-radius:4px;padding:2px 8px;font-size:0.74rem;font-weight:600;color:#c4b5fd;white-space:nowrap;">
-        ${primaryIcon} ${_esc(o.artist_name)}
-      </span>`;
 
-    // Center column varies by single-slot vs multi-slot.
-    let centerHtml = '';
-    let actionsHtml = '';
-    let expandedHtml = '';
+    // Header line: venue + date + time-remaining badge. The artist
+    // identity is implied (the banner is filtered to the current
+    // page's artist), so no artist chip needed.
+    const header = `<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-bottom:6px;">
+      <span style="font-size:0.85rem;color:var(--text);font-weight:600;">
+        ${_esc(o.venue_name)}${title} · ${_fmtDate(o.gig_date)}
+      </span>
+      ${expires}
+    </div>`;
 
     if (!o.slots || o.slots.length === 0) {
-      centerHtml = `<span style="font-size:0.78rem;color:var(--text-gray);font-style:italic;">No slots match your type</span>`;
-      actionsHtml = `<button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
-        style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>`;
-    } else if (o.slots.length === 1) {
-      const s = o.slots[0];
-      const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
-      centerHtml = `<span style="font-size:0.8rem;color:var(--text);">
-        ${_esc(o.venue_name)}${title} · ${_fmtDate(o.gig_date)} · ${_esc(s.time)} · <span style="color:#22c55e;font-weight:600;">${payStr}</span>
-      </span>`;
-      actionsHtml = `
-        <button type="button" class="hob-book-one" data-token="${_esc(o.offer_token)}"
-          data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
-          style="padding:5px 14px;background:#16a34a;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;">Book</button>
-        <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
-          style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>`;
-    } else {
-      centerHtml = `<span style="font-size:0.8rem;color:var(--text);">
-        ${_esc(o.venue_name)}${title} · ${_fmtDate(o.gig_date)} · <span style="color:#fcd34d;font-weight:600;">${o.slots.length} slots</span>
-      </span>`;
-      actionsHtml = `
-        <button type="button" class="hob-expand-btn" data-token="${_esc(o.offer_token)}"
-          style="padding:5px 12px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.45);border-radius:4px;color:#86efac;cursor:pointer;font-size:0.74rem;font-weight:600;">Pick a slot ▾</button>
-        <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
-          style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>`;
-      // Hidden expand panel — toggled by the "Pick a slot" button.
-      expandedHtml = `<div class="hob-expand-panel" data-token="${_esc(o.offer_token)}" style="display:none;margin-top:6px;padding-left:12px;border-left:2px solid rgba(34,197,94,0.4);">
-        <div style="display:flex;gap:5px;flex-wrap:wrap;">
-          ${o.slots.map(s => {
-            const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
-            return `<button type="button" class="hob-slot" data-token="${_esc(o.offer_token)}" data-slot="${parseInt(s.id, 10)}"
-              data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}"
-              data-slot-num="${s.slot_number}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
-              style="padding:5px 10px;background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.4);border-radius:4px;color:#86efac;cursor:pointer;font-size:0.72rem;font-weight:600;">
-              ${_typeIcon(s.artist_type)} Slot ${s.slot_number} · ${_esc(s.time)} · ${payStr}
-            </button>`;
-          }).join('')}
+      return `<div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+        ${header}
+        <div style="font-size:0.78rem;color:var(--text-gray);font-style:italic;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <span>No slots match your artist type</span>
+          <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
+            style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>
         </div>
       </div>`;
     }
 
+    // One row per slot, inline Book + Decline.
+    const slotRows = o.slots.map(s => {
+      const payStr = s.pay && s.pay === Math.round(s.pay) ? `$${Math.round(s.pay)}` : `$${Number(s.pay).toFixed(2)}`;
+      // For multi-slot, label includes 'Slot N'; for single-slot,
+      // skip the slot number since it's the only one.
+      const slotLabel = o.slots.length > 1 ? `Slot ${s.slot_number} · ` : '';
+      return `<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;padding:5px 0;">
+        <span style="font-size:0.82rem;color:var(--text);">
+          ${_typeIcon(s.artist_type)} ${slotLabel}${_esc(s.time)} · <span style="color:#22c55e;font-weight:600;">${payStr}</span>
+        </span>
+        <span style="display:inline-flex;gap:6px;">
+          <button type="button" class="hob-slot-book" data-token="${_esc(o.offer_token)}" data-slot="${parseInt(s.id, 10)}"
+            data-venue="${_esc(o.venue_name)}" data-date="${_esc(o.gig_date)}"
+            data-slot-num="${s.slot_number}" data-time="${_esc(s.time)}" data-pay="${_esc(payStr)}"
+            style="padding:5px 14px;background:#16a34a;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;">Book</button>
+          <button type="button" class="hob-decline" data-token="${_esc(o.offer_token)}"
+            style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>
+        </span>
+      </div>`;
+    }).join('');
+
     return `<div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        ${artistChip}
-        <span style="flex:1;min-width:200px;">${centerHtml}</span>
-        ${expires}
-        <span style="display:inline-flex;gap:6px;">${actionsHtml}</span>
-      </div>
-      ${expandedHtml}
+      ${header}
+      <div style="display:flex;flex-direction:column;">${slotRows}</div>
     </div>`;
   }
 
