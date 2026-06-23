@@ -7623,6 +7623,7 @@ def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_
         text("""SELECT wl.artist_id, wl.position, wl.offer_sent,
                        wl.offer_sent_at, wl.offer_expires_at,
                        wl.offer_declined, wl.reminder_sent_at,
+                       COALESCE(wl.added_post_creation, 0) as added_post_creation,
                        a.name as artist_name
                 FROM gig_waitlist wl
                 LEFT JOIN artists a ON a.id = wl.artist_id
@@ -7677,6 +7678,7 @@ def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_
             "offer_expires_at": str(r["offer_expires_at"]) if r["offer_expires_at"] else None,
             "hours_remaining": hours_remaining,
             "reminder_sent": bool(r["reminder_sent_at"]),
+            "added_post_creation": bool(r["added_post_creation"]),
         }
         if state == "current_offer":
             current_offer = row_out
@@ -7765,12 +7767,22 @@ def skip_current_offer(gig_id: int, user=Depends(get_current_user), db=Depends(g
 @router.post("/api/gigs/{gig_id}/hold/reorder")
 def reorder_hold_waitlist(gig_id: int, data: dict,
                           user=Depends(get_current_user), db=Depends(get_db)):
-    """Venue reorders or adds/removes artists in the hold waitlist
-    mid-cycle. The current in-flight offer (offer_sent=1 and not
-    declined) is preserved at position 0; venue can only edit the
-    queued (not-yet-offered) portion.
+    """Sync the venue-added portion of the hold waitlist.
 
-    Body: {"queued_ids": [artist_id, artist_id, ...]}
+    Originally-locked rows (added_post_creation=0, set at gig
+    creation) are NEVER touched — venue picked the initial order
+    and it stays put. This endpoint only manages the rows added
+    AFTER creation via the '+ Add artist' affordance:
+
+      - For each artist_id in body.queued_ids that already exists
+        with added_post_creation=1 → UPDATE position (reorder).
+      - For each artist_id NOT yet on the list → INSERT with
+        added_post_creation=1 (add).
+      - For each existing added_post_creation=1 row NOT in
+        queued_ids → DELETE (remove).
+
+    Body: {"queued_ids": [artist_id, artist_id, ...]}  — the desired
+    full ordered list of POST-CREATION artists (in their new order).
     """
     from backend.utils import check_venue_access
     gig = db.execute(
@@ -7782,50 +7794,67 @@ def reorder_hold_waitlist(gig_id: int, data: dict,
     check_venue_access(db, gig["venue_id"], user.id)
     if gig["hold_status"] != "active":
         raise HTTPException(400, "Hold not active")
-    new_ids = data.get("queued_ids") or []
-    new_ids = [int(x) for x in new_ids]
+    new_ids = [int(x) for x in (data.get("queued_ids") or [])]
 
-    # Current in-flight + already-completed (declined/accepted) artists
-    # → those stay where they are. We're rewriting only the not-yet-
-    # offered portion.
-    locked_rows = db.execute(
-        text("""SELECT artist_id FROM gig_waitlist
-                WHERE gig_id = :gid AND source = 'hold'
-                  AND (offer_sent = 1)"""),
+    # All artist IDs already on this gig's hold waitlist (any state).
+    # Used to (a) prevent duplicating an originally-locked artist,
+    # (b) decide whether each new_id is already in our added pool.
+    existing = db.execute(
+        text("""SELECT artist_id, added_post_creation, id
+                FROM gig_waitlist
+                WHERE gig_id = :gid AND source = 'hold'"""),
         {"gid": gig_id}
-    ).fetchall()
-    locked_ids = {r[0] for r in locked_rows}
+    ).mappings().all()
+    locked_ids = {r["artist_id"] for r in existing if not r["added_post_creation"]}
+    added_existing = {r["artist_id"]: r["id"] for r in existing if r["added_post_creation"]}
 
-    # Strip already-locked artists from the new_ids (venue can't move
-    # the active offer or re-queue a declined artist via reorder)
+    # Strip out originally-locked artists from new_ids (they can't be
+    # in the post-creation pool by definition).
     new_ids = [aid for aid in new_ids if aid not in locked_ids]
 
-    # Delete the queued (un-offered) rows
-    db.execute(
-        text("""DELETE FROM gig_waitlist
-                WHERE gig_id = :gid AND source = 'hold' AND offer_sent = 0"""),
-        {"gid": gig_id}
-    )
-    # Re-insert in new order. Position numbers: continue past the
-    # locked rows so the locked artists keep their order.
-    max_pos = db.execute(
+    # Compute the position offset — added rows always live AFTER the
+    # locked positions so the offer cycle hits locked first.
+    max_locked_pos = db.execute(
         text("""SELECT COALESCE(MAX(position), -1) FROM gig_waitlist
-                WHERE gig_id = :gid AND source = 'hold' AND offer_sent = 1"""),
+                WHERE gig_id = :gid AND source = 'hold'
+                  AND added_post_creation = 0"""),
         {"gid": gig_id}
     ).scalar()
-    next_pos = (max_pos or -1) + 1
-    for aid in new_ids:
-        try:
+    base_pos = (max_locked_pos or -1) + 1
+
+    # Apply the diff
+    seen_added = set()
+    for i, aid in enumerate(new_ids):
+        seen_added.add(aid)
+        new_pos = base_pos + i
+        if aid in added_existing:
+            # Reorder: just update position
             db.execute(
-                text("""INSERT INTO gig_waitlist (gig_id, artist_id, source, position, notified)
-                        VALUES (:gid, :aid, 'hold', :pos, 0)"""),
-                {"gid": gig_id, "aid": aid, "pos": next_pos}
+                text("UPDATE gig_waitlist SET position = :p WHERE id = :id"),
+                {"p": new_pos, "id": added_existing[aid]}
             )
-            next_pos += 1
-        except Exception as e:
-            logger.warning(f"[HOLD] reorder skip duplicate gig={gig_id} artist={aid}: {e}")
+        else:
+            # Add: new row with added_post_creation=1
+            try:
+                db.execute(
+                    text("""INSERT INTO gig_waitlist
+                            (gig_id, artist_id, source, position, notified, added_post_creation)
+                            VALUES (:gid, :aid, 'hold', :pos, 0, 1)"""),
+                    {"gid": gig_id, "aid": aid, "pos": new_pos}
+                )
+            except Exception as e:
+                logger.warning(f"[HOLD] add skip duplicate gig={gig_id} artist={aid}: {e}")
+    # Remove: any added row not in the new list
+    to_remove = [aid for aid in added_existing if aid not in seen_added]
+    for aid in to_remove:
+        db.execute(
+            text("""DELETE FROM gig_waitlist
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND source = 'hold' AND added_post_creation = 1"""),
+            {"gid": gig_id, "aid": aid}
+        )
     db.commit()
-    return {"ok": True, "queued_count": len(new_ids)}
+    return {"ok": True, "added_count": len(new_ids), "removed_count": len(to_remove)}
 
 
 @router.post("/api/gigs/{gig_id}/hold/resolve-exhausted")

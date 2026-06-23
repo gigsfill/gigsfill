@@ -2103,6 +2103,11 @@ def setup_database():
         "source TEXT DEFAULT 'cancellation'",
         "position INTEGER DEFAULT 0",
         "reminder_sent_at DATETIME",
+        # added_post_creation=1 for rows added by venue AFTER gig
+        # creation via the hold-mgmt panel's '+ Add artist' button.
+        # These are reorderable + removable; rows with added=0 (the
+        # original waitlist set at gig creation time) are locked.
+        "added_post_creation INTEGER DEFAULT 0",
     ])
 
     # gig_cancelled_artists (May 2026 part 9):

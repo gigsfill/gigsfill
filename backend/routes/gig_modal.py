@@ -213,6 +213,7 @@ def get_gig_modal_data(
                g.is_multi_slot, g.frequency_exempt,
                g.radius_blast_token, g.contract_hold_artist_id, g.contract_hold_expires_at,
                g.recurring_group_id, g.is_recurring,
+               g.hold_status, g.hold_offer_window_hours,
                CASE WHEN g.radius_blast_token IS NOT NULL AND g.status='open' THEN 1 ELSE 0 END as is_blast_open,
                -- has_active_waitlist excludes hold-source rows (Jun 2026).
                -- The legacy gig_modal 'Booking Locked' UI keyed off this

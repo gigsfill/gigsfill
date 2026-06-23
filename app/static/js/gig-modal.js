@@ -303,11 +303,12 @@ async function renderGigModal(data, callbacks = {}) {
         return _commit(html, actionsHtml);
       }
       if (hi.my_state === 'queued') {
-        const pos = hi.my_position != null ? hi.my_position + 1 : '?';
+        // Generic message — don't reveal queue position (might feel
+        // discouraging if they're #5 on a list). Per user request.
         html += `<div style="margin-bottom:14px;background:rgba(139,92,246,0.10);border:1px solid rgba(139,92,246,0.4);border-radius:10px;padding:14px 18px;">
           <div style="font-size:0.85rem;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">🔒 Hold in Progress</div>
           <p style="margin:0;font-size:0.86rem;line-height:1.5;color:var(--text);">
-            You're position <b>#${pos}</b> on this venue's hold list. Another artist is currently being offered the gig — if they decline or don't respond within 24 hours, you'll be offered the slot(s) you match.
+            This gig is currently in the process of being booked.
           </p>
         </div>`;
         actionsHtml = `<div class="_gig-btn-row" style="justify-content:flex-end;">${_closeBtn(close)}</div>`;
