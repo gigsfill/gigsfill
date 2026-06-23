@@ -89,6 +89,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   let venueFrequencies = {};
   let venuePayOverrides = {}; // venue_id -> override pay amount
   let venueBlastSettings = {}; // venue_id -> blast/blink settings from public endpoint
+  // Set of gig_ids that have an ACTIVE hold offer for THIS artist
+  // (current offerer status, not just queued). Populated by
+  // loadHoldOfferGigIds() before the calendar first renders so the
+  // bubble can blink immediately instead of flipping black→blue
+  // after async load. See shouldBlinkForArtist().
+  let holdOfferGigIds = new Set();
   let artistDefaultCity = null; // v73: Store artist's city for Clear Filters
 
   // Search/Filter state
@@ -305,10 +311,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // ── Artist blink logic ────────────────────────────────────────────────────
-  // Returns {blink: true, color: '#f59e0b'} if this gig bubble should blink
+  // Returns {blink: true, color: '#xxx'} if this gig bubble should blink
   // for this artist, or {blink: false} if not.
   //
   // Rules:
+  //  0. Active hold offer for THIS artist → ALWAYS blink purple
+  //     (highest priority — they're on the clock right now).
   //  1. Cancelled/radius blast: only blink when the blast has already fired
   //     (g.is_blast_open set). No date-proximity blinking for these.
   //  2. Open gig windows (1w, 36h): blink if gig date is within the venue's
@@ -316,7 +324,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   //       a. artist is a preferred artist at this venue, OR
   //       b. venue has blast_all_enabled for that key and artist is within radius.
   function shouldBlinkForArtist(gig) {
-    if (!gig || gig.status !== 'open' || isGigEndPassed(gig)) return {blink: false};
+    if (!gig || isGigEndPassed(gig)) return {blink: false};
+    // Case 0: artist has an active pending offer on this gig.
+    // Bypass status check since held gigs technically stay
+    // status='open' but are hidden from search.
+    if (gig.id && holdOfferGigIds.has(gig.id)) {
+      return {blink: true, color: '#7c6bff'};  // purple — same as banner
+    }
+    if (gig.status !== 'open') return {blink: false};
 
     const bs = venueBlastSettings[gig.venue_id];
     const isPreferred = preferredVenues.some(
@@ -695,6 +710,27 @@ document.addEventListener("DOMContentLoaded", async () => {
     gigs = [...allGigs]; // Copy for filtering
     // Fetch blast/blink settings for any new venues not yet cached
     await loadVenueBlastSettings();
+    // Hold-offer gig ids for THIS artist — drives the immediate
+    // blue-blink on the calendar bubble (vs. waiting for the banner's
+    // 60s poll to fire). Filter by artist_id since /api/me/hold-offers
+    // returns offers across every artist the user has access to.
+    await loadHoldOfferGigIds();
+  }
+
+  async function loadHoldOfferGigIds() {
+    try {
+      const res = await fetch('/api/me/hold-offers', { credentials: 'include' });
+      if (!res.ok) { holdOfferGigIds = new Set(); return; }
+      const data = await res.json();
+      const aid = parseInt(artistId, 10);
+      holdOfferGigIds = new Set(
+        (data.offers || [])
+          .filter(o => parseInt(o.artist_id, 10) === aid)
+          .map(o => parseInt(o.gig_id, 10))
+      );
+    } catch (_) {
+      holdOfferGigIds = new Set();
+    }
   }
 
   async function loadMyGigs() {

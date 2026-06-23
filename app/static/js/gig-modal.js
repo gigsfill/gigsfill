@@ -271,26 +271,36 @@ async function renderGigModal(data, callbacks = {}) {
         if (slots.length === 0) {
           slotsHtml = '<div style="font-size:0.82rem;color:var(--text-gray);font-style:italic;">No slots match your artist type.</div>';
         } else {
-          slotsHtml = slots.map(s => {
-            const slotLabel = slots.length > 1 ? `Slot ${s.slot_number} · ` : '';
-            return `<div style="display:inline-flex;align-items:center;gap:10px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:7px 12px;margin:0 6px 6px 0;flex-wrap:nowrap;">
-              <span style="font-size:0.84rem;color:var(--text);white-space:nowrap;">
-                ${_typeIcon(s.artist_type)} ${slotLabel}${s.time} · <span style="color:#22c55e;font-weight:600;">${_payStr(s.pay)}</span>
-              </span>
-              <span style="display:inline-flex;gap:5px;">
-                <button type="button" data-token="${hi.offer_token}" data-slot="${s.id}"
-                  data-venue="${(data.venue_name||'').replace(/"/g,'&quot;')}" data-date="${data.date||''}"
-                  data-slot-num="${s.slot_number}" data-time="${s.time}" data-pay="${_payStr(s.pay)}"
-                  onclick="window.gmHoldBook && window.gmHoldBook(this)"
-                  title="Book this slot now."
-                  style="padding:5px 14px;background:#7c6bff;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;">Book</button>
-                <button type="button" data-token="${hi.offer_token}"
-                  onclick="window.gmHoldDecline && window.gmHoldDecline(this)"
-                  title="Decline if you are unable to perform on this day."
-                  style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>
-              </span>
-            </div>`;
-          }).join('');
+          // Vertical layout: each slot on its own row with fixed-width
+          // columns so icon / slot-label / time / pay / buttons line
+          // up across rows. tabular-nums + min-width on the time column
+          // (sized to '12:00 PM – 12:00 PM') keeps the pay column
+          // aligned even when one slot is '1:00 PM' and another is
+          // '12:00 PM'.
+          slotsHtml = '<div style="display:flex;flex-direction:column;gap:6px;">'
+            + slots.map(s => {
+              const slotLabel = slots.length > 1 ? `Slot ${s.slot_number}` : '';
+              return `<div style="display:flex;align-items:center;gap:10px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:8px 12px;">
+                <span style="display:inline-flex;align-items:center;gap:8px;flex:1;font-size:0.84rem;color:var(--text);white-space:nowrap;">
+                  <span style="display:inline-block;width:18px;text-align:center;flex:0 0 18px;">${_typeIcon(s.artist_type)}</span>
+                  ${slotLabel ? `<span style="display:inline-block;min-width:54px;flex:0 0 54px;font-weight:600;">${slotLabel}</span>` : ''}
+                  <span style="display:inline-block;min-width:11ch;font-variant-numeric:tabular-nums;flex:0 0 11ch;">${s.time}</span>
+                  <span style="color:#22c55e;font-weight:600;font-variant-numeric:tabular-nums;display:inline-block;min-width:7ch;flex:0 0 7ch;">${_payStr(s.pay)}</span>
+                </span>
+                <span style="display:inline-flex;gap:6px;flex:0 0 auto;">
+                  <button type="button" data-token="${hi.offer_token}" data-slot="${s.id}"
+                    data-venue="${(data.venue_name||'').replace(/"/g,'&quot;')}" data-date="${data.date||''}"
+                    data-slot-num="${s.slot_number}" data-time="${s.time}" data-pay="${_payStr(s.pay)}"
+                    onclick="window.gmHoldBook && window.gmHoldBook(this)"
+                    title="Book this slot now."
+                    style="padding:5px 18px;background:#7c6bff;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:72px;">Book</button>
+                  <button type="button" data-token="${hi.offer_token}"
+                    onclick="window.gmHoldDecline && window.gmHoldDecline(this)"
+                    title="Decline if you are unable to perform on this day."
+                    style="padding:5px 14px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:72px;">Decline</button>
+                </span>
+              </div>`;
+            }).join('') + '</div>';
         }
         html += `<div style="margin-bottom:14px;background:rgba(245,158,11,0.08);border:1.5px solid rgba(245,158,11,0.5);border-radius:10px;padding:12px 16px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">

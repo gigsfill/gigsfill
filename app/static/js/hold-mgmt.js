@@ -50,7 +50,11 @@
     }
     if (!data || !data.is_held) return;
 
-    const body = document.getElementById('modalBody');
+    // Prefer .modal-section (venue-create-gigs.html's edit form
+    // container — the modal there has no #modalBody element, only
+    // <section class="modal-section">). Fallback to #modalBody on
+    // pages that have it.
+    const body = document.querySelector('.modal-section') || document.getElementById('modalBody');
     if (!body) return;
 
     const isActive = data.hold_status === 'active';
