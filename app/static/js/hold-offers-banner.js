@@ -301,6 +301,14 @@
   function start() {
     load();
     setInterval(load, POLL_MS);
+    // Refresh on tab focus / visibility change so artists see updated
+    // slot info immediately after the venue edits the gig (e.g. loads
+    // a template that swaps a slot to a door deal). Without this, the
+    // banner stays stale until the next 60s tick.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') load();
+    });
+    window.addEventListener('focus', () => load());
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);

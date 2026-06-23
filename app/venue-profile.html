@@ -591,7 +591,20 @@
 
     // ========== CALENDAR ==========
     async function loadGigs() {
-      try { const r = await fetch(`/venues/${venueId}/gigs`); if (r.ok) venueGigs = await r.json(); } catch(e) {}
+      // Public profile may be viewed by anyone (no auth). The
+      // /venues/{id}/gigs endpoint requires venue access — for non-
+      // owners it 401s and the calendar appears empty. Use the
+      // public-gigs endpoint and filter to this venue. Public endpoint
+      // returns ~90 days of gigs (per audit fix) and already excludes
+      // held gigs from being visible (per hold-feature filter).
+      try {
+        const r = await fetch(`/api/gigs/public`);
+        if (r.ok) {
+          const all = await r.json();
+          const vid = parseInt(venueId, 10);
+          venueGigs = (all || []).filter(g => parseInt(g.venue_id, 10) === vid);
+        }
+      } catch(e) {}
       const now = new Date(); calYear = now.getFullYear(); calMonth = now.getMonth();
       renderCalendar();
     }

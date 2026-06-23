@@ -389,6 +389,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function getGigClass(gig) {
+    // Held gig (Jun 2026): hold_status='active'|'exhausted'. The
+    // gig isn't bookable by clicking the calendar bubble — the
+    // current offerer responds via the banner + inline gig-modal
+    // Book/Decline; queued + declined artists can't book at all.
+    // Render as 'started' (black) so the bubble looks locked. The
+    // current offerer ALSO gets a blinking purple overlay via
+    // shouldBlinkForArtist Case 0, which paints on top of the
+    // black base — purple-blink on black reads as 'live offer'.
+    if (gig.hold_status === 'active' || gig.hold_status === 'exhausted') {
+      return 'started';
+    }
+
     // Pending venue approval (same-day booking) — show cyan pulse for the requesting artist,
     // show as booked (with waitlist option) for all other artists
     const aid = parseInt(artistId);
