@@ -282,4 +282,18 @@
   }
 
   window.loadHoldOffersBanner = load;
+
+  // Exposed for the gig-modal Pending-Offer rendering (Jun 2026).
+  // Same Book/Decline plumbing as the banner; lets the inline modal
+  // act on offers without duplicating the fetch + confirmation logic.
+  window.gmHoldBook = function (btn) {
+    _confirmBook({
+      token: btn.dataset.token, slotId: btn.dataset.slot,
+      venue: btn.dataset.venue, date: btn.dataset.date,
+      slotNum: btn.dataset.slotNum, time: btn.dataset.time, pay: btn.dataset.pay,
+    }, btn);
+  };
+  window.gmHoldDecline = function (btn) {
+    _decline(btn.dataset.token, btn);
+  };
 })();

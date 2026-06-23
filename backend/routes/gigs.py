@@ -1415,6 +1415,11 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                     g.recurring_end_after,
                     g.recurring_end_by_date,
                     COALESCE(g.is_multi_slot, 0) as is_multi_slot,
+                    -- Hold status (Jun 2026) drives the Hold-mgmt panel
+                    -- + suppresses the legacy blast banner. Without this
+                    -- column the frontend can't tell held gigs apart.
+                    g.hold_status,
+                    g.hold_offer_window_hours,
                     CASE WHEN g.radius_blast_token IS NOT NULL AND g.status = 'open' THEN 1 ELSE 0 END as is_blast_open,
                     COALESCE(g.frequency_exempt, 0) as frequency_exempt,
                     -- has_active_waitlist drives the old 'WAITLIST IN PROGRESS'

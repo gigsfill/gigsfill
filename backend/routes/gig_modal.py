@@ -449,6 +449,70 @@ def get_gig_modal_data(
         # My slots on this gig
         my_slots = [s for s in slots if s.get("artist_id") == viewer_id]
 
+        # Hold-feature state for the gig modal (Jun 2026). The artist
+        # gig modal needs to know:
+        #   - Is this a held gig?
+        #   - What's my position in the hold waitlist?
+        #   - If I'm the current offer holder, my token + expiry +
+        #     filtered list of slots I can actually fill.
+        # The frontend renders 'Pending Offer' + Book/Decline per slot
+        # for current_offer state; 'in process' notice for queued; nothing
+        # special for accepted/declined (normal flow).
+        hold_info = {"is_held": False}
+        if gig.get("hold_status") in ("active", "exhausted"):
+            from backend.services.gig_hold import (
+                _list_matching_open_slots as _hl, _fmt_time as _hfmt,
+            )
+            wl_hold = db.execute(text("""
+                SELECT offer_sent, offer_declined, offer_token,
+                       offer_expires_at, position
+                FROM gig_waitlist
+                WHERE gig_id = :gid AND artist_id = :aid AND source = 'hold'
+                LIMIT 1
+            """), {"gid": gig_id, "aid": viewer_id}).mappings().first()
+            my_state = None
+            if wl_hold:
+                # accepted = booked into a slot already
+                if any(s.get("artist_id") == viewer_id and s.get("status") == "booked" for s in slots):
+                    my_state = "accepted"
+                elif wl_hold["offer_declined"]:
+                    my_state = "declined"
+                elif wl_hold["offer_sent"]:
+                    my_state = "current_offer"
+                else:
+                    my_state = "queued"
+            hold_info = {
+                "is_held": True,
+                "hold_status": gig["hold_status"],
+                "my_state": my_state,
+                "my_position": int(wl_hold["position"]) if wl_hold and wl_hold.get("position") is not None else None,
+                "offer_token": wl_hold["offer_token"] if (wl_hold and my_state == "current_offer") else None,
+                "offer_expires_at": str(wl_hold["offer_expires_at"]) if (wl_hold and my_state == "current_offer") else None,
+            }
+            # Compute hours_remaining for current_offer
+            if my_state == "current_offer" and hold_info["offer_expires_at"]:
+                try:
+                    from datetime import datetime as _dt
+                    _exp = _dt.strptime(
+                        hold_info["offer_expires_at"].replace("T", " ").split(".")[0],
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+                    _hr = max(0, round((_exp - _dt.utcnow()).total_seconds() / 3600, 1))
+                    hold_info["hours_remaining"] = _hr
+                except Exception:
+                    hold_info["hours_remaining"] = None
+                # Matching open slots for THIS artist
+                _matching = _hl(db, gig_id, viewer_id)
+                hold_info["my_matching_slots"] = [
+                    {
+                        "id": int(s["id"]),
+                        "slot_number": s["slot_number"],
+                        "time": f"{_hfmt(s['start_time'])} – {_hfmt(s['end_time'])}",
+                        "pay": s["pay"],
+                        "artist_type": s["artist_type"],
+                    } for s in _matching
+                ]
+
         # Venue contract requirement
         vc = db.execute(text("""
             SELECT contract_type, require_for_booking
@@ -680,6 +744,7 @@ def get_gig_modal_data(
         "is_banned":          is_banned,
         "freq_check":         freq_check,
         "waitlist_status":    waitlist_status,
+        "hold_info":          hold_info,
         "can_message":        _can_message,
         "artist_data":        artist_data,
         "venue_contract_required": venue_contract_required,

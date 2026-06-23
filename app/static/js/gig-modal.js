@@ -243,6 +243,86 @@ async function renderGigModal(data, callbacks = {}) {
       return _commit(html, actionsHtml);
     }
 
+    // ── Hold-feature panel (Jun 2026) ────────────────────────────────
+    // For held gigs, render the appropriate state inline in the modal
+    // so the calendar bubble click experience mirrors the Pending
+    // Offers banner at the top of the page. Short-circuits the legacy
+    // waitlist UI for held gigs.
+    if (data.hold_info && data.hold_info.is_held) {
+      const hi = data.hold_info;
+      if (hi.my_state === 'current_offer') {
+        // Same vocabulary as the Pending Offers banner: time-left,
+        // per-slot Book/Decline. Click flows through to the same
+        // /hold/respond endpoints via window.loadHoldOffersBanner
+        // (re-fetches + scrolls to top after action).
+        const hrs = hi.hours_remaining;
+        let timeLeft = '';
+        if (hrs != null) {
+          const totalMins = Math.round(hrs * 60);
+          if (totalMins <= 0) timeLeft = 'expiring now';
+          else if (totalMins < 60) timeLeft = `${totalMins} ${totalMins===1?'minute':'minutes'} left to book`;
+          else if (hrs < 24) { const h = Math.round(hrs); timeLeft = `${h} ${h===1?'hour':'hours'} left to book`; }
+          else { const d = Math.round(hrs/24); timeLeft = `${d} ${d===1?'day':'days'} left to book`; }
+        }
+        const _typeIcon = t => ({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'❓'}[t] || '🎵');
+        const _payStr = p => (p && p === Math.round(p)) ? `$${Math.round(p)}` : `$${Number(p).toFixed(2)}`;
+        const slots = hi.my_matching_slots || [];
+        let slotsHtml = '';
+        if (slots.length === 0) {
+          slotsHtml = '<div style="font-size:0.82rem;color:var(--text-gray);font-style:italic;">No slots match your artist type.</div>';
+        } else {
+          slotsHtml = slots.map(s => {
+            const slotLabel = slots.length > 1 ? `Slot ${s.slot_number} · ` : '';
+            return `<div style="display:inline-flex;align-items:center;gap:10px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:7px 12px;margin:0 6px 6px 0;flex-wrap:nowrap;">
+              <span style="font-size:0.84rem;color:var(--text);white-space:nowrap;">
+                ${_typeIcon(s.artist_type)} ${slotLabel}${s.time} · <span style="color:#22c55e;font-weight:600;">${_payStr(s.pay)}</span>
+              </span>
+              <span style="display:inline-flex;gap:5px;">
+                <button type="button" data-token="${hi.offer_token}" data-slot="${s.id}"
+                  data-venue="${(data.venue_name||'').replace(/"/g,'&quot;')}" data-date="${data.date||''}"
+                  data-slot-num="${s.slot_number}" data-time="${s.time}" data-pay="${_payStr(s.pay)}"
+                  onclick="window.gmHoldBook && window.gmHoldBook(this)"
+                  title="Book this slot now."
+                  style="padding:5px 14px;background:#7c6bff;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;">Book</button>
+                <button type="button" data-token="${hi.offer_token}"
+                  onclick="window.gmHoldDecline && window.gmHoldDecline(this)"
+                  title="Decline if you are unable to perform on this day."
+                  style="padding:5px 12px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Decline</button>
+              </span>
+            </div>`;
+          }).join('');
+        }
+        html += `<div style="margin-bottom:14px;background:rgba(245,158,11,0.08);border:1.5px solid rgba(245,158,11,0.5);border-radius:10px;padding:12px 16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+            <span style="font-size:0.85rem;font-weight:700;color:#fcd34d;text-transform:uppercase;letter-spacing:0.05em;">🔒 Pending Offer</span>
+            ${timeLeft ? `<span style="color:${hrs < 6 ? '#ef4444' : '#fcd34d'};font-weight:600;font-size:0.8rem;">${timeLeft}</span>` : ''}
+          </div>
+          <div>${slotsHtml}</div>
+        </div>`;
+        actionsHtml = `<div class="_gig-btn-row" style="justify-content:flex-end;">${_closeBtn(close)}</div>`;
+        return _commit(html, actionsHtml);
+      }
+      if (hi.my_state === 'queued') {
+        const pos = hi.my_position != null ? hi.my_position + 1 : '?';
+        html += `<div style="margin-bottom:14px;background:rgba(139,92,246,0.10);border:1px solid rgba(139,92,246,0.4);border-radius:10px;padding:14px 18px;">
+          <div style="font-size:0.85rem;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">🔒 Hold in Progress</div>
+          <p style="margin:0;font-size:0.86rem;line-height:1.5;color:var(--text);">
+            You're position <b>#${pos}</b> on this venue's hold list. Another artist is currently being offered the gig — if they decline or don't respond within 24 hours, you'll be offered the slot(s) you match.
+          </p>
+        </div>`;
+        actionsHtml = `<div class="_gig-btn-row" style="justify-content:flex-end;">${_closeBtn(close)}</div>`;
+        return _commit(html, actionsHtml);
+      }
+      if (hi.my_state === 'declined') {
+        html += `<div style="margin-bottom:14px;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.3);border-radius:10px;padding:14px 18px;">
+          <p style="margin:0;font-size:0.86rem;color:var(--text);">You previously declined this offer. The venue has been notified.</p>
+        </div>`;
+        actionsHtml = `<div class="_gig-btn-row" style="justify-content:flex-end;">${_closeBtn(close)}</div>`;
+        return _commit(html, actionsHtml);
+      }
+      // my_state === 'accepted' or null → fall through to normal flow
+    }
+
     // Waitlist LOCKED banner — only show if there are still open bookable slots
     const _hasBookableSlots = (data.slots || []).some(s => s.relationship === 'open_bookable');
     const _allSlotsTaken = (data.slots || []).every(s => s.status !== 'open' || s.relationship === 'freq_blocked');
