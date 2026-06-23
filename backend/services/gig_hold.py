@@ -180,10 +180,17 @@ def respond_to_hold_offer(db, token: str, action: str, slot_id: Optional[int] = 
         return {"ok": True, "message": "Thanks — we've let the venue know."}
 
     if action == "accept":
-        # Need to know which slot. For single-slot gigs we infer.
-        open_slots = _list_open_hold_slots(db, row["gig_id"])
+        # Multi-slot gigs with mixed types: filter to only slots this
+        # specific artist can actually fill. A DJ artist offered a gig
+        # with a Live Band slot + a DJ slot only sees the DJ slot.
+        open_slots = _list_matching_open_slots(db, row["gig_id"], row["artist_id"])
         if not open_slots:
-            return {"ok": False, "message": "All slots on this gig have already been booked."}
+            # Either no open slots at all OR none match this artist's
+            # type. Both are dead-ends for this offer.
+            any_open = _list_open_hold_slots(db, row["gig_id"])
+            if not any_open:
+                return {"ok": False, "message": "All slots on this gig have already been booked."}
+            return {"ok": False, "message": "None of the open slots match your artist type."}
         chosen = None
         if slot_id:
             for s in open_slots:
@@ -191,7 +198,7 @@ def respond_to_hold_offer(db, token: str, action: str, slot_id: Optional[int] = 
                     chosen = s
                     break
             if chosen is None:
-                return {"ok": False, "message": "That slot is no longer available — pick a different one."}
+                return {"ok": False, "message": "That slot is no longer available for your type — pick a different one."}
         elif len(open_slots) == 1:
             chosen = open_slots[0]
         else:
@@ -318,15 +325,68 @@ def process_hold_offers(db):
 
 def _list_open_hold_slots(db, gig_id: int):
     """Return the list of currently-open slots on this gig as dicts
-    with id, slot_number, start_time, end_time, pay. Used to build the
-    offer email's slot picker + to validate the artist's slot pick."""
+    with id, slot_number, start_time, end_time, pay + type fields
+    (artist_type, band_formats, styles) so the artist match filter
+    can run on the result."""
     from sqlalchemy import text
     return db.execute(
-        text("""SELECT id, slot_number, start_time, end_time, pay
+        text("""SELECT id, slot_number, start_time, end_time, pay,
+                       artist_type, band_formats, styles
                 FROM gig_slots WHERE gig_id = :gid AND status = 'open'
                 ORDER BY slot_number ASC"""),
         {"gid": gig_id}
     ).mappings().all()
+
+
+def _csv_set(s):
+    """CSV-or-semicolon-separated string → set of tokens (lowercased
+    for case-insensitive compare). Used by _artist_matches_slot to
+    match the frontend's _csvSet behavior."""
+    if not s:
+        return set()
+    return {t.strip().lower() for t in str(s).replace(";", ",").split(",") if t.strip()}
+
+
+def _artist_matches_slot(artist_row, slot_row) -> bool:
+    """Mirror of the frontend _artistMatchesSlot. An artist can only
+    book a slot when:
+      - slot.artist_type is set AND artist.artist_type equals it
+      - if slot specifies band_formats, artist has at least one overlap
+      - if slot specifies styles, artist has at least one overlap
+    Used to filter the open-slot list on hold respond so a DJ artist
+    offered a multi-slot gig with a DJ slot + a Live Band slot only
+    sees the DJ slot as bookable."""
+    if not artist_row or not slot_row:
+        return False
+    s_type = (slot_row.get("artist_type") or "").strip()
+    a_type = (artist_row.get("artist_type") or "").strip()
+    if not s_type or not a_type:
+        return False
+    if s_type != a_type:
+        return False
+    slot_fmt = _csv_set(slot_row.get("band_formats"))
+    if slot_fmt:
+        if not (slot_fmt & _csv_set(artist_row.get("band_formats"))):
+            return False
+    slot_styles = _csv_set(slot_row.get("styles"))
+    if slot_styles:
+        if not (slot_styles & _csv_set(artist_row.get("styles"))):
+            return False
+    return True
+
+
+def _list_matching_open_slots(db, gig_id: int, artist_id: int):
+    """Filter _list_open_hold_slots to only slots the artist matches.
+    Pulls the artist's profile fields and runs each slot through
+    _artist_matches_slot. Returns the list (possibly empty)."""
+    from sqlalchemy import text
+    artist = db.execute(
+        text("""SELECT id, artist_type, band_formats, styles
+                FROM artists WHERE id = :aid"""),
+        {"aid": artist_id}
+    ).mappings().first()
+    open_slots = _list_open_hold_slots(db, gig_id)
+    return [s for s in open_slots if _artist_matches_slot(artist, dict(s))]
 
 
 def _mark_exhausted_and_notify(db, gig_id: int):
@@ -368,8 +428,30 @@ def _send_hold_offer_email(db, gig_id: int, artist_id: int, token: str, is_remin
         logger.warning(f"[HOLD] no email on file for artist={artist_id}")
         return
 
-    open_slots = _list_open_hold_slots(db, gig_id)
+    # Filter open slots to ones the artist actually matches. Showing
+    # all open slots in the offer email would be misleading for a DJ
+    # artist offered a multi-type gig — they'd see a Live Band slot
+    # they can't book.
+    open_slots = _list_matching_open_slots(db, gig_id, artist_id)
     is_multi = bool(gig.get("is_multi_slot"))
+
+    # If no slots match this artist's type, don't send a useless offer.
+    # Mark the waitlist row declined and advance to the next artist.
+    if not open_slots:
+        from sqlalchemy import text as _t
+        logger.warning(
+            f"[HOLD] gig={gig_id} artist={artist_id} has no matching "
+            f"open slot — auto-declining + advancing"
+        )
+        db.execute(
+            _t("""UPDATE gig_waitlist SET offer_declined = 1
+                  WHERE gig_id = :gid AND artist_id = :aid AND source = 'hold'
+                    AND offer_token = :tok"""),
+            {"gid": gig_id, "aid": artist_id, "tok": token}
+        )
+        db.commit()
+        send_next_hold_offer(db, gig_id)
+        return
 
     # Build the dynamic template vars
     base_url = "https://gigsfill.com"

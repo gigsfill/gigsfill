@@ -212,8 +212,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Without this, venues could open the panel before they've typed
   // anything, see no matching artists (Phase 4 type-filter), and
   // get confused.
+  // Hold mode requires EVERY slot to be fully filled out — venue is
+  // pre-offering the gig as-is. A half-configured slot would mean the
+  // accepting artist sees garbage fields in their offer email. Required
+  // per slot:
+  //   - start_time + end_time
+  //   - pay > 0 (flat) OR door guarantee > 0 (door deal)
+  //   - artist_type set
+  //   - if artist_type === 'Live Band': at least one band_format AND
+  //     at least one style picked (these are the .slot-lineup-cb and
+  //     .slot-style-cb checkbox pills)
+  // Returns false on the first incomplete slot encountered.
   function _gigReadyForHold() {
     const rows = document.querySelectorAll('#slotList .slot-row');
+    if (rows.length === 0) return false;
     for (const row of rows) {
       const start = row.querySelector('.slot-start')?.value;
       const end = row.querySelector('.slot-end')?.value;
@@ -222,9 +234,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       const pay = parseFloat((row.querySelector('.slot-pay-amount')?.value || '0').replace(/,/g, '')) || 0;
       const guarRaw = parseFloat((row.querySelector('.slot-door-guarantee')?.value || '0').replace(/,/g, '')) || 0;
       const hasMoney = doorOn ? guarRaw > 0 : pay > 0;
-      if (start && end && type && hasMoney) return true;
+      if (!start || !end || !type || !hasMoney) return false;
+      if (type === 'Live Band') {
+        const hasFormat = row.querySelectorAll('.slot-lineup-cb:checked').length > 0;
+        const hasStyle = row.querySelectorAll('.slot-style-cb:checked').length > 0;
+        if (!hasFormat || !hasStyle) return false;
+      }
     }
-    return false;
+    return true;
   }
 
   function _updateHoldPillState() {
@@ -427,6 +444,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   // re-fetching when slot types change.
   let _holdApprovedCache = null;
 
+  // Artist-type → icon for the picker. Matches the slot type select
+  // options (line 943-946 in this file): 🎸 Live Band, 🎧 DJ, 🎤
+  // Comedian, ❓ Trivia Host. Future types: add here.
+  const HOLD_TYPE_ICON = {
+    'Live Band': '🎸',
+    'DJ': '🎧',
+    'Comedian': '🎤',
+    'Trivia Host': '❓',
+  };
+  function _holdTypeIcon(t) { return HOLD_TYPE_ICON[t] || '🎵'; }
+
   function _renderHoldMasterFromCache() {
     if (!_holdApprovedCache || !holdMasterList) return;
     const eligible = _holdApprovedCache.filter(_artistMatchesAnySlot);
@@ -438,8 +466,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       const aid = parseInt(a.artist_id || a.id, 10);
       const nm = _escHtml(window._holdArtistMap[aid]);
       const paySuffix = window._holdPayForArtist(aid);
-      return `<button type="button" class="hold-master-row${(window._holdArtistOrder || []).includes(aid) ? ' is-selected' : ''}" data-aid="${aid}">
-        <span>${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>
+      const icon = _holdTypeIcon(a.artist_type);
+      return `<button type="button" class="hold-master-row${(window._holdArtistOrder || []).includes(aid) ? ' is-selected' : ''}" data-aid="${aid}" title="${_escHtml(a.artist_type || 'Artist')}">
+        <span style="display:inline-flex;align-items:center;gap:5px;width:100%;">
+          <span style="flex:0 0 auto;font-size:0.85em;line-height:1;">${icon}</span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>
+        </span>
       </button>`;
     }).join('');
     holdMasterList.querySelectorAll('.hold-master-row').forEach(btn => {

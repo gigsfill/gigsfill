@@ -7379,7 +7379,10 @@ def hold_respond_landing(token: str, db=Depends(get_db)):
     """
     from sqlalchemy import text
     from fastapi.responses import HTMLResponse
-    from backend.services.gig_hold import respond_to_hold_offer, _list_open_hold_slots, _fmt_time
+    from backend.services.gig_hold import (
+        respond_to_hold_offer, _list_open_hold_slots,
+        _list_matching_open_slots, _fmt_time,
+    )
 
     # Look up the offer to see how many slots are open
     row = db.execute(
@@ -7407,11 +7410,20 @@ def hold_respond_landing(token: str, db=Depends(get_db)):
             "Offer no longer active",
             "This hold is no longer active. The venue may have cancelled or opened the gig already."
         ))
-    open_slots = _list_open_hold_slots(db, row["gig_id"])
+    # Show ONLY slots this artist can fill. For a mixed-type multi-slot
+    # gig (e.g. Slot 1 = Live Band, Slot 2 = DJ), a DJ artist only sees
+    # the DJ slot in the picker. Mirrors backend service filter.
+    open_slots = _list_matching_open_slots(db, row["gig_id"], row["artist_id"])
     if not open_slots:
+        any_open = _list_open_hold_slots(db, row["gig_id"])
+        if not any_open:
+            return HTMLResponse(_hold_simple_page(
+                "All slots booked",
+                "Every slot on this gig has already been booked. Thanks for the quick response — sorry we missed you on this one."
+            ))
         return HTMLResponse(_hold_simple_page(
-            "All slots booked",
-            "Every slot on this gig has already been booked. Thanks for the quick response — sorry we missed you on this one."
+            "No matching slots",
+            "None of the open slots match your artist type. We've let the venue know — they'll move on to the next artist on their list."
         ))
 
     # Single-slot path: book + confirm in one shot
