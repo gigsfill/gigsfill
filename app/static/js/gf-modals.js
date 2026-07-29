@@ -297,3 +297,56 @@
   // only deliberately during Phase 2 migration.
 
 })();
+
+// ── Universal modal safety-net ────────────────────────────────────────────
+// (Added 2026-07-25) Both shared modal systems (this file's gfm-* + the
+// legacy modals.js) already close on backdrop click and have X buttons.
+// But there are ~15+ one-off inline modals scattered across the app
+// (built by createElement or innerHTML injection) that don't consistently
+// wire either. This global handler catches those:
+//   1. When the user clicks an element that LOOKS like a modal backdrop
+//      (position:fixed, covers most of the viewport, high z-index, and
+//      the click target IS that element itself — not a descendant), it
+//      removes the element from the DOM.
+//   2. Escape key closes the topmost matching overlay.
+// Deliberately conservative — only fires when the click hits the overlay
+// exactly (`e.target === el`), never on button/input/text clicks inside.
+(function () {
+  'use strict';
+  function looksLikeModalOverlay(el) {
+    if (!el || el.nodeType !== 1) return false;
+    // Skip elements that opted out (e.g., persistent banners).
+    if (el.dataset && el.dataset.noAutoDismiss === '1') return false;
+    // Already handled by their own overlay.onclick handlers — usually harmless
+    // to double-dismiss (element is already gone), but skip to avoid noise.
+    const cs = window.getComputedStyle(el);
+    if (cs.position !== 'fixed') return false;
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    // High z-index (matches app pattern for modals ≥ ~1000).
+    const z = parseInt(cs.zIndex, 10);
+    if (isNaN(z) || z < 1000) return false;
+    // Covers most of viewport (excludes small toasts / dropdowns).
+    const r = el.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (r.width < vw * 0.7 || r.height < vh * 0.5) return false;
+    return true;
+  }
+  document.addEventListener('click', function (e) {
+    if (looksLikeModalOverlay(e.target)) {
+      // Only when the click hits the overlay itself, not a child.
+      try { e.target.remove(); } catch (_) {}
+    }
+  }, true);
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    // Find the topmost visible modal-shaped overlay and remove it.
+    // Reverse-iterate: highest z-index / latest in DOM wins.
+    const candidates = Array.from(document.body.querySelectorAll('*')).reverse();
+    for (const el of candidates) {
+      if (looksLikeModalOverlay(el)) {
+        try { el.remove(); } catch (_) {}
+        return;
+      }
+    }
+  });
+})();

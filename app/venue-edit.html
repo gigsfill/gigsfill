@@ -5,7 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -50,7 +51,7 @@
        PROFILE CONTAINER
        ======================================== */
     .profile-container {
-      max-width: 1100px;
+      max-width: 880px;
       margin: 0 auto;
       padding: 16px 16px;
     }
@@ -89,7 +90,12 @@
     .section-header-row h2 {
       font-size: 0.8rem;
       font-weight: 700;
-      color: var(--cyan);
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      width: fit-content;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       margin: 0;
@@ -105,7 +111,12 @@
     .content-card > h2 {
       font-size: 0.8rem;
       font-weight: 700;
-      color: var(--cyan);
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      width: fit-content;
       margin-bottom: 8px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -136,8 +147,8 @@
     /* City/State/Zip row */
     .form-row-multi {
       display: grid;
-      grid-template-columns: 120px 1fr 60px 80px 80px 120px;
-      gap: 12px;
+      grid-template-columns: 100px 1fr 60px 80px 80px 120px;
+      gap: 10px;
       align-items: center;
     }
     
@@ -335,6 +346,9 @@
       resize: vertical;
       font-family: inherit;
       box-sizing: border-box;
+      /* 2026-07-26: center caption text so it lines up with the
+         centered .media-title above the caption. */
+      text-align: center;
     }
     .video-caption::placeholder,
     .picture-caption::placeholder { color: var(--text-gray); font-style: italic; }
@@ -449,8 +463,8 @@
   <script src="/app/static/js/api-globals.js?v=11"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script src="/app/static/js/gf-modals.js?v=7"></script>
-  <script defer src="/app/static/js/venue.edit.js?v=6"></script>
+  <script src="/app/static/js/gf-modals.js?v=8"></script>
+  <script defer src="/app/static/js/venue.edit.js?v=12"></script>
   
 </head>
 
@@ -467,7 +481,7 @@
       </div>
     </div>
   </header>
-  <script src="/app/static/js/user-dropdown.js?v=9"></script>
+  <script src="/app/static/js/user-dropdown.js?v=11"></script>
 
   <div class="profile-container">
 
@@ -709,7 +723,7 @@
           <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">ASCAP</span>
           <input type="text" id="pro_ascap_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
           <input type="date" id="pro_ascap_expiration" style="font-size: 0.85rem;">
-          <button class="btn ghost" onclick="uploadProLicense('ASCAP')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+          <button onclick="uploadProLicense('ASCAP')" style="padding: 4px 12px; background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.4); color: #c4b5fd; border-radius: 5px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; cursor: pointer;">Upload</button>
         </div>
         <div id="pro_ascap_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
         
@@ -717,7 +731,7 @@
           <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">BMI</span>
           <input type="text" id="pro_bmi_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
           <input type="date" id="pro_bmi_expiration" style="font-size: 0.85rem;">
-          <button class="btn ghost" onclick="uploadProLicense('BMI')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+          <button onclick="uploadProLicense('BMI')" style="padding: 4px 12px; background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.4); color: #c4b5fd; border-radius: 5px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; cursor: pointer;">Upload</button>
         </div>
         <div id="pro_bmi_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
         
@@ -725,7 +739,7 @@
           <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">SESAC</span>
           <input type="text" id="pro_sesac_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
           <input type="date" id="pro_sesac_expiration" style="font-size: 0.85rem;">
-          <button class="btn ghost" onclick="uploadProLicense('SESAC')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+          <button onclick="uploadProLicense('SESAC')" style="padding: 4px 12px; background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.4); color: #c4b5fd; border-radius: 5px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; cursor: pointer;">Upload</button>
         </div>
         <div id="pro_sesac_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
         
@@ -733,7 +747,7 @@
           <span style="font-size: 0.8rem; font-weight: 600; color: var(--cyan);">GMR</span>
           <input type="text" id="pro_gmr_number" placeholder="License Number (optional)" style="font-size: 0.85rem;">
           <input type="date" id="pro_gmr_expiration" style="font-size: 0.85rem;">
-          <button class="btn ghost" onclick="uploadProLicense('GMR')" style="padding: 4px 10px; font-size: 0.75rem; white-space: nowrap;">Upload</button>
+          <button onclick="uploadProLicense('GMR')" style="padding: 4px 12px; background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.4); color: #c4b5fd; border-radius: 5px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; cursor: pointer;">Upload</button>
         </div>
         <div id="pro_gmr_file" style="font-size: 0.75rem; color: var(--text-muted); margin: -4px 0 8px 100px;"></div>
       </div>
@@ -837,7 +851,7 @@
 
 <!-- Vanity URL editor: must load BEFORE the init scripts that want
      to use window.applyVanityToLinks for the header profile button. -->
-<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/venue-edit-init.js"></script>
 <script src="/app/static/js/onboarding-checklist.js" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>

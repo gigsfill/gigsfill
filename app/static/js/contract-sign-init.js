@@ -139,8 +139,17 @@ async function signContract() {
   const name = document.getElementById('signatureName').value.trim();
   const agreed = document.getElementById('signatureAgree').checked;
   
-  if (!name) { alert('Please type your full name.'); return; }
-  if (!agreed) { alert('Please agree to the terms.'); return; }
+  // BUG FIX (Jul 2026 audit): branded modals for validation errors.
+  if (!name) {
+    if (typeof window.showAlert === 'function') window.showAlert('Please type your full legal name.', 'Signature Required');
+    else alert('Please type your full name.');
+    return;
+  }
+  if (!agreed) {
+    if (typeof window.showAlert === 'function') window.showAlert('Please agree to the terms.', 'Terms Required');
+    else alert('Please agree to the terms.');
+    return;
+  }
   
   const btn = document.getElementById('signBtn');
   btn.disabled = true;
@@ -230,7 +239,11 @@ async function downloadContract() {
 
 async function submitCountersign() {
   const name = document.getElementById('countersignName').value.trim();
-  if (!name) { alert('Please type your full legal name.'); return; }
+  if (!name) {
+    if (typeof window.showAlert === 'function') window.showAlert('Please type your full legal name.', 'Signature Required');
+    else alert('Please type your full legal name.');
+    return;
+  }
   
   const btn = document.getElementById('countersignBtn');
   const status = document.getElementById('countersignStatus');

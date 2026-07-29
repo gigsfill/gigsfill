@@ -201,7 +201,7 @@ def get_artist_timezone_str(db, artist_id: int) -> str:
       3. Platform timezone fallback
 
     Used by the daily open-gig digest job to send each artist's email
-    at 9 AM in their LOCAL time, not a single platform-wide send time
+    at 6 AM in their LOCAL time, not a single platform-wide send time
     that would land in the middle of the night for some users.
     """
     row = db.execute(text(
@@ -238,17 +238,25 @@ def venue_local_to_utc_naive(local_year: int, local_month: int, local_day: int,
 
 
 def check_venue_access(db, venue_id: int, user_id: int):
-    """Verify user has access to this venue (owner or entity_user). Raises HTTPException 403 if not."""
+    """Verify user has access to this venue (owner or entity_user). Raises HTTPException 403 if not.
+
+    Jul 2026: also rejects tombstoned venues (`deleted_at IS NOT NULL`).
+    The row survives so historical joins render "[Deleted] X" correctly,
+    but no write operation (edit, create gig, upload flyer, etc.) should
+    ever succeed against a tombstoned venue.
+    """
     row = db.execute(
         text("""
             SELECT 1 FROM venues v
-            WHERE v.id = :vid AND (
+            WHERE v.id = :vid
+              AND v.deleted_at IS NULL
+              AND (
                 v.user_id = :uid
                 OR EXISTS (
                     SELECT 1 FROM entity_users eu
                     WHERE eu.entity_type = 'venue' AND eu.entity_id = v.id AND eu.user_id = :uid
                 )
-            )
+              )
         """),
         {"vid": venue_id, "uid": user_id}
     ).first()
@@ -257,17 +265,22 @@ def check_venue_access(db, venue_id: int, user_id: int):
 
 
 def check_artist_access(db, artist_id: int, user_id: int):
-    """Verify user has access to this artist (owner or entity_user). Raises HTTPException 403 if not."""
+    """Verify user has access to this artist (owner or entity_user). Raises HTTPException 403 if not.
+
+    Jul 2026: also rejects tombstoned artists (see check_venue_access).
+    """
     row = db.execute(
         text("""
             SELECT 1 FROM artists a
-            WHERE a.id = :aid AND (
+            WHERE a.id = :aid
+              AND a.deleted_at IS NULL
+              AND (
                 a.user_id = :uid
                 OR EXISTS (
                     SELECT 1 FROM entity_users eu
                     WHERE eu.entity_type = 'artist' AND eu.entity_id = a.id AND eu.user_id = :uid
                 )
-            )
+              )
         """),
         {"aid": artist_id, "uid": user_id}
     ).first()

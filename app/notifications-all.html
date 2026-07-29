@@ -4,9 +4,10 @@
 <head>
 <script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
 <meta charset="utf-8"/>
-<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -34,7 +35,7 @@
 </div>
 </div>
 </header>
-<script src="/app/static/js/user-dropdown.js?v=9"></script>
+<script src="/app/static/js/user-dropdown.js?v=11"></script>
 
 <main class="container" style="max-width: 1400px; margin: 0 auto;">
 <!-- Header & Filters Section -->
@@ -58,8 +59,10 @@
 <button class="btn primary" id="markAllRead">Mark All Read</button>
 </div>
 </div>
-<!-- Stats Grid - Compact -->
-<div id="summaryStats" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+<!-- Stats Grid - Compact. auto-fit + minmax collapses cleanly: 4 columns
+     on desktop, 2 on tablet, 1 on phone (the 4-column repeat was cramming
+     stats into ~90px cells on a 375px iPhone). Added 2026-07-24. -->
+<div id="summaryStats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px;">
 <!-- Stats will be populated here -->
 </div>
 </section>
@@ -126,7 +129,9 @@
   /* Ensure stats and list don't go side by side */
   #summaryStats {
     display: grid !important;
-    grid-template-columns: repeat(4, 1fr) !important;
+    /* auto-fit for responsive collapse — same logic as the inline
+       style. Fixed 4-column blows up on iPhone. Fixed 2026-07-24. */
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
     gap: 16px !important;
     margin-bottom: 0 !important;
   }
@@ -135,6 +140,29 @@
     display: block !important;
     width: 100% !important;
   }
+
+  /* Mobile font-size normalization for Activity Center notification
+     rows (added 2026-07-25). The inline-styled rows in
+     notifications-all.js use ~7 different font sizes (0.7rem, 0.75rem,
+     0.8rem, 0.85rem, 1rem, 1.1rem, 1.5rem) which read as visually
+     chaotic on a phone. Collapse to a single readable size except for
+     the icon (which stays large as a visual anchor). Overrides are
+     scoped to the notification container so they don't leak into the
+     stats grid above. */
+  @media (max-width: 640px) {
+    #notificationsList > div > div * {
+      font-size: 0.875rem !important;  /* 14px — matches title on mobile */
+    }
+    /* Keep the leading icon large as a visual anchor. */
+    #notificationsList > div > div span[style*="1.5rem"] {
+      font-size: 1.5rem !important;
+    }
+    /* Keep the NEW badge and Delete button visibly compact. */
+    #notificationsList > div > div span[style*="border-radius: 12px"],
+    #notificationsList > div > div button {
+      font-size: 0.75rem !important;
+    }
+  }
 </style>
 <footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
@@ -142,7 +170,8 @@
 
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
-<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-modals.js?v=8"></script>
 </body>
 </html>

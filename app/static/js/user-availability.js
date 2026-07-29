@@ -145,10 +145,27 @@
     if (list) list.style.display = spec.checked ? '' : 'none';
   };
 
+  // Reveal / hide the "Other" free-text field based on the dropdown
+  // selection. Called from the <select onchange="uaReasonChanged()">.
+  window.uaReasonChanged = function () {
+    const preset = document.getElementById('uaReasonPreset');
+    const other  = document.getElementById('uaReasonOther');
+    if (!preset || !other) return;
+    other.style.display = (preset.value === 'Other') ? '' : 'none';
+    if (preset.value === 'Other') { other.focus(); }
+    else { other.value = ''; }
+  };
+
   window.uaAddBlackout = async function () {
     const start = document.getElementById('uaStartDate').value;
     const end   = document.getElementById('uaEndDate').value;
-    const reason = (document.getElementById('uaReason').value || '').trim();
+    // Reason composed from the preset dropdown + optional freetext.
+    // Backend stores it as a single reason string (unchanged schema).
+    const preset = (document.getElementById('uaReasonPreset')?.value || '').trim();
+    const other  = (document.getElementById('uaReasonOther')?.value || '').trim();
+    const reason = preset === 'Other'
+      ? other
+      : preset;
     const status = document.getElementById('uaAddStatus');
     const scope = document.getElementById('uaScopeSpecific')?.checked ? 'specific' : 'all';
     let artistIds = null;
@@ -188,7 +205,11 @@
       // Clear form
       document.getElementById('uaStartDate').value = '';
       document.getElementById('uaEndDate').value = '';
-      document.getElementById('uaReason').value = '';
+      // Reset the reason preset dropdown + hide/clear the "Other" input.
+      const presetEl = document.getElementById('uaReasonPreset');
+      const otherEl  = document.getElementById('uaReasonOther');
+      if (presetEl) presetEl.value = '';
+      if (otherEl)  { otherEl.value = ''; otherEl.style.display = 'none'; }
       window.uaSetScope('all');
       await uaLoad();
       setTimeout(() => { status.textContent = ''; }, 2500);

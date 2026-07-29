@@ -470,12 +470,21 @@ class MyArtists {
         const [year, month, day] = gig.date.split('-');
         const gigDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
         gigDate.setHours(0, 0, 0, 0);
-        
+
         if (this.showPastGigs) {
           return gigDate < today; // Show only past gigs
         } else {
           return gigDate >= today; // Show only today and future gigs
         }
+      });
+      // Sort closest-to-today first (Jul 2026 — user request).
+      // Future view: ascending date (today, then further out).
+      // Past view: descending date (most recent past first).
+      // Tiebreaker on same date: earliest start_time wins.
+      filteredGigs.sort((a, b) => {
+        const dCmp = (a.date || '').localeCompare(b.date || '');
+        if (dCmp !== 0) return this.showPastGigs ? -dCmp : dCmp;
+        return (a.start_time || '').localeCompare(b.start_time || '');
       });
     }
     
@@ -511,15 +520,21 @@ class MyArtists {
       statusBadge = '<span style="background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.5); color: #38bdf8; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">Non-Preferred</span>';
     }
     
-    // Pay + frequency override INPUT values. When no override has been set
-    // (a freshly-approved preferred artist) we default to 0 so the venue
-    // explicitly sees "no override" rather than the inherited venue
-    // default (which would mislead them into thinking they'd set one).
-    // The backend treats override = 0 / NULL identically (max() with the
-    // gig pay wins), so 0 here is purely a clearer UI default.
+    // Pay override defaults to 0/00 when no override is set — backend
+    // treats 0 and NULL identically for pay (max() with gig pay wins),
+    // so 0 is the clearest "no override" UI marker per user intent.
+    //
+    // Frequency override defaults to BLANK when no override is set
+    // (Jul 21 2026 bug fix). Previously showed as "0", but the backend
+    // treats freq=0 differently from NULL — freq=0 means "no gap
+    // required, artist can book anytime" (bypasses venue default) while
+    // NULL means "inherit venue default." Rendering "0" as the default
+    // meant a venue user tabbing through the frequency input silently
+    // converted "use venue default" into "no gap required." Blank input
+    // stays blank on save (saveOverride below converts '' → null).
     const payDollars = (artist.pay_dollars_override != null) ? artist.pay_dollars_override : 0;
     const payCents = String((artist.pay_cents_override != null) ? artist.pay_cents_override : 0).padStart(2, '0');
-    const freqDays = (artist.frequency_days_override != null) ? artist.frequency_days_override : 0;
+    const freqDays = (artist.frequency_days_override != null) ? artist.frequency_days_override : '';
     const showOverrideChip = (status === 'approved');
     
     // Audit fix (May 2026 part 7): escape every user-controlled field.
@@ -544,11 +559,13 @@ class MyArtists {
               <span style="font-size: 0.75rem; color: var(--text-muted);">Pay:</span>
               <span style="color: var(--text-muted); font-size: 0.8rem;">$</span>
               <input type="text" value="${payDollars}" data-pref-id="${artist.preferred_id}" data-field="pay_dollars"
+                title="$0.00 = no override (this artist earns the gig's default pay). Set higher if you want to guarantee this artist more than the gig's typical pay — the override is a FLOOR, not a fixed rate, so if the gig pays more the artist still gets the higher amount."
                 onblur="myArtists.saveOverride(${artist.preferred_id}, 'pay_dollars_override', this.value.replace(/,/g,''))"
                 onkeypress="if(event.key==='Enter'){this.blur()}"
                 style="width: 52px; padding: 3px 6px; background: rgba(21,27,40,0.8); border: 1px solid rgba(99,91,255,0.3); border-radius: 4px; color: white; font-size: 0.8rem; text-align: right;">
               <span style="color: var(--text-muted); font-size: 0.8rem;">.</span>
               <input type="text" value="${payCents}" maxlength="2" data-pref-id="${artist.preferred_id}" data-field="pay_cents"
+                title="$0.00 = no override (this artist earns the gig's default pay). Set higher if you want to guarantee this artist more than the gig's typical pay — the override is a FLOOR, not a fixed rate, so if the gig pays more the artist still gets the higher amount."
                 onblur="myArtists.saveOverride(${artist.preferred_id}, 'pay_cents_override', this.value)"
                 onkeypress="if(event.key==='Enter'){this.blur()}"
                 style="width: 28px; padding: 3px 4px; background: rgba(21,27,40,0.8); border: 1px solid rgba(99,91,255,0.3); border-radius: 4px; color: white; font-size: 0.8rem; text-align: center;">
@@ -558,6 +575,8 @@ class MyArtists {
               <span style="font-size: 0.75rem; color: var(--text-muted);">Frequency:</span>
               <span style="font-size: 0.75rem; color: var(--text-muted);">1 per</span>
               <input type="number" value="${freqDays}" min="0" max="365" data-pref-id="${artist.preferred_id}" data-field="freq"
+                placeholder="—"
+                title="Leave blank to inherit your venue's default frequency rule. 0 = no gap required (artist can book anytime). N = override with N days between bookings."
                 onblur="myArtists.saveOverride(${artist.preferred_id}, 'frequency_days_override', this.value)"
                 onkeypress="if(event.key==='Enter'){this.blur()}"
                 style="width: 44px; padding: 3px 4px; background: rgba(21,27,40,0.8); border: 1px solid rgba(99,91,255,0.3); border-radius: 4px; color: white; font-size: 0.8rem; text-align: center;">
@@ -628,7 +647,7 @@ class MyArtists {
                       <div style="font-size:0.82rem; color:#e2e8f0; display:flex; align-items:center; gap:10px; flex-wrap:wrap; cursor:pointer;" onclick="myArtists.showGigDetails(${gig.id})" onmouseover="this.parentElement.style.background='rgba(239,68,68,0.14)'" onmouseout="this.parentElement.style.background='rgba(239,68,68,0.08)'">
                         <strong style="white-space:nowrap;">${dateStr}</strong><span style="color:rgba(255,255,255,0.3);">|</span>
                         <span style="white-space:nowrap;">${formatTime(gig.start_time)} – ${formatTime(gig.end_time)}</span><span style="color:rgba(255,255,255,0.3);">|</span>
-                        <span style="color:#f87171; font-weight:600; white-space:nowrap;">${({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'}[gig.artist_type] || '🎵')} Booked • ${(() => {
+                        <span style="color:#f87171; font-weight:600; white-space:nowrap;">${({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'}[gig.artist_type] || '🎵')} Booked • ${(() => {
                           // Door-deal aware. The /preferred-artists-with-gigs
                           // endpoint now stamps deal_type/guarantee_cents/
                           // door_pct and pay_summary onto each gig row, so

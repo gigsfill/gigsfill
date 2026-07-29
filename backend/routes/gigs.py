@@ -12,7 +12,7 @@ import logging
 from backend.utils import utcnow_naive as _utcnow_naive
 
 # Services — centralized logic replacing copy-pasted blocks
-from backend.services.gig_cleanup import cleanup_gig_records, delete_gig_completely
+from backend.services.gig_cleanup import cleanup_gig_records, delete_gig_completely, cleanup_hold_records
 from backend.services.notification_service import (
     format_time_12hr, notify_gig_booked, notify_gig_cancelled,
     notify_all_entity_users_cancelled, create_notification
@@ -223,7 +223,7 @@ def _recompute_gig_fees(db, gig_id):
         sums tie exactly
 
     Guards:
-      - No-op if parent is past 'scheduled'/'test' status (real money has moved
+      - No-op if parent is past 'scheduled' status (real money has moved
         or is committed — recomputing would corrupt accounting)
       - No-op if no active children (caller is expected to delete the parent)
 
@@ -238,14 +238,14 @@ def _recompute_gig_fees(db, gig_id):
     ).mappings().first()
     if not parent:
         return
-    if parent["status"] not in ("scheduled", "test"):
+    if parent["status"] != "scheduled":
         # Audit fix #13 (May 2026): log the skip so future incidents leave a
         # trail. Silent skip is intentional safety (real money has moved or is
         # committed) but if a recompute is REQUESTED on a charged/paid parent,
         # something upstream may be wrong (e.g. cancel triggered after charge).
         logger.warning(
             f"[FEES] _recompute_gig_fees skipped for gig {gig_id}: parent txn {parent['id']} "
-            f"status={parent['status']!r} (only 'scheduled'/'test' are recomputable)"
+            f"status={parent['status']!r} (only 'scheduled' is recomputable)"
         )
         return
 
@@ -538,10 +538,11 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
             logger.info(f"SKIPPED Stripe transaction: venue {venue_id} is on free trial — direct payment (audit row inserted)")
             return
 
-        # Read platform settings
+        # Read platform settings (Test Mode removed Jul 1 2026 — no longer
+        # reads `payments_enabled`; every booking writes status='scheduled').
         settings = {}
         for r in db.execute(
-            text("SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('platform_fee_percent', 'platform_fee_split', 'platform_min_fee', 'payments_enabled', 'payment_processing_hour')")
+            text("SELECT setting_key, setting_value FROM platform_settings WHERE setting_key IN ('platform_fee_percent', 'platform_fee_split', 'platform_min_fee', 'payment_processing_hour')")
         ).fetchall():
             settings[r[0]] = r[1]
 
@@ -563,8 +564,7 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
             pass
         min_fee_cents = int(float(settings.get('platform_min_fee', '0')) * 100)
         fee_split     = settings.get('platform_fee_split', 'split')
-        payments_live = settings.get('payments_enabled', '0') in ('1', 'true')
-        tx_status     = 'scheduled' if payments_live else 'test'
+        tx_status     = 'scheduled'
 
         amount_cents = int(float(pay_amount or 0) * 100)
         # Pure-door deals (guarantee_cents=0, door_pct>0) legitimately
@@ -654,38 +654,90 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
         if existing_charge:
             # ── Multi-slot: parent already exists; values will be normalized by
             # _recompute_gig_fees() after the new child is inserted below. ──
+            #
+            # Audit fix (Jun 2026): refuse to add a child to a parent that's
+            # already past 'scheduled'/'test'. _recompute_gig_fees would
+            # silently no-op for a 'charged'/'paid'/'transferred' parent
+            # (it has to — money has moved), leaving the parent's total
+            # short by this artist's pay AND the new child stranded outside
+            # both the pending-charge and stalled-transfer queries. If the
+            # stalled-transfer loop ever picks the child up it transfers
+            # money the parent never raised, eating into the platform's
+            # Connect balance. Bail out early with a clear error so the
+            # booking gate surfaces it instead of silently ghosting.
+            _parent_status = db.execute(
+                text("SELECT status FROM transactions WHERE id = :pid"),
+                {"pid": existing_charge["id"]}
+            ).scalar()
+            if _parent_status not in ("scheduled",):
+                logger.error(
+                    f"[BOOKING] gig {gig_id} artist {artist_id}: parent venue_charge "
+                    f"#{existing_charge['id']} already in status {_parent_status!r} — "
+                    f"refusing new payout child to prevent ghost transaction"
+                )
+                from fastapi import HTTPException as _HE
+                raise _HE(409, (
+                    "This gig's payment has already been processed. "
+                    "Contact support to add this artist — a new charge needs to be "
+                    "raised separately."
+                ))
             parent_id = existing_charge["id"]
         else:
             # Check if there are already other booked slots (means this is a multi-slot gig
             # and we're adding the first transaction — or it truly is a single-slot gig).
             # We'll create a venue_charge parent regardless; if it ends up being single-slot
             # the type is updated to 'single' at the end if there's only 1 artist.
-            db.execute(
-                text("""
-                    INSERT INTO transactions
-                        (gig_id, from_user_id, to_user_id, artist_id,
-                         amount_cents, venue_charge_cents, artist_payout_cents, commission_cents,
-                         credit_card_fee_cents, payment_method_type, status,
-                         scheduled_process_at, created_at, notes, transaction_type)
-                    VALUES
-                        (:gig_id, :from_uid, :from_uid, NULL,
-                         :amount, :venue_charge, 0, :commission,
-                         0, 'stripe', :status,
-                         :scheduled, :now, :notes, 'venue_charge')
-                """),
-                {
-                    "gig_id":       gig_id,
-                    "from_uid":     venue_user["user_id"],
-                    "amount":       amount_cents,
-                    "venue_charge": amount_cents + venue_fee,
-                    "commission":   total_fee_cents,
-                    "status":       tx_status,
-                    "scheduled":    payout_date,
-                    "now":          _utcnow_naive(),
-                    "notes":        f"Gig {gig_id} — consolidated venue charge",
-                }
-            )
-            our_parent_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+            # Jul 2026 audit fix: wrap the INSERT to catch IntegrityError
+            # from the uidx_transactions_venue_charge_per_gig partial UNIQUE
+            # (added in db.py). Under Postgres the post-INSERT race-loser
+            # cleanup below was not atomic — two concurrent bookings could
+            # both pass the existing_charge SELECT and both INSERT before
+            # either committed. The UNIQUE now makes the second INSERT
+            # fail; here we catch, re-read the winner, and reuse it.
+            from sqlalchemy.exc import IntegrityError
+            try:
+                # 2026-07-25: RETURNING id inline (was: separate
+                # last_insert_rowid, per-connection and vulnerable to pool
+                # swaps returning a stale id from another connection).
+                our_parent_id = db.execute(
+                    text("""
+                        INSERT INTO transactions
+                            (gig_id, from_user_id, to_user_id, artist_id,
+                             amount_cents, venue_charge_cents, artist_payout_cents, commission_cents,
+                             credit_card_fee_cents, payment_method_type, status,
+                             scheduled_process_at, created_at, notes, transaction_type)
+                        VALUES
+                            (:gig_id, :from_uid, :from_uid, NULL,
+                             :amount, :venue_charge, 0, :commission,
+                             0, 'stripe', :status,
+                             :scheduled, :now, :notes, 'venue_charge') RETURNING id
+                    """),
+                    {
+                        "gig_id":       gig_id,
+                        "from_uid":     venue_user["user_id"],
+                        "amount":       amount_cents,
+                        "venue_charge": amount_cents + venue_fee,
+                        "commission":   total_fee_cents,
+                        "status":       tx_status,
+                        "scheduled":    payout_date,
+                        "now":          _utcnow_naive(),
+                        "notes":        f"Gig {gig_id} — consolidated venue charge",
+                    }
+                ).scalar()
+            except IntegrityError as _uv:
+                # Another concurrent booking beat us to the parent INSERT.
+                # Roll back this session's dirty state and grab the winner.
+                logger.warning(f"[BOOKING_RACE] gig {gig_id}: uidx blocked duplicate parent INSERT — reading winner")
+                try: db.rollback()
+                except Exception: pass
+                _winner = db.execute(
+                    text("SELECT id FROM transactions WHERE gig_id = :gid AND transaction_type = 'venue_charge' AND status NOT IN ('payment_cancelled') ORDER BY id ASC LIMIT 1"),
+                    {"gid": gig_id}
+                ).mappings().first()
+                if not _winner:
+                    logger.error(f"[BOOKING_RACE] gig {gig_id}: IntegrityError but no winner found — surfacing")
+                    raise
+                our_parent_id = _winner["id"]
             # Audit fix (May 2026 part 5): post-insert race-loser cleanup.
             # Two concurrent bookings on different slots of the same multi-slot
             # gig can both pass the existing_charge SELECT above and both INSERT
@@ -795,15 +847,26 @@ def _ensure_approval_columns(db):
             db.execute(text("ALTER TABLE gig_slots ADD COLUMN approval_requested_at TEXT"))
             db.commit()
         # Backstop create — setup_database() is the canonical declaration site.
+        # Jul 2026 audit (B-C2): added `expires_at` so a replayable approval
+        # token can't sit valid forever. All approve/deny endpoints check
+        # this on read; expired tokens 410.
         try:
             db.execute(text("""
                 CREATE TABLE IF NOT EXISTS pending_approval_tokens (
                     token TEXT PRIMARY KEY,
                     gig_id INTEGER NOT NULL,
                     artist_id INTEGER NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT
                 )
             """))
+            # Additive migration for existing installs.
+            try:
+                _cols = {r[1] for r in db.execute(text("PRAGMA table_info(pending_approval_tokens)")).fetchall()}
+                if "expires_at" not in _cols:
+                    db.execute(text("ALTER TABLE pending_approval_tokens ADD COLUMN expires_at TEXT"))
+            except Exception:
+                pass
             db.execute(text("CREATE INDEX IF NOT EXISTS idx_pending_approval_gig_artist ON pending_approval_tokens(gig_id, artist_id)"))
             db.commit()
         except Exception as _te:
@@ -881,13 +944,97 @@ def _is_same_day_booking(gig_date_str: str, gig_start_time: str = None,
             return False
 
 
+def _venue_requires_same_day_approval(db, venue_id: int) -> bool:
+    """Return True if the venue OWNER wants to gatekeep same-day bookings
+    (i.e. force a pending_venue_approval hold before the artist is confirmed).
+
+    Jul 21 2026 fix — the `venue_booking_approval_request` notification
+    preference was previously used ONLY to gate the venue's email; the
+    approval hold ALWAYS fired. That silently trapped same-day bookings
+    for venue users who had turned the pref off (they never got notified
+    and the booking sat pending forever).
+
+    Now the preference actually controls the gate:
+      • Owner's row missing OR enabled=1 → require approval (safe default).
+      • Owner's row explicitly enabled=0 → skip the gate, auto-confirm.
+
+    Checking only the OWNER (not every entity user) keeps behavior
+    deterministic — the owner is the primary decision-maker. Staff users
+    can still opt out of the email individually via their own preference.
+    """
+    try:
+        row = db.execute(text("""
+            SELECT ep.enabled
+              FROM venues v
+              LEFT JOIN email_preferences ep
+                ON ep.user_id = v.user_id
+               AND ep.notification_type = 'venue_booking_approval_request'
+             WHERE v.id = :vid
+        """), {"vid": venue_id}).first()
+        if not row:
+            return True  # Venue not found → default to safer behavior
+        enabled = row[0]
+        # NULL (no explicit preference row) → default True (require).
+        # 0 → explicitly opted out → skip the hold.
+        if enabled is None:
+            return True
+        return bool(int(enabled))
+    except Exception:
+        # If anything goes wrong reading the pref, default to the pre-fix
+        # behavior (require approval) so we never silently lose the gate.
+        return True
+
+
 # CREATE GIG (VENUE)
+def _validate_door_slots(slots: list) -> None:
+    """Door slots must carry BOTH a positive guarantee_cents AND a
+    positive door_pct (Jun 2026 — tightened from 'at least one' to
+    'both required'). Raise HTTPException(400) with a per-slot message
+    on the first offender so the frontend can surface it inline."""
+    for i, s in enumerate(slots or []):
+        if (s.get("deal_type") or "flat").lower() != "door":
+            continue
+        gua = int(s.get("guarantee_cents") or 0)
+        pct = int(s.get("door_pct") or 0)
+        if gua <= 0 or pct <= 0:
+            raise HTTPException(400,
+                f"Slot {i + 1}: Door Split needs BOTH a Guarantee Pay and a % of door. Enter both, or switch back to flat pay.")
+
+
 @router.post("/venues/{venue_id}/gigs")
 def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     from backend.utils import check_venue_access
     check_venue_access(db, venue_id, user.id)
+    # PDF + Hold + Recurring incompatibility (Jul 2026 Phase 5).
+    # PDF contracts (pdf_upload / per_gig_pdf) can't be bulk-signed:
+    # each gig is a separate document the artist must download + sign +
+    # upload individually. Bundling N dates into one signature on a
+    # multi-date contract isn't a thing in the existing PDF pipeline.
+    # Refuse the combo at create-time so the venue gets an actionable
+    # error before staging the series — vs. the artist hitting it when
+    # they try to sign 30 minutes later.
+    if (data.get("hold_artist_ids") or []) and data.get("is_recurring"):
+        _pdf_ct = db.execute(
+            text("""SELECT contract_type FROM venue_contracts
+                    WHERE venue_id = :vid AND is_active = 1
+                      AND require_for_booking = 1
+                      AND contract_type IN ('pdf_upload', 'per_gig_pdf')
+                    LIMIT 1"""),
+            {"vid": venue_id}
+        ).first()
+        if _pdf_ct:
+            raise HTTPException(
+                400,
+                "Hold + Recurring isn't supported for PDF contracts. PDFs can't "
+                "be bulk-signed across many dates in one step. To use this combo, "
+                "switch your venue contract to digital (Custom Builder or "
+                "Auto-Generated) in Venue Settings → Contracts. Or create this "
+                "series without Hold, and artists will sign each PDF individually "
+                "when they book."
+            )
     try:
         slots = data.get("slots", [])
+        _validate_door_slots(slots)
 
         # Derive gig start/end from slots.
         # PROD BUG (May 10 2026): the original sorted slots by string
@@ -958,16 +1105,19 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                         )
         # ────────────────────────────────────────────────────────────────────
 
-        result = db.execute(
+        # 2026-07-25: RETURNING id inline (was: separate last_insert_rowid,
+        # per-connection and vulnerable to pool swaps returning a stale
+        # id from another pool connection).
+        gig_id = db.execute(
             text("""
                 INSERT INTO gigs
                     (venue_id, artist_id, date, start_time, end_time, title, pay, notes, status, artist_type, band_formats, styles,
-                     is_recurring, recurring_group_id, recurring_interval_weeks, recurring_days_of_week, 
+                     is_recurring, recurring_group_id, recurring_interval_weeks, recurring_days_of_week,
                      recurring_end_type, recurring_end_after, recurring_end_by_date, is_multi_slot)
                 VALUES
                     (:venue_id, NULL, :date, :start_time, :end_time, :title, :pay, :notes, 'open', :artist_type, :band_formats, :styles,
                      :is_recurring, :recurring_group_id, :recurring_interval_weeks, :recurring_days_of_week,
-                     :recurring_end_type, :recurring_end_after, :recurring_end_by_date, 1)
+                     :recurring_end_type, :recurring_end_after, :recurring_end_by_date, 1) RETURNING id
             """),
             {
                 "venue_id": venue_id,
@@ -989,12 +1139,7 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                 "recurring_end_by_date": data.get("recurring_end_by_date"),
                 "is_multi_slot": 1
             }
-        )
-        db.flush()
-        
-        # Get the new gig ID
-        gig_row = db.execute(text("SELECT last_insert_rowid()")).scalar()
-        gig_id = gig_row
+        ).scalar()
         
         # Always create slots (every gig uses slots)
         if slots:
@@ -1002,9 +1147,9 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                 db.execute(
                     text("""
                         INSERT INTO gig_slots (gig_id, slot_number, start_time, end_time, pay, status,
-                                               artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents)
+                                               artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents, apply_override, requires_equipment)
                         VALUES (:gig_id, :slot_number, :start_time, :end_time, :pay, 'open',
-                                :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0))
+                                :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0), COALESCE(:apply_override, 0), :requires_equipment)
                     """),
                     {
                         "gig_id": gig_id,
@@ -1018,6 +1163,10 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                     "deal_type": slot.get("deal_type"),
                     "door_pct": slot.get("door_pct"),
                     "guarantee_cents": slot.get("guarantee_cents"),
+                    "apply_override": 1 if slot.get("apply_override") else 0,
+                    # Jul 1 2026: MC-type equipment gate. None = venue
+                    # left it unspecified → no filter.
+                    "requires_equipment": (1 if bool(slot.get("requires_equipment")) else 0) if slot.get("requires_equipment") is not None else None,
                     }
                 )
         
@@ -1116,14 +1265,20 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
         except Exception:
             pass
 
-        # ── Hold feature (Jun 2026) ──
-        # Venue can mark a single gig (not series — Phase 5) as held at
-        # creation time with an ordered list of preferred-artist IDs.
-        # If `hold_email_artists` is true the first artist receives the
-        # offer immediately; otherwise the waitlist is staged but
-        # nobody's been notified yet.
+        # ── Hold feature (Jun 2026 / series Jul 2026) ──
+        # Venue can mark a gig as held at creation time with an ordered
+        # list of preferred-artist IDs.
+        #   - Single gig: first artist receives the offer immediately (if
+        #     `hold_email_artists` is true). Same UX as before.
+        #   - Recurring gig: every instance gets the same waitlist staged
+        #     but DOES NOT auto-fire its rotation. The frontend POSTs one
+        #     gig per occurrence; after the loop finishes it calls
+        #     /api/series/{recurring_group_id}/hold/start once which fires
+        #     a single bundled offer per artist (all dates in one email).
+        #     This avoids 26 separate emails to the same artist for a 26-
+        #     week series.
         _hold_artist_ids = data.get("hold_artist_ids") or []
-        if _hold_artist_ids and not data.get("is_recurring"):
+        if _hold_artist_ids:
             try:
                 from backend.services.gig_hold import create_hold_waitlist
                 create_hold_waitlist(
@@ -1132,6 +1287,12 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                     artist_ids=_hold_artist_ids,
                     send_email_now=bool(data.get("hold_email_artists", True)),
                     offer_window_hours=int(data.get("hold_offer_window_hours") or 24),
+                    # Recurring → defer rotation kickoff. Per-instance
+                    # waitlist rows are still inserted + hold_status set
+                    # to 'active' so the gig is hidden from public search
+                    # while staging. The series-start endpoint generates
+                    # the shared offer token and fires the bundled email.
+                    defer_kickoff=bool(data.get("is_recurring")),
                 )
             except Exception as _he:
                 # Hold setup failure shouldn't kill the gig creation —
@@ -1222,7 +1383,7 @@ def list_gigs(db=Depends(get_db)):
                     SELECT gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time,
                            gs.pay, gs.status, gs.artist_id,
                            gs.artist_type, gs.band_formats, gs.styles,
-                           gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                           gs.deal_type, gs.door_pct, gs.guarantee_cents, COALESCE(gs.apply_override,0) as apply_override, gs.requires_equipment,
                            a.name as artist_name,
                            -- Booked artist's actual profile attributes — used
                            -- by the hover card to filter the lineup/style
@@ -1248,34 +1409,16 @@ def list_gigs(db=Depends(get_db)):
 
 # v96: PUBLIC GIGS ENDPOINT for public-gigs.html
 @router.get("/api/artists/{artist_id}/gigs/public")
-def list_artist_gigs_public(artist_id: int, db=Depends(get_db)):
-    """Get all booked gigs for an artist (public view) - including slot bookings"""
+@limiter.limit("60/minute")
+def list_artist_gigs_public(artist_id: int, request: Request, db=Depends(get_db)):
+    """Get all booked gigs for an artist (public view) - including slot bookings.
+    Rate-limited (Jul 1 2026 audit fix): 60/min per IP prevents anonymous
+    scraping of every artist's gig history."""
     try:
-        # Regular gigs
-        regular = db.execute(
-            text("""
-                SELECT g.id, g.venue_id, g.date, g.start_time, g.end_time,
-                       g.status, g.title, g.pay, g.artist_type, g.band_formats,
-                       COALESCE(g.is_multi_slot, 0) as is_multi_slot,
-                       v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
-                       a.name as artist_name, a.artist_type as artist_actual_type, a.band_formats as artist_band_formats, a.styles as artist_styles,
-                       -- Audit fix (May 2026 part 8): include in-flight states in the "booked count"
-                       -- so multi-slot fullness reflects reality. Otherwise a 3-slot gig with one
-                       -- 'booked' + two 'pending_contract' shows as "1/3 booked" when really 3/3
-                       -- are committed.
-                       (SELECT COUNT(*) FROM gig_slots gs2 WHERE gs2.gig_id = g.id
-                          AND gs2.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')) as booked_slots_count,
-                       (SELECT COUNT(*) FROM gig_slots gs3 WHERE gs3.gig_id = g.id) as total_slots_count
-                FROM gigs g
-                JOIN venues v ON g.venue_id = v.id
-                JOIN artists a ON g.artist_id = a.id
-                WHERE g.artist_id = :aid AND g.status = 'booked'
-                ORDER BY g.date ASC
-            """),
-            {"aid": artist_id}
-        ).mappings().all()
-        
-        # Slot bookings (multi-slot gigs where artist booked a slot)
+        # Jul 2026 refactor: collapsed the "regular gigs" + "slot bookings"
+        # two-query merge into a single slot-only read. Post-backfill every
+        # gig has ≥1 `gig_slots` row so slot-only covers both shapes.
+        # Removes an extra DB round-trip + the Python-side seen_ids dedup.
         slot_gigs = db.execute(
             text("""
                 SELECT DISTINCT g.id, g.venue_id, g.date, gs.start_time, gs.end_time,
@@ -1283,10 +1426,6 @@ def list_artist_gigs_public(artist_id: int, db=Depends(get_db)):
                        COALESCE(g.is_multi_slot, 0) as is_multi_slot,
                        v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
                        a.name as artist_name, a.artist_type as artist_actual_type, a.band_formats as artist_band_formats, a.styles as artist_styles,
-                       -- Audit fix (May 2026 part 8): include in-flight states in the "booked count"
-                       -- so multi-slot fullness reflects reality. Otherwise a 3-slot gig with one
-                       -- 'booked' + two 'pending_contract' shows as "1/3 booked" when really 3/3
-                       -- are committed.
                        (SELECT COUNT(*) FROM gig_slots gs2 WHERE gs2.gig_id = g.id
                           AND gs2.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')) as booked_slots_count,
                        (SELECT COUNT(*) FROM gig_slots gs3 WHERE gs3.gig_id = g.id) as total_slots_count
@@ -1299,18 +1438,39 @@ def list_artist_gigs_public(artist_id: int, db=Depends(get_db)):
             """),
             {"aid": artist_id}
         ).mappings().all()
-        
-        seen_ids = set()
-        result = []
-        for r in regular:
-            seen_ids.add(r['id'])
-            result.append(dict(r))
-        for r in slot_gigs:
-            if r['id'] not in seen_ids:
-                seen_ids.add(r['id'])
-                result.append(dict(r))
-        
+
+        result = [dict(r) for r in slot_gigs]
         result.sort(key=lambda x: x.get('date', ''))
+
+        # Attach per-slot data to multi-slot gigs in ONE batched query so
+        # the artist-profile hover card / day modal can render per-slot
+        # breakdowns without an N+1 fan-out. Same redacted shape as
+        # /api/gigs/{id}/slots/public.
+        multi_ids = [r["id"] for r in result if r.get("is_multi_slot")]
+        if multi_ids:
+            placeholders = ",".join([f":id{i}" for i, _ in enumerate(multi_ids)])
+            params = {f"id{i}": gid for i, gid in enumerate(multi_ids)}
+            slot_rows = db.execute(
+                text(f"""
+                    SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
+                           gs.artist_id, gs.status,
+                           gs.artist_type, gs.band_formats, gs.styles,
+                           gs.deal_type, gs.requires_equipment,
+                           a.name as artist_name
+                    FROM gig_slots gs
+                    LEFT JOIN artists a ON gs.artist_id = a.id
+                    WHERE gs.gig_id IN ({placeholders})
+                    ORDER BY gs.gig_id, gs.slot_number ASC
+                """),
+                params,
+            ).mappings().all()
+            by_gig = {}
+            for s in slot_rows:
+                by_gig.setdefault(s["gig_id"], []).append(dict(s))
+            for r in result:
+                if r.get("is_multi_slot"):
+                    r["slots"] = by_gig.get(r["id"], [])
+
         return result
     except Exception as e:
         logger.error(f"Failed to load gigs. Please try again.: {e}", exc_info=True)
@@ -1364,8 +1524,9 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
                     (SELECT COUNT(*) FROM gig_slots gs WHERE gs.gig_id = g.id) as total_slots_count
                 FROM gigs g
                 JOIN venues v ON g.venue_id = v.id
-                LEFT JOIN artists a ON g.artist_id = a.id
+                LEFT JOIN artists a ON g.artist_id = a.id AND a.deleted_at IS NULL
                 WHERE COALESCE(v.payment_status, 'active') != 'suspended'
+                  AND v.deleted_at IS NULL
                   AND g.date >= date('now', '-7 days')
                   AND g.date <= date('now', '+90 days')
                   -- Hide active/exhausted holds from artist search.
@@ -1380,7 +1541,39 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
         # each row so pay_summary is present in a consistent shape — for
         # vanilla gig rows this is just "$X.XX", matching what the artist /
         # venue dashboards return for door-less slots.
-        return _enrich_pay_summary([dict(r) for r in rows])
+        rows = _enrich_pay_summary([dict(r) for r in rows])
+
+        # Attach per-slot data to multi-slot gigs in ONE batched query so
+        # public calendar consumers (venue-profile, artist-profile, public-
+        # gigs) can render per-slot bubble colors + hover breakdowns without
+        # an N+1 fan-out. Financial fields are excluded — same redaction as
+        # /api/gigs/{id}/slots/public above.
+        multi_ids = [r["id"] for r in rows if r.get("is_multi_slot")]
+        if multi_ids:
+            placeholders = ",".join([f":id{i}" for i, _ in enumerate(multi_ids)])
+            params = {f"id{i}": gid for i, gid in enumerate(multi_ids)}
+            slot_rows = db.execute(
+                text(f"""
+                    SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
+                           gs.artist_id, gs.status,
+                           gs.artist_type, gs.band_formats, gs.styles,
+                           gs.deal_type, gs.requires_equipment,
+                           a.name as artist_name
+                    FROM gig_slots gs
+                    LEFT JOIN artists a ON gs.artist_id = a.id
+                    WHERE gs.gig_id IN ({placeholders})
+                    ORDER BY gs.gig_id, gs.slot_number ASC
+                """),
+                params,
+            ).mappings().all()
+            by_gig = {}
+            for s in slot_rows:
+                by_gig.setdefault(s["gig_id"], []).append(dict(s))
+            for r in rows:
+                if r.get("is_multi_slot"):
+                    r["slots"] = by_gig.get(r["id"], [])
+
+        return rows
 
     except Exception as e:
         logger.error(f"Failed to load gigs. Please try again.: {e}", exc_info=True)
@@ -1471,7 +1664,7 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                 text("""
                     SELECT gs.gig_id, gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time, gs.pay, gs.status, gs.artist_id,
                            gs.artist_type, gs.band_formats, gs.styles,
-                           gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                           gs.deal_type, gs.door_pct, gs.guarantee_cents, COALESCE(gs.apply_override,0) as apply_override, gs.requires_equipment,
                            gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
                            a.name as artist_name,
                            a.band_formats as artist_band_formats,
@@ -1539,7 +1732,8 @@ def get_gig_detail(gig_id: int, user=Depends(get_current_user), db=Depends(get_d
         SELECT gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time, gs.pay,
                gs.artist_id, a.name as artist_name, gs.status,
                gs.artist_type, gs.band_formats, gs.styles,
-               gs.deal_type, gs.door_pct, gs.guarantee_cents
+               gs.deal_type, gs.door_pct, gs.guarantee_cents, COALESCE(gs.apply_override,0) as apply_override,
+               gs.requires_equipment
         FROM gig_slots gs LEFT JOIN artists a ON gs.artist_id = a.id
         WHERE gs.gig_id = :gid ORDER BY gs.slot_number
     """), {"gid": gig_id}).fetchall()
@@ -1768,6 +1962,10 @@ def _check_artist_time_conflict(db, artist_id: int, gig_id: int,
 
     # Pull every gig+slot the artist is committed to (booked, pending_contract,
     # pending_venue_approval, awaiting_venue_contract) EXCEPT this one.
+    # Jul 2026 refactor: dropped the "single-slot: g.artist_id" leg. Post-
+    # backfill every booking has a `gig_slots` row so the slot leg alone
+    # covers both shapes. Changed LEFT JOIN → INNER JOIN so the WHERE is
+    # simpler.
     rows = db.execute(_t("""
         SELECT g.id as gig_id, g.venue_id, g.date as gig_date,
                g.start_time as g_start, g.end_time as g_end,
@@ -1777,15 +1975,9 @@ def _check_artist_time_conflict(db, artist_id: int, gig_id: int,
                g.status as gig_status
         FROM gigs g
         JOIN venues v ON v.id = g.venue_id
-        LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
+        JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
         WHERE g.id != :gid
-          AND (
-            -- Single-slot booking: artist on gig itself
-            (g.artist_id = :aid AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval'))
-            OR
-            -- Multi-slot booking: artist on a specific slot
-            (gs.artist_id = :aid AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval'))
-          )
+          AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
     """), {"aid": artist_id, "gid": gig_id}).mappings().all()
 
     if not rows:
@@ -2033,8 +2225,15 @@ def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
             _gig_d = _dc.fromisoformat(str(gig_date)[:10])
             _days = (_gig_d - _today).days
             if _days >= 0:
+                # Jul 2026 fix: also require waive_frequency=1 on the row. When
+                # the venue enables a reminder but explicitly turns waive_freq
+                # OFF, we should NOT lift the frequency limit — send the email
+                # but respect the venue's cadence policy. Prior version treated
+                # every enabled window as auto-waive, which contradicted the
+                # per-row toggle we shipped in the July 3 consolidation.
                 _brows = db.execute(_t("""SELECT time_value, time_unit FROM venue_email_notifications
-                                         WHERE venue_id=:vid AND notification_key IN ('open_gig_36h','open_gig_1w') AND enabled=1"""),
+                                         WHERE venue_id=:vid AND notification_key IN ('open_gig_36h','open_gig_1w')
+                                           AND enabled=1 AND COALESCE(waive_frequency, 1) = 1"""),
                                     {"vid": venue_id}).mappings().all()
                 for _br in _brows:
                     _tv, _tu = _br["time_value"], _br["time_unit"]
@@ -2045,16 +2244,27 @@ def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
         except Exception:
             pass
 
+    # Venue-set frequency-exempt waiver — mirrors book_gig at line ~2407.
+    # Without this branch, multi-slot bookings via book_with_contract +
+    # contract-required venues silently 403'd freq-exempt artists.
+    _exempt_row = db.execute(_t("SELECT COALESCE(frequency_exempt,0) as fx FROM gigs WHERE id=:gid"),
+                              {"gid": gig_id}).mappings().first()
+    if _exempt_row and _exempt_row.get("fx"):
+        _blast_waives = True
+
     if not _blast_waives:
         freq = db.execute(_t("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) as freq_days
                                 FROM preferred_artists pa JOIN venues v ON v.id=pa.venue_id
                                 WHERE pa.venue_id=:vid AND pa.artist_id=:aid"""),
                           {"vid": venue_id, "aid": artist_id}).mappings().first()
         if freq and (freq["freq_days"] or 0) > 0:
-            close = db.execute(_t("""SELECT g.date FROM gigs g WHERE g.venue_id=:vid AND g.id!=:gid
-                                     AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
-                                     AND (g.artist_id=:aid OR EXISTS(
-                                         SELECT 1 FROM gig_slots gs WHERE gs.gig_id=g.id AND gs.artist_id=:aid AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')))
+            # Jul 2026 refactor: dropped `g.artist_id=:aid OR` leg — slot-
+            # only covers both shapes post-backfill.
+            close = db.execute(_t("""SELECT g.date FROM gigs g
+                                     JOIN gig_slots gs ON gs.gig_id=g.id AND gs.artist_id=:aid
+                                     WHERE g.venue_id=:vid AND g.id!=:gid
+                                       AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+                                       AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                      ORDER BY ABS(JULIANDAY(g.date)-JULIANDAY(:d)) LIMIT 1"""),
                                {"vid": venue_id, "aid": artist_id, "gid": gig_id, "d": gig_date}).mappings().first()
             if close:
@@ -2100,19 +2310,17 @@ def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
     #    blocks the Book button when onboarding isn't complete, but a direct
     #    API call (or stale frontend state) could still book the gig — and
     #    the payout would silently `transfer_failed` the day after.
-    #    Skip when payments are globally off (admin test/dev).
+    # Test Mode removed (Jul 1 2026): this now hard-blocks unconditionally.
     try:
-        _pay_on = db.execute(_t("SELECT setting_value FROM platform_settings WHERE setting_key='payments_enabled'")).scalar()
-        if str(_pay_on or '').strip().lower() in ('1', 'true'):
-            _eps = db.execute(_t("""SELECT COALESCE(stripe_connect_onboarding_complete, 0) as ok
-                                     FROM entity_payment_settings
-                                     WHERE entity_type = 'artist' AND entity_id = :aid"""),
-                              {"aid": artist_id}).mappings().first()
-            if not _eps or not int(_eps["ok"] or 0):
-                raise HTTPException(
-                    402,
-                    "STRIPE_ONBOARDING_INCOMPLETE: Connect your payout account in your artist Payments tab before booking."
-                )
+        _eps = db.execute(_t("""SELECT COALESCE(stripe_connect_onboarding_complete, 0) as ok
+                                 FROM entity_payment_settings
+                                 WHERE entity_type = 'artist' AND entity_id = :aid"""),
+                          {"aid": artist_id}).mappings().first()
+        if not _eps or not int(_eps["ok"] or 0):
+            raise HTTPException(
+                402,
+                "STRIPE_ONBOARDING_INCOMPLETE: Connect your payout account in your artist Payments tab before booking."
+            )
     except HTTPException:
         raise
     except Exception:
@@ -2160,26 +2368,30 @@ def book_gig(
             raise HTTPException(403, "No artist profile found")
         artist_id = artist["id"]
     else:
-        # v97: Check BOTH direct ownership AND entity_users access
+        # v97: Check BOTH direct ownership AND entity_users access.
+        # Jul 2026: also exclude tombstoned artists (deleted_at IS NOT NULL)
+        # so a deleted artist can't be re-attached to a new booking. The
+        # row survives for historical joins but is inert for future actions.
         artist = db.execute(
             text("""
                 SELECT a.id FROM artists a
-                WHERE a.id = :aid 
+                WHERE a.id = :aid
+                AND a.deleted_at IS NULL
                 AND (
                     a.user_id = :uid
                     OR EXISTS (
-                        SELECT 1 FROM entity_users eu 
-                        WHERE eu.entity_type = 'artist' 
-                        AND eu.entity_id = a.id 
+                        SELECT 1 FROM entity_users eu
+                        WHERE eu.entity_type = 'artist'
+                        AND eu.entity_id = a.id
                         AND eu.user_id = :uid
                     )
                 )
             """),
             {"aid": int(artist_id), "uid": user.id}
         ).mappings().first()
-        
+
         if not artist:
-            raise HTTPException(403, "Artist does not belong to you")
+            raise HTTPException(403, "Artist does not belong to you or has been deleted")
         artist_id = int(artist_id)
 
     # Load gig — also pull artist_type + band_formats so the match-gate
@@ -2332,12 +2544,16 @@ def book_gig(
             _gig_date = _date_cls.fromisoformat(str(gig["date"])[:10])
             _days_until = (_gig_date - _today).days
             if _days_until >= 0:
+                # Jul 2026 fix: gate on waive_frequency — see explanation in
+                # _run_prebooking_checks. Venue that disables waive on 1w wants
+                # reminders sent but NOT freq waived — respect that here.
                 _blast_rows = db.execute(
                     text("""SELECT notification_key, time_value, time_unit
                             FROM venue_email_notifications
                             WHERE venue_id = :vid
                               AND notification_key IN ('open_gig_36h','open_gig_1w')
-                              AND enabled = 1"""),
+                              AND enabled = 1
+                              AND COALESCE(waive_frequency, 1) = 1"""),
                     {"vid": gig["venue_id"]}
                 ).mappings().all()
                 for _br in _blast_rows:
@@ -2430,37 +2646,28 @@ def book_gig(
     # Audit fix (May 2026): Stripe Connect onboarding gate. Frontend already
     # blocks the Book button, but a direct API call would otherwise produce
     # a confirmed booking whose payout silently transfer_fails next day.
+    # Test Mode removed (Jul 1 2026): this hard-blocks unconditionally.
     try:
-        _pay_on = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='payments_enabled'")).scalar()
-        if str(_pay_on or '').strip().lower() in ('1', 'true'):
-            _eps = db.execute(
-                text("""SELECT COALESCE(stripe_connect_onboarding_complete, 0) as ok
-                        FROM entity_payment_settings
-                        WHERE entity_type = 'artist' AND entity_id = :aid"""),
-                {"aid": artist_id}
-            ).mappings().first()
-            if not _eps or not int(_eps["ok"] or 0):
-                raise HTTPException(
-                    402,
-                    "STRIPE_ONBOARDING_INCOMPLETE: Connect your payout account in your artist Payments tab before booking."
-                )
+        _eps = db.execute(
+            text("""SELECT COALESCE(stripe_connect_onboarding_complete, 0) as ok
+                    FROM entity_payment_settings
+                    WHERE entity_type = 'artist' AND entity_id = :aid"""),
+            {"aid": artist_id}
+        ).mappings().first()
+        if not _eps or not int(_eps["ok"] or 0):
+            raise HTTPException(
+                402,
+                "STRIPE_ONBOARDING_INCOMPLETE: Connect your payout account in your artist Payments tab before booking."
+            )
     except HTTPException:
         raise
     except Exception:
         pass
 
-    # Apply pay override: effective_pay = MAX(gig_listed_pay, artist_override_pay)
-    # NOTE: We do NOT write to gigs.pay here — that would corrupt the listed pay for all
-    # other artists. The override is applied at payout time on the booked slot only.
-    pay_override = db.execute(
-        text("""
-            SELECT pa.pay_dollars_override, pa.pay_cents_override, g.pay
-            FROM preferred_artists pa
-            JOIN gigs g ON g.id = :gid
-            WHERE pa.venue_id = g.venue_id AND pa.artist_id = :aid
-        """),
-        {"gid": gig_id, "aid": artist_id}
-    ).mappings().first()
+    # (Dead code removed Jun 2026: an unused override query lived here
+    # — the real override is applied later at line ~2561 against the
+    # OPEN SLOT, not the parent gig.pay. Keeping a leftover query
+    # invited the bug of someone reading the wrong-status value.)
 
     # Same-day booking: only require approval for non-preferred (radius) artists.
     # Preferred artists book directly even on same-day.
@@ -2481,7 +2688,12 @@ def book_gig(
         _real_pref_status_row and _real_pref_status_row[0] == "approved"
     )
     _ensure_approval_columns(db)
-    if _is_same_day_booking(gig["date"], gig.get("start_time"), venue_id=gig.get("venue_id")) and not _is_preferred_artist:
+    # Same-day gate now respects the venue owner's `venue_booking_approval_request`
+    # preference (Jul 21 2026). Opted-out → auto-confirm same-day; opted-in
+    # or default → hold in pending_venue_approval as before.
+    if (_is_same_day_booking(gig["date"], gig.get("start_time"), venue_id=gig.get("venue_id"))
+            and not _is_preferred_artist
+            and _venue_requires_same_day_approval(db, gig.get("venue_id"))):
         db.execute(
             text("""
                 UPDATE gigs
@@ -2504,10 +2716,23 @@ def book_gig(
             {"gid": gig_id}
         ).mappings().first()
         if _open_slot_for_approval:
-            db.execute(
-                text("UPDATE gig_slots SET artist_id = :aid, status = 'pending_venue_approval', approval_requested_at = :now WHERE id = :sid"),
+            # Audit RED fix (Jul 1 2026): the same-day-approval slot claim
+            # was missing the `WHERE status='open'` + rowcount race guard
+            # that every other slot-promotion path uses. Two artists
+            # racing "Book" on the same open slot would both pass the
+            # SELECT above and both UPDATE — last write wins, but the
+            # loser still got a {ok:True, pending_approval:True} response.
+            # Now the loser gets 409 SLOT_TAKEN so their UI knows.
+            _sd_claim = db.execute(
+                text("""UPDATE gig_slots
+                        SET artist_id = :aid, status = 'pending_venue_approval',
+                            approval_requested_at = :now
+                        WHERE id = :sid AND status = 'open'"""),
                 {"aid": artist_id, "now": _utcnow_naive().isoformat(), "sid": _open_slot_for_approval["id"]}
             )
+            if (_sd_claim.rowcount or 0) == 0:
+                db.commit()
+                raise HTTPException(409, "SLOT_TAKEN: This slot was just claimed by another artist. Please refresh and try again.")
         gig_details = db.execute(
             text("""
                 SELECT g.id, g.date, g.title, g.start_time, g.end_time, g.pay, g.notes,
@@ -2554,31 +2779,42 @@ def book_gig(
     if not open_slot:
         raise HTTPException(403, "No open slots available for this gig")
 
-    # Apply pay override on the slot. Door-deal slots SKIP the override —
-    # the guarantee floor is final (see _apply_slot_pay_override docstring
-    # for the design rationale: door split is the per-gig opt-out from
-    # the standing override).
+    # Apply pay override on the slot. Rule (Jun 2026):
+    #   - Flat: bump slot.pay to override if higher (always).
+    #   - Door: bump guarantee_cents AND mirror into pay ONLY when
+    #           slot.apply_override = 1. Default 0 means the door
+    #           guarantee floor is final regardless of override —
+    #           venue's per-slot opt-in toggle on the door config UI.
     pay_override = db.execute(
         text("""
-            SELECT pa.pay_dollars_override, pa.pay_cents_override, gs.pay, gs.deal_type
+            SELECT pa.pay_dollars_override, pa.pay_cents_override,
+                   gs.pay, gs.deal_type, gs.guarantee_cents,
+                   COALESCE(gs.apply_override, 0) as apply_override
             FROM preferred_artists pa
             JOIN gig_slots gs ON gs.gig_id = :gid AND gs.id = :sid
             WHERE pa.venue_id = :vid AND pa.artist_id = :aid
+              AND pa.status = 'approved'
         """),
         {"gid": gig_id, "sid": open_slot["id"], "vid": gig["venue_id"], "aid": artist_id}
     ).mappings().first()
 
-    if (
-        pay_override
-        and pay_override["pay_dollars_override"] is not None
-        and (pay_override.get("deal_type") or "").lower() != "door"
-    ):
+    if pay_override and pay_override["pay_dollars_override"] is not None:
         override_pay = float(pay_override["pay_dollars_override"]) + float(pay_override["pay_cents_override"] or 0) / 100
-        if override_pay > float(pay_override["pay"] or 0):
-            db.execute(
-                text("UPDATE gig_slots SET pay = :pay WHERE id = :sid"),
-                {"pay": override_pay, "sid": open_slot["id"]}
-            )
+        is_door = (pay_override.get("deal_type") or "").lower() == "door"
+        door_opted_in = is_door and int(pay_override.get("apply_override") or 0) == 1
+        if is_door and door_opted_in:
+            cur_gua_dollars = float(pay_override.get("guarantee_cents") or 0) / 100.0
+            if override_pay > cur_gua_dollars:
+                db.execute(
+                    text("UPDATE gig_slots SET guarantee_cents = :gc, pay = :pay WHERE id = :sid"),
+                    {"gc": int(round(override_pay * 100)), "pay": override_pay, "sid": open_slot["id"]}
+                )
+        elif not is_door:
+            if override_pay > float(pay_override["pay"] or 0):
+                db.execute(
+                    text("UPDATE gig_slots SET pay = :pay WHERE id = :sid"),
+                    {"pay": override_pay, "sid": open_slot["id"]}
+                )
 
     # Book the slot — atomic claim guarded by status='open'.
     # Audit fix (May 2026): without the status guard, two artists hitting
@@ -2639,7 +2875,27 @@ def book_gig(
 
     # Notifications and email — use the unified send_booking_emails
     try:
-        notify_gig_booked(db, {"venue_name": "", "artist_name": "", "date": gig["date"]}, gig_id, gig["venue_id"], artist_id)
+        # Jul 2026 fix: pull venue_name, artist_name, and the artist's slot
+        # start_time so the in-app notification renders "You booked a gig at
+        # V on DATE at 8:00 PM" instead of "at " (empty time). Previously the
+        # book_gig hot path passed an empty stub dict here — book_slot's
+        # equivalent call (gigs.py:5117) already fetched the full details.
+        _bg_ctx = db.execute(
+            text("""SELECT v.venue_name, a.name as artist_name, gs.start_time
+                    FROM gigs g
+                    JOIN venues v ON v.id = g.venue_id
+                    LEFT JOIN artists a ON a.id = :aid
+                    LEFT JOIN gig_slots gs ON gs.id = :sid
+                    WHERE g.id = :gid"""),
+            {"gid": gig_id, "aid": artist_id, "sid": open_slot["id"]}
+        ).mappings().first()
+        _bg_details = {
+            "venue_name":  (_bg_ctx or {}).get("venue_name") or "",
+            "artist_name": (_bg_ctx or {}).get("artist_name") or "",
+            "date":        gig["date"],
+            "start_time":  (_bg_ctx or {}).get("start_time"),
+        }
+        notify_gig_booked(db, _bg_details, gig_id, gig["venue_id"], artist_id)
     except Exception as e:
         logger.error(f"[BOOK_GIG] notify error: {e}")
     try:
@@ -2751,6 +3007,36 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
     elif cancelled_by == "venue" and not has_venue_access:
         cancelled_by = "artist"
 
+    # BUG FIX (Jul 2026 audit): refuse cancellation on already-past gigs.
+    # A gig that already ended can't be "cancelled" — the show either
+    # happened or was a no-show. Firing cancellation emails to venue and
+    # artist after the fact is confusing (they may have already played
+    # and been paid) and can trigger the transaction cleanup helper
+    # against past-settled txns. Compare against the venue's local
+    # timezone so we don't false-block a gig that's still upcoming in
+    # its own tz.
+    try:
+        from backend.utils import get_venue_timezone
+        _vtz = get_venue_timezone(db, result["venue_id"])
+        _end_str = result.get("end_time") or "23:59"
+        _gig_end_naive = datetime.strptime(
+            f"{str(result['date'])[:10]} {_end_str}",
+            "%Y-%m-%d %H:%M"
+        )
+        _gig_end = _gig_end_naive.replace(tzinfo=_vtz)
+        if datetime.now(_vtz) >= _gig_end:
+            raise HTTPException(
+                409,
+                "GIG_ALREADY_ENDED: This gig has already ended — it can't be "
+                "cancelled. If the artist was a no-show or the show didn't "
+                "happen, contact GigsFill to resolve the payment."
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # Malformed date/time — fall through and let downstream handle.
+        pass
+
     # For multi-slot gigs where gig.artist_id is NULL, resolve from request or slot
     effective_artist_id = result.get("artist_id") or request_artist_id
     effective_result = dict(result)
@@ -2790,6 +3076,17 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
     if cancelled_by == "artist":
         aid = int(effective_artist_id) if effective_artist_id else None
         if aid:
+            # BUG FIX (Jul 2026 audit): snapshot whether the artist held an
+            # active slot BEFORE we reset it. Used below at ~line 3183 to
+            # decide whether to fire notify_gig_cancelled. Previously the
+            # check ran AFTER this reset, so for a partially-booked multi-slot
+            # gig (parent status='open') the reset cleared the slot artist_id
+            # to NULL → later check found nothing → venue never got the in-app
+            # notification (only the email fired).
+            effective_result['_artist_had_active_slot'] = bool(db.execute(
+                text("SELECT 1 FROM gig_slots WHERE gig_id=:gid AND artist_id=:aid AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') LIMIT 1"),
+                {"gid": gig_id, "aid": aid}
+            ).first())
             # Clear this artist's slot(s), reopen them and restore original gig pay
             db.execute(
                 text("""UPDATE gig_slots
@@ -2920,6 +3217,51 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
                         WHERE id = :gid"""),
                 {"gid": gig_id, "aid": _cancelled_aid_for_clear}
             )
+            # BUG FIX (Jul 2026 audit): mirror the artist-cancel and cancel_slot
+            # branches' waitlist cleanup here. Without it, the cancelled
+            # artist's stale gig_waitlist row (created by any previous
+            # waitlist-join that silently succeeded on top of an active
+            # booking) would let notify_waitlist re-offer them the very slot
+            # they just lost.
+            if _cancelled_aid_for_clear:
+                try:
+                    db.execute(
+                        text("DELETE FROM waitlist_offered WHERE gig_id = :gid AND artist_id = :aid"),
+                        {"gid": gig_id, "aid": _cancelled_aid_for_clear}
+                    )
+                    db.execute(
+                        text("UPDATE gig_waitlist SET offer_declined = 1 WHERE gig_id = :gid AND artist_id = :aid"),
+                        {"gid": gig_id, "aid": _cancelled_aid_for_clear}
+                    )
+                except Exception as _wl_e:
+                    logger.warning(f"cancel_gig venue keep_open waitlist cleanup skip: {_wl_e}")
+            # Hold cleanup (Jun 2026): if the gig had an active or
+            # exhausted hold cycle, wind it down so the gig actually
+            # becomes publicly bookable. Without this, hold_status
+            # stayed 'active'/'exhausted' and the gig remained hidden
+            # from /api/gigs/public + blasts. Mark in-flight offers
+            # consumed (no email-link revival) but keep the rows for
+            # audit history.
+            cleanup_hold_records(db, gig_id, delete_rows=False)
+            # Audit fix (Jun 2026): also kill the cancelled artist's
+            # pending_approval_tokens. The full-delete branch already
+            # nukes them gig-wide (line 2990) — the keep_open branch
+            # was missing this, so the artist could click a stale
+            # email-approval link after their slot was reopened.
+            try:
+                _aid_for_tok = effective_result.get("artist_id")
+                if _aid_for_tok:
+                    db.execute(
+                        text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid"),
+                        {"gid": gig_id, "aid": _aid_for_tok}
+                    )
+                else:
+                    db.execute(
+                        text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid"),
+                        {"gid": gig_id}
+                    )
+            except Exception as _ptke:
+                logger.warning(f"cancel_gig keep_open: pending_approval_tokens cleanup failed for gig {gig_id}: {_ptke}")
             db.commit()
             # FIX (May 2026): delete flyer ONLY if no bookings remain. Multi-slot gigs
             # with other slots still booked keep their custom flyer. When preserved,
@@ -2968,11 +3310,17 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
     # If gig was booked OR in contract flow (and artist cancel path), notify BOTH parties
     # pending_contract / awaiting_venue_contract = contract was signed but not yet countersigned
     # For multi-slot: gig.status may be 'open' even when a slot was booked/pending
-    _slot_was_active = False
-    if effective_result.get("artist_id"):
+    # BUG FIX (Jul 2026 audit): prefer the pre-reset snapshot when available.
+    # For the artist-cancel branch the snapshot was taken before slot mutation
+    # (see effective_result['_artist_had_active_slot'] set above); for
+    # venue-cancel we still run the post-hoc query. The old code always did
+    # the post-hoc query and mis-reported "not active" for partial multi-slot
+    # gigs, silently skipping the in-app notification to venue.
+    _slot_was_active = bool(effective_result.get('_artist_had_active_slot'))
+    if not _slot_was_active and effective_result.get("artist_id"):
         try:
             _slot_was_active = bool(db.execute(
-                text("SELECT 1 FROM gig_slots WHERE gig_id=:gid AND artist_id=:aid AND status IN ('booked','pending_contract','awaiting_venue_contract') LIMIT 1"),
+                text("SELECT 1 FROM gig_slots WHERE gig_id=:gid AND artist_id=:aid AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval') LIMIT 1"),
                 {"gid": gig_id, "aid": effective_result["artist_id"]}
             ).first())
         except Exception:
@@ -3123,6 +3471,23 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
                 logger.error(f"Background blast error: {_e}", exc_info=True)
         _threading2.Thread(target=_blast_bg, daemon=True).start()
 
+    # Audit trail — cancel_gig deletes money-adjacent state
+    # (transactions, contracts, flyers). Log so a future incident can
+    # reconstruct what was cancelled by whom. (Jul 2026 delete-audit.)
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "gig_cancel",
+            target_table="gigs", target_id=gig_id,
+            metadata={
+                "endpoint": "cancel_gig",
+                "keep_open": bool(data.get("keep_open", False)),
+                "cancellation_reason": (data.get("cancellation_reason") or "")[:200],
+            },
+        )
+    except Exception:
+        pass
+
     return {"ok": True}
 
 @router.delete("/gigs/{gig_id}")
@@ -3158,22 +3523,43 @@ def delete_gig(gig_id: int, db=Depends(get_db), user=Depends(get_current_user)):
     # Audit fix #14 (May 2026): fan out cancellation to ALL artist/venue
     # users and send proper cancellation emails. Previously only the primary
     # artist_user_id got an in-app notification and no email was sent.
-    if result["status"] == "booked" and result["artist_id"]:
+    #
+    # Audit fix (Jul 2026 delete-audit): enumerate EVERY booked slot's
+    # artist across every in-flight status (booked / pending_contract /
+    # awaiting_venue_contract / pending_venue_approval), not just the
+    # legacy parent `result["artist_id"]` at status='booked'. Multi-slot
+    # gigs stored the booked artist on `gig_slots.artist_id` — the old
+    # branch here silently missed them and mid-contract artists.
+    try:
+        _booked_slots = db.execute(
+            text("""
+                SELECT DISTINCT gs.artist_id, a.name as artist_name
+                FROM gig_slots gs
+                JOIN artists a ON a.id = gs.artist_id
+                WHERE gs.gig_id = :gid
+                  AND gs.artist_id IS NOT NULL
+                  AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+            """),
+            {"gid": gig_id}
+        ).mappings().all()
+    except Exception:
+        _booked_slots = []
+    for _bs in _booked_slots:
         try:
             notify_gig_cancelled(
-                db, dict(result), gig_id, result["venue_id"], result["artist_id"],
+                db, dict(result), gig_id, result["venue_id"], _bs["artist_id"],
                 cancelled_by="venue", cancellation_reason=""
             )
         except Exception as _ne:
-            logger.warning(f"delete_gig notify_gig_cancelled error: {_ne}")
+            logger.warning(f"delete_gig notify_gig_cancelled error (artist={_bs['artist_id']}): {_ne}")
         try:
             send_cancellation_emails(
                 db,
                 {
                     "id": gig_id,
-                    "artist_name": result.get("artist_name", "Artist"),
+                    "artist_name": _bs["artist_name"] or result.get("artist_name", "Artist"),
                     "venue_name": result.get("venue_name", ""),
-                    "artist_id": result["artist_id"],
+                    "artist_id": _bs["artist_id"],
                     "venue_id": result["venue_id"],
                     "date": result["date"],
                     "start_time": result.get("start_time"),
@@ -3183,7 +3569,7 @@ def delete_gig(gig_id: int, db=Depends(get_db), user=Depends(get_current_user)):
                 cancelled_by="venue",
             )
         except Exception as _ee:
-            logger.warning(f"delete_gig send_cancellation_emails error: {_ee}")
+            logger.warning(f"delete_gig send_cancellation_emails error (artist={_bs['artist_id']}): {_ee}")
 
     # If gig is in waitlist mode, notify the artist who holds the active offer
     try:
@@ -3244,6 +3630,7 @@ def delete_gig(gig_id: int, db=Depends(get_db), user=Depends(get_current_user)):
 @router.put("/gigs/{gig_id}")
 def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     from backend.utils import check_venue_access
+    _validate_door_slots(data.get("slots", []))
     gig = db.execute(
         text("SELECT venue_id, date, start_time, end_time FROM gigs WHERE id = :gid"),
         {"gid": gig_id}
@@ -3354,9 +3741,9 @@ def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depen
             db.execute(
                 text("""
                     INSERT INTO gig_slots (gig_id, slot_number, start_time, end_time, pay, status,
-                                           artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents)
+                                           artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents, apply_override, requires_equipment)
                     VALUES (:gig_id, :slot_number, :start_time, :end_time, :pay, 'open',
-                            :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0))
+                            :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0), COALESCE(:apply_override, 0), :requires_equipment)
                 """),
                 {
                     "gig_id": gig_id,
@@ -3370,6 +3757,8 @@ def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depen
                     "deal_type": s.get("deal_type"),
                     "door_pct": s.get("door_pct"),
                     "guarantee_cents": s.get("guarantee_cents"),
+                    "apply_override": 1 if s.get("apply_override") else 0,
+                    "requires_equipment": (1 if bool(s.get("requires_equipment")) else 0) if s.get("requires_equipment") is not None else None,
                 }
             )
             next_num += 1
@@ -3462,7 +3851,8 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
                     pay        = :pay,
                     deal_type        = COALESCE(:deal_type, deal_type),
                     door_pct         = COALESCE(:door_pct, door_pct),
-                    guarantee_cents  = COALESCE(:guarantee_cents, guarantee_cents)
+                    guarantee_cents  = COALESCE(:guarantee_cents, guarantee_cents),
+                    apply_override   = COALESCE(:apply_override, apply_override)
                 WHERE gig_id = :gig_id AND slot_number = :slot_number
             """),
             {
@@ -3474,6 +3864,7 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
                 "deal_type":       s.get("deal_type"),
                 "door_pct":        s.get("door_pct"),
                 "guarantee_cents": s.get("guarantee_cents"),
+                "apply_override":  (1 if s.get("apply_override") else 0) if s.get("apply_override") is not None else None,
             }
         )
 
@@ -3508,9 +3899,9 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
             db.execute(
                 text("""
                     INSERT INTO gig_slots (gig_id, slot_number, start_time, end_time, pay, status,
-                                           artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents)
+                                           artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents, requires_equipment)
                     VALUES (:gig_id, :slot_number, :start_time, :end_time, :pay, 'open',
-                            :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0))
+                            :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0), :requires_equipment)
                 """),
                 {
                     "gig_id":      gig_id,
@@ -3524,6 +3915,7 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
                     "deal_type": s.get("deal_type"),
                     "door_pct": s.get("door_pct"),
                     "guarantee_cents": s.get("guarantee_cents"),
+                    "requires_equipment": (1 if bool(s.get("requires_equipment")) else 0) if s.get("requires_equipment") is not None else None,
                 }
             )
 
@@ -3564,7 +3956,7 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
                     ORDER BY id DESC LIMIT 1"""),
             {"gid": gig_id}
         ).scalar()
-        if parent_status in ("scheduled", "test"):
+        if parent_status in ("scheduled",):
             booked_slots = db.execute(
                 text("""SELECT artist_id, COALESCE(SUM(pay), 0) AS pay_sum
                         FROM gig_slots
@@ -3614,8 +4006,57 @@ def update_recurring_gigs(venue_id: int, recurring_group_id: str, data: dict, re
     from backend.utils import check_venue_access
     check_venue_access(db, venue_id, user.id)
     from_date = request.query_params.get('from_date')
-    
-    
+
+    # Audit fix (Jul 2026 audit — B-H2): bulk time update was skipping
+    # the per-date overlap check that both `create_gig` and `update_gig`
+    # enforce. A venue re-timing a recurring series could produce
+    # overlapping OPEN gigs on the same date. Validate first, fail 409
+    # with the conflicting dates listed.
+    _new_start = data.get("start_time")
+    _new_end   = data.get("end_time")
+    if _new_start and _new_end and from_date:
+        _conflicts = db.execute(
+            text("""
+                WITH affected AS (
+                    SELECT id, date FROM gigs
+                    WHERE recurring_group_id = :group_id
+                      AND venue_id = :venue_id
+                      AND date >= :from_date
+                      AND status = 'open'
+                )
+                SELECT a.date, g.id AS other_id,
+                       g.start_time AS other_start, g.end_time AS other_end
+                FROM affected a
+                JOIN gigs g
+                  ON g.venue_id = :venue_id
+                 AND g.date = a.date
+                 AND g.id != a.id
+                WHERE
+                  -- overlap: NOT (new_end <= other_start OR new_start >= other_end)
+                  NOT (
+                    time(:new_end)   <= time(g.start_time)
+                    OR
+                    time(:new_start) >= time(g.end_time)
+                  )
+                ORDER BY a.date
+                LIMIT 8
+            """),
+            {
+                "group_id": recurring_group_id,
+                "venue_id": venue_id,
+                "from_date": from_date,
+                "new_start": _new_start,
+                "new_end": _new_end,
+            }
+        ).mappings().all()
+        if _conflicts:
+            _dates = [f"{c['date']} ({c['other_start']}–{c['other_end']})" for c in _conflicts]
+            raise HTTPException(
+                409,
+                "Time change would overlap existing gigs on: " + ", ".join(_dates) +
+                ". Adjust the time or edit those gigs first."
+            )
+
     result = db.execute(
         text("""
             UPDATE gigs
@@ -3742,6 +4183,48 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
     skip_dates = set(data.get('skip_dates', []) or [])
     force_overlap = bool(data.get('force_overlap', False))
 
+    # Detect series-hold so we can propagate it to any newly inserted
+    # instances (Jul 2026 audit fix #12). If ANY existing gig in this
+    # series has hold_status='active' AND hold-source waitlist rows,
+    # the venue is mid-rotation — the new dates need to join the hold
+    # so the venue doesn't get a confusing mix of publicly-bookable
+    # extensions and privately-held originals.
+    _series_hold_artist_ids = []
+    _series_hold_window = 24
+    _series_hold_email_pref = True
+    try:
+        _h_check = db.execute(
+            text("""SELECT 1 FROM gigs g
+                    WHERE g.recurring_group_id = :rgid
+                      AND g.hold_status = 'active'
+                      AND EXISTS (SELECT 1 FROM gig_waitlist wl
+                                  WHERE wl.gig_id = g.id AND wl.source = 'hold')
+                    LIMIT 1"""),
+            {"rgid": recurring_group_id}
+        ).first()
+        if _h_check:
+            # Pull the canonical hold artist list from the earliest gig
+            # in the series — positions are the same across instances.
+            _src_gig = db.execute(
+                text("""SELECT id, hold_offer_window_hours, hold_email_artists
+                        FROM gigs
+                        WHERE recurring_group_id = :rgid AND hold_status = 'active'
+                        ORDER BY date ASC LIMIT 1"""),
+                {"rgid": recurring_group_id}
+            ).mappings().first()
+            if _src_gig:
+                _series_hold_window = int(_src_gig["hold_offer_window_hours"] or 24)
+                _series_hold_email_pref = bool(int(_src_gig["hold_email_artists"] or 1))
+                _ar_rows = db.execute(
+                    text("""SELECT artist_id FROM gig_waitlist
+                            WHERE gig_id = :gid AND source = 'hold'
+                            ORDER BY position ASC"""),
+                    {"gid": _src_gig["id"]}
+                ).fetchall()
+                _series_hold_artist_ids = [r[0] for r in _ar_rows]
+    except Exception as _hxe:
+        logger.warning(f"[SERIES_EXTEND] hold-detect failed rgid={recurring_group_id}: {_hxe}")
+
     if not skip_schedule_recalc:
       new_start = data.get('start_time')
       new_end   = data.get('end_time')
@@ -3782,18 +4265,21 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
                 })
                 continue  # Don't insert this one yet
 
-        db.execute(
+        # 2026-07-25: RETURNING id inline (pool-swap safety).
+        new_gig_id = db.execute(
             text("""
                     INSERT INTO gigs
                         (venue_id, date, start_time, end_time, title, pay, notes, status,
-                         artist_type, band_formats, styles, is_recurring, recurring_group_id,
+                         artist_type, band_formats, styles, is_recurring, is_multi_slot,
+                         recurring_group_id,
                          recurring_interval_weeks, recurring_days_of_week,
                          recurring_end_type, recurring_end_after, recurring_end_by_date)
                     VALUES
                         (:venue_id, :date, :start_time, :end_time, :title, :pay, :notes, 'open',
-                         :artist_type, :band_formats, :styles, 1, :recurring_group_id,
+                         :artist_type, :band_formats, :styles, 1, 1,
+                         :recurring_group_id,
                          :recurring_interval_weeks, :recurring_days_of_week,
-                         :recurring_end_type, :recurring_end_after, :recurring_end_by_date)
+                         :recurring_end_type, :recurring_end_after, :recurring_end_by_date) RETURNING id
             """),
             {
                 "venue_id": venue_id,
@@ -3813,13 +4299,64 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
                 "recurring_end_after": data.get("recurring_end_after"),
                 "recurring_end_by_date": data.get("recurring_end_by_date")
             }
-        )
-        new_gig_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        ).scalar()
+
+        # BUG FIX (Jul 2026 audit): create the slot-1 row so this gig satisfies
+        # the "every gig has ≥1 gig_slots row" invariant. Without it the gig
+        # rendered as empty in gig_modal, was skipped by every slot-only
+        # reader, and the single-slot contract-upload path silently corrupted
+        # the parent status. Mirrors the slot-insert pattern in create_gig.
+        try:
+            db.execute(text("""
+                INSERT INTO gig_slots
+                    (gig_id, slot_number, start_time, end_time, pay, status,
+                     artist_type, band_formats, styles, deal_type,
+                     door_pct, guarantee_cents, apply_override)
+                VALUES
+                    (:gid, 1, :st, :et, :pay, 'open',
+                     :atype, :bf, :styles, 'flat',
+                     0, 0, 0)
+            """), {
+                "gid": new_gig_id,
+                "st": data.get("start_time"),
+                "et": data.get("end_time"),
+                "pay": data.get("pay", 0),
+                "atype": data.get("artist_type"),
+                "bf":    data.get("band_formats"),
+                "styles": data.get("styles"),
+            })
+        except Exception as _slot_e:
+            logger.warning(f"[SERIES_EXTEND] slot-1 insert failed for gig {new_gig_id}: {_slot_e}")
+
         try:
             _acf, _ = _get_flyer_helpers()
             _acf(db, new_gig_id, venue_id)
         except Exception:
             pass
+        # Audit fix #12 (Jul 2026): if this series already has a live
+        # hold rotation, propagate it to the new instance so the new
+        # date isn't publicly bookable while the rest of the series is
+        # privately held. defer_kickoff=True — new dates get staged but
+        # don't fire a fresh per-gig rotation; in-flight artists pick
+        # them up automatically via _list_series_eligible_gigs on next
+        # modal refresh, and the next-in-line artist sees them in
+        # their bundled email.
+        if _series_hold_artist_ids:
+            try:
+                from backend.services.gig_hold import create_hold_waitlist
+                create_hold_waitlist(
+                    db, gig_id=new_gig_id,
+                    artist_ids=_series_hold_artist_ids,
+                    send_email_now=_series_hold_email_pref,
+                    offer_window_hours=_series_hold_window,
+                    defer_kickoff=True,
+                )
+                logger.info(
+                    f"[SERIES_EXTEND] propagated hold to new gig={new_gig_id} "
+                    f"({len(_series_hold_artist_ids)} artists)"
+                )
+            except Exception as _he:
+                logger.error(f"[SERIES_EXTEND] hold propagation failed for new gig {new_gig_id}: {_he}")
         gigs_added += 1
     
     # 4. Delete extra gigs that shouldn't exist (only if NOT in any in-flight state,
@@ -3852,15 +4389,46 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
             if _slot_inflight:
                 gigs_skipped_inflight += 1
                 continue
+            # Audit fix Y1 (Jun 30 2026): the bespoke 3-statement delete
+            # left orphan rows in gig_contracts, notifications, gig_email_log,
+            # public_activity, gig_messages, waitlist_offered, etc. The
+            # parent gig is guaranteed to be in `_SAFE_TO_DELETE_PARENT`
+            # (open / cancelled — no in-flight money) and no slot is in
+            # an in-flight state, so the canonical cleanup helper is
+            # safe here. Flyer cleanup (template-aware) stays explicit.
+            #
+            # Payment YELLOW fix (Jul 1 2026): also run the charged-txn
+            # guard before delete_gig_completely so an unexpected orphan
+            # payment_cancelled / free_trial audit row (or any FUTURE
+            # money-state we forget to exclude from _SAFE_TO_DELETE_PARENT)
+            # can't be silently dropped. Matches the guard already in place
+            # in cancel_gig / cancel_slot / delete_gig_with_slots.
+            try:
+                from backend.services.gig_cleanup import assert_no_charged_transactions
+                assert_no_charged_transactions(db, gig_info['id'])
+            except Exception as _acte:
+                logger.warning(
+                    f"update_recurring_series: shrink skipped gig={gig_info['id']} — "
+                    f"charged-txn guard raised: {_acte}"
+                )
+                gigs_skipped_inflight += 1
+                continue
             try:
                 db.execute(text("DELETE FROM flyers WHERE gig_id = :gid AND is_template = 0"), {"gid": gig_info['id']})
             except Exception: pass
             try:
-                from backend.routes.waitlist import cleanup_gig_waitlist
-                cleanup_gig_waitlist(db, gig_info['id'])
-            except Exception: pass
-            db.execute(text("DELETE FROM gig_slots WHERE gig_id = :gid"), {"gid": gig_info['id']})
-            db.execute(text("DELETE FROM gigs WHERE id = :gid"), {"gid": gig_info['id']})
+                from backend.services.gig_cleanup import delete_gig_completely
+                delete_gig_completely(db, gig_info['id'])
+            except Exception as _del_e:
+                # Last-resort fallback — keep the shrink moving even if
+                # cleanup encounters an unexpected ancillary-table miss.
+                logger.warning(f"update_recurring_series: delete_gig_completely failed for gig={gig_info['id']}: {_del_e}")
+                try:
+                    from backend.routes.waitlist import cleanup_gig_waitlist
+                    cleanup_gig_waitlist(db, gig_info['id'])
+                except Exception: pass
+                db.execute(text("DELETE FROM gig_slots WHERE gig_id = :gid"), {"gid": gig_info['id']})
+                db.execute(text("DELETE FROM gigs WHERE id = :gid"), {"gid": gig_info['id']})
             gigs_deleted += 1
     
     # 5. Update all remaining OPEN gigs with new field values
@@ -3951,9 +4519,9 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
                 db.execute(
                     text("""
                         INSERT INTO gig_slots (gig_id, slot_number, start_time, end_time, pay, status,
-                                               artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents)
+                                               artist_type, band_formats, styles, deal_type, door_pct, guarantee_cents, requires_equipment)
                         VALUES (:gig_id, :slot_number, :start_time, :end_time, :pay, 'open',
-                                :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0))
+                                :artist_type, :band_formats, :styles, COALESCE(:deal_type, 'flat'), COALESCE(:door_pct, 0), COALESCE(:guarantee_cents, 0), :requires_equipment)
                     """),
                     {
                         "gig_id": og_id, "slot_number": i,
@@ -3963,6 +4531,7 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
                     "deal_type": s.get("deal_type"),
                     "door_pct": s.get("door_pct"),
                     "guarantee_cents": s.get("guarantee_cents"),
+                    "requires_equipment": (1 if bool(s.get("requires_equipment")) else 0) if s.get("requires_equipment") is not None else None,
                     }
                 )
     
@@ -4267,7 +4836,7 @@ def my_gigs(
                 SELECT gs.gig_id, gs.id as slot_id, gs.slot_number, gs.start_time, gs.end_time,
                        gs.pay, gs.status, gs.artist_id,
                        gs.artist_type, gs.band_formats, gs.styles,
-                       gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                       gs.deal_type, gs.door_pct, gs.guarantee_cents, COALESCE(gs.apply_override,0) as apply_override, gs.requires_equipment,
                        a.name as artist_name
                 FROM gig_slots gs
                 LEFT JOIN artists a ON gs.artist_id = a.id
@@ -4292,7 +4861,8 @@ def my_gigs(
 # ==========================================
 
 @router.get("/api/gigs/{gig_id}/slots/public")
-def get_gig_slots_public(gig_id: int, db=Depends(get_db)):
+@limiter.limit("60/minute")
+def get_gig_slots_public(gig_id: int, request: Request, db=Depends(get_db)):
     """Public slot list — used by anonymous calendar pages
     (artist-profile, venue-profile, public-gigs) to render per-slot
     hover breakdowns. REDACTS internal financial fields that the
@@ -4308,8 +4878,8 @@ def get_gig_slots_public(gig_id: int, db=Depends(get_db)):
                 SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
                        gs.artist_id, gs.status,
                        gs.artist_type, gs.band_formats, gs.styles,
-                       gs.deal_type,
-                       a.name as artist_name
+                       gs.deal_type, gs.requires_equipment,
+                           a.name as artist_name
                 FROM gig_slots gs
                 LEFT JOIN artists a ON gs.artist_id = a.id
                 WHERE gs.gig_id = :gig_id
@@ -4332,7 +4902,7 @@ def get_gig_slots(gig_id: int, user=Depends(get_current_user), db=Depends(get_db
                 SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
                        gs.pay, gs.artist_id, gs.status,
                        gs.artist_type, gs.band_formats, gs.styles,
-                       gs.deal_type, gs.door_pct, gs.guarantee_cents,
+                       gs.deal_type, gs.door_pct, gs.guarantee_cents, COALESCE(gs.apply_override,0) as apply_override, gs.requires_equipment,
                        gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
                        a.name as artist_name
                 FROM gig_slots gs
@@ -4368,15 +4938,16 @@ def book_slot(
             raise HTTPException(403, "No artist profile found")
         artist_id = artist["id"]
     else:
-        # Verify ownership
+        # Verify ownership + exclude tombstoned (Jul 2026, same as book_gig).
         artist = db.execute(
             text("""
                 SELECT a.id FROM artists a
-                WHERE a.id = :aid 
+                WHERE a.id = :aid
+                AND a.deleted_at IS NULL
                 AND (
                     a.user_id = :uid
                     OR EXISTS (
-                        SELECT 1 FROM entity_users eu 
+                        SELECT 1 FROM entity_users eu
                         WHERE eu.entity_type = 'artist' AND eu.entity_id = a.id AND eu.user_id = :uid
                     )
                 )
@@ -4384,7 +4955,7 @@ def book_slot(
             {"aid": int(artist_id), "uid": user.id}
         ).mappings().first()
         if not artist:
-            raise HTTPException(403, "Artist does not belong to you")
+            raise HTTPException(403, "Artist does not belong to you or has been deleted")
         artist_id = int(artist_id)
 
     # Load slot
@@ -4415,11 +4986,25 @@ def book_slot(
 
     # Load parent gig for venue info
     gig = db.execute(
-        text("SELECT id, venue_id, date, status FROM gigs WHERE id = :gid"),
+        text("SELECT id, venue_id, date, status, hold_status FROM gigs WHERE id = :gid"),
         {"gid": gig_id}
     ).mappings().first()
     if not gig:
         raise HTTPException(404, "Gig not found")
+
+    # Held-gig guard (Jun 2026): a gig with hold_status='active' or
+    # 'exhausted' is privately offered to an ordered list of artists.
+    # Bookings must flow through the Hold pipeline (respond_to_hold_offer)
+    # to consume the waitlist row + advance rotation. Hitting book_slot
+    # directly would book the slot but leave the hold state inconsistent
+    # — the offered artist's email link would still appear valid, the
+    # rotation wouldn't advance, and venue notifications would miss
+    # the hold-specific email template. Block it.
+    if gig.get("hold_status") in ("active", "exhausted"):
+        raise HTTPException(403,
+            "This gig is currently held — bookings must come through your "
+            "Pending Offers banner (or the email offer link). Open this gig "
+            "from your calendar to see the Pending Offer panel.")
 
     # FIX (May 21 2026): hard-block on time-overlap with another booking.
     _enforce_no_artist_time_overlap(db, artist_id, gig_id, gig["venue_id"],
@@ -4563,8 +5148,13 @@ def book_slot(
             _gig_d = _dc.fromisoformat(str(gig_date_str)[:10])
             _days = (_gig_d - _today).days
             if _days >= 0:
+                # Jul 2026 fix: also gate on waive_frequency — the multi-slot
+                # book_slot path was silently waiving frequency inside any
+                # enabled window regardless of the venue's waive-toggle. Now
+                # matches the single-slot book_gig behavior.
                 _brows = db.execute(text("""SELECT time_value, time_unit FROM venue_email_notifications
-                                            WHERE venue_id=:vid AND notification_key IN ('open_gig_36h','open_gig_1w') AND enabled=1"""),
+                                            WHERE venue_id=:vid AND notification_key IN ('open_gig_36h','open_gig_1w')
+                                              AND enabled=1 AND COALESCE(waive_frequency, 1) = 1"""),
                                     {"vid": gig["venue_id"]}).mappings().all()
                 for _br in _brows:
                     _tv, _tu = _br["time_value"], _br["time_unit"]
@@ -4574,6 +5164,14 @@ def book_slot(
                         break
         except Exception:
             pass
+    # Venue-set frequency-exempt waiver — mirrors book_gig at line 2447.
+    # Without this, the multi-slot path silently 403'd exempt artists even
+    # though the venue had explicitly waived the policy for them.
+    if not _freq_blast_waives:
+        _exempt_row2 = db.execute(text("SELECT COALESCE(frequency_exempt,0) as fx FROM gigs WHERE id=:gid"),
+                                   {"gid": gig_id}).mappings().first()
+        if _exempt_row2 and _exempt_row2.get("fx"):
+            _freq_blast_waives = True
     if not _freq_blast_waives and gig_date_str:
         freq = db.execute(text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) as freq_days
                                   FROM preferred_artists pa JOIN venues v ON v.id=pa.venue_id
@@ -4585,12 +5183,13 @@ def book_slot(
                              {"vid": gig["venue_id"]}).mappings().first()
             freq = {"freq_days": (_vf or {}).get("artist_frequency_days")}
         if freq and (freq["freq_days"] or 0) > 0:
+            # Jul 2026 refactor: dropped `g.artist_id=:aid OR` leg — slot-
+            # only covers both shapes post-backfill.
             close = db.execute(text("""SELECT g.date FROM gigs g
+                                       JOIN gig_slots gs ON gs.gig_id=g.id AND gs.artist_id=:aid
                                        WHERE g.venue_id=:vid AND g.id!=:gid
                                          AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
-                                         AND (g.artist_id=:aid OR EXISTS(
-                                             SELECT 1 FROM gig_slots gs
-                                             WHERE gs.gig_id=g.id AND gs.artist_id=:aid AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')))
+                                         AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                        ORDER BY ABS(JULIANDAY(g.date)-JULIANDAY(:d)) LIMIT 1"""),
                               {"vid": gig["venue_id"], "aid": artist_id, "gid": gig_id, "d": gig_date_str}).mappings().first()
             if close:
@@ -4606,55 +5205,66 @@ def book_slot(
                         f"{dir_msg} Gigs must be at least {needed} more day{'s' if needed != 1 else ''} apart.")
 
     # Audit fix (May 2026): Stripe Connect onboarding gate (same as book_gig).
+    # Test Mode removed (Jul 1 2026): hard-blocks unconditionally.
     try:
-        _pay_on = db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='payments_enabled'")).scalar()
-        if str(_pay_on or '').strip().lower() in ('1', 'true'):
-            _eps = db.execute(
-                text("""SELECT COALESCE(stripe_connect_onboarding_complete, 0) as ok
-                        FROM entity_payment_settings
-                        WHERE entity_type = 'artist' AND entity_id = :aid"""),
-                {"aid": artist_id}
-            ).mappings().first()
-            if not _eps or not int(_eps["ok"] or 0):
-                raise HTTPException(
-                    402,
-                    "STRIPE_ONBOARDING_INCOMPLETE: Connect your payout account in your artist Payments tab before booking."
-                )
+        _eps = db.execute(
+            text("""SELECT COALESCE(stripe_connect_onboarding_complete, 0) as ok
+                    FROM entity_payment_settings
+                    WHERE entity_type = 'artist' AND entity_id = :aid"""),
+            {"aid": artist_id}
+        ).mappings().first()
+        if not _eps or not int(_eps["ok"] or 0):
+            raise HTTPException(
+                402,
+                "STRIPE_ONBOARDING_INCOMPLETE: Connect your payout account in your artist Payments tab before booking."
+            )
     except HTTPException:
         raise
     except Exception:
         pass
 
-    # Apply pay override: effective_pay = MAX(slot_listed_pay, artist_override_pay).
-    # Door-deal slots SKIP the override — the per-gig guarantee floor is final
-    # (see _apply_slot_pay_override docstring for design rationale).
+    # Apply pay override. Rule (Jun 2026):
+    #   - Flat: bump slot.pay to override if higher (always).
+    #   - Door: bump guarantee + mirror into pay ONLY when
+    #           slot.apply_override = 1 (venue's per-slot opt-in).
     slot_pay_override = db.execute(
         text("""
             SELECT pa.pay_dollars_override, pa.pay_cents_override
             FROM preferred_artists pa
             WHERE pa.venue_id = :vid AND pa.artist_id = :aid
+              AND pa.status = 'approved'
         """),
         {"vid": gig["venue_id"], "aid": artist_id}
     ).mappings().first()
 
     _slot_deal_type = (slot.get("deal_type") or "").lower() if isinstance(slot, dict) or hasattr(slot, "get") else ""
-    if (
-        slot_pay_override
-        and slot_pay_override["pay_dollars_override"] is not None
-        and _slot_deal_type != "door"
-    ):
+    _slot_apply_override = int((slot.get("apply_override") if hasattr(slot, "get") else 0) or 0)
+    if slot_pay_override and slot_pay_override["pay_dollars_override"] is not None:
         override_pay = float(slot_pay_override["pay_dollars_override"]) + float(slot_pay_override["pay_cents_override"] or 0) / 100
-        slot_pay = float(slot.get("pay") or 0)
-        if override_pay > slot_pay:
-            db.execute(
-                text("UPDATE gig_slots SET pay = :pay WHERE id = :sid"),
-                {"pay": override_pay, "sid": slot_id}
-            )
+        if _slot_deal_type == "door" and _slot_apply_override == 1:
+            cur_gua_dollars = float(slot.get("guarantee_cents") or 0) / 100.0
+            if override_pay > cur_gua_dollars:
+                db.execute(
+                    text("UPDATE gig_slots SET guarantee_cents = :gc, pay = :pay WHERE id = :sid"),
+                    {"gc": int(round(override_pay * 100)), "pay": override_pay, "sid": slot_id}
+                )
+        elif _slot_deal_type != "door":
+            slot_pay = float(slot.get("pay") or 0)
+            if override_pay > slot_pay:
+                db.execute(
+                    text("UPDATE gig_slots SET pay = :pay WHERE id = :sid"),
+                    {"pay": override_pay, "sid": slot_id}
+                )
 
-    # Same-day booking: only require approval for non-preferred (radius) artists
+    # Same-day booking: only require approval for non-preferred (radius) artists.
+    # Jul 21 2026: also skip when the venue owner has opted out of the
+    # `venue_booking_approval_request` preference — same reasoning as the
+    # gig-level book path above.
     _is_preferred_slot = pref and pref.get("status") == "approved"
     _ensure_approval_columns(db)
-    if _is_same_day_booking(gig["date"], gig.get("start_time"), venue_id=gig.get("venue_id")) and not _is_preferred_slot:
+    if (_is_same_day_booking(gig["date"], gig.get("start_time"), venue_id=gig.get("venue_id"))
+            and not _is_preferred_slot
+            and _venue_requires_same_day_approval(db, gig.get("venue_id"))):
         # Audit fix (May 2026 part 5): atomic claim guard — without
         # `AND status='open'` two concurrent same-day book_slot requests
         # would both pass and both UPDATE. Rowcount check raises SLOT_TAKEN.
@@ -4883,6 +5493,51 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
         raise HTTPException(400, "artist_id required")
     artist_id = int(artist_id)
 
+    # Prefetch defense (Jul 1 2026): Gmail/Outlook/Slack link prefetchers
+    # auto-GET URLs in incoming mail. A one-click GET-that-mutates would
+    # approve the booking (and auto-execute a contract) before the venue
+    # ever clicked. If this is a GET with an email token, render a
+    # confirmation page whose form POST fires the actual approval.
+    # Deny-booking has the same shape at line 5448.
+    if request.method == "GET" and token:
+        from fastapi.responses import HTMLResponse
+        _t = _h_esc(token)
+        _aid = int(artist_id)
+        _gid = int(gig_id)
+        html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Approve booking · GigsFill</title>
+<style>
+  body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+         background:#0f1419; margin:0; padding:40px 20px; color:#e4e7eb; }}
+  .card {{ max-width:480px; margin:60px auto; background:#1a1f2e;
+         border:1px solid #2d3548; border-radius:12px; padding:32px 36px;
+         text-align:center; }}
+  h1 {{ font-size:1.5rem; margin:0 0 12px;
+       background:linear-gradient(135deg,#7c6bff,#06b6d4);
+       background-clip:text; -webkit-background-clip:text;
+       -webkit-text-fill-color:transparent; }}
+  p {{ color:#9ca3af; line-height:1.55; }}
+  .btn {{ display:inline-block; padding:12px 28px; border:none;
+        border-radius:6px; font-size:0.95rem; font-weight:600;
+        cursor:pointer; text-decoration:none; margin:6px 4px; }}
+  .btn-approve {{ background:#22c55e; color:#fff; }}
+  .btn-back {{ background:#374151; color:#fff; }}
+</style></head><body>
+<div class="card">
+  <div style="font-size:2.6rem;margin-bottom:8px;">✅</div>
+  <h1>Approve this booking?</h1>
+  <p>Clicking <strong>Approve</strong> will confirm the artist's request,
+  book the slot, and email them the decision.</p>
+  <form method="POST" action="/api/gigs/{_gid}/approve-booking?token={_t}&amp;artist_id={_aid}"
+        style="margin-top:18px;">
+    <button class="btn btn-approve" type="submit">Yes, approve</button>
+    <a class="btn btn-back" href="/app/venue-create-gigs.html">Cancel</a>
+  </form>
+</div></body></html>"""
+        return HTMLResponse(content=html)
+
     _ensure_approval_columns(db)
 
     gig = db.execute(
@@ -4897,15 +5552,31 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
         # Audit fix (May 2026 part 5): look up by per-(gig, artist) token in
         # pending_approval_tokens FIRST. The legacy single-column gigs.approval_token
         # remains as a fallback so links emailed before this deploy still work.
+        # Jul 2026 audit (B-C2): also enforce expires_at so a replayable
+        # token can't sit valid forever. NULL expires_at = pre-migration
+        # row, treat as valid.
         _per_artist = None
         try:
             _per_artist = db.execute(
-                text("SELECT artist_id FROM pending_approval_tokens WHERE token = :tok AND gig_id = :gid"),
+                text("SELECT artist_id, expires_at FROM pending_approval_tokens WHERE token = :tok AND gig_id = :gid"),
                 {"tok": token, "gid": gig_id}
-            ).first()
+            ).mappings().first()
         except Exception:
             _per_artist = None
-        _token_matches_per_artist = bool(_per_artist and int(_per_artist[0]) == artist_id)
+        _token_matches_per_artist = False
+        if _per_artist and int(_per_artist["artist_id"]) == artist_id:
+            _exp = _per_artist.get("expires_at")
+            if _exp:
+                try:
+                    from datetime import datetime as _dt
+                    _exp_naive = str(_exp).split(".")[0].split("+")[0].replace("T", " ").strip()
+                    _exp_dt = _dt.strptime(_exp_naive, "%Y-%m-%d %H:%M:%S")
+                    if _exp_dt >= _dt.utcnow():
+                        _token_matches_per_artist = True
+                except Exception:
+                    _token_matches_per_artist = True  # unparseable → treat as legacy
+            else:
+                _token_matches_per_artist = True
         _token_matches_legacy = bool(gig["approval_token"] and token == gig["approval_token"])
         if not (_token_matches_per_artist or _token_matches_legacy):
             # Token is gone — check if already actioned (already approved or denied)
@@ -4968,7 +5639,7 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
                     "SELECT 1 FROM gig_contracts WHERE gig_id=:gid AND artist_id=:aid"
                 ), {"gid": gig_id, "aid": artist_id}).first()
                 if not _existing_contract:
-                    _now_iso = utcnow_naive().isoformat() + 'Z'
+                    _now_iso = _utcnow_naive().isoformat() + 'Z'
                     _body = (_vc_check.get("contract_body") or
                              "Auto-executed via same-day approval flow.")
                     db.execute(text("""
@@ -5003,6 +5674,23 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
         pass
 
     if slot:
+        # Audit YELLOW fix (Jul 1 2026): approvals can fire hours after the
+        # artist's original "Book" click. In the gap the artist may have
+        # booked a conflicting gig elsewhere — re-run the cross-venue
+        # time-overlap check at approval time. If it raises, the pending
+        # slot stays pending (venue can deny it explicitly).
+        try:
+            _enforce_no_artist_time_overlap(
+                db, artist_id, gig_id, gig["venue_id"],
+                str(gig["date"])[:10],
+                slot.get("start_time"), slot.get("end_time")
+            )
+        except HTTPException as _overlap_exc:
+            # Surface the overlap message so the venue sees WHY the
+            # approval was blocked. Slot stays pending.
+            _detail = getattr(_overlap_exc, "detail", None) or "Artist booked elsewhere in this time window."
+            raise HTTPException(_overlap_exc.status_code, _detail)
+
         # Audit fix (May 2026): atomic-claim guard. The previous unconditional
         # UPDATE meant a double-clicked email link or a refresh would re-fire
         # the entire post-block — venue + artist got duplicate booking emails
@@ -5017,6 +5705,14 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
             # Already approved by an earlier in-flight request.
             db.commit()
             return {"ok": True, "already_approved": True}
+        # Audit YELLOW fix (Jul 1 2026): clear last_cancelled_artist_id
+        # so the cancelled artist isn't permanently excluded from future
+        # cancellation blasts on this gig. book_slot at line 5039 does
+        # the same at booking commit time; approve was missed.
+        db.execute(
+            text("UPDATE gigs SET last_cancelled_artist_id = NULL WHERE id = :gid"),
+            {"gid": gig_id}
+        )
         # Clear token (also conditional so a token-replay race is a no-op).
         # Audit fix (May 2026 part 5): also delete this artist's row from
         # pending_approval_tokens so the email link can't be reused.
@@ -5113,9 +5809,19 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
         try:
             send_approval_decision_emails(db, dict(names), artist_id, approved=True, slot_info=slot_info_str)
             notify_gig_booked(db, dict(names), gig_id, gig["venue_id"], artist_id)
-            # Send the standard booking confirmation email to BOTH artist and venue
+            # Send the standard booking confirmation email to BOTH artist
+            # and venue. Audit YELLOW fix (Jul 1 2026): thread the just-
+            # approved slot's id through so send_booking_emails only fires
+            # for THIS slot on multi-slot gigs — otherwise every previously-
+            # booked slot on the same gig re-emails on each approval.
             try:
-                send_booking_emails(db, gig_id)
+                # Audit fix (Jul 1 2026 regression sweep): the `dir()` idiom
+                # for detecting the backstop-path variable was fragile —
+                # a nested refactor would break it silently. locals() gives
+                # a definite answer inside the function scope.
+                _bs = locals().get("_backstop_open_slot")
+                _approved_slot_id = slot["id"] if slot else (_bs["id"] if _bs else None)
+                send_booking_emails(db, gig_id, slot_id=_approved_slot_id)
             except Exception as _be:
                 logger.error(f"[APPROVE_BOOKING] send_booking_emails error: {_be}")
         except Exception as e:
@@ -5197,15 +5903,29 @@ def deny_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depends
     if token:
         # Audit fix (May 2026 part 5): prefer per-(gig, artist) token lookup,
         # fall back to legacy single-column token (for in-flight pre-deploy emails).
+        # Jul 2026 audit (B-C2): enforce expires_at — same treatment as approve.
         _per_artist = None
         try:
             _per_artist = db.execute(
-                text("SELECT artist_id FROM pending_approval_tokens WHERE token = :tok AND gig_id = :gid"),
+                text("SELECT artist_id, expires_at FROM pending_approval_tokens WHERE token = :tok AND gig_id = :gid"),
                 {"tok": token, "gid": gig_id}
-            ).first()
+            ).mappings().first()
         except Exception:
             _per_artist = None
-        _token_matches_per_artist = bool(_per_artist and int(_per_artist[0]) == artist_id)
+        _token_matches_per_artist = False
+        if _per_artist and int(_per_artist["artist_id"]) == artist_id:
+            _exp = _per_artist.get("expires_at")
+            if _exp:
+                try:
+                    from datetime import datetime as _dt
+                    _exp_naive = str(_exp).split(".")[0].split("+")[0].replace("T", " ").strip()
+                    _exp_dt = _dt.strptime(_exp_naive, "%Y-%m-%d %H:%M:%S")
+                    if _exp_dt >= _dt.utcnow():
+                        _token_matches_per_artist = True
+                except Exception:
+                    _token_matches_per_artist = True
+            else:
+                _token_matches_per_artist = True
         _token_matches_legacy = bool(gig["approval_token"] and token == gig["approval_token"])
         if not (_token_matches_per_artist or _token_matches_legacy):
             from fastapi.responses import HTMLResponse
@@ -5426,15 +6146,25 @@ def cancel_slot(
         {"sid": slot_id, "gid": gig_id}
     )
     
+    # Audit fix (Jul 2026 delete-audit): when the slot had no artist
+    # (e.g. cancel-with-remove_slot on an already-open slot), the old
+    # `slot.get("artist_id") or 0` fallback wrote `last_cancelled_
+    # artist_id = 0` on the gig. The blast-cancellation code at
+    # `fire_cancelled_gig_blast` reads that as a valid artist to exclude
+    # (artist_id=0 doesn't exist so it just no-op'd, but the CASE-WHEN
+    # branch on `artist_id = 0` matched no rows anyway). Now use NULL
+    # so the CASE-WHEN is a real no-op and `last_cancelled_artist_id`
+    # only records real artist cancellations.
+    _cancel_aid = slot.get("artist_id")
     # Re-open parent gig if it was fully booked OR pending_contract/awaiting_venue_contract/pending_venue_approval
     db.execute(
         text("""UPDATE gigs SET status = 'open', radius_blast_token = NULL,
                     artist_id = CASE WHEN artist_id = :aid THEN NULL ELSE artist_id END,
                     contract_hold_artist_id = NULL, contract_hold_expires_at = NULL,
                     approval_token = NULL, approval_requested_at = NULL,
-                    last_cancelled_artist_id = :aid
+                    last_cancelled_artist_id = CASE WHEN :aid IS NOT NULL THEN :aid ELSE last_cancelled_artist_id END
                 WHERE id = :gid AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')"""),
-        {"gid": gig_id, "aid": slot.get("artist_id") or 0}
+        {"gid": gig_id, "aid": _cancel_aid}
     )
     # For multi-slot gigs: gig.status stays 'open' so above WHERE won't match.
     # Clear contract_hold, radius_blast_token, and artist_id for the cancelling artist.
@@ -5444,7 +6174,7 @@ def cancel_slot(
                     radius_blast_token = NULL,
                     artist_id = CASE WHEN artist_id = :aid THEN NULL ELSE artist_id END
                 WHERE id = :gid AND status = 'open'"""),
-        {"gid": gig_id, "aid": slot.get("artist_id") or 0}
+        {"gid": gig_id, "aid": _cancel_aid}
     )
     # Always record last_cancelled_artist_id so blast emails exclude the canceller
     if slot.get("artist_id"):
@@ -5550,19 +6280,42 @@ def cancel_slot(
                 {"n": i, "sid": row[0]}
             )
         if not remaining:
-            # All slots removed — the gig is empty, delete it. cleanup_gig_records
-            # was already run for the cancelled artist's records; this catches any
-            # gig-level rows (parent venue_charge if still present, contracts, etc.).
-            # Audit fix (May 2026 part 2): belt-and-suspenders gig-wide charged
-            # check before the full cleanup wipes the parent venue_charge row.
-            from backend.services.gig_cleanup import assert_no_charged_transactions
+            # All slots removed — the gig is empty, delete it completely.
+            # BUG FIX (Jul 2026 audit): use delete_gig_completely instead of
+            # cleanup_gig_records + raw DELETE FROM gigs. cleanup_gig_records
+            # only removes contract-typed notification rows, leaving the
+            # `gig_cancelled` row that notify_gig_cancelled just inserted at
+            # line 5898 dangling — and the notifications FK to gigs has no
+            # ON DELETE CASCADE, so DELETE FROM gigs raised IntegrityError
+            # → 500 → rollback → email already fired but nothing persisted.
+            # delete_gig_completely handles notifications, gig_messages,
+            # gig_waitlist, waitlist_offered, artist_reviews,
+            # gig_cancelled_artists, pending_approval_tokens, and the
+            # recurring-group survivor cleanup in the right order.
+            from backend.services.gig_cleanup import assert_no_charged_transactions, delete_gig_completely
             assert_no_charged_transactions(db, gig_id)
-            cleanup_gig_records(db, gig_id)
-            db.execute(text("DELETE FROM gigs WHERE id = :gid"), {"gid": gig_id})
+            delete_gig_completely(db, gig_id)
             logger.info(f"cancel_slot: deleted gig {gig_id} (last slot removed)")
         else:
             logger.info(f"cancel_slot: removed slot {slot_id} from gig {gig_id}; {len(remaining)} slots remain")
         db.commit()
+
+    # Audit trail (Jul 2026 delete-audit) — cancel_slot touches money-
+    # adjacent state (transactions, contracts). Log so a future incident
+    # can reconstruct what was cancelled by whom.
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "gig_slot_cancel",
+            target_table="gig_slots", target_id=slot_id,
+            metadata={
+                "gig_id": int(gig_id),
+                "artist_id": _cancel_aid,
+                "remove_slot": bool(remove_slot),
+            },
+        )
+    except Exception:
+        pass
 
     return {"ok": True, "removed": remove_slot}
 
@@ -5727,6 +6480,25 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                 except Exception as _le:
                     logger.warning(f"[CANCEL_WITH_SLOTS] flyer logo strip loop failed for gig {gig_id}: {_le}")
 
+                # Hold cleanup (Jun 2026): venue-UI "Cancel Gig" (keep_open
+                # branch) needs to wind down the hold cycle too, or the gig
+                # stays hidden from public search and a stale offer email
+                # link can still book a slot that was just reset.
+                cleanup_hold_records(db, gig_id, delete_rows=False)
+                # Audit fix (Jun 2026): drop pending_approval_tokens for
+                # the cancelled gig. Mirrors cancel_gig's full-delete
+                # branch (line 2990) and the keep_open patch above.
+                # Without this, an artist whose slot was reopened via
+                # the venue-UI Cancel Gig button could still click a
+                # stale email-approval link.
+                try:
+                    db.execute(
+                        text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid"),
+                        {"gid": gig_id}
+                    )
+                except Exception as _ptke:
+                    logger.warning(f"[CANCEL_WITH_SLOTS] pending_approval_tokens cleanup failed for gig {gig_id}: {_ptke}")
+
             except HTTPException:
                 # Audit fix (May 2026 part 5): bubble up HTTPException raised by
                 # cleanup helpers so the venue gets the real reason (charged
@@ -5740,65 +6512,43 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                 logger.error(f"keep_open reset failed: {e}", exc_info=True)
                 db.rollback()
         else:
-            # Delete optional tables one-by-one with individual commits
+            # Audit fix (Jul 2026 delete-audit): consolidate the inline
+            # cleanup below into a single call to the canonical
+            # `delete_gig_completely` helper. Prior inline version
+            # missed `gig_cancelled_artists`, `notification_sent_log`,
+            # `venue_reviews.gig_id` NULL-out, recurring-series survivor
+            # cleanup, and `_recompute_gig_fees` — all of which the
+            # helper handles. Two small extras stay inline because they
+            # aren't in the helper: gig-scoped flyers + email log +
+            # public_activity + payment_cancellations.
             for _s in [
                 "DELETE FROM gig_email_log WHERE gig_id = :gid",
                 "DELETE FROM public_activity WHERE gig_id = :gid",
                 "DELETE FROM flyers WHERE gig_id = :gid AND is_template = 0",
+                "DELETE FROM payment_cancellations WHERE transaction_id IN (SELECT id FROM transactions WHERE gig_id=:gid)",
             ]:
                 try:
                     db.execute(text(_s), {"gid": gig_id})
-                    db.commit()
                 except Exception:
-                    db.rollback()
-
-            # Core deletes — all in one transaction
+                    pass
             try:
-                db.execute(text("DELETE FROM payment_cancellations WHERE transaction_id IN (SELECT id FROM transactions WHERE gig_id=:gid)"), {"gid": gig_id})
-            except Exception:
-                db.rollback()
-            try:
-                db.execute(text("DELETE FROM transactions WHERE gig_id=:gid"), {"gid": gig_id})
-                # Audit fix (May 2026 part 5): unlink signed PDF files on disk.
-                # Without this, old signed contract PDFs persist forever under
-                # app/static/uploads/contracts/signed/. NEVER touch pdf_file_path —
-                # that's the venue's template PDF shared across many gigs.
-                try:
-                    import os as _os
-                    _pdf_rows = db.execute(
-                        text("SELECT signed_pdf_path FROM gig_contracts WHERE gig_id = :gid"),
-                        {"gid": gig_id}
-                    ).mappings().all()
-                    for _gc in _pdf_rows:
-                        _pdf = _gc.get("signed_pdf_path")
-                        if _pdf:
-                            _abs = _pdf.lstrip("/")
-                            if _os.path.isfile(_abs):
-                                try:
-                                    _os.remove(_abs)
-                                except OSError:
-                                    pass
-                except Exception as _pe:
-                    logger.warning(f"delete_gig_with_slots: signed-PDF unlink failed for gig {gig_id}: {_pe}")
-                db.execute(text("DELETE FROM gig_contracts WHERE gig_id=:gid"), {"gid": gig_id})
-                db.execute(text("DELETE FROM notifications WHERE gig_id=:gid"), {"gid": gig_id})
-                db.execute(text("DELETE FROM gig_messages WHERE gig_id=:gid"), {"gid": gig_id})
-                db.execute(text("DELETE FROM gig_waitlist WHERE gig_id=:gid"), {"gid": gig_id})
-                try: db.execute(text("DELETE FROM waitlist_offered WHERE gig_id=:gid"), {"gid": gig_id})
-                except Exception: pass
-                # Audit fix (May 2026 part 7): drop pending_approval_tokens.
-                try: db.execute(text("DELETE FROM pending_approval_tokens WHERE gig_id=:gid"), {"gid": gig_id})
-                except Exception: pass
-                db.execute(text("DELETE FROM artist_reviews WHERE gig_id=:gid"), {"gid": gig_id})
-                db.execute(text("DELETE FROM gig_slots WHERE gig_id=:gid"), {"gid": gig_id})
-                db.execute(text("DELETE FROM gigs WHERE id=:gid"), {"gid": gig_id})
-                db.commit()
+                from backend.services.gig_cleanup import delete_gig_completely
+                delete_gig_completely(db, gig_id)
             except Exception as e:
                 logger.error(f"Core delete failed for gig {gig_id}: {e}")
                 db.rollback()
                 raise HTTPException(500, f"Delete failed: {e}")
 
         # Send notifications (best-effort — never fail the response)
+        # BUG FIX (Jul 2026 audit): pass gig_id=None in the delete branch
+        # (keep_open=False). notifications.gig_id FKs to gigs(id) with no
+        # ON DELETE CASCADE, and the gig row was DELETEd at line 6241 above.
+        # Without this fix, every create_notification call raised
+        # IntegrityError caught by the outer try/except → every in-app
+        # cancellation notification silently dropped. The cancellation email
+        # (which doesn't touch notifications) still fired, so the artist got
+        # an email but no Activity Center row.
+        _notif_gig_id = gig_id if keep_open else None
         if gig:
             event_label = gig.get("artist_type") or gig.get("title") or "Event"
             for s in booked_slots:
@@ -5812,7 +6562,7 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                         create_notification(
                             db, s["artist_user_id"], "gig_cancelled", "Gig Cancelled",
                             f"Gig at {gig['venue_name']} on {gig['date']} has been cancelled. {slot_info}{reason_suffix}",
-                            gig_id=gig_id, venue_id=gig["venue_id"], artist_id=s["artist_id"]
+                            gig_id=_notif_gig_id, venue_id=gig["venue_id"], artist_id=s["artist_id"]
                         )
                 except Exception as e:
                     logger.warning(f"Artist notification failed for slot: {e}")
@@ -5825,7 +6575,7 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                 for vu in venue_users:
                     if vu.get("user_id"):
                         create_notification(db, vu["user_id"], "gig_cancelled", "Gig Cancelled",
-                            venue_msg, gig_id=gig_id, venue_id=gig["venue_id"])
+                            venue_msg, gig_id=_notif_gig_id, venue_id=gig["venue_id"])
             except Exception as e:
                 logger.warning(f"Venue notification failed: {e}")
 
@@ -5859,6 +6609,23 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                 except Exception as e:
                     logger.warning(f"Waitlist/blast error (keep_open): {e}")
 
+        # Audit trail — this is the venue UI's primary Cancel Gig
+        # button. Log so incident review can trace who cancelled what.
+        # (Jul 2026 delete-audit.)
+        try:
+            from backend.utils import log_admin_action
+            log_admin_action(
+                db, user, "gig_delete_with_slots",
+                target_table="gigs", target_id=gig_id,
+                metadata={
+                    "keep_open": bool(keep_open),
+                    "booked_artist_ids": [int(s["artist_id"]) for s in (booked_slots or []) if s.get("artist_id")],
+                    "cancellation_reason": (cancellation_reason or "")[:200],
+                },
+            )
+        except Exception:
+            pass
+
         return {"ok": True}
 
     except HTTPException:
@@ -5870,11 +6637,30 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
 
 
 def _get_effective_pay_for_artist(db, gig_id: int, venue_id: int, artist_id: int, base_pay: float) -> float:
-    """Return max(base_pay, artist's pay override) for a given artist at a venue."""
+    """Return max(base_pay, artist's pay override) for a given artist at a venue.
+
+    The override only applies for `status='approved'` preferred-artist
+    rows — a pending/denied/revoked row still carries the historical
+    override columns but should NOT influence pay. Without the guard,
+    a venue who set $20 then revoked the relationship would still send
+    blast emails showing $20.
+
+    KNOWN GAP (audit Jun 2026): this helper takes a flat `base_pay` and
+    has NO slot/door-deal awareness. All three callers (blast emails at
+    lines ~6170/6268/6441) pass `gig.pay` which is the GIG-level pay
+    (slot-1 pay for multi-slot gigs). For door-deal slots the override
+    is gated by `gig_slots.apply_override` which we can't see at the
+    gig level. Net: if a venue blasts a gig whose first slot is a door
+    deal, the email will quote the gig-level guarantee dollars without
+    "+ Y% door" terms. Acceptable for now — blasts are usually flat-pay
+    gigs and the slot terms are visible when the artist opens the gig
+    modal. Proper fix: make blast emails slot-aware.
+    """
     try:
         row = db.execute(
             text("""SELECT COALESCE(pay_dollars_override,0) + COALESCE(pay_cents_override,0)/100.0 as override_pay
-                    FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid"""),
+                    FROM preferred_artists
+                    WHERE venue_id=:vid AND artist_id=:aid AND status='approved'"""),
             {"vid": venue_id, "aid": artist_id}
         ).mappings().first()
         if row and row["override_pay"] and float(row["override_pay"]) > base_pay:
@@ -5923,25 +6709,91 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
         except Exception as _wce:
             logger.warning(f"[BLAST] waitlist check failed: {_wce}")
 
-    # Check venue has cancelled_blast enabled; read configured time window
-    notif = db.execute(
-        text("SELECT enabled, COALESCE(time_value,7) as time_value, COALESCE(time_unit,'days') as time_unit, COALESCE(blast_all_enabled,0) as blast_all_enabled, COALESCE(blast_all_radius,20) as blast_all_radius FROM venue_email_notifications WHERE venue_id = :vid AND notification_key = 'cancelled_blast'"),
-        {"vid": venue_id}
-    ).mappings().first()
-    if notif is None:
-        logger.info(f"[BLAST] No cancelled_blast row for venue {venue_id} — treating as enabled (default ON)")
-        blast_window_value, blast_window_unit = 7, 'days'
-        blast_all_en, blast_all_mi = False, 20
-    elif not notif["enabled"]:
-        logger.info(f"[BLAST] cancelled_blast is disabled for venue {venue_id}, skipping")
-        return
-    else:
-        blast_window_value = int(notif["time_value"] or 7)
-        blast_window_unit  = str(notif["time_unit"] or "days")
-        blast_all_en = bool(notif["blast_all_enabled"])
-        blast_all_mi = int(notif["blast_all_radius"] or 20)
+    # Jul 2026: cancellation blast is now sourced from per-window cancel_notify_*
+    # fields on the open_gig_4w/2w/1w/36h rows. Rule: find the SMALLEST window
+    # whose remaining-days threshold still covers the gig AND which has either
+    # cancel_notify_preferred=1 or cancel_notify_all_enabled=1. That row's
+    # cancel_notify_* + waive_frequency drive this send. Each cancellation
+    # fires exactly one blast.
 
-    # Load gig details
+    # Load gig date to compute days_until in platform timezone
+    _gig_date_raw = db.execute(
+        text("SELECT date FROM gigs WHERE id = :gid AND status = 'open'"),
+        {"gid": gig_id}
+    ).scalar()
+    if not _gig_date_raw:
+        logger.warning(f"[BLAST] Gig {gig_id} not found or not 'open' — skipping blast")
+        return
+    try:
+        gig_date = datetime.strptime(_gig_date_raw, "%Y-%m-%d").date()
+        # Jul 2026 audit (B-H1): use the VENUE's timezone, not the
+        # platform's. A Hawaii venue near local midnight can otherwise
+        # land in the wrong owning window (36h vs 1w) → wrong
+        # cancel_notify_preferred/all/waive_frequency behaviour and
+        # possibly wrong recipient set.
+        try:
+            import pytz as _blast_pytz
+            from backend.utils import get_venue_timezone_str
+            _blast_tz_str = get_venue_timezone_str(db, int(venue_id))
+            _today_local = datetime.now(_blast_pytz.timezone(_blast_tz_str)).date()
+        except Exception:
+            from datetime import date as _local_date
+            _today_local = _local_date.today()
+        days_until = (gig_date - _today_local).days
+    except Exception as e:
+        logger.error(f"[BLAST] Date parse error: {e}")
+        return
+
+    if days_until < 0:
+        logger.info(f"[BLAST] Gig {gig_id} already past ({days_until}d) — skipping")
+        return
+
+    # Windows smallest→largest so first match is the tightest owning window.
+    # (36h ≈ 1.5 days as a float boundary.)
+    _WINDOWS = [('open_gig_36h', 1.5), ('open_gig_1w', 7), ('open_gig_2w', 14), ('open_gig_4w', 28)]
+
+    _cancel_rows = db.execute(text("""
+        SELECT notification_key,
+               COALESCE(cancel_notify_preferred, 0)   as cnp,
+               COALESCE(cancel_notify_all_enabled, 0) as cnae,
+               COALESCE(cancel_notify_all_radius, 20) as cnar,
+               COALESCE(waive_frequency, 1)           as wf
+        FROM venue_email_notifications
+        WHERE venue_id = :vid
+          AND notification_key IN ('open_gig_36h','open_gig_1w','open_gig_2w','open_gig_4w')
+    """), {"vid": venue_id}).mappings().all()
+    _row_by_key = {r["notification_key"]: r for r in _cancel_rows}
+
+    # Per-key defaults for venues that never saved the row (mirrors
+    # NOTIFICATION_DEFAULTS in routes/venue_emails.py).
+    _DEFAULT_CANCEL = {
+        'open_gig_4w':  {'cnp': 0, 'cnae': 0, 'cnar': 20, 'wf': 0},
+        'open_gig_2w':  {'cnp': 0, 'cnae': 0, 'cnar': 20, 'wf': 0},
+        'open_gig_1w':  {'cnp': 1, 'cnae': 0, 'cnar': 20, 'wf': 1},
+        'open_gig_36h': {'cnp': 1, 'cnae': 1, 'cnar': 20, 'wf': 1},
+    }
+
+    _owning = None
+    for _wkey, _wdays in _WINDOWS:
+        if days_until > _wdays:
+            continue
+        _r = _row_by_key.get(_wkey) or _DEFAULT_CANCEL[_wkey]
+        if _r.get("cnp") or _r.get("cnae"):
+            _owning = (_wkey, _r)
+            break
+
+    if not _owning:
+        logger.info(f"[BLAST] Gig {gig_id} at {days_until}d — no covering window has cancel_notify_* enabled, skipping")
+        return
+
+    _owning_key, _owning_row = _owning
+    cancel_pref    = bool(_owning_row.get("cnp"))
+    blast_all_en   = bool(_owning_row.get("cnae"))
+    blast_all_mi   = int(_owning_row.get("cnar") or 20)
+    waive_freq_own = bool(_owning_row.get("wf", 1))
+    logger.info(f"[BLAST] Gig {gig_id} at {days_until}d → owning='{_owning_key}' pref={cancel_pref} all={blast_all_en}@{blast_all_mi}mi waive={waive_freq_own}")
+
+    # Load gig details (venue name / city / state used downstream in template)
     gig = db.execute(text("""
         SELECT g.id, g.date, g.start_time, g.end_time, g.pay, g.notes, g.artist_type,
                g.title, g.band_formats, g.styles, g.status,
@@ -5955,46 +6807,21 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
 
     logger.info(f"[BLAST] Gig found: date={gig['date']}, artist_type={gig['artist_type']}, venue={gig['venue_name']}")
 
-    # Only fire if within 7 days — check BEFORE stamping token so calendar stays green if outside window
-    try:
-        gig_date = datetime.strptime(gig["date"], "%Y-%m-%d").date()
-        # Use platform timezone date (not server UTC) for correct day boundary
-        try:
-            import pytz as _blast_pytz
-            from sqlalchemy import text as _blast_tx
-            _blast_tz_str = db.execute(_blast_tx(
-                "SELECT setting_value FROM platform_settings WHERE setting_key='platform_timezone'"
-            )).scalar() or "America/Los_Angeles"
-            _blast_tz = _blast_pytz.timezone(_blast_tz_str)
-            _today_local = __import__('datetime').datetime.now(_blast_tz).date()
-        except Exception:
-            from datetime import date as _local_date
-            _today_local = _local_date.today()
-        days_until = (gig_date - _today_local).days
-        # Convert configured window to days for comparison
-        if blast_window_unit == 'weeks':
-            window_days = blast_window_value * 7
-        elif blast_window_unit == 'hours':
-            window_days = blast_window_value / 24.0
-        else:
-            window_days = blast_window_value
-        logger.info(f"[BLAST] days_until={days_until}, window={window_days}d (today={_today_local}, gig_date={gig_date})")
-        if days_until < 0 or days_until > window_days:
-            logger.info(f"[BLAST] Gig is {days_until} days away — outside {window_days}d window, skipping.")
-            return
-    except Exception as e:
-        logger.error(f"[BLAST] Date parse error: {e}")
-        return
-
-    # All checks passed — stamp blast token NOW so amber shows immediately
-    # (do this before any email attempt so calendar updates even if SMTP fails)
+    # Stamp blast token so calendar updates immediately. frequency_exempt is
+    # gated on the owning window's waive_frequency setting.
     blast_token = secrets.token_urlsafe(32)
-    db.execute(
-        text("UPDATE gigs SET radius_blast_token = :token, frequency_exempt = 1 WHERE id = :gid"),
-        {"token": blast_token, "gid": gig_id}
-    )
+    if waive_freq_own:
+        db.execute(
+            text("UPDATE gigs SET radius_blast_token = :token, frequency_exempt = 1 WHERE id = :gid"),
+            {"token": blast_token, "gid": gig_id}
+        )
+    else:
+        db.execute(
+            text("UPDATE gigs SET radius_blast_token = :token WHERE id = :gid"),
+            {"token": blast_token, "gid": gig_id}
+        )
     db.commit()
-    logger.info(f"[BLAST] radius_blast_token + frequency_exempt set for gig {gig_id}")
+    logger.info(f"[BLAST] radius_blast_token{' + frequency_exempt' if waive_freq_own else ''} set for gig {gig_id}")
 
     # Load SMTP settings — emails are best-effort after token is stamped
     smtp_row = db.execute(text("""
@@ -6138,9 +6965,11 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
     # Get preferred artists — exclude banned and waitlist-declined/timed-out
     # FIX (May 2026): also exclude artists with a blackout date covering this gig.
     artists = db.execute(text("""
-        SELECT a.id, a.name, a.artist_type, u.email, u.id as user_id
+        SELECT a.id, a.name, a.artist_type, u.email, u.id as user_id,
+               a.band_formats, a.styles,
+               COALESCE(a.has_own_equipment, 0) as has_own_equipment
         FROM preferred_artists pa
-        JOIN artists a ON a.id = pa.artist_id
+        JOIN artists a ON a.id = pa.artist_id AND a.deleted_at IS NULL
         JOIN users u ON u.id = a.user_id
         WHERE pa.venue_id = :vid AND pa.status = 'approved'
           AND a.id NOT IN (
@@ -6164,7 +6993,10 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
           AND a.id NOT IN (
               -- Audit fix (May 2026 part 9): exclude ALL artists who have ever
               -- cancelled a slot on this gig, not just the most recent (which
-              -- is what gigs.last_cancelled_artist_id / :excl_aid above tracks).
+              -- is what gigs.last_cancelled_artist_id / the excl_aid bind above
+              -- tracks). NOTE do not write bind-style tokens (colon + name)
+              -- inside comments; SQLAlchemy text() treats them as real
+              -- bindparams and injects an extra binding, causing runtime error.
               SELECT artist_id FROM gig_cancelled_artists WHERE gig_id = :gid
           )
           AND NOT EXISTS (
@@ -6177,6 +7009,14 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
 
     logger.info(f"[BLAST] Found {len(artists)} approved preferred artists for venue {venue_id}")
 
+    # Jul 2026: cancel_notify_preferred=0 on the owning window means the venue
+    # wants the "blast to ALL in radius" side to fire (if enabled) WITHOUT
+    # emailing preferred artists for this cancellation. Empty the list so the
+    # per-artist loop below is a no-op; the blast_all branch downstream still runs.
+    if not cancel_pref:
+        logger.info(f"[BLAST] Owning window has cancel_notify_preferred=0 — skipping preferred send")
+        artists = []
+
     def render(s, vars_):
         import re as _re
         def _block(m):
@@ -6187,12 +7027,91 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
             s = s.replace(f"{{{{{k}}}}}", str(v or ""))
         return s
 
+    # FIX (Jul 2026, revised Jul 1 2026): accepted-types must reflect
+    # what the artist could actually BOOK. If any open slot has an
+    # explicit artist_type, only those types are accepted (gig-level is
+    # ignored — it may match a BOOKED slot but that slot isn't bookable).
+    # If open slots are all NULL/empty (or no slot rows), fall back to
+    # gig-level type.
+    _accepted_types_blast = set()
+    _open_slot_types_explicit = db.execute(
+        text("""SELECT DISTINCT artist_type FROM gig_slots
+                WHERE gig_id = :gid AND status = 'open'
+                  AND artist_type IS NOT NULL AND TRIM(artist_type) != ''"""),
+        {"gid": gig_id}
+    ).fetchall()
+    _explicit = [(_st[0] or "").strip().lower() for _st in _open_slot_types_explicit if _st[0]]
+    if _explicit:
+        _accepted_types_blast.update(_explicit)
+        # Also include gig-level type if any open slot inherits (NULL/empty type).
+        _has_inherit = db.execute(
+            text("""SELECT 1 FROM gig_slots WHERE gig_id = :gid AND status = 'open'
+                    AND (artist_type IS NULL OR TRIM(artist_type) = '') LIMIT 1"""),
+            {"gid": gig_id}
+        ).first()
+        if _has_inherit and gig["artist_type"]:
+            _accepted_types_blast.add(gig["artist_type"].strip().lower())
+    else:
+        if gig["artist_type"]:
+            _accepted_types_blast.add(gig["artist_type"].strip().lower())
+
+    # Jul 1 2026: pull each open slot's band_formats/styles/equipment
+    # so we can require the artist to overlap on at least one open slot
+    # they can actually book. Mirrors `_artist_matches_slot` semantics.
+    _cb_open_slots = db.execute(text("""
+        SELECT artist_type, band_formats, styles, requires_equipment
+        FROM gig_slots WHERE gig_id = :gid AND status = 'open'
+    """), {"gid": gig_id}).mappings().all()
+    _CB_MC = {"open mic mc", "karaoke mc"}
+
+    def _cb_csv_set(_s):
+        if not _s:
+            return set()
+        return {t.strip().lower() for t in str(_s).replace(";", ",").split(",") if t.strip()}
+
+    def _cb_slot_matches(_a_type, _a_fmts, _a_styles, _a_has_equip, _slot):
+        _st = (_slot.get("artist_type") or "").strip().lower() or (gig["artist_type"] or "").strip().lower()
+        if _a_type and _st and _st != _a_type.strip().lower():
+            return False
+        if _st not in _CB_MC:
+            _sf = _cb_csv_set(_slot.get("band_formats")) or _cb_csv_set(gig.get("band_formats"))
+            if _sf and not (_sf & _cb_csv_set(_a_fmts)):
+                return False
+            _ss = _cb_csv_set(_slot.get("styles")) or _cb_csv_set(gig.get("styles"))
+            if _ss and not (_ss & _cb_csv_set(_a_styles)):
+                return False
+        _req = _slot.get("requires_equipment")
+        if _req in (1, True, "1", "true", "True") and not _a_has_equip:
+            return False
+        return True
+
     sent_count = 0
     for artist in artists:
-        # Match artist type — skip only if BOTH sides have a value and they don't match
-        if gig["artist_type"] and artist["artist_type"]:
-            if gig["artist_type"].lower() != artist["artist_type"].lower():
-                logger.info(f"[BLAST] Skipping {artist['name']}: type mismatch (gig={gig['artist_type']}, artist={artist['artist_type']})")
+        # Match artist type — accepted types include gig-level + any
+        # open slot type. Skip if artist has no type set, OR if their
+        # type isn't in the accepted set.
+        if not artist["artist_type"]:
+            logger.info(f"[BLAST] Skipping {artist['name']}: artist has no type set")
+            continue
+        if _accepted_types_blast and artist["artist_type"].strip().lower() not in _accepted_types_blast:
+            logger.info(f"[BLAST] Skipping {artist['name']}: type mismatch (accepted={_accepted_types_blast}, artist={artist['artist_type']})")
+            continue
+        # Jul 1 2026: band_formats + styles + equipment overlap filter.
+        if _cb_open_slots:
+            if not any(_cb_slot_matches(artist["artist_type"], artist.get("band_formats"),
+                                          artist.get("styles"),
+                                          bool(artist.get("has_own_equipment")), s)
+                        for s in _cb_open_slots):
+                logger.info(f"[BLAST] Skipping {artist['name']}: no open slot matches band_formats/styles/equipment")
+                continue
+        else:
+            _sf = _cb_csv_set(gig.get("band_formats"))
+            if _sf and not (_sf & _cb_csv_set(artist.get("band_formats"))):
+                logger.info(f"[BLAST] Skipping {artist['name']}: band_formats mismatch (gig-level)")
+                continue
+            _ss = _cb_csv_set(gig.get("styles"))
+            if _ss and not (_ss & _cb_csv_set(artist.get("styles"))):
+                logger.info(f"[BLAST] Skipping {artist['name']}: styles mismatch (gig-level)")
                 continue
 
         # Check email preference — only skip if explicitly disabled
@@ -6262,17 +7181,16 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
     logger.info(f"[BLAST] Done (preferred) — sent to {sent_count}/{len(artists)} preferred artists for gig {gig_id}")
 
     # ── Radius blast: non-preferred artists within radius ──────────────────
-    # Check if venue has radius_blast enabled (default ON)
-    radius_notif = db.execute(
-        text("SELECT enabled, radius_miles FROM venue_email_notifications WHERE venue_id = :vid AND notification_key = 'radius_blast'"),
-        {"vid": venue_id}
-    ).mappings().first()
-
-    if radius_notif is not None and not radius_notif["enabled"]:
-        logger.info(f"[BLAST] radius_blast disabled for venue {venue_id}, skipping radius blast")
+    # Jul 2026: gated by the OWNING WINDOW's cancel_notify_all_enabled +
+    # cancel_notify_all_radius (already loaded above as blast_all_en / blast_all_mi).
+    # Was previously reading the legacy `radius_blast` row — which meant the new
+    # per-window UI toggle was silently ignored and a brand-new venue (no legacy
+    # row) fired non-preferred blasts on every cancellation regardless of intent.
+    if not blast_all_en:
+        logger.info(f"[BLAST] Owning window has cancel_notify_all_enabled=0 — skipping radius blast")
         return
 
-    radius_miles = (radius_notif["radius_miles"] if radius_notif and radius_notif["radius_miles"] else 20)
+    radius_miles = blast_all_mi
 
     # Get venue coordinates
     venue_coords = db.execute(
@@ -6307,10 +7225,13 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
     lon_min, lon_max = vlon - lon_delta, vlon + lon_delta
 
     candidate_artists = db.execute(text("""
-        SELECT a.id, a.name, a.artist_type, a.latitude, a.longitude, u.email, u.id as user_id
+        SELECT a.id, a.name, a.artist_type, a.latitude, a.longitude, u.email, u.id as user_id,
+               a.band_formats, a.styles,
+               COALESCE(a.has_own_equipment, 0) as has_own_equipment
         FROM artists a
         JOIN users u ON u.id = a.user_id
-        WHERE a.latitude  BETWEEN :lat_min AND :lat_max
+        WHERE a.deleted_at IS NULL
+          AND a.latitude  BETWEEN :lat_min AND :lat_max
           AND a.longitude BETWEEN :lon_min AND :lon_max
           AND a.latitude  IS NOT NULL
           AND a.longitude IS NOT NULL
@@ -6355,9 +7276,28 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
         if ra["id"] in preferred_ids:
             continue
 
-        # Artist type match — skip only if both sides set and mismatched
-        if gig["artist_type"] and ra["artist_type"]:
-            if gig["artist_type"].lower() != ra["artist_type"].lower():
+        # FIX (Jul 2026): Artist type match — accepted set is gig-level
+        # OR any open slot's type (handles multi-slot mixed gigs).
+        # Reuses _accepted_types_blast computed at the top of this fn.
+        if not ra["artist_type"]:
+            continue
+        if _accepted_types_blast and ra["artist_type"].strip().lower() not in _accepted_types_blast:
+            continue
+        # Jul 1 2026: band_formats + styles + equipment overlap filter.
+        # Reuses the _cb_open_slots + _cb_slot_matches helpers from the
+        # preferred branch above.
+        if _cb_open_slots:
+            if not any(_cb_slot_matches(ra["artist_type"], ra.get("band_formats"),
+                                          ra.get("styles"),
+                                          bool(ra.get("has_own_equipment")), s)
+                        for s in _cb_open_slots):
+                continue
+        else:
+            _sf = _cb_csv_set(gig.get("band_formats"))
+            if _sf and not (_sf & _cb_csv_set(ra.get("band_formats"))):
+                continue
+            _ss = _cb_csv_set(gig.get("styles"))
+            if _ss and not (_ss & _cb_csv_set(ra.get("styles"))):
                 continue
 
         # Precise haversine check on the small candidate set
@@ -6737,7 +7677,7 @@ def batch_blast(request: Request, venue_id: int, data: dict, background_tasks: B
         preferred = db.execute(text("""
             SELECT a.id, a.name, u.email, u.id as user_id
             FROM preferred_artists pa
-            JOIN artists a ON a.id = pa.artist_id
+            JOIN artists a ON a.id = pa.artist_id AND a.deleted_at IS NULL
             JOIN users u ON u.id = a.user_id
             WHERE pa.venue_id = :vid AND pa.status = 'approved'
               AND a.id NOT IN (
@@ -7381,6 +8321,68 @@ def venue_ical(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)
 # (~192 bits entropy), one-use semantics (offer_declined=1 set on
 # both accept + decline), expire 24h after the offer is sent.
 
+def _venue_requires_contract_for_booking(db, venue_id: int, artist_id: int) -> bool:
+    """True when the venue has an active contract that requires signing
+    on booking. Mirrors the check in artist.book-gigs.js Book flow:
+    `/api/venues/{vid}/contracts/active` returns has_contract + require_for_booking.
+    Used by the email-link Hold-accept endpoints to detect whether a
+    booking needs to flow through contract signing (in which case we
+    redirect to the in-app calendar where the existing signing modal
+    runs) vs. fast-path direct book.
+    """
+    try:
+        row = db.execute(
+            text("""SELECT COALESCE(require_for_booking, 0) as require_for_booking
+                    FROM venue_contracts
+                    WHERE venue_id = :vid AND is_active = 1
+                    LIMIT 1"""),
+            {"vid": venue_id}
+        ).first()
+        return bool(row and int(row[0] or 0))
+    except Exception as _ce:
+        logger.warning(f"[HOLD] contract-required check failed venue={venue_id}: {_ce}")
+        return False
+
+
+def _hold_redirect_to_contract_landing(token: str, gig_id: int, slot_id, venue_name: str,
+                                        gig_date: str) -> str:
+    """Render an HTML landing page that points the artist to the in-app
+    contract signing flow. Used when the email-link path would have
+    booked directly but the venue requires a contract.
+
+    The deep link includes `hold_book=<token>:<slot_id>` so the artist
+    calendar page can auto-trigger the in-app Book flow (which already
+    handles contract signing). artist_id is left out — the in-app page
+    derives it from the artist's session + the calendar selector.
+    """
+    sid_part = f":{int(slot_id)}" if slot_id else ""
+    # Audit fix (Jul 1 2026 regression sweep): venue_name is venue-controlled
+    # input and was previously interpolated raw — same XSS class the Jul 1
+    # frontend batch closed. gig_date is a canonical YYYY-MM-DD string but
+    # escape defensively.
+    safe_venue = _h_esc(venue_name or 'The venue')
+    safe_date = _h_esc(str(gig_date or '')[:10])
+    safe_link = _h_esc(f"/app/artist-book-gigs.html#hold_book={token}{sid_part}")
+    inner = f"""<h1 style="color:#a78bfa;">Sign your contract to confirm</h1>
+<p style="margin:0 0 16px 0;color:#cbd5e1;font-size:0.95rem;">
+  <b>{safe_venue}</b> requires a contract on booking for the gig on <b>{safe_date}</b>.
+  We've taken you out of the email flow so you can review and sign it inside GigsFill.
+</p>
+<p style="margin:0 0 20px 0;color:#94a3b8;font-size:0.86rem;">
+  Sign in (if you aren't already), then click the gig on your calendar — the contract opens
+  automatically. Your hold offer is still in flight; nothing's been booked yet.
+</p>
+<a href="{safe_link}" style="display:inline-block;background:#7c6bff;color:#fff;text-decoration:none;
+   padding:11px 22px;border-radius:6px;font-size:0.92rem;font-weight:600;">
+  Open My Calendar to Sign &amp; Book
+</a>
+<p style="margin:18px 0 0 0;color:#94a3b8;font-size:0.78rem;">
+  Or, if you'd rather decline, you can do that from your inbox — the email's red Decline button
+  still works.
+</p>"""
+    return _hold_page_shell(title="Sign your contract to confirm", inner_html=inner, accent="#a78bfa")
+
+
 @router.get("/hold/respond/{token}", include_in_schema=False)
 def hold_respond_landing(token: str, db=Depends(get_db)):
     """Artist clicks the green Accept button in the email. Two flows:
@@ -7440,6 +8442,22 @@ def hold_respond_landing(token: str, db=Depends(get_db)):
             "None of the open slots match your artist type. We've let the venue know — they'll move on to the next artist on their list."
         ))
 
+    # Contract-required redirect (Jun 2026): if the venue requires a
+    # contract on booking, the email-link path can't sign one — punt
+    # the artist to the in-app calendar where the existing signing
+    # modal runs. Done BEFORE the single-slot fast-book to avoid
+    # booking before the contract is signed.
+    if _venue_requires_contract_for_booking(db, row["venue_id"], row["artist_id"]):
+        # Single-slot: pass the slot id in the deep link so the calendar
+        # can auto-trigger the right Book button. Multi-slot: omit the
+        # slot id and let the artist pick from the in-app Pending Offer
+        # panel (which shows all matching slots).
+        slot_for_link = int(open_slots[0]["id"]) if len(open_slots) == 1 else None
+        return HTMLResponse(_hold_redirect_to_contract_landing(
+            token, row["gig_id"], slot_for_link,
+            row["venue_name"], str(row["date"])
+        ))
+
     # Single-slot path: book + confirm in one shot
     if len(open_slots) == 1:
         result = respond_to_hold_offer(db, token=token, action="accept", slot_id=int(open_slots[0]["id"]))
@@ -7452,14 +8470,122 @@ def hold_respond_landing(token: str, db=Depends(get_db)):
             ))
         return HTMLResponse(_hold_simple_page("Something went wrong", result.get("message") or "Please try again or contact support."))
 
-    # Multi-slot: show a picker
-    return HTMLResponse(_hold_slot_picker_page(token, row, open_slots))
+    # Multi-slot: show a picker — precompute effective pay (override
+    # for flat slots) so the picker renders what the artist will actually
+    # be paid.
+    from backend.services.gig_hold import _effective_pay_for_artist as _heff
+    slots_for_picker = []
+    for s in open_slots:
+        d = dict(s)
+        d["effective_pay"] = _heff(db, s, row["venue_id"], row["artist_id"])
+        slots_for_picker.append(d)
+    return HTMLResponse(_hold_slot_picker_page(token, row, slots_for_picker))
+
+
+def _resolve_hold_token(db, token: str):
+    """Look up a per-gig hold offer-token's artist + venue + date without
+    firing the decline. Returns a mapping or None."""
+    return db.execute(
+        text("""SELECT wl.artist_id, wl.gig_id, wl.offer_declined,
+                       g.date, g.venue_id,
+                       v.venue_name,
+                       a.name as artist_name,
+                       a.user_id as artist_user_id
+                FROM gig_waitlist wl
+                JOIN gigs g ON g.id = wl.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                JOIN artists a ON a.id = wl.artist_id
+                WHERE wl.offer_token = :tok AND wl.source = 'hold'
+                LIMIT 1"""),
+        {"tok": token}
+    ).mappings().first()
 
 
 @router.get("/hold/decline/{token}", include_in_schema=False)
-def hold_decline_landing(token: str, db=Depends(get_db)):
-    """One-click decline from email. Marks offer declined, advances
-    to next artist on the waitlist."""
+def hold_decline_landing(token: str,
+                         user=Depends(get_optional_user),
+                         db=Depends(get_db)):
+    """Email-link landing for per-gig hold decline.
+
+    Prefetch defense (Jul 1 2026, mirrors the series-hold Y3 fix): Gmail/
+    Outlook/Slack auto-GET links in incoming mail to render previews. A
+    one-click GET-that-mutates would fire the decline before the artist
+    ever clicked. Behavior:
+
+      - Logged-in caller who owns the token's artist → execute decline
+        immediately (one-click as before).
+      - Anyone else → render a confirmation page whose POST form performs
+        the actual decline. GET no longer mutates state in the un-auth'd
+        case, so prefetchers can't trigger anything.
+    """
+    from fastapi.responses import HTMLResponse
+    from backend.services.gig_hold import respond_to_hold_offer
+    info = _resolve_hold_token(db, token)
+    if not info:
+        return HTMLResponse(_hold_simple_page(
+            "Offer not found",
+            "This hold link is invalid or has already been cleaned up.",
+        ), status_code=404)
+    if int(info["offer_declined"] or 0) == 1:
+        return HTMLResponse(_hold_simple_page(
+            "Already responded",
+            "This offer has already been handled.",
+        ), status_code=410)
+
+    artist_owns_caller = bool(user) and int(user.id) == int(info["artist_user_id"] or 0)
+    if not artist_owns_caller and user:
+        # entity_users fallback (managed-artist users)
+        try:
+            _euser = db.execute(
+                text("""SELECT 1 FROM entity_users
+                        WHERE entity_type='artist' AND entity_id=:aid AND user_id=:uid"""),
+                {"aid": info["artist_id"], "uid": user.id}
+            ).first()
+            artist_owns_caller = bool(_euser)
+        except Exception:
+            pass
+
+    if artist_owns_caller:
+        result = respond_to_hold_offer(db, token=token, action="decline")
+        if result.get("ok"):
+            return HTMLResponse(_hold_simple_page(
+                "Thanks for letting us know",
+                "We've told the venue — they'll offer the gig to the next artist on their list. Catch you on the next one.",
+                color="#6b7280"
+            ))
+        return HTMLResponse(_hold_simple_page(
+            "Already responded",
+            result.get("message") or "This offer has already been handled."
+        ))
+
+    # Un-auth'd or wrong-artist caller → show a confirmation form. Uses
+    # _hold_page_shell directly (rather than _hold_simple_page) because
+    # the body contains a <form> which can't nest inside the shell's <p>.
+    safe_venue = _h_esc(info.get("venue_name") or "the venue")
+    safe_artist = _h_esc(info.get("artist_name") or "you")
+    safe_date = _h_esc(str(info.get("date") or "")[:10])
+    inner = (
+        f"<h1 style='color:#f8fafc;'>Confirm: decline this hold offer?</h1>"
+        f"<p style='margin:0 0 14px;color:#cbd5e1;font-size:0.95rem;line-height:1.6;'>"
+        f"You're about to decline {safe_venue}'s hold offer for "
+        f"<strong>{safe_date}</strong> on behalf of <strong>{safe_artist}</strong>.</p>"
+        f"<form method='POST' action='/hold/decline/{_h_esc(token)}' style='margin-top:18px;'>"
+        f"  <button type='submit' style='padding:10px 22px;background:#ef4444;color:#fff;border:0;border-radius:6px;font-weight:600;cursor:pointer;font-size:14px;'>Yes, decline this offer</button>"
+        f"</form>"
+        f"<p style='margin-top:16px;font-size:13px;color:#6b7280;'>If this wasn't you, close this tab — nothing has been declined yet.</p>"
+    )
+    return HTMLResponse(_hold_page_shell(
+        title="Confirm decline",
+        inner_html=inner,
+        accent="#ef4444",
+    ))
+
+
+@router.post("/hold/decline/{token}", include_in_schema=False)
+def hold_decline_submit(token: str, db=Depends(get_db)):
+    """Form-POST target for the confirmation landing. Fires the actual
+    decline only after the user explicitly clicks the button — GET
+    prefetchers can't reach this path."""
     from fastapi.responses import HTMLResponse
     from backend.services.gig_hold import respond_to_hold_offer
     result = respond_to_hold_offer(db, token=token, action="decline")
@@ -7469,15 +8595,69 @@ def hold_decline_landing(token: str, db=Depends(get_db)):
             "We've told the venue — they'll offer the gig to the next artist on their list. Catch you on the next one.",
             color="#6b7280"
         ))
-    return HTMLResponse(_hold_simple_page("Already responded", result.get("message") or "This offer has already been handled."))
+    return HTMLResponse(_hold_simple_page(
+        "Already responded",
+        result.get("message") or "This offer has already been handled."
+    ))
 
 
 @router.post("/hold/accept/{token}", include_in_schema=False)
-def hold_accept_slot(token: str, slot_id: int = Query(...), db=Depends(get_db)):
-    """Form POST from the multi-slot picker page. Returns HTML."""
-    from fastapi.responses import HTMLResponse
+def hold_accept_slot(token: str, request: Request,
+                     slot_id: int = Query(...), db=Depends(get_db)):
+    """Accept a hold offer for a specific slot.
+
+    Dual-mode response based on Accept header:
+      - Accept: application/json  → JSON {ok, message} (used by the
+        artist banner so it can surface backend error messages like
+        "Stripe not set up" / "Frequency conflict" rather than the
+        generic "✗ Failed" toast).
+      - Anything else → HTML landing page (used by the email link's
+        multi-slot picker form which expects a rendered confirmation
+        on the next request).
+    """
+    from fastapi.responses import HTMLResponse, JSONResponse
     from backend.services.gig_hold import respond_to_hold_offer
+    wants_json = "application/json" in (request.headers.get("accept") or "").lower()
+
+    # Contract-required redirect (Jun 2026): the multi-slot picker
+    # form submits here. Before booking, check if the venue requires
+    # a contract on booking. If so:
+    #   - JSON caller (in-app banner): the banner already does its
+    #     own contract check + signing modal upstream, so it should
+    #     never reach this branch. We still respond with a clear
+    #     error so any future caller surfaces it.
+    #   - HTML caller (email-link picker): redirect to the in-app
+    #     calendar so the artist can sign + book through the existing
+    #     flow.
+    ctx_row = db.execute(
+        text("""SELECT wl.gig_id, wl.artist_id,
+                       g.venue_id, g.date, v.venue_name
+                FROM gig_waitlist wl
+                JOIN gigs g ON g.id = wl.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                WHERE wl.offer_token = :tok AND wl.source = 'hold'
+                LIMIT 1"""),
+        {"tok": token}
+    ).mappings().first()
+    if ctx_row and _venue_requires_contract_for_booking(db, ctx_row["venue_id"], ctx_row["artist_id"]):
+        if wants_json:
+            return JSONResponse(
+                content={"ok": False, "requires_contract": True,
+                         "message": "This venue requires a contract on booking. Use the in-app Pending Offer panel to sign."},
+                status_code=409,
+            )
+        return HTMLResponse(_hold_redirect_to_contract_landing(
+            token, ctx_row["gig_id"], int(slot_id),
+            ctx_row["venue_name"], str(ctx_row["date"])
+        ))
+
     result = respond_to_hold_offer(db, token=token, action="accept", slot_id=int(slot_id))
+    if wants_json:
+        # Use the 4xx range on failures so the banner's res.ok branch
+        # also flips false (defense-in-depth alongside the explicit
+        # {ok: false} body check on the frontend).
+        status_code = 200 if result.get("ok") else 400
+        return JSONResponse(content=result, status_code=status_code)
     if result.get("ok"):
         return HTMLResponse(_hold_simple_page(
             "Booked!",
@@ -7563,13 +8743,22 @@ def _hold_slot_picker_page(token: str, row, open_slots) -> str:
     rows_html = ""
     for s in open_slots:
         time_str = f"{_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}"
-        pay = int(s["pay"]) if s["pay"] and s["pay"] == int(s["pay"]) else s["pay"]
+        # Unified override rule (Jun 2026): use the precomputed
+        # effective_pay (which already applies the override to both
+        # flat and door slots) as the dollar amount. Door slots
+        # additionally append the door%.
+        eff = float(s.get("effective_pay") if s.get("effective_pay") is not None else (s.get("pay") or 0))
+        eff_fmt = f"${int(eff)}" if eff == int(eff) else f"${eff:.2f}"
+        if (s.get("deal_type") or "flat").lower() == "door":
+            pay_html = f"{eff_fmt} + {int(s.get('door_pct') or 0)}% door"
+        else:
+            pay_html = eff_fmt
         rows_html += f"""
 <form method="POST" action="/hold/accept/{token}?slot_id={int(s['id'])}" style="margin:0 0 10px 0;">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:rgba(124,107,255,0.08);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:14px 16px;">
     <div>
       <div style="font-size:0.95rem;font-weight:600;color:#f8fafc;">Slot {s['slot_number']}</div>
-      <div style="font-size:0.86rem;color:#cbd5e1;margin-top:2px;">{time_str}  ·  <span style="color:#22c55e;font-weight:700;">${pay}</span></div>
+      <div style="font-size:0.86rem;color:#cbd5e1;margin-top:2px;">{time_str}  ·  <span style="color:#22c55e;font-weight:700;">{pay_html}</span></div>
     </div>
     <button type="submit"
       title="Book this slot now."
@@ -7608,7 +8797,7 @@ def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_
     from backend.utils import check_venue_access
     gig = db.execute(
         text("""SELECT id, venue_id, hold_status, hold_offer_window_hours,
-                       date, status
+                       date, status, recurring_group_id
                 FROM gigs WHERE id = :gid"""),
         {"gid": gig_id}
     ).mappings().first()
@@ -7650,17 +8839,108 @@ def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_
 
     from datetime import datetime as _dt
     now = _dt.utcnow()
+    window_h = int(gig.get("hold_offer_window_hours") or 24)
+    # For series gigs, gather every artist who booked ANOTHER gig in the
+    # same series so we can label declined rows as "booked elsewhere"
+    # (the artist accepted the series, just not THIS specific date).
+    series_booked_by_artist = set()
+    if gig.get("recurring_group_id"):
+        for r in db.execute(
+            text("""SELECT DISTINCT gs.artist_id, g2.id as g2_id, g2.date
+                    FROM gig_slots gs JOIN gigs g2 ON g2.id = gs.gig_id
+                    WHERE g2.recurring_group_id = :rgid
+                      AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+                      AND gs.artist_id IS NOT NULL
+                      AND g2.id != :gid"""),
+            {"rgid": gig["recurring_group_id"], "gid": gig_id}
+        ).mappings().all():
+            series_booked_by_artist.add((int(r["artist_id"]), int(r["g2_id"]), str(r["date"])[:10]))
     waitlist_out = []
     current_offer = None
     for r in rows:
+        state = None
+        state_reason = None
         if r["artist_id"] in accepted_artist_ids:
             state = "accepted"
         elif not r["offer_sent"]:
             state = "queued"
+            # Frequency check for queued artists: compute closest existing
+            # booking at this venue (any direction). If within freq_days,
+            # surface so the venue knows this artist can't accept even
+            # when their position comes up.
+            try:
+                _fr = db.execute(
+                    text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) AS fd
+                            FROM venues v
+                            LEFT JOIN preferred_artists pa
+                              ON pa.venue_id = v.id AND pa.artist_id = :aid
+                            WHERE v.id = :vid"""),
+                    {"aid": r["artist_id"], "vid": gig["venue_id"]}
+                ).scalar() or 0
+                if int(_fr) > 0:
+                    _cb = db.execute(
+                        text("""SELECT g3.date
+                                FROM gigs g3 LEFT JOIN gig_slots gs2 ON gs2.gig_id = g3.id
+                                WHERE g3.venue_id = :vid AND g3.id != :gid
+                                  AND (g3.artist_id = :aid
+                                       OR (gs2.artist_id = :aid
+                                           AND gs2.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')))
+                                ORDER BY ABS(julianday(g3.date) - julianday(:gdate)) ASC LIMIT 1"""),
+                        {"vid": gig["venue_id"], "gid": gig_id, "aid": r["artist_id"],
+                         "gdate": str(gig["date"])[:10]}
+                    ).mappings().first()
+                    if _cb:
+                        _d1 = _dt.strptime(str(gig["date"])[:10], "%Y-%m-%d").date()
+                        _d2 = _dt.strptime(str(_cb["date"])[:10], "%Y-%m-%d").date()
+                        _diff = (_d1 - _d2).days
+                        if abs(_diff) <= int(_fr):
+                            state_reason = {
+                                "kind": "freq_blocked",
+                                "days_apart": int(abs(_diff)),
+                                "direction": "before" if _diff > 0 else "after",
+                                "other_date": str(_cb["date"])[:10],
+                                "required": int(_fr),
+                            }
+            except Exception:
+                pass
         elif r["offer_declined"]:
-            state = "declined"  # also covers expired (we set offer_declined=1 on expire)
+            # Distinguish actual decline / expiry / series-accept-elsewhere.
+            # Series first: if the artist booked another gig in the same
+            # series, this is "Booked another date" — not a real decline.
+            _series_other = None
+            if gig.get("recurring_group_id"):
+                _other = [(g2id, d) for (aid, g2id, d) in series_booked_by_artist
+                          if aid == int(r["artist_id"])]
+                if _other:
+                    _series_other = _other[0]
+            if _series_other:
+                state = "booked_elsewhere"
+                state_reason = {
+                    "kind": "booked_elsewhere",
+                    "other_gig_id": _series_other[0],
+                    "other_date": _series_other[1],
+                }
+            else:
+                # Expiry vs explicit decline. offer_sent_at + window_h is
+                # the original natural expiry. If offer_expires_at is at
+                # least 95% of that window from offer_sent_at, it's the
+                # natural-expiry case (sweep marked it). Otherwise the
+                # artist (or backend cleanup) explicitly consumed it
+                # earlier.
+                _natural_expiry = False
+                try:
+                    _sent = _dt.strptime(str(r["offer_sent_at"]).replace("T"," ").split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    _exp = _dt.strptime(str(r["offer_expires_at"]).replace("T"," ").split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    _gap_h = (_exp - _sent).total_seconds() / 3600
+                    if _gap_h >= window_h * 0.95:
+                        _natural_expiry = True
+                except Exception:
+                    pass
+                if _natural_expiry:
+                    state = "expired"
+                else:
+                    state = "declined"
         else:
-            # Active offer — still in flight
             state = "current_offer"
         hours_remaining = None
         if r["offer_expires_at"] and state == "current_offer":
@@ -7674,6 +8954,7 @@ def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_
             "artist_name": r["artist_name"],
             "position": r["position"],
             "state": state,
+            "state_reason": state_reason,
             "offer_sent_at": str(r["offer_sent_at"]) if r["offer_sent_at"] else None,
             "offer_expires_at": str(r["offer_expires_at"]) if r["offer_expires_at"] else None,
             "hours_remaining": hours_remaining,
@@ -7687,18 +8968,180 @@ def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_
     open_slots = [s for s in slot_rows if s["status"] == "open"]
     booked_slots = [s for s in slot_rows if s["status"] == "booked"]
 
+    # Per-bucket state (Jun 2026 — parallel-per-type rotation, Option A).
+    # One bucket per distinct open-slot artist_type. Each bucket's state:
+    #   'active'        : has an in-flight offer OR remaining candidates
+    #   'exhausted'     : at least one artist of this type WAS queued but
+    #                     all of them either declined / expired
+    #   'no_candidates' : NO artist of this type was ever queued (venue
+    #                     forgot to add anyone of that type)
+    # Frontend renders a per-bucket notice for non-active buckets so the
+    # venue can act on the dead bucket without waiting for the rest of
+    # the rotation to finish.
+    buckets = []
+    _open_types = sorted({s["artist_type"] for s in open_slots if s.get("artist_type")})
+    for _t in _open_types:
+        _bucket_slots = [s for s in open_slots if s.get("artist_type") == _t]
+        # In-flight offer to an artist of this type, if any
+        _in_flight_row = db.execute(
+            text("""SELECT wl.artist_id, wl.offer_sent_at, wl.offer_expires_at,
+                           wl.reminder_sent_at, a.name as artist_name
+                    FROM gig_waitlist wl
+                    JOIN artists a ON a.id = wl.artist_id
+                    WHERE wl.gig_id = :gid AND wl.source = 'hold'
+                      AND wl.offer_sent = 1 AND wl.offer_declined = 0
+                      AND a.artist_type = :t
+                    LIMIT 1"""),
+            {"gid": gig_id, "t": _t}
+        ).mappings().first()
+        _in_flight = None
+        if _in_flight_row:
+            _ifh_remaining = None
+            if _in_flight_row["offer_expires_at"]:
+                try:
+                    _exp = _dt.strptime(
+                        str(_in_flight_row["offer_expires_at"]).replace("T"," ").split(".")[0],
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                    _ifh_remaining = max(0, round((_exp - now).total_seconds() / 3600, 1))
+                except Exception:
+                    pass
+            _in_flight = {
+                "artist_id": _in_flight_row["artist_id"],
+                "artist_name": _in_flight_row["artist_name"],
+                "offer_expires_at": str(_in_flight_row["offer_expires_at"]) if _in_flight_row["offer_expires_at"] else None,
+                "hours_remaining": _ifh_remaining,
+                "reminder_sent": bool(_in_flight_row["reminder_sent_at"]),
+            }
+        # Remaining (un-offered, un-declined) candidates for this type
+        _remaining_cnt = db.execute(
+            text("""SELECT COUNT(*) FROM gig_waitlist wl
+                    JOIN artists a ON a.id = wl.artist_id
+                    WHERE wl.gig_id = :gid AND wl.source = 'hold'
+                      AND wl.offer_sent = 0 AND wl.offer_declined = 0
+                      AND a.artist_type = :t"""),
+            {"gid": gig_id, "t": _t}
+        ).scalar() or 0
+        # Has any artist of this type ever been queued?
+        _ever_queued = db.execute(
+            text("""SELECT 1 FROM gig_waitlist wl
+                    JOIN artists a ON a.id = wl.artist_id
+                    WHERE wl.gig_id = :gid AND wl.source = 'hold'
+                      AND a.artist_type = :t LIMIT 1"""),
+            {"gid": gig_id, "t": _t}
+        ).first()
+        if _in_flight or _remaining_cnt > 0:
+            _state = "active"
+        elif _ever_queued:
+            _state = "exhausted"
+        else:
+            _state = "no_candidates"
+        buckets.append({
+            "artist_type": _t,
+            "slot_count": len(_bucket_slots),
+            "slot_ids": [s["id"] for s in _bucket_slots],
+            "in_flight": _in_flight,
+            "remaining_candidates": int(_remaining_cnt),
+            "state": _state,
+        })
+
     return {
         "is_held": True,
         "hold_status": gig["hold_status"],
         "offer_window_hours": gig["hold_offer_window_hours"] or 24,
         "current_offer": current_offer,
         "waitlist": waitlist_out,
+        "buckets": buckets,
         "open_slot_count": len(open_slots),
         "booked_slot_count": len(booked_slots),
         "open_slots": [dict(s) for s in open_slots],
         "booked_slots": [dict(s) for s in booked_slots],
         "venue_id": gig["venue_id"],
+        # gig date so the venue picker can request the preferred-artists
+        # endpoint with for_gig_date and surface per-artist freq status
+        # (Jun 2026 — Hold-Gig add-artist UX).
+        "date": str(gig["date"])[:10] if gig.get("date") else None,
     }
+
+
+@router.post("/api/gigs/{gig_id}/hold/start")
+def start_hold(gig_id: int, data: dict,
+               user=Depends(get_current_user), db=Depends(get_db)):
+    """Add a Hold to an existing gig the venue created without one.
+
+    Body:
+      artist_ids: ordered list of preferred-artist ids (top of list
+                  goes first). Required, non-empty.
+      hold_email_artists: bool (default True) — send the first offer
+                          immediately vs. just stage the waitlist.
+      hold_offer_window_hours: int (default 24).
+
+    Refuses if the gig is already held, fully booked, or has no open
+    slots. Otherwise delegates to create_hold_waitlist (same code path
+    as create-time hold setup).
+    """
+    from backend.utils import check_venue_access
+    from backend.services.gig_hold import create_hold_waitlist
+    gig = db.execute(
+        text("SELECT id, venue_id, hold_status, status FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if gig["hold_status"]:
+        raise HTTPException(400, "This gig already has a hold in progress.")
+    if gig["status"] in ("booked", "cancelled"):
+        raise HTTPException(400, f"Can't start a hold on a {gig['status']} gig.")
+
+    # Must have at least one OPEN slot — hold offers slots to artists,
+    # nothing to offer if every slot is already booked.
+    open_count = db.execute(
+        text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
+        {"gid": gig_id}
+    ).scalar() or 0
+    if open_count == 0:
+        raise HTTPException(400, "This gig has no open slots to hold.")
+
+    artist_ids = data.get("artist_ids") or []
+    if not artist_ids:
+        raise HTTPException(400, "Pick at least one artist for the hold list.")
+    try:
+        artist_ids = [int(a) for a in artist_ids]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid artist id in hold list.")
+
+    # Refuse to add an artist who's ALREADY booked into one of this
+    # gig's slots — accepting a hold offer for an additional slot
+    # would put the same artist on two slots of the same gig (and
+    # the per-slot pre-book gates can't catch this since the second
+    # slot is genuinely open). Catch it up-front with a clear message.
+    already_booked = db.execute(
+        text("""SELECT DISTINCT gs.artist_id, a.name
+                FROM gig_slots gs
+                LEFT JOIN artists a ON a.id = gs.artist_id
+                WHERE gs.gig_id = :gid
+                  AND gs.status IN ('booked', 'pending_contract', 'awaiting_venue_contract', 'pending_venue_approval')
+                  AND gs.artist_id IS NOT NULL"""),
+        {"gid": gig_id}
+    ).mappings().all()
+    booked_ids = {int(r["artist_id"]) for r in already_booked}
+    conflicting = [int(a) for a in artist_ids if int(a) in booked_ids]
+    if conflicting:
+        names = {int(r["artist_id"]): (r["name"] or f"Artist #{r['artist_id']}") for r in already_booked}
+        nlist = ", ".join(names.get(a, f"Artist #{a}") for a in conflicting)
+        raise HTTPException(400,
+            f"Can't add {nlist} to the hold — they're already booked on a slot of this gig.")
+
+    create_hold_waitlist(
+        db,
+        gig_id=gig_id,
+        artist_ids=artist_ids,
+        send_email_now=bool(data.get("hold_email_artists", True)),
+        offer_window_hours=int(data.get("hold_offer_window_hours") or 24),
+    )
+    logger.info(f"[HOLD] gig={gig_id} hold STARTED post-creation by user={user.id} with {len(artist_ids)} artist(s)")
+    return {"ok": True, "message": "Hold started.", "artist_count": len(artist_ids)}
 
 
 @router.post("/api/gigs/{gig_id}/hold/release")
@@ -7759,9 +9202,16 @@ def skip_current_offer(gig_id: int, user=Depends(get_current_user), db=Depends(g
         {"gid": gig_id}
     )
     db.commit()
-    next_aid = send_next_hold_offer(db, gig_id)
-    return {"ok": True, "next_artist_id": next_aid,
-            "message": "Moved on to next artist." if next_aid else "Waitlist exhausted — see the gig modal for next steps."}
+    # Jun 2026: send_next_hold_offer now returns a LIST (parallel-per-type
+    # rotation). Multiple artists may have been offered in one call when
+    # the gig has multiple open slot types. For the legacy single-id
+    # response shape, surface the first one if any fired.
+    next_ids = send_next_hold_offer(db, gig_id) or []
+    return {"ok": True,
+            "next_artist_id": next_ids[0] if next_ids else None,
+            "next_artist_ids": next_ids,
+            "message": ("Moved on to next artist." if next_ids
+                        else "Waitlist exhausted — see the gig modal for next steps.")}
 
 
 @router.post("/api/gigs/{gig_id}/hold/reorder")
@@ -7844,9 +9294,38 @@ def reorder_hold_waitlist(gig_id: int, data: dict,
                 )
             except Exception as e:
                 logger.warning(f"[HOLD] add skip duplicate gig={gig_id} artist={aid}: {e}")
-    # Remove: any added row not in the new list
+    # Remove: any added row not in the new list.
+    # If the row being removed has an offer IN FLIGHT (offer_sent=1,
+    # offer_declined=0, not yet expired) the artist's email link stays
+    # valid for the offer window — they could click it and end up
+    # booking a slot the venue thought they'd been pulled from. Mark
+    # the offer declined first so respond_to_hold_offer's offer-state
+    # check (services/gig_hold.py:~160) rejects the click cleanly,
+    # then advance the rotation to the next artist.
     to_remove = [aid for aid in added_existing if aid not in seen_added]
+    advanced_after_remove = False
     for aid in to_remove:
+        _in_flight = db.execute(
+            text("""SELECT id FROM gig_waitlist
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND source = 'hold' AND added_post_creation = 1
+                      AND offer_sent = 1 AND offer_declined = 0
+                      AND offer_expires_at > CURRENT_TIMESTAMP"""),
+            {"gid": gig_id, "aid": aid}
+        ).first()
+        if _in_flight:
+            # Soft-invalidate the in-flight offer BEFORE the DELETE so
+            # any concurrent /hold/respond click for this token hits
+            # the offer-no-longer-active branch in respond_to_hold_offer.
+            db.execute(
+                text("""UPDATE gig_waitlist
+                        SET offer_declined = 1,
+                            offer_expires_at = CURRENT_TIMESTAMP
+                        WHERE gig_id = :gid AND artist_id = :aid
+                          AND source = 'hold'"""),
+                {"gid": gig_id, "aid": aid}
+            )
+            advanced_after_remove = True
         db.execute(
             text("""DELETE FROM gig_waitlist
                     WHERE gig_id = :gid AND artist_id = :aid
@@ -7854,7 +9333,421 @@ def reorder_hold_waitlist(gig_id: int, data: dict,
             {"gid": gig_id, "aid": aid}
         )
     db.commit()
+    if advanced_after_remove:
+        # Hand the offer to the next artist on the list (idempotent — if
+        # no next eligible row exists this just marks the hold exhausted).
+        try:
+            from backend.services.gig_hold import send_next_hold_offer
+            send_next_hold_offer(db, gig_id)
+        except Exception as _ne:
+            logger.warning(f"[HOLD] reorder→advance failed gig={gig_id}: {_ne}")
     return {"ok": True, "added_count": len(new_ids), "removed_count": len(to_remove)}
+
+
+@router.post("/api/gigs/{gig_id}/hold/cancel-slots-by-type")
+def cancel_hold_slots_by_type(gig_id: int, data: dict,
+                              user=Depends(get_current_user), db=Depends(get_db)):
+    """Cancel every OPEN slot of a given artist_type on a held gig
+    (Jun 2026 — parallel-per-type rotation, Option A).
+
+    Surfaces in the venue hold-management panel for "dead" buckets:
+    artist_types where the venue forgot to add anyone of that type, or
+    where the whole rotation of that type declined/expired. Booked
+    slots of the same type are untouched.
+
+    If cancelling these slots leaves NO open slots of any type, the
+    gig becomes fully booked or fully cancelled — and `hold_status`
+    clears. Otherwise the other-type rotations keep running.
+
+    Body: `{artist_type: 'Live Band' | 'DJ' | ...}`.
+    """
+    from backend.utils import check_venue_access
+    artist_type = (data.get("artist_type") or "").strip()
+    if not artist_type:
+        raise HTTPException(400, "artist_type required")
+
+    gig = db.execute(
+        text("SELECT venue_id, hold_status, status FROM gigs WHERE id = :gid"),
+        {"gid": gig_id}
+    ).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if not gig["hold_status"]:
+        raise HTTPException(400, "Gig is not held")
+
+    cancelled_slot_ids = [r[0] for r in db.execute(
+        text("""SELECT id FROM gig_slots
+                WHERE gig_id = :gid AND status = 'open' AND artist_type = :t"""),
+        {"gid": gig_id, "t": artist_type}
+    ).fetchall()]
+    if not cancelled_slot_ids:
+        return {"ok": True, "cancelled_count": 0,
+                "message": f"No open {artist_type} slots to cancel."}
+    db.execute(
+        text("""UPDATE gig_slots SET status = 'cancelled'
+                WHERE gig_id = :gid AND status = 'open' AND artist_type = :t"""),
+        {"gid": gig_id, "t": artist_type}
+    )
+
+    # If no open slots remain across any type, the gig is done — flip
+    # gig.status appropriately and clear hold_status (the remaining
+    # buckets are also empty, so the rotation has nothing left to do).
+    remaining_open = db.execute(
+        text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
+        {"gid": gig_id}
+    ).scalar() or 0
+    booked = db.execute(
+        text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'booked'"),
+        {"gid": gig_id}
+    ).scalar() or 0
+    if remaining_open == 0:
+        new_status = "booked" if booked else "cancelled"
+        db.execute(
+            text("UPDATE gigs SET status = :s, hold_status = NULL WHERE id = :gid"),
+            {"s": new_status, "gid": gig_id}
+        )
+    # If open slots still exist, hold_status stays as-is — other type
+    # buckets are still running.
+
+    db.commit()
+    logger.info(f"[HOLD] gig={gig_id} cancelled {len(cancelled_slot_ids)} open '{artist_type}' slot(s) via bucket-resolve")
+    return {"ok": True,
+            "cancelled_count": len(cancelled_slot_ids),
+            "cancelled_slot_ids": cancelled_slot_ids,
+            "message": f"Cancelled {len(cancelled_slot_ids)} empty {artist_type} slot(s)."}
+
+
+@router.post("/api/series/{recurring_group_id}/hold/start")
+def start_series_hold_endpoint(recurring_group_id: str,
+                               user=Depends(get_current_user), db=Depends(get_db)):
+    """Kickoff for a series-wide hold (Jul 2026 — Phase 5).
+
+    Called once by the venue's create-gig frontend after every recurring
+    occurrence has been POSTed (each with hold_artist_ids set + the
+    deferred-kickoff flag). Fires the FIRST round of bundled offers:
+    one parallel offer per artist_type bucket. Each artist gets ONE
+    email listing every gig in the series they could fill, with a
+    shared offer_token covering all their rows.
+
+    Idempotent — calling on a series whose holds are already in flight
+    returns the offered artist_ids without re-firing.
+    """
+    from backend.utils import check_venue_access
+    from backend.services.gig_hold import start_series_hold
+    # Authorize: any gig in the series tells us the venue.
+    row = db.execute(
+        text("""SELECT g.venue_id FROM gigs g
+                WHERE g.recurring_group_id = :rgid LIMIT 1"""),
+        {"rgid": recurring_group_id}
+    ).mappings().first()
+    if not row:
+        raise HTTPException(404, "Series not found")
+    check_venue_access(db, row["venue_id"], user.id)
+    offered = start_series_hold(db, recurring_group_id) or []
+    return {"ok": True, "offered_artist_ids": offered,
+            "message": f"Series hold started — {len(offered)} bundled offer(s) sent."}
+
+
+@router.get("/series-hold/respond/{token}", include_in_schema=False)
+def series_hold_landing(token: str, request: Request, db=Depends(get_db)):
+    """Landing page for the email-link click. Redirects to the artist
+    book-gigs page with a hash that opens the series-hold modal."""
+    # Look up the artist + series so the redirect can target the
+    # right calendar.
+    row = db.execute(
+        text("""SELECT wl.artist_id, g.recurring_group_id
+                FROM gig_waitlist wl
+                JOIN gigs g ON g.id = wl.gig_id
+                WHERE wl.offer_token = :tok AND wl.source = 'hold'
+                  AND wl.offer_declined = 0
+                LIMIT 1"""),
+        {"tok": token}
+    ).mappings().first()
+    if not row:
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;padding:40px;text-align:center;'>"
+            "<h2>Offer No Longer Active</h2>"
+            "<p>This series-hold offer has expired or already been responded to.</p>"
+            "</body></html>",
+            status_code=410
+        )
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        f"/app/artist-book-gigs.html#series-hold={token}",
+        status_code=302
+    )
+
+
+def _h_esc(s) -> str:
+    """Defensive HTML-escape for venue/artist names embedded in landing
+    page templates. Returns empty string for None."""
+    import html as _html
+    return _html.escape("" if s is None else str(s), quote=True)
+
+
+def _series_hold_landing_html(title: str, body_html: str, color: str = "#111", status: int = 200):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(
+        f"<html><body style='font-family:-apple-system,sans-serif;max-width:560px;"
+        f"margin:60px auto;padding:24px;text-align:center;color:{color};'>"
+        f"<h2 style='color:{color};margin-bottom:8px;'>{title}</h2>"
+        f"{body_html}"
+        f"<p style='margin-top:24px;'><a href='/app/artist-book-gigs.html' style='color:#7c6bff;'>Back to your calendar</a></p>"
+        f"</body></html>",
+        status_code=status,
+    )
+
+
+def _resolve_series_hold_token(db, token: str):
+    """Look up a series-hold offer-token's artist + venue + date span
+    without firing the decline. Returns a mapping or None."""
+    return db.execute(
+        text("""SELECT wl.artist_id, wl.offer_declined,
+                       MIN(g.date) as first_date,
+                       MAX(g.date) as last_date,
+                       COUNT(DISTINCT g.id) as gig_count,
+                       MAX(g.recurring_group_id) as recurring_group_id,
+                       MAX(v.venue_name) as venue_name,
+                       MAX(a.name) as artist_name,
+                       MAX(a.user_id) as artist_user_id
+                FROM gig_waitlist wl
+                JOIN gigs g ON g.id = wl.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                JOIN artists a ON a.id = wl.artist_id
+                WHERE wl.offer_token = :tok AND wl.source = 'hold'
+                GROUP BY wl.artist_id"""),
+        {"tok": token}
+    ).mappings().first()
+
+
+@router.get("/series-hold/decline/{token}", include_in_schema=False)
+def series_hold_decline_landing(token: str, request: Request,
+                                user=Depends(get_optional_user),
+                                db=Depends(get_db)):
+    """Email-link landing for "Decline All".
+
+    Y3 audit fix (Jun 30 2026): defend against link prefetchers (Gmail/
+    Outlook/Slack auto-GET URLs in emails to render previews — that would
+    silently fire the decline before the artist sees it) and forwarded-
+    email recipients. Behavior:
+
+      - Logged-in caller who owns the token's artist → execute decline
+        immediately (one-click as before).
+      - Anyone else (anonymous OR logged-in-but-wrong-artist) → render a
+        confirmation page with a POST form that performs the actual
+        decline. GET no longer mutates state in the un-auth'd case.
+    """
+    info = _resolve_series_hold_token(db, token)
+    if not info:
+        return _series_hold_landing_html(
+            "Offer not found",
+            "<p>This series-hold link is invalid or has already been cleaned up.</p>",
+            color="#ef4444", status=404,
+        )
+    if int(info["offer_declined"] or 0) == 1:
+        return _series_hold_landing_html(
+            "Already responded",
+            "<p>This series offer has already been handled.</p>",
+            color="#94a3b8", status=410,
+        )
+
+    artist_owns_caller = bool(user) and int(user.id) == int(info["artist_user_id"] or 0)
+    if not artist_owns_caller:
+        try:
+            from backend.utils import check_artist_access
+            check_artist_access(db, int(info["artist_id"]), user.id) if user else None
+            artist_owns_caller = bool(user)
+        except Exception:
+            artist_owns_caller = False
+
+    if artist_owns_caller:
+        from backend.services.gig_hold import respond_to_series_hold_offer
+        try:
+            result = respond_to_series_hold_offer(db, token=token, action="decline")
+        except Exception as e:
+            logger.error(f"[SERIES_HOLD] decline-landing failed for token={token[:8]}: {e}")
+            result = {"ok": False, "message": "Could not process — please try again."}
+        if result.get("ok"):
+            return _series_hold_landing_html(
+                "Declined — thanks for letting the venue know",
+                "<p>The venue has been notified and the next artist on their hold list will be offered the series.</p>",
+                color="#22c55e",
+            )
+        return _series_hold_landing_html(
+            "Couldn't process",
+            f"<p>{result.get('message', 'The offer may have expired or already been responded to.')}</p>",
+            color="#ef4444", status=410,
+        )
+
+    # Un-auth'd (or wrong-artist) caller → show a confirmation form.
+    # The POST endpoint below fires the actual decline. This stops
+    # GET-prefetchers from silently declining 26 dates on the artist's
+    # behalf, and a forwarded-email recipient has to take a deliberate
+    # click before any state changes.
+    safe_venue = _h_esc(info.get("venue_name") or "the venue")
+    safe_artist = _h_esc(info.get("artist_name") or "you")
+    gig_count = int(info.get("gig_count") or 0)
+    first_date = _h_esc(str(info.get("first_date") or "")[:10])
+    last_date = _h_esc(str(info.get("last_date") or "")[:10])
+    span = f"{first_date}" if first_date == last_date else f"{first_date} → {last_date}"
+    body = (
+        f"<p style='color:#374151;'>You're about to decline {safe_venue}'s series-hold offer for "
+        f"<strong>{gig_count} date{'s' if gig_count != 1 else ''}</strong> ({_h_esc(span)}) on behalf of "
+        f"<strong>{safe_artist}</strong>.</p>"
+        f"<form method='POST' action='/series-hold/decline/{_h_esc(token)}' style='margin-top:18px;'>"
+        f"  <button type='submit' style='padding:10px 22px;background:#ef4444;color:#fff;border:0;border-radius:6px;font-weight:600;cursor:pointer;font-size:14px;'>Yes, decline this offer</button>"
+        f"</form>"
+        f"<p style='margin-top:16px;font-size:13px;color:#6b7280;'>If this wasn't you, you can safely close this tab — nothing has been declined yet.</p>"
+    )
+    return _series_hold_landing_html(
+        "Confirm: decline this series offer?",
+        body,
+        color="#111",
+    )
+
+
+@router.post("/series-hold/decline/{token}", include_in_schema=False)
+def series_hold_decline_submit(token: str, db=Depends(get_db)):
+    """Form-POST target for the confirmation landing above. Performs the
+    actual decline only after the user explicitly clicks the button —
+    GET prefetchers can't reach this path."""
+    from backend.services.gig_hold import respond_to_series_hold_offer
+    try:
+        result = respond_to_series_hold_offer(db, token=token, action="decline")
+    except Exception as e:
+        logger.error(f"[SERIES_HOLD] decline-submit failed for token={token[:8]}: {e}")
+        result = {"ok": False, "message": "Could not process — please try again."}
+    if result.get("ok"):
+        return _series_hold_landing_html(
+            "Declined — thanks for letting the venue know",
+            "<p>The venue has been notified and the next artist on their hold list will be offered the series.</p>",
+            color="#22c55e",
+        )
+    return _series_hold_landing_html(
+        "Couldn't process",
+        f"<p>{result.get('message', 'The offer may have expired or already been responded to.')}</p>",
+        color="#ef4444", status=410,
+    )
+
+
+@router.get("/api/series-hold/offer/{token}")
+def get_series_hold_offer(token: str, user=Depends(get_current_user), db=Depends(get_db)):
+    """Detail endpoint for the series-hold modal. Returns the offer's
+    artist + venue + eligible gigs (open + matching the artist's type)
+    + the artist's existing bookings at this venue OUTSIDE the series
+    (so the modal can grey dates that would conflict with the venue's
+    frequency rule against the artist's pre-existing one-offs).
+
+    Auth (Jul 2026 audit fix #19): caller must own the artist (or be
+    an entity_user of the artist) the token resolves to. Was unauth
+    before — anyone with the URL could enumerate venue/artist/pay info.
+    """
+    from backend.services.gig_hold import (
+        _list_series_eligible_gigs, _list_artist_other_bookings_at_venue
+    )
+    row = db.execute(
+        text("""SELECT wl.artist_id, wl.offer_expires_at,
+                       wl.offer_declined,
+                       g.recurring_group_id, g.venue_id,
+                       v.venue_name, v.artist_frequency_days,
+                       a.name as artist_name
+                FROM gig_waitlist wl
+                JOIN gigs g ON g.id = wl.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                JOIN artists a ON a.id = wl.artist_id
+                WHERE wl.offer_token = :tok AND wl.source = 'hold'
+                LIMIT 1"""),
+        {"tok": token}
+    ).mappings().first()
+    if not row:
+        raise HTTPException(404, "Offer not found")
+    if int(row["offer_declined"] or 0) == 1:
+        raise HTTPException(410, "Offer already responded to")
+    # Auth: caller must own this artist
+    auth_ok = db.execute(
+        text("""SELECT 1 FROM artists a
+                WHERE a.id = :aid AND (a.user_id = :uid OR EXISTS (
+                  SELECT 1 FROM entity_users eu
+                  WHERE eu.entity_type='artist' AND eu.entity_id=a.id AND eu.user_id=:uid
+                ))"""),
+        {"aid": row["artist_id"], "uid": user.id}
+    ).first()
+    if not auth_ok:
+        raise HTTPException(403, "Not your offer")
+    # Venue contract requirement
+    vc = db.execute(
+        text("""SELECT id, contract_type FROM venue_contracts
+                WHERE venue_id = :vid AND is_active = 1 AND require_for_booking = 1
+                LIMIT 1"""),
+        {"vid": row["venue_id"]}
+    ).mappings().first()
+    eligible = _list_series_eligible_gigs(
+        db, row["recurring_group_id"], row["artist_id"]
+    )
+    # Out-of-series existing bookings for freq greying (#11 fix).
+    existing_bookings = _list_artist_other_bookings_at_venue(
+        db, row["venue_id"], row["artist_id"],
+        exclude_recurring_group_id=row["recurring_group_id"]
+    )
+    return {
+        "ok": True,
+        "artist_id": row["artist_id"],
+        "artist_name": row["artist_name"],
+        "venue_id": row["venue_id"],
+        "venue_name": row["venue_name"],
+        "recurring_group_id": row["recurring_group_id"],
+        "offer_expires_at": str(row["offer_expires_at"]) if row["offer_expires_at"] else None,
+        "frequency_days": int(row["artist_frequency_days"] or 0),
+        "requires_contract": bool(vc),
+        "contract_type": vc["contract_type"] if vc else None,
+        "eligible": eligible,
+        "existing_bookings": existing_bookings,
+    }
+
+
+@router.post("/api/series-hold/respond/{token}")
+def post_series_hold_response(token: str, data: dict, request: Request,
+                              user=Depends(get_current_user), db=Depends(get_db)):
+    """Bulk-accept (with picks) or decline-all a series hold offer.
+
+    Body: `{action: 'accept' | 'decline', slot_picks?: [{gig_id, slot_id}],
+            signature_name?: str}`.
+    """
+    from backend.services.gig_hold import respond_to_series_hold_offer
+    # Auth: token already binds to a specific artist; verify caller
+    # owns that artist or is an entity_user.
+    row = db.execute(
+        text("""SELECT wl.artist_id FROM gig_waitlist wl
+                WHERE wl.offer_token = :tok AND wl.source = 'hold' LIMIT 1"""),
+        {"tok": token}
+    ).first()
+    if not row:
+        raise HTTPException(404, "Offer not found")
+    artist_id = int(row[0])
+    auth = db.execute(
+        text("""SELECT 1 FROM artists a
+                WHERE a.id = :aid AND (a.user_id = :uid OR EXISTS (
+                  SELECT 1 FROM entity_users eu
+                  WHERE eu.entity_type = 'artist' AND eu.entity_id = a.id AND eu.user_id = :uid
+                ))"""),
+        {"aid": artist_id, "uid": user.id}
+    ).first()
+    if not auth:
+        raise HTTPException(403, "Not your offer")
+    action = (data.get("action") or "").lower()
+    picks = data.get("slot_picks") or []
+    sig = data.get("signature_name")
+    ip = request.client.host if request.client else None
+    result = respond_to_series_hold_offer(
+        db, token=token, action=action,
+        slot_picks=picks, signature_name=sig, signature_ip=ip
+    )
+    if not result.get("ok"):
+        # 4xx-friendly: surface message back to client
+        return result
+    return result
 
 
 @router.post("/api/gigs/{gig_id}/hold/resolve-exhausted")
@@ -7890,44 +9783,39 @@ def resolve_exhausted_hold(gig_id: int, data: dict,
         return {"ok": True, "message": "Empty slots are now open to all artists."}
 
     if action == "cancel_empty":
-        # Find and cancel each open slot via the existing slot-cancel
-        # path. For simplicity here we update gig_slots.status = 'cancelled'
-        # directly — no payment cleanup needed because these slots were
-        # never booked (no transaction rows exist).
-        open_slots = db.execute(
+        # Jul 2026 spec rewrite: DELETE empty slot rows. If the gig has
+        # no booked / in-flight slots after the deletion, DELETE the
+        # whole gig (via delete_gig_completely so flyers / waitlist /
+        # tokens are cleaned up too). If at least one booked slot
+        # remains, keep the gig and just clear hold_status.
+        from backend.services.gig_cleanup import delete_gig_completely
+        open_slot_ids = [r[0] for r in db.execute(
             text("SELECT id FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
             {"gid": gig_id}
-        ).fetchall()
-        for s in open_slots:
-            db.execute(
-                text("UPDATE gig_slots SET status = 'cancelled' WHERE id = :sid"),
-                {"sid": s[0]}
-            )
-        # Clear hold_status. If ALL slots are now non-open, also flip
-        # gig.status to 'booked' (or 'cancelled' if every slot got cancelled).
-        remaining_open = db.execute(
-            text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
+        ).fetchall()]
+        booked_or_inflight = db.execute(
+            text("""SELECT COUNT(*) FROM gig_slots
+                    WHERE gig_id = :gid
+                      AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')"""),
             {"gid": gig_id}
-        ).scalar()
-        booked = db.execute(
-            text("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'booked'"),
+        ).scalar() or 0
+        if booked_or_inflight == 0:
+            delete_gig_completely(db, gig_id)
+            return {"ok": True,
+                    "deleted_count": len(open_slot_ids),
+                    "gig_deleted": True,
+                    "message": f"Gig deleted (no booked slots; removed {len(open_slot_ids)} empty slot(s))."}
+        for sid in open_slot_ids:
+            db.execute(text("DELETE FROM gig_slots WHERE id = :sid"), {"sid": sid})
+        db.execute(
+            text("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
             {"gid": gig_id}
-        ).scalar()
-        if remaining_open == 0:
-            new_status = "booked" if booked else "cancelled"
-            db.execute(
-                text("UPDATE gigs SET status = :s, hold_status = NULL WHERE id = :gid"),
-                {"s": new_status, "gid": gig_id}
-            )
-        else:
-            db.execute(
-                text("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
-                {"gid": gig_id}
-            )
+        )
         db.commit()
         return {"ok": True,
-                "cancelled_count": len(open_slots),
-                "message": f"Cancelled {len(open_slots)} empty slot(s)."}
+                "deleted_count": len(open_slot_ids),
+                "gig_deleted": False,
+                "message": f"Deleted {len(open_slot_ids)} empty slot(s); kept the gig with its booked slot(s)."}
 
     raise HTTPException(400, "Unknown action — expected 'open_all' or 'cancel_empty'")
 
@@ -7950,7 +9838,15 @@ def my_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
     Includes the per-artist matching-slot filter so a DJ user with
     an offer on a Live Band + DJ multi-slot gig only sees the DJ
     slot in the banner."""
-    from backend.services.gig_hold import _list_matching_open_slots, _fmt_time
+    from backend.services.gig_hold import _list_matching_open_slots, _fmt_time, _effective_pay_for_artist
+    # Series-hold rows (Jul 2026 audit RED #8): exclude rows whose
+    # offer_token is shared across multiple gigs — those are the
+    # bundled series offers. Their sole entry point is the email
+    # link → bundled-modal hash deep-link, NOT this banner. Letting
+    # them surface here would render 26 banner cards for a 26-week
+    # series and clicking any one card would route to the legacy
+    # per-gig accept (which only books a single random slot and
+    # leaves the other 25 rows orphaned).
     rows = db.execute(
         text("""SELECT wl.artist_id, wl.gig_id, wl.offer_token,
                        wl.offer_sent_at, wl.offer_expires_at,
@@ -7972,6 +9868,7 @@ def my_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
                                   WHERE eu.entity_type = 'artist'
                                     AND eu.entity_id = a.id
                                     AND eu.user_id = :uid))
+                  AND g.recurring_group_id IS NULL
                 ORDER BY wl.offer_expires_at ASC"""),
         {"uid": user.id}
     ).mappings().all()
@@ -7990,12 +9887,18 @@ def my_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
                 pass
         # Slots the artist can actually fill (mirrors offer email + picker)
         matching = _list_matching_open_slots(db, r["gig_id"], r["artist_id"])
-        slots_out = [
-            {
+        slots_out = []
+        for s in matching:
+            # Apply per-artist pay override for flat slots so the banner
+            # shows the same amount the artist will actually be paid.
+            # Door slots are intentionally NOT overridden — guarantee
+            # floor is final (see _effective_pay_for_artist docstring).
+            effective_pay = _effective_pay_for_artist(db, s, r["venue_id"], r["artist_id"])
+            slots_out.append({
                 "id": int(s["id"]),
                 "slot_number": s["slot_number"],
                 "time": f"{_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}",
-                "pay": s["pay"],
+                "pay": effective_pay,
                 "artist_type": s["artist_type"],
                 # Deal info — lets the artist banner render door deals
                 # correctly when the venue mid-cycle swaps a slot's
@@ -8004,8 +9907,8 @@ def my_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
                 "deal_type": s.get("deal_type") or "flat",
                 "door_pct": s.get("door_pct") or 0,
                 "guarantee_cents": s.get("guarantee_cents") or 0,
-            } for s in matching
-        ]
+                "apply_override": int(s.get("apply_override") or 0),
+            })
         offers.append({
             "artist_id": r["artist_id"],
             "artist_name": r["artist_name"],
@@ -8021,3 +9924,406 @@ def my_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
             "slots": slots_out,
         })
     return {"offers": offers}
+
+
+@router.get("/api/me/series-hold-offers")
+def my_series_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
+    """Active series-hold offers for every artist this user can access.
+    Sibling to /api/me/hold-offers (which surfaces single-gig offers).
+    Series offers are one bundled offer per (token, artist) group;
+    clicking opens the series-hold modal via the shared offer_token.
+    Added Jul 2026 (audit fix #8 — replaces the per-gig fan-out in
+    the legacy banner with a single collapsed entry per series).
+    """
+    rows = db.execute(
+        text("""SELECT wl.artist_id, wl.offer_token,
+                       MIN(wl.offer_expires_at) as expires_at,
+                       a.name as artist_name,
+                       v.id as venue_id, v.venue_name,
+                       g.recurring_group_id
+                FROM gig_waitlist wl
+                JOIN artists a ON a.id = wl.artist_id
+                JOIN gigs g ON g.id = wl.gig_id
+                JOIN venues v ON v.id = g.venue_id
+                WHERE wl.source = 'hold'
+                  AND wl.offer_sent = 1
+                  AND wl.offer_declined = 0
+                  AND wl.offer_expires_at > CURRENT_TIMESTAMP
+                  AND g.recurring_group_id IS NOT NULL
+                  AND (a.user_id = :uid
+                       OR EXISTS (SELECT 1 FROM entity_users eu
+                                  WHERE eu.entity_type = 'artist'
+                                    AND eu.entity_id = a.id
+                                    AND eu.user_id = :uid))
+                GROUP BY wl.offer_token, wl.artist_id
+                ORDER BY MIN(wl.offer_expires_at) ASC"""),
+        {"uid": user.id}
+    ).mappings().all()
+    from datetime import datetime as _dt
+    from backend.services.gig_hold import _list_series_eligible_gigs
+    now = _dt.utcnow()
+    out = []
+    for r in rows:
+        hours_remaining = None
+        if r["expires_at"]:
+            try:
+                exp = _dt.strptime(str(r["expires_at"]).replace("T"," ").split(".")[0],
+                                    "%Y-%m-%d %H:%M:%S")
+                hours_remaining = max(0, round((exp - now).total_seconds() / 3600, 1))
+            except Exception:
+                pass
+        # Use the canonical eligible-gigs computation so the banner count
+        # matches what the artist sees when they open the picker. A static
+        # COUNT(DISTINCT gig_id) would show 8 dates available for a series
+        # even after another artist booked a slot — the bundled-modal would
+        # then surface only 7. (Jul 2026 user report.)
+        eligible = _list_series_eligible_gigs(db, r["recurring_group_id"], r["artist_id"])
+        eligible_gig_count = len({e["gig_id"] for e in eligible})
+        if eligible_gig_count == 0:
+            # No eligible slots left — the artist will see "no matching
+            # dates" if they click into the modal. Skip the banner card
+            # entirely so they don't get a confusing dead end.
+            continue
+        out.append({
+            "artist_id": r["artist_id"],
+            "artist_name": r["artist_name"],
+            "venue_id": r["venue_id"],
+            "venue_name": r["venue_name"],
+            "recurring_group_id": r["recurring_group_id"],
+            "offer_token": r["offer_token"],
+            "gig_count": eligible_gig_count,
+            "expires_at": str(r["expires_at"]) if r["expires_at"] else None,
+            "hours_remaining": hours_remaining,
+        })
+    return {"offers": out}
+
+
+@router.get("/api/me/venue-hold-offers")
+def my_venue_hold_offers(user=Depends(get_current_user), db=Depends(get_db)):
+    """Snapshot of every held gig across every venue this user can manage.
+    Powers the venue-side Pending Offers banner — mirrors the artist
+    banner but from the venue perspective. Includes current offer
+    (artist + countdown), queued/declined/accepted counts, and a
+    `needs_action` flag for exhausted gigs that need the venue to
+    pick 'Open to All' or 'Cancel Gig'.
+    """
+    from datetime import datetime as _dt
+    # Held gigs across every venue this user has access to (primary +
+    # secondary via entity_users). Filtered to today-or-later — a held
+    # gig in the past is stale and shouldn't clutter the banner.
+    rows = db.execute(
+        text("""SELECT g.id as gig_id, g.date as gig_date, g.title as gig_title,
+                       g.hold_status, g.venue_id, v.venue_name,
+                       g.recurring_group_id
+                FROM gigs g JOIN venues v ON v.id = g.venue_id
+                WHERE g.hold_status IN ('active', 'exhausted')
+                  AND g.date >= date('now')
+                  AND (v.user_id = :uid
+                       OR EXISTS (SELECT 1 FROM entity_users eu
+                                  WHERE eu.entity_type = 'venue'
+                                    AND eu.entity_id = v.id
+                                    AND eu.user_id = :uid))
+                ORDER BY g.date ASC, g.id ASC"""),
+        {"uid": user.id}
+    ).mappings().all()
+
+    now = _dt.utcnow()
+    offers = []
+    # For series-aware "booked elsewhere" detection — group by rgid once.
+    series_bookings = {}  # rgid -> {aid -> [(gig_id, date)]}
+    series_rgids = sorted({r["recurring_group_id"] for r in rows if r["recurring_group_id"]})
+    for _rgid in series_rgids:
+        series_bookings[_rgid] = {}
+        for _rr in db.execute(text("""
+            SELECT gs.artist_id, g.id as gig_id, g.date
+            FROM gig_slots gs JOIN gigs g ON g.id = gs.gig_id
+            WHERE g.recurring_group_id = :rgid
+              AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+              AND gs.artist_id IS NOT NULL
+        """), {"rgid": _rgid}).mappings().all():
+            series_bookings[_rgid].setdefault(int(_rr["artist_id"]), []).append(
+                (int(_rr["gig_id"]), str(_rr["date"])[:10])
+            )
+    for r in rows:
+        gid = r["gig_id"]
+        rgid = r.get("recurring_group_id")
+        venue_id_local = r["venue_id"]
+        gig_date_str = str(r["gig_date"])[:10]
+        # Window hours for this gig (heuristic for natural-expiry vs decline).
+        _winh_row = db.execute(
+            text("SELECT COALESCE(hold_offer_window_hours, 24) AS h FROM gigs WHERE id = :gid"),
+            {"gid": gid}
+        ).scalar()
+        win_h = int(_winh_row or 24)
+        # Per-gig waitlist snapshot
+        wl_rows = db.execute(
+            text("""SELECT wl.artist_id, wl.position, wl.offer_sent,
+                           wl.offer_sent_at, wl.offer_expires_at, wl.offer_declined,
+                           a.name as artist_name, a.artist_type
+                    FROM gig_waitlist wl
+                    LEFT JOIN artists a ON a.id = wl.artist_id
+                    WHERE wl.gig_id = :gid AND wl.source = 'hold'
+                    ORDER BY wl.position ASC"""),
+            {"gid": gid}
+        ).mappings().all()
+        # Booked artists via gig_slots — used to derive 'accepted' state
+        slot_rows = db.execute(
+            text("""SELECT artist_id, status FROM gig_slots WHERE gig_id = :gid"""),
+            {"gid": gid}
+        ).mappings().all()
+        accepted_aids = set(s["artist_id"] for s in slot_rows
+                            if s["status"] == "booked" and s["artist_id"])
+
+        queued_count = 0
+        declined_count = 0
+        accepted_count = 0
+        # Per-state artist name lists for truthful hover tooltips
+        # (Jul 2026 — replace the misleading "all N declined" summary).
+        declined_artists = []
+        expired_artists = []
+        booked_elsewhere_artists = []
+        freq_blocked_artists = []
+        current_offer = None
+        for w in wl_rows:
+            if w["artist_id"] in accepted_aids:
+                accepted_count += 1
+                continue
+            if not w["offer_sent"]:
+                queued_count += 1
+                # Frequency check for queued artists at this venue
+                try:
+                    _fd = db.execute(
+                        text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days)
+                                FROM venues v LEFT JOIN preferred_artists pa
+                                  ON pa.venue_id = v.id AND pa.artist_id = :aid
+                                WHERE v.id = :vid"""),
+                        {"aid": w["artist_id"], "vid": venue_id_local}
+                    ).scalar() or 0
+                    if int(_fd) > 0:
+                        _cb = db.execute(text("""
+                            SELECT g3.date FROM gigs g3
+                            LEFT JOIN gig_slots gs2 ON gs2.gig_id = g3.id
+                            WHERE g3.venue_id = :vid AND g3.id != :gid
+                              AND (g3.artist_id = :aid
+                                   OR (gs2.artist_id = :aid AND gs2.status IN
+                                       ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')))
+                            ORDER BY ABS(julianday(g3.date) - julianday(:gd)) ASC LIMIT 1
+                        """), {"vid": venue_id_local, "gid": gid,
+                               "aid": w["artist_id"], "gd": gig_date_str}).mappings().first()
+                        if _cb:
+                            _d1 = _dt.strptime(gig_date_str, "%Y-%m-%d").date()
+                            _d2 = _dt.strptime(str(_cb["date"])[:10], "%Y-%m-%d").date()
+                            _diff = (_d1 - _d2).days
+                            if abs(_diff) <= int(_fd):
+                                freq_blocked_artists.append({
+                                    "artist_id": w["artist_id"],
+                                    "artist_name": w["artist_name"],
+                                    "days_apart": int(abs(_diff)),
+                                    "direction": "before" if _diff > 0 else "after",
+                                    "other_date": str(_cb["date"])[:10],
+                                    "required": int(_fd),
+                                })
+                except Exception:
+                    pass
+                continue
+            if w["offer_declined"]:
+                declined_count += 1
+                # Series first — did they book another date in the same series?
+                if rgid and series_bookings.get(rgid, {}).get(int(w["artist_id"])):
+                    other = [(g2, d) for (g2, d) in series_bookings[rgid][int(w["artist_id"])] if g2 != gid]
+                    if other:
+                        booked_elsewhere_artists.append({
+                            "artist_id": w["artist_id"],
+                            "artist_name": w["artist_name"],
+                            "other_date": other[0][1],
+                        })
+                        continue
+                # Natural expiry vs explicit decline
+                natural_expiry = False
+                try:
+                    _sent = _dt.strptime(str(w["offer_sent_at"]).replace("T"," ").split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    _exp = _dt.strptime(str(w["offer_expires_at"]).replace("T"," ").split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    _gap_h = (_exp - _sent).total_seconds() / 3600
+                    if _gap_h >= win_h * 0.95:
+                        natural_expiry = True
+                except Exception:
+                    pass
+                target = expired_artists if natural_expiry else declined_artists
+                target.append({"artist_id": w["artist_id"], "artist_name": w["artist_name"]})
+                continue
+            # Active offer in flight
+            hours_remaining = None
+            if w["offer_expires_at"]:
+                try:
+                    exp = _dt.strptime(str(w["offer_expires_at"]).replace("T", " ").split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    hours_remaining = max(0, round((exp - now).total_seconds() / 3600, 1))
+                except Exception:
+                    pass
+            current_offer = {
+                "artist_id": w["artist_id"],
+                "artist_name": w["artist_name"],
+                "offer_expires_at": str(w["offer_expires_at"]) if w["offer_expires_at"] else None,
+                "hours_remaining": hours_remaining,
+            }
+
+        # Slot counts surface in the banner row so the venue sees
+        # 'X open / Y booked' next to the date at a glance.
+        open_slot_count = sum(1 for s in slot_rows if s["status"] == "open")
+        booked_slot_count = sum(1 for s in slot_rows if s["status"] == "booked")
+        total_slots = len(slot_rows)
+
+        offers.append({
+            "gig_id": gid,
+            "gig_date": str(r["gig_date"]),
+            "gig_title": r["gig_title"],
+            "venue_id": r["venue_id"],
+            "venue_name": r["venue_name"],
+            "hold_status": r["hold_status"],
+            "recurring_group_id": r["recurring_group_id"],
+            "current_offer": current_offer,
+            "queued_count": queued_count,
+            "declined_count": declined_count,
+            "accepted_count": accepted_count,
+            "total_artists": len(wl_rows),
+            "open_slot_count": open_slot_count,
+            "booked_slot_count": booked_slot_count,
+            "total_slot_count": total_slots,
+            # Truthful per-state artist lists (Jul 2026). Powers the
+            # per-gig row breakdown + hover tooltips so the venue sees
+            # WHICH artists declined / expired / freq-blocked instead of
+            # the misleading "all N declined" summary.
+            "declined_artists": declined_artists,
+            "expired_artists": expired_artists,
+            "booked_elsewhere_artists": booked_elsewhere_artists,
+            "freq_blocked_artists": freq_blocked_artists,
+            # Exhausted = every artist responded (declined/expired) AND
+            # at least one slot is still open. Venue needs to act.
+            "needs_action": r["hold_status"] == "exhausted",
+        })
+
+    return {"offers": offers}
+
+
+@router.post("/api/series/{recurring_group_id}/hold/resolve-exhausted")
+def resolve_exhausted_series_hold(
+    recurring_group_id: str, data: dict,
+    user=Depends(get_current_user), db=Depends(get_db),
+):
+    """Bulk resolve every held gig in a recurring series in ONE call.
+
+    Mirrors the per-gig `/api/gigs/{gig_id}/hold/resolve-exhausted`
+    endpoint but iterates across every gig in the series. Lets the
+    venue "Open to All" or "Cancel empty slots" across 50 dates with
+    one click instead of 50 individual API calls (Jul 2026 — Pending
+    Holds banner series-grouping).
+
+    Body:
+      action: 'open_all' | 'cancel_empty' (required)
+
+    Returns: {ok, gig_count, results: [{gig_id, ok, message}], message}
+    """
+    from backend.utils import check_venue_access
+    action = (data.get("action") or "").lower()
+    if action not in ("open_all", "cancel_empty"):
+        raise HTTPException(400, "Unknown action — expected 'open_all' or 'cancel_empty'")
+    # Authorize the venue (any gig in the series tells us which venue).
+    venue_row = db.execute(
+        text("""SELECT DISTINCT venue_id FROM gigs
+                WHERE recurring_group_id = :rgid LIMIT 1"""),
+        {"rgid": recurring_group_id}
+    ).mappings().first()
+    if not venue_row:
+        raise HTTPException(404, "Series not found")
+    check_venue_access(db, venue_row["venue_id"], user.id)
+
+    # Find every gig in the series with an active or exhausted hold.
+    gig_ids = [r[0] for r in db.execute(
+        text("""SELECT id FROM gigs
+                WHERE recurring_group_id = :rgid
+                  AND hold_status IN ('active', 'exhausted')"""),
+        {"rgid": recurring_group_id}
+    ).fetchall()]
+    if not gig_ids:
+        return {"ok": True, "gig_count": 0, "results": [],
+                "message": "No held gigs in this series."}
+
+    results = []
+    if action == "open_all":
+        # Just clear hold_status on every gig — the existing per-gig
+        # logic for 'open_all' is one UPDATE. Batch into a single
+        # statement.
+        db.execute(
+            text("""UPDATE gigs SET hold_status = NULL
+                    WHERE recurring_group_id = :rgid
+                      AND hold_status IN ('active', 'exhausted')"""),
+            {"rgid": recurring_group_id}
+        )
+        db.commit()
+        for gid in gig_ids:
+            results.append({"gig_id": gid, "ok": True, "message": "Opened to all"})
+        return {"ok": True, "gig_count": len(gig_ids), "results": results,
+                "message": f"Opened {len(gig_ids)} gig(s) to all artists."}
+
+    # cancel_empty (Jul 2026 spec rewrite): DELETE empty slot rows from
+    # gig_slots. If the gig has NO booked / in-flight slots remaining
+    # after the deletion, DELETE the whole gig via the canonical
+    # delete_gig_completely helper (which cleans up flyers, waitlist,
+    # tokens, etc). If at least one booked slot remains, keep the gig
+    # and just clear its hold_status.
+    from backend.services.gig_cleanup import delete_gig_completely
+    total_slots_deleted = 0
+    full_gig_deletes = 0
+    partial_slot_deletes = 0
+    for gid in gig_ids:
+        try:
+            open_slot_ids = [r[0] for r in db.execute(
+                text("SELECT id FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
+                {"gid": gid}
+            ).fetchall()]
+            booked_or_inflight = db.execute(
+                text("""SELECT COUNT(*) FROM gig_slots
+                        WHERE gig_id = :gid
+                          AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')"""),
+                {"gid": gid}
+            ).scalar() or 0
+            if booked_or_inflight == 0:
+                # No booked/in-flight slots → delete the gig entirely
+                # (and its slots, waitlist, flyers, etc.)
+                delete_gig_completely(db, gid)
+                total_slots_deleted += len(open_slot_ids)
+                full_gig_deletes += 1
+                results.append({"gig_id": gid, "ok": True,
+                                "deleted": "gig",
+                                "message": f"Gig deleted (no booked slots; removed {len(open_slot_ids)} empty slot(s))"})
+            else:
+                # Multi-slot gig with booked slot(s) — delete just the
+                # empty slot rows; keep the gig with the booked ones.
+                for sid in open_slot_ids:
+                    db.execute(text("DELETE FROM gig_slots WHERE id = :sid"), {"sid": sid})
+                # Clear hold_status; gig.status reflects the booked
+                # slots' state already.
+                db.execute(
+                    text("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
+                    {"gid": gid}
+                )
+                total_slots_deleted += len(open_slot_ids)
+                partial_slot_deletes += 1
+                results.append({"gig_id": gid, "ok": True,
+                                "deleted": "slots",
+                                "message": f"Deleted {len(open_slot_ids)} empty slot(s); kept the gig with its booked slot(s)"})
+        except Exception as e:
+            logger.error(f"[SERIES_RESOLVE] cancel_empty failed gig={gid}: {e}")
+            results.append({"gig_id": gid, "ok": False, "message": str(e)})
+    db.commit()
+    # Build a human-readable summary describing what actually happened.
+    bits = []
+    if full_gig_deletes:
+        bits.append(f"deleted {full_gig_deletes} gig{'s' if full_gig_deletes != 1 else ''} entirely")
+    if partial_slot_deletes:
+        bits.append(f"removed empty slots from {partial_slot_deletes} gig{'s' if partial_slot_deletes != 1 else ''} with booked slots")
+    summary = "; ".join(bits) if bits else "no slots to remove"
+    return {"ok": True, "gig_count": len(gig_ids), "results": results,
+            "slots_deleted": total_slots_deleted,
+            "gigs_deleted": full_gig_deletes,
+            "gigs_partial": partial_slot_deletes,
+            "message": f"Removed {total_slots_deleted} empty slot(s) — {summary}."}

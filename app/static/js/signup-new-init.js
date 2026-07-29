@@ -129,6 +129,12 @@ function toggleBandFormats() {
   document.getElementById('bandFormatsField').style.display = isLiveBand ? 'block' : 'none';
   const lineupField = document.getElementById('lineupField');
   if (lineupField) lineupField.style.display = isLiveBand ? 'block' : 'none';
+  // Jul 1 2026: MC-type equipment opt-in on signup.
+  const mcField = document.getElementById('mcEquipmentField');
+  if (mcField) {
+    const isMC = artistType === 'Open Mic MC' || artistType === 'Karaoke MC';
+    mcField.style.display = isMC ? 'block' : 'none';
+  }
 }
 
 async function nextStep() {
@@ -290,7 +296,9 @@ async function nextStep() {
         const em = document.getElementById('email').value || '';
         const ph = document.getElementById('phone').value || '';
         const contactStr = `${fn} ${ln} - ${em} - ${ph}`.trim();
-        bc.innerHTML = `<option value="${contactStr}" selected>${contactStr}</option>`;
+        const _cs = (window.esc ? window.esc(contactStr) : contactStr);
+        const _csAttr = (window.escAttr ? window.escAttr(contactStr) : contactStr);
+        bc.innerHTML = `<option value="${_csAttr}" selected>${_cs}</option>`;
       }
     } else {
       document.getElementById('step3-venue').classList.add('active');
@@ -411,13 +419,18 @@ async function completeSignup() {
           return;
         }
         payload.styles = checkedStyles.map(cb => cb.value).join(',');
-        
+
         const checkedFormats = Array.from(document.querySelectorAll('input[name="band_format"]:checked'));
         if (checkedFormats.length === 0) {
           showError('Please select at least one lineup option');
           return;
         }
         payload.band_formats = checkedFormats.map(cb => cb.value).join(',');
+      }
+      // Jul 1 2026: MC-type equipment opt-in on signup.
+      if (payload.artist_type === 'Open Mic MC' || payload.artist_type === 'Karaoke MC') {
+        const equipCb = document.getElementById('signupHasOwnEquipment');
+        payload.has_own_equipment = equipCb ? equipCb.checked : false;
       }
     } else {
       payload.venue_name = document.getElementById('venueName').value;

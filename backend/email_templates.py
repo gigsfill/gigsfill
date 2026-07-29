@@ -121,7 +121,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -180,7 +180,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -247,7 +247,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -278,7 +278,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -309,7 +309,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -729,7 +729,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -760,7 +760,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -791,7 +791,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -822,7 +822,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -852,6 +852,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">You&#39;re Invited</h1>
 <p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{inviter_name}}</strong> has invited you to help manage the {{entity_type}} <strong>{{entity_name}}</strong> on GigsFill.</p>
+{{personal_message_block}}
 <p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">If you accept, you will have full access to create, edit, and manage gigs for <strong>{{entity_name}}</strong>.</p>
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto;">
 <tr>
@@ -1131,7 +1132,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -1232,7 +1233,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -1333,7 +1334,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -1434,7 +1435,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -1617,7 +1618,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -1845,7 +1846,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -2057,7 +2058,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -2132,7 +2133,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -2233,7 +2234,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -2342,7 +2343,7 @@ TEMPLATES = {
 </tr>
 <tr>
 <td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
-<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="../" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td>
 </tr>
 </tbody>
@@ -2587,7 +2588,6 @@ TEMPLATES = {
 <p style="margin:0 0 4px;font-size:14px;color:#6b7280;">Ticket #{{ticket_id}} &middot; {{ticket_subject}}</p>
 <p style="margin:16px 0 20px;font-size:15px;line-height:1.6;color:#4b5563;">Hi <strong>{{user_name}}</strong>,</p>
 <div style="background:#e0f2fe;border-radius:6px;padding:16px;margin:0 0 20px;font-size:14px;line-height:1.6;color:#1e293b;white-space:pre-wrap;">{{reply_body}}</div>
-<p style="font-size:13px;color:#6b7280;margin:0 0 20px;">- {{admin_name}}</p>
 {{#previous_thread}}<hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0 16px;">
 <p style="font-size:12px;color:#9ca3af;margin:0 0 8px;">Previous messages:</p>
 {{previous_thread}}
@@ -2908,7 +2908,7 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 </tr>{{/slot_info}}
 <tr>
 <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Pay</td>
-<td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">${{pay}}</td>
+<td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">{{pay_display}}</td>
 </tr>
 </table>
 </td></tr>
@@ -2920,6 +2920,35 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 <p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
 </td></tr>
 </table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
+    "hold_series_offer_artist": {
+        "subject": "{{venue_name}} — {{gig_count}} dates offered just to you",
+        "body": '''<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background:#f9fafb;">
+<table cellpadding="0" cellspacing="0" border="0" style="width: 100%; background: white; border-radius: 12px; padding: 24px;">
+<tr><td>
+<p style="margin: 0 0 8px 0; font-size: 16px; color: #111827;">Hi {{artist_name}},</p>
+<p style="margin: 0 0 12px 0; font-size: 14px; color: #374151; line-height: 1.45;"><strong>{{venue_name}}</strong> just launched a recurring series and is offering it to you first — <strong>{{gig_count}} dates</strong> to pick from. You can book as many as you want; nothing happens until you confirm.</p>
+<p style="margin: 0 0 14px 0; font-size: 13px; color: #6b7280; line-height: 1.4;">{{freq_note}}</p>
+<table cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;border-collapse:collapse;">
+<thead><tr>
+<th style="text-align:left;padding:4px 16px 4px 0;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e5e7eb;white-space:nowrap;">Date</th>
+<th style="text-align:left;padding:4px 16px 4px 0;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e5e7eb;white-space:nowrap;">Time</th>
+<th style="text-align:right;padding:4px 0 4px 0;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e5e7eb;white-space:nowrap;">Pay</th>
+</tr></thead>
+<tbody>{{rows_html}}</tbody>
+</table>
+<table cellpadding="0" cellspacing="0" border="0" style="margin: 4px 0;"><tr>
+<td style="padding-right: 12px;"><a href="{{pick_url}}" style="display:inline-block;padding:12px 28px;background:#7c6bff;color:white;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Pick Your Dates →</a></td>
+<td><a href="{{decline_url}}" style="display:inline-block;padding:12px 24px;background:transparent;color:#dc2626;border:1px solid #dc2626;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Decline All</a></td>
+</tr></table>
+<p style="margin: 16px 0 0 0; font-size: 12px; color: #9ca3af; line-height: 1.4;">You have {{window_label}} to respond. If we don't hear back, the offer moves to the next artist on the venue's list.</p>
 </td></tr>
 </table>
 </body>
@@ -2969,20 +2998,31 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 <tr><td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #d97706;">Your hold ran out of artists</h1>
 <p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{venue_name}}, every artist on your hold list for the gig on <strong>{{date}}</strong> has either declined or let the offer expire.</p>
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 24px;">
-<tr><td style="padding: 20px;">
+
+<!-- Booked slots — what DID get filled -->
+<h2 style="margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #059669;">Already booked ({{booked_slot_count}})</h2>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; margin-bottom: 18px;">
+<tr><td style="padding: 16px 20px;">
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+{{booked_slots_html}}
+</table>
+</td></tr>
+</table>
+
+<!-- Open slots — what still needs an artist -->
+<h2 style="margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #d97706;">Still open ({{open_slot_count}})</h2>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 18px;">
+<tr><td style="padding: 16px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+{{open_slots_html}}
 <tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 130px;">Open slots</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{open_slot_summary}}</td>
-</tr>
-<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Artists tried</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artists_tried_count}}</td>
+<td style="padding: 8px 0 0 0; font-size: 13px; color: #6b7280; border-top: 1px solid rgba(212,148,6,0.25); width: 130px;">Artists tried</td>
+<td style="padding: 8px 0 0 0; font-size: 13px; color: #6b7280; border-top: 1px solid rgba(212,148,6,0.25);">{{artists_tried_count}}</td>
 </tr>
 </table>
 </td></tr>
 </table>
+
 <p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">Open it up to all artists, or cancel the slots that didn&#39;t fill — your call. Manage from your calendar:</p>
 <a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">Decide What to Do</a>
 </td></tr>

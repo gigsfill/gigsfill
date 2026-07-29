@@ -148,18 +148,27 @@ function bindAutosave(input, field, artistId) {
       }
     }
 
-    // Normalize URL fields - ensure https://www. prefix
+    // Normalize URL fields — add https:// scheme if missing. ONLY prepend
+    // `www.` when the host is a bare apex domain (e.g. `spotify.com` →
+    // `www.spotify.com`). If the host already has a subdomain
+    // (`open.spotify.com`, `music.apple.com`, `youtu.be`), leave it alone —
+    // adding `www.` in front breaks those (Spotify's `open` subdomain
+    // doesn't resolve as `www.open.spotify.com`). Jul 25 2026 bug fix.
     const urlFields = ['website_url','facebook_url','instagram_url','twitter_url','youtube_url','spotify_url','tiktok_url'];
     if (urlFields.includes(field) && input.value.trim()) {
       let url = input.value.trim();
       if (!/^https?:\/\//i.test(url)) {
-        if (!/^www\./i.test(url)) {
-          url = 'www.' + url;
-        }
         url = 'https://' + url;
-      } else if (/^https?:\/\/(?!www\.)/i.test(url) && !url.includes('://www.')) {
-        url = url.replace(/^(https?:\/\/)/, '$1www.');
       }
+      try {
+        const u = new URL(url);
+        // Count dots in hostname: 1 dot = bare apex (`spotify.com`); 2+ = subdomain.
+        const dotCount = (u.hostname.match(/\./g) || []).length;
+        if (dotCount === 1 && !u.hostname.startsWith('www.')) {
+          u.hostname = 'www.' + u.hostname;
+          url = u.toString();
+        }
+      } catch (_) { /* malformed URL — leave user's typed value alone */ }
       input.value = url;
     }
 
@@ -180,6 +189,11 @@ function bindAutosave(input, field, artistId) {
         const _msg = _detail || `Couldn't save (HTTP ${_res.status}). Try again or refresh the page.`;
         if (window.showErrorModal) window.showErrorModal("Save failed", _msg);
         else console.warn("[artist.edit autosave]", field, _msg);
+      } else if (field === 'name' && typeof window.reloadVanityUrl === 'function') {
+        // Jul 2026: refresh the vanity URL section after a name change
+        // so the URL updates in place (backend may have auto-migrated
+        // the slug — see maybe_update_slug_on_rename in vanity.py).
+        window.reloadVanityUrl('artist', parseInt(artistId, 10));
       }
     } catch (_e) {
       const _msg = "Couldn't reach the server. Check your connection and try again.";
@@ -458,34 +472,66 @@ async function loadArtist() {
       <option value="DJ">DJ</option>
       <option value="Comedian">Comedian</option>
       <option value="Trivia Host">Trivia Host</option>
+      <option value="Open Mic MC">Open Mic MC</option>
+      <option value="Karaoke MC">Karaoke MC</option>
     `;
 
-    // Populate styles + lineup checkboxes
+    // Populate styles + lineup pills (Jul 1 2026: matches the Search
+    // Gigs page toggle style — inactive pills are muted grey, active
+    // pills go green). Hidden checkboxes underneath preserve the
+    // existing form contract; the label click flips the checkbox
+    // natively, and a change listener syncs the pill's visual state
+    // via a data-active flag.
     const formatsContainer = formatsBlock.querySelector('.band-formats') || formatsBlock;
+    const _STYLE_OPTIONS = ['Country','Hip-Hop','Indie','Jazz','Latin','Pop','Reggae','Rock'];
+    const _LINEUP_OPTIONS = ['Solo','Duo','Trio','Full Band'];
+    const _pillCss = 'padding:4px 8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.2); color:var(--text-muted); border-radius:6px; cursor:pointer; transition:all 0.2s; font-size:0.75rem; font-weight:500; user-select:none; display:inline-block;';
+    const _sectionLabelCss = 'font-weight:600; font-size:0.85rem; color:var(--text-gray,#94a3b8); display:block; margin-bottom:8px;';
+    const _pillsRowCss = 'display:flex; gap:8px; flex-wrap:wrap;';
+    function _pillHtml(name, val) {
+      return `<label class="artist-edit-pill" data-active="false" style="${_pillCss}">`
+           + `<input type="checkbox" name="${name}" value="${val}" style="position:absolute; opacity:0; width:0; height:0; pointer-events:none;">`
+           + `<span>${val}</span></label>`;
+    }
     formatsContainer.innerHTML = `
-      <div>
-        <label style="font-weight: 600; font-size: 0.85rem; color: var(--text-gray, #94a3b8); display: block; margin-bottom: 8px;">Styles (select at least one)</label>
-        <div style="display: flex; gap: 16px; flex-wrap: wrap;" id="stylesChecks">
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Country" /><span>Country</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Hip-Hop" /><span>Hip-Hop</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Indie" /><span>Indie</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Jazz" /><span>Jazz</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Latin" /><span>Latin</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Pop" /><span>Pop</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Reggae" /><span>Reggae</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="artist_style" value="Rock" /><span>Rock</span></label>
+      <div style="margin-bottom:14px;">
+        <label style="${_sectionLabelCss}">Styles (select at least one)</label>
+        <div style="${_pillsRowCss}" id="stylesChecks">
+          ${_STYLE_OPTIONS.map(v => _pillHtml('artist_style', v)).join('')}
         </div>
       </div>
       <div>
-        <label style="font-weight: 600; font-size: 0.85rem; color: var(--text-gray, #94a3b8); display: block; margin-bottom: 8px;">Lineup (select at least one)</label>
-        <div style="display: flex; gap: 16px; flex-wrap: wrap;" id="lineupChecks">
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="band_format" value="Solo" /><span>Solo</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="band_format" value="Duo" /><span>Duo</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="band_format" value="Trio" /><span>Trio</span></label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" name="band_format" value="Full Band" /><span>Full Band</span></label>
+        <label style="${_sectionLabelCss}">Lineup (select at least one)</label>
+        <div style="${_pillsRowCss}" id="lineupChecks">
+          ${_LINEUP_OPTIONS.map(v => _pillHtml('band_format', v)).join('')}
         </div>
       </div>
     `;
+    // Sync pill visual state from its underlying checkbox. Active =
+    // green, inactive = muted. Runs on load (after `checked` is set
+    // from artist data) and on every subsequent click.
+    function _syncPillFromCb(cb) {
+      const pill = cb.closest('.artist-edit-pill');
+      if (!pill) return;
+      if (cb.checked) {
+        pill.setAttribute('data-active', 'true');
+        pill.style.background = 'rgba(34, 197, 94, 0.2)';
+        pill.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+        pill.style.color = '#22c55e';
+      } else {
+        pill.setAttribute('data-active', 'false');
+        pill.style.background = 'rgba(255,255,255,0.05)';
+        pill.style.borderColor = 'rgba(255,255,255,0.2)';
+        pill.style.color = 'var(--text-muted)';
+      }
+    }
+    // Wire change listener so click-on-label (native checkbox toggle)
+    // triggers the sync. The existing save-on-change handler further
+    // below already fires on `change` — this listener runs first and
+    // just updates styling.
+    formatsContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', () => _syncPillFromCb(cb));
+    });
 
     // Re-query checkboxes after populating
     const formatChecks = formatsBlock.querySelectorAll('input[name="band_format"]');
@@ -504,20 +550,48 @@ async function loadArtist() {
 
     // Set current value
     artistTypeEl.value = artist.artist_type || "";
-  
+
+    // Jul 1 2026: MC-type equipment gate. Show the "I bring my own
+    // equipment" checkbox only for Open Mic MC / Karaoke MC types.
+    const mcEquipBlock = document.getElementById("mcEquipmentBlock");
+    const mcEquipCb = document.getElementById("has_own_equipment");
+    function _syncMcEquipBlock(type) {
+      const isMC = type === "Open Mic MC" || type === "Karaoke MC";
+      if (mcEquipBlock) mcEquipBlock.style.display = isMC ? "block" : "none";
+    }
+    _syncMcEquipBlock(artist.artist_type);
+    if (mcEquipCb) {
+      mcEquipCb.checked = artist.has_own_equipment === true
+                       || artist.has_own_equipment === 1
+                       || artist.has_own_equipment === "1"
+                       || artist.has_own_equipment === "true";
+      mcEquipCb.addEventListener("change", async () => {
+        // Save immediately (matches the type/formats save pattern).
+        try {
+          await window.apiPutSafe
+            ? window.apiPutSafe(`/artists/${artistId}`, { has_own_equipment: mcEquipCb.checked })
+            : fetch(`/artists/${artistId}`, {
+                method: "PUT", credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ has_own_equipment: mcEquipCb.checked })
+              });
+        } catch (e) { console.error("save has_own_equipment:", e); }
+      });
+    }
+
     if (artist.artist_type === "Live Band") {
       formatsBlock.classList.remove("hidden");
   
       if (artist.band_formats) {
         artist.band_formats.split(",").forEach(v => {
           const cb = [...formatChecks].find(c => c.value === v.trim());
-          if (cb) cb.checked = true;
+          if (cb) { cb.checked = true; _syncPillFromCb(cb); }
         });
       }
       if (artist.styles) {
         artist.styles.split(",").forEach(v => {
           const cb = [...styleChecks].find(c => c.value === v.trim());
-          if (cb) cb.checked = true;
+          if (cb) { cb.checked = true; _syncPillFromCb(cb); }
         });
       }
       if (isValid()) {
@@ -532,7 +606,10 @@ async function loadArtist() {
     artistTypeEl.addEventListener("change", async () => {
 
       const type = artistTypeEl.value;
-  
+
+      // Jul 1 2026: sync MC-equipment block visibility on type change.
+      _syncMcEquipBlock(type);
+
       if (type === "Live Band") {
         formatsBlock.classList.remove("hidden");
         if (!isValid()) {
@@ -541,12 +618,12 @@ async function loadArtist() {
         }
         return;
       }
-  
+
       formatsBlock.classList.add("hidden");
       allChecks.forEach(c => (c.checked = false));
       stopBlink();
       lockPage(false);
-  
+
       await saveArtistType(artistId, {
         artist_type: type,
         band_formats: null,
@@ -879,15 +956,68 @@ async function loadArtist() {
                title="${safeUrl}">🔗 ${safeDisplay}</a>`;
   }
 
+  // Sync return: best-effort immediate thumbnail (YouTube pattern is
+  // deterministic from the URL so no API call needed). For Vimeo /
+  // TikTok / Instagram / Facebook / bare video URLs, return the branded
+  // placeholder first, then _asyncFetchThumb below fires an oEmbed
+  // lookup (Vimeo + TikTok have public CORS-friendly oEmbed endpoints)
+  // and swaps the placeholder for the real thumbnail when it arrives.
+  // Cached in _thumbCache so we don't re-hit the API on every render.
+  const _thumbCache = new Map();
   function getVideoThumbnail(url) {
-    // YouTube
-    const ytMatch = url.match(/(?:youtube\.com.*v=|youtu\.be\/)([^&]+)/);
-    if (ytMatch) {
-      return `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
-    }
-  
-    // Vimeo (fallback icon for now)
+    if (!url) return "/app/static/img/video-placeholder.svg";
+    // YouTube — direct thumbnail URL
+    const ytMatch = url.match(/(?:youtube\.com.*v=|youtu\.be\/|youtube\.com\/shorts\/)([^&?/]+)/);
+    if (ytMatch) return `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+    // Cached from a prior oEmbed lookup?
+    if (_thumbCache.has(url)) return _thumbCache.get(url);
     return "/app/static/img/video-placeholder.svg";
+  }
+
+  // Fire oEmbed lookups AFTER media loads and swap the placeholder for
+  // the real thumbnail once resolved. Runs once per new URL; results
+  // cached in _thumbCache. Called from loadMedia after DOM is written.
+  async function _refreshMissingThumbnails() {
+    const imgs = document.querySelectorAll('#videos .media-card img[src*="video-placeholder"]');
+    const seen = new Set();
+    for (const img of imgs) {
+      const card = img.closest('.media-card');
+      if (!card) continue;
+      const editBtn = card.querySelector('.edit-url-btn');
+      const url = editBtn ? editBtn.dataset.currentUrl : '';
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      _asyncFetchThumb(url).then(thumbUrl => {
+        if (!thumbUrl) return;
+        _thumbCache.set(url, thumbUrl);
+        // Update every img currently pointing at this url's card.
+        document.querySelectorAll('#videos .media-card').forEach(c => {
+          const b = c.querySelector('.edit-url-btn');
+          if (b && b.dataset.currentUrl === url) {
+            const i = c.querySelector('img');
+            if (i) i.src = thumbUrl;
+          }
+        });
+      }).catch(() => { /* silent — placeholder stays */ });
+    }
+  }
+
+  async function _asyncFetchThumb(url) {
+    try {
+      // Vimeo — public oEmbed with CORS. Any /video/{id} or /{id} URL.
+      if (/vimeo\.com\/(?:video\/)?\d+/.test(url)) {
+        const r = await fetch('https://vimeo.com/api/oembed.json?url=' + encodeURIComponent(url));
+        if (r.ok) { const j = await r.json(); return j.thumbnail_url || null; }
+      }
+      // TikTok — public oEmbed with CORS.
+      if (/tiktok\.com\/@[^/]+\/video\/\d+/.test(url)) {
+        const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(url));
+        if (r.ok) { const j = await r.json(); return j.thumbnail_url || null; }
+      }
+      // Instagram + Facebook locked their oEmbed behind Graph API tokens
+      // (Nov 2020). No public thumbnail — placeholder stays.
+    } catch (_) { /* silent */ }
+    return null;
   }
   
 
@@ -1008,6 +1138,10 @@ async function loadArtist() {
         const url = m.video_url || "";
         const playerHtml = renderAudioLinkPlayer(url);
         const caption = m.caption || "";
+        // ✏️ Edit URL button — subtle cyan icon that opens a modal to
+        // fix the source URL without deleting + re-adding the entry.
+        // Added 2026-07-25.
+        const editUrlBtn = `<button class="edit-url-btn" data-id="${m.id}" data-current-url="${escapeHtml(url)}" title="Edit the audio URL" style="background:transparent;border:0;color:#94a3b8;font-size:0.95rem;cursor:pointer;padding:2px 6px;border-radius:4px;line-height:1;" onmouseover="this.style.color='#7dd3fc';this.style.background='rgba(6,182,212,0.1)';" onmouseout="this.style.color='#94a3b8';this.style.background='transparent';">✏️</button>`;
         audioEl.insertAdjacentHTML("beforeend", `
           <div class="audio-entry" data-id="${m.id}" data-kind="audio_link">
             <textarea
@@ -1027,12 +1161,13 @@ async function loadArtist() {
                 data-id="${m.id}"
               />
               ${playerHtml}
+              ${editUrlBtn}
               <button class="delete-btn" data-id="${m.id}">Delete</button>
             </div>
           </div>
         `);
       }
-  
+
       // -----------------------------
       // VIDEOS
       // -----------------------------
@@ -1040,6 +1175,10 @@ async function loadArtist() {
         hasVideos = true;
         const thumb = getVideoThumbnail(m.video_url);
         const caption = m.caption || "";
+        const videoUrl = m.video_url || "";
+        // ✏️ Edit URL button — same pattern as audio_link. Sits next to
+        // Delete so the two "manage" actions are grouped. Added 2026-07-25.
+        const editUrlBtn = `<button class="edit-url-btn" data-id="${m.id}" data-current-url="${escapeHtml(videoUrl)}" title="Edit the video URL" style="background:transparent;border:1px solid rgba(148,163,184,0.3);color:#94a3b8;font-size:0.75rem;cursor:pointer;padding:3px 10px;border-radius:4px;line-height:1;margin-right:6px;" onmouseover="this.style.color='#7dd3fc';this.style.borderColor='rgba(6,182,212,0.5)';" onmouseout="this.style.color='#94a3b8';this.style.borderColor='rgba(148,163,184,0.3)';">✏️ Edit URL</button>`;
         // Caption sits inside the overlay below the title input — matches the
         // audio-entry pattern (title + caption together as the "metadata" of
         // the media). Public profile renders it below the title-label and
@@ -1062,7 +1201,10 @@ async function loadArtist() {
                 rows="2"
                 data-id="${m.id}"
               >${escapeHtml(caption)}</textarea>
-              <button class="delete-btn" data-id="${m.id}">Delete</button>
+              <div style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;">
+                ${editUrlBtn}
+                <button class="delete-btn" data-id="${m.id}">Delete</button>
+              </div>
             </div>
           </div>
         `);
@@ -1073,6 +1215,12 @@ async function loadArtist() {
     const audioCount = items.filter(m => m.media_type === "audio").length;
     const countEl = document.getElementById("addAudioBtnCount");
     if (countEl) countEl.textContent = audioCount ? `(${audioCount}/3)` : "";
+
+    // Kick off async oEmbed lookups for videos whose thumbnails aren't
+    // deterministic (Vimeo, TikTok). Swaps the placeholder for the real
+    // thumbnail in place when the API responds. YouTube already resolved
+    // synchronously above; Instagram/Facebook keep the placeholder.
+    _refreshMissingThumbnails();
   }
   
   
@@ -1121,6 +1269,85 @@ async function loadArtist() {
   }, true);
   
   
+  // Edit-URL click handler for video + audio_link cards. Opens a small
+  // modal with the current URL prefilled; Save (or Enter) PUTs the
+  // new value and refreshes the media list so the card updates
+  // (new thumbnail for videos, new player for audio_links).
+  // Added 2026-07-25.
+  document.addEventListener("click", async e => {
+    if (!(e.target instanceof HTMLElement)) return;
+    // Match the button itself OR its child (emoji span, etc.)
+    const btn = e.target.closest ? e.target.closest(".edit-url-btn") : null;
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const currentUrl = btn.dataset.currentUrl || "";
+    const card = btn.closest(".media-card") || btn.closest(".audio-entry");
+    const kind = card && card.dataset.kind;
+    const label = kind === "video" ? "Video URL" : "Audio URL";
+    const artistId = new URLSearchParams(window.location.search).get("artist_id");
+
+    _openUrlEditModal(label, currentUrl, async (newUrl) => {
+      const trimmed = (newUrl || "").trim();
+      if (!trimmed || trimmed === currentUrl) return;
+      try {
+        const res = await fetch(`/api/media/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ video_url: trimmed })
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          if (window.showErrorModal) window.showErrorModal("Save failed", d.detail || `HTTP ${res.status}`);
+          return;
+        }
+        if (artistId && typeof loadMedia === "function") loadMedia(artistId);
+      } catch (_) {
+        if (window.showErrorModal) window.showErrorModal("Network error", "Could not reach the server.");
+      }
+    });
+  });
+
+  // Minimal edit-URL modal — uniform look with the rest of the site's
+  // modals (dark card, cyan gradient Save button). Enter submits, Escape
+  // cancels. Overlay click-outside dismisses via the universal
+  // safety-net in gf-modals.js.
+  function _openUrlEditModal(labelText, initialValue, onSave) {
+    const existing = document.getElementById("_urlEditOverlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "_urlEditOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10010;display:flex;align-items:center;justify-content:center;padding:16px;";
+    overlay.innerHTML = `
+      <div style="background:var(--card,#151b28);border:1px solid var(--border);border-radius:12px;padding:24px 28px;max-width:520px;width:100%;box-shadow:0 24px 64px rgba(0,0,0,0.6);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px;">
+          <h3 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--text);">Edit ${escapeHtml(labelText)}</h3>
+          <button id="_urlEditCloseX" style="background:transparent;border:1px solid rgba(239,68,68,0.35);color:#ef4444;font-size:1.5rem;line-height:1;cursor:pointer;padding:0;width:32px;height:32px;border-radius:6px;">&times;</button>
+        </div>
+        <label style="display:block;font-size:0.75rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:6px;">${escapeHtml(labelText)}</label>
+        <input id="_urlEditInput" type="text" value="${escapeHtml(initialValue || "")}" placeholder="https://…"
+               style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:0.9rem;box-sizing:border-box;">
+        <p style="margin:8px 0 0;font-size:0.75rem;color:var(--text-muted);font-style:italic;">Press Enter to save.</p>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
+          <button id="_urlEditCancel" style="padding:9px 18px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-gray);font-size:0.82rem;font-weight:600;cursor:pointer;">Cancel</button>
+          <button id="_urlEditSave" style="padding:9px 20px;border-radius:6px;border:none;background:linear-gradient(135deg,var(--purple,#8b5cf6),var(--cyan,#06b6d4));color:#fff;font-size:0.82rem;font-weight:600;cursor:pointer;">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = document.getElementById("_urlEditInput");
+    const close = () => { const el = document.getElementById("_urlEditOverlay"); if (el) el.remove(); };
+    const submit = () => { const v = input ? input.value : ""; close(); onSave(v); };
+    document.getElementById("_urlEditCloseX").onclick = close;
+    document.getElementById("_urlEditCancel").onclick = close;
+    document.getElementById("_urlEditSave").onclick   = submit;
+    overlay.onclick = e => { if (e.target === overlay) close(); };
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); submit(); }
+      else if (e.key === "Escape") { e.preventDefault(); close(); }
+    });
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+  }
+
   document.addEventListener("click", async e => {
     if (!(e.target instanceof HTMLElement)) return;
     if (!e.target.classList.contains("delete-btn")) return;
@@ -1163,7 +1390,13 @@ async function loadArtist() {
       window.showConfirm(
         label,
         "This action can't be undone.",
-        doDelete,
+        // Wrap in sync fire-and-forget so gf-modals closes the confirm
+        // on first click. Passing the async `doDelete` directly would
+        // return a Promise → modal stays open even after the DELETE
+        // succeeds and the card is removed from the DOM behind it.
+        // Same pattern as the Support Tickets / Contact Messages
+        // delete flows. Fixed 2026-07-25.
+        function () { doDelete(); },
         null,
         { tone: 'warning', confirmLabel: 'Delete', cancelLabel: 'Cancel', confirmStyle: 'danger' }
       );

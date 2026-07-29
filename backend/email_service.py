@@ -188,7 +188,7 @@ class EmailService:
         "decline_url", "manage_url", "calendar_url", "profile_url",
         "stripe_url", "support_url",
         "waitlist_message", "blast_message", "slot_times_html",
-        "open_slots_html", "artist_list_html", "gig_summary_html",
+        "open_slots_html", "booked_slots_html", "artist_list_html", "gig_summary_html",
         "venue_logo_html", "artist_logo_html",
         # Audit fix (May 2026 part 7): contract-sign dispatch uses `slots_html`
         # (vs the older `slot_times_html`); without this on the allowlist
@@ -207,6 +207,13 @@ class EmailService:
         # NOT be re-escaped at template-render time, or recipients see
         # literal `<p style=...>` markup in their inbox.
         "personal_note", "recipient_greeting",
+        # 2026-07-26: entity-invitation multi-invite injects a pre-built
+        # <div> callout with the inviter's optional personal note. Inner
+        # user text is html.escape()'d + newlines→<br> in the builder
+        # (entity_users.py:_send_invitation_email), so the outer wrapper
+        # is safe. Without this on the allowlist the whole div showed as
+        # literal `<div style=...>` in the recipient's inbox.
+        "personal_message_block",
         # Audit fix (May 2026 part 10h): far-away-booking notice blocks built
         # in email_dispatch.send_booking_emails as pre-styled HTML tables.
         "far_notice_artist", "far_notice_venue",
@@ -353,6 +360,50 @@ class EmailService:
         subject = self.render_template(template['subject'], variables)
         body = self.render_template(template['body'], variables)
         
+        # Jul 2026 audit (E-H2): RFC 8058 one-click unsubscribe. Mint a
+        # per-(user, notification_type) HMAC-signed token so the header
+        # link is verifiable server-side without a DB lookup, valid for
+        # 90 days (older emails' links keep working). Also inject a
+        # visible footer link so recipients whose client doesn't fire
+        # the one-click POST still have an obvious out — Gmail/Yahoo
+        # bulk-sender rules (Feb 2024) require both.
+        try:
+            from backend.routes.unsubscribe import sign_unsubscribe_token
+            _unsub_token = sign_unsubscribe_token(user_id, notification_type)
+        except Exception as _e:
+            logger.warning(f"unsub token mint failed for user={user_id} type={notification_type}: {_e}")
+            _unsub_token = None
+        _base_url = "https://gigsfill.com"
+        try:
+            from sqlalchemy import text as _es_text
+            _url_row = self.db.execute(
+                _es_text("SELECT setting_value FROM platform_settings WHERE setting_key='site_url'")
+            ).scalar()
+            if _url_row:
+                _base_url = str(_url_row).rstrip("/")
+        except Exception:
+            pass
+        _unsub_url = f"{_base_url}/api/unsubscribe/{_unsub_token}" if _unsub_token else None
+
+        # Inject a visible footer link into the body — placed just
+        # before </body> if present, otherwise appended. Idempotent:
+        # skip if the body already includes a `/api/unsubscribe/` link
+        # (so we don't double-inject for templates that already have it).
+        if _unsub_url and "/api/unsubscribe/" not in body:
+            _footer = (
+                '<div style="margin-top:32px;padding-top:20px;border-top:1px solid #e5e7eb;'
+                'font-size:12px;color:#94a3b8;text-align:center;line-height:1.6;">'
+                f'You are receiving this because you enabled the <em>{notification_type.replace("_"," ")}</em> '
+                'email in your GigsFill preferences. '
+                f'<a href="{_unsub_url}" style="color:#64748b;text-decoration:underline;">Unsubscribe from this type</a> '
+                f'· <a href="{_base_url}/app/user-profile.html?tab=email" style="color:#64748b;text-decoration:underline;">Manage all preferences</a>'
+                '</div>'
+            )
+            if "</body>" in body:
+                body = body.replace("</body>", _footer + "</body>", 1)
+            else:
+                body = body + _footer
+
         try:
             # Create message — use "alternative" not "mixed" to avoid Outlook paperclip
             msg = MIMEMultipart("alternative")
@@ -364,8 +415,19 @@ class EmailService:
             msg['To'] = user_email
             msg['Subject'] = subject
             msg['X-Mailer'] = 'GigsFill'
-            msg['List-Unsubscribe'] = f'<mailto:{self.from_email}?subject=unsubscribe>'
-            msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
+            # RFC 8058: header MUST be an HTTPS URL for List-Unsubscribe-Post
+            # to be honored. `mailto:` alone isn't sufficient for Gmail
+            # promotions/inbox categorization anymore. Include both so
+            # older clients that only understand mailto still work.
+            if _unsub_url:
+                msg['List-Unsubscribe'] = f'<{_unsub_url}>, <mailto:{self.from_email}?subject=unsubscribe>'
+                msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
+            else:
+                # Fallback: keep the original mailto-only header if token
+                # minting somehow failed. Better than dropping the header
+                # entirely.
+                msg['List-Unsubscribe'] = f'<mailto:{self.from_email}?subject=unsubscribe>'
+                msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
             msg.attach(MIMEText(body, 'html'))
             
             logger.info(f"Sending to {user_email} via {self.smtp_server}:{self.smtp_port} from {self.from_email}")

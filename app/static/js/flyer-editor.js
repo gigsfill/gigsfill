@@ -2591,7 +2591,7 @@
     // with logos; clicking one adds that artist's logo with the artist_id tagged
     // so the cancel-cleanup code can find and remove it later if that artist is
     // cancelled from the gig.
-    if (varName === 'artist_logo' && gigInfo && gigInfo.is_multi_slot && Array.isArray(gigInfo.slots)) {
+    if (varName === 'artist_logo' && gigInfo && Array.isArray(gigInfo.slots) && gigInfo.slots.length > 1) {
       const eligibleSlots = gigInfo.slots.filter(s => s.artist_id && s.artist_picture_url);
       if (eligibleSlots.length > 1) {
         _showArtistLogoPicker(eligibleSlots);

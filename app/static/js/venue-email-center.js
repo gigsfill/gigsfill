@@ -790,6 +790,40 @@ function openEmailDetail(index) {
         recipientsHtml = `<span style="color: var(--text-white);">${count} artist${count === 1 ? '' : 's'}</span>`;
     }
 
+    // Jul 22 2026: killed the white iframe entirely. Users kept
+    // reporting "still white" because the iframe rendered the raw
+    // email HTML (which is white by design for recipient-side
+    // rendering) inside a dark modal, creating a stark contrast
+    // patch that read as unstyled. Instead: convert the email HTML
+    // to plain text (strip tags + collapse whitespace), render it
+    // in a dark styled panel that matches the rest of the site.
+    // A collapsible "View original HTML" section is available for
+    // anyone who needs to inspect the raw sent version.
+    const _stripHtmlToText = (html) => {
+        if (!html) return '';
+        // Extract <a href="X">TXT</a> as "TXT (X)" so links survive readable.
+        let s = String(html)
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/(p|div|tr|h[1-6]|li)>/gi, '\n')
+            .replace(/<li[^>]*>/gi, '  • ')
+            .replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+                (_m, url, txt) => txt.replace(/<[^>]+>/g, '').trim() + ' (' + url + ')')
+            .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/[ \t]+/g, ' ')
+            .replace(/\n[ \t]+/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+        return s;
+    };
+    const _bodyText = _stripHtmlToText(email.body);
     document.getElementById('emailDetailBody').innerHTML = `
         <div style="display: grid; grid-template-columns: 70px 1fr; gap: 6px 12px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.08);">
             <div style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">To:</div>
@@ -799,31 +833,12 @@ function openEmailDetail(index) {
             <div style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">Subject:</div>
             <div style="font-size: 0.85rem; color: var(--text-white);">${esc(email.subject)}</div>
         </div>
-        <div class="modal-body" id="emailDetailBodyHost"></div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:700;margin-bottom:8px;">
+            <span>📧</span><span>Message</span>
+            <span style="flex:1;height:1px;background:linear-gradient(to right, rgba(139,92,246,0.25), rgba(6,182,212,0));"></span>
+        </div>
+        <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(139,92,246,0.25);border-radius:10px;padding:16px 18px;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;font-size:0.88rem;line-height:1.6;color:var(--text-white);white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow-y:auto;">${esc(_bodyText) || '<span style="color:var(--text-muted);font-style:italic;">(no text content)</span>'}</div>
     `;
-
-    // Audit fix (May 2026 part 8): render the email body inside a SANDBOXED
-    // iframe — `email.body` is the user-typed HTML that was sent. Previously
-    // this was injected as `${email.body}` into the host page's innerHTML,
-    // so any script tags or event handlers in the body executed inside the
-    // venue's session (self-XSS, but a multi-user-account team member could
-    // plant content). The sandbox attribute below allows ONLY same-origin
-    // resource references (images) — no scripts, no forms, no parent access.
-    const _emailHost = document.getElementById('emailDetailBodyHost');
-    if (_emailHost) {
-        const _iframe = document.createElement('iframe');
-        _iframe.setAttribute('sandbox', 'allow-same-origin');
-        _iframe.style.cssText = 'width:100%;min-height:400px;border:0;background:#fff;';
-        _emailHost.appendChild(_iframe);
-        try {
-            const _doc = _iframe.contentDocument || _iframe.contentWindow.document;
-            _doc.open();
-            _doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;margin:14px;color:#222;}</style></head><body>' + (email.body || '') + '</body></html>');
-            _doc.close();
-        } catch (_e) {
-            _emailHost.textContent = '[email body could not be displayed]';
-        }
-    }
 
     document.getElementById('emailDetailModal').classList.remove('hidden');
 }

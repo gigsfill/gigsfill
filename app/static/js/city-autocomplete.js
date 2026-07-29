@@ -301,10 +301,24 @@
     input._ddPointerIn = function() { return pointerInDD || picking; };
 
     function positionDD() {
-      var r = input.getBoundingClientRect();
-      dd.style.top = (r.bottom + 2) + "px";
-      dd.style.left = r.left + "px";
-      dd.style.width = Math.max(r.width, 220) + "px";
+      // Read after a rAF tick so any in-flight layout (modal transitions,
+      // dropdown DOM insert) has settled — otherwise typing during the
+      // demo-modal's 0.18s translateY transition placed the dropdown at
+      // the input's *mid-transition* y, leaving a visible gap once the
+      // modal reached translateY(0).
+      requestAnimationFrame(function () {
+        var r = input.getBoundingClientRect();
+        var top = r.bottom + 2;
+        // If there isn't room below, flip above the field (small
+        // viewports / dropdown near the bottom of a scrollable modal).
+        var ddH = Math.min(dd.scrollHeight || 220, 220);
+        if (top + ddH > window.innerHeight - 8 && r.top - ddH - 4 > 8) {
+          top = r.top - ddH - 4;
+        }
+        dd.style.top = top + "px";
+        dd.style.left = r.left + "px";
+        dd.style.width = Math.max(r.width, 220) + "px";
+      });
     }
 
     function render() {
@@ -431,6 +445,13 @@
     });
     window.addEventListener("scroll", function() { if (dd.style.display !== "none") positionDD(); }, true);
     window.addEventListener("resize", function() { if (dd.style.display !== "none") positionDD(); });
+    // Also reposition when an ancestor finishes a transition (e.g. the
+    // demo-request modal's 0.18s translateY animation). Without this,
+    // the dropdown could get stuck at the input's mid-animation y-pos
+    // and appear detached from the field once the modal settles.
+    window.addEventListener("transitionend", function (e) {
+      if (dd.style.display !== "none" && e.propertyName === "transform") positionDD();
+    }, true);
 
     if (opts.validate !== false) {
       window.attachCityValidation(opts.inputId, opts.stateId);

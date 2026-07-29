@@ -3,8 +3,11 @@ from sqlalchemy import text
 from backend.db import get_db
 from backend.routes.auth import get_current_user
 from datetime import datetime
+import logging
 from backend.utils import utcnow_naive
 from backend.rate_limiter import limiter
+
+logger = logging.getLogger("gigsfill.venues")
 
 router = APIRouter()
 
@@ -187,8 +190,12 @@ def create_venue(data: dict, user=Depends(get_current_user), db=Depends(get_db))
 
 # ✅ NEW: Public venue listing for artists
 @router.get("/api/venues/public")
-def list_public_venues(db=Depends(get_db)):
-    """Public endpoint for artists to discover venues"""
+@limiter.limit("30/minute")
+def list_public_venues(request: Request, db=Depends(get_db)):
+    """Public endpoint for artists to discover venues.
+    Rate-limited (Jul 1 2026 audit fix): 30/min per IP prevents catalog
+    scraping via anonymous traffic. Legitimate browsers hit this once
+    per navigation."""
     rows = db.execute(
         text("""
             SELECT
@@ -206,6 +213,7 @@ def list_public_venues(db=Depends(get_db)):
                 default_pay_cents
             FROM venues
             WHERE COALESCE(payment_status, 'active') != 'suspended'
+              AND deleted_at IS NULL
             ORDER BY venue_name ASC
         """)
     ).mappings().all()
@@ -214,13 +222,17 @@ def list_public_venues(db=Depends(get_db)):
 
 # v97: Public single venue endpoint for profile viewing
 @router.get("/api/venues/{venue_id}/public")
-def get_venue_public(venue_id: int, db=Depends(get_db)):
+@limiter.limit("60/minute")
+def get_venue_public(venue_id: int, request: Request, db=Depends(get_db)):
     """Public endpoint to view any venue profile.
 
     Audit fix (Jun 2026): `user_id` was exposed in the response,
     enabling venue→user enumeration from anonymous traffic.
     Authed routes still surface user_id where needed; only the
     public endpoint drops it.
+
+    Rate-limited (Jul 1 2026 audit fix): 60/min per IP. Public profile
+    views are common (one per navigation) but bulk enumeration is not.
     """
     row = db.execute(
         text("""
@@ -263,6 +275,7 @@ def get_venue_public(venue_id: int, db=Depends(get_db)):
                 pro_certified
             FROM venues
             WHERE id = :id
+              AND deleted_at IS NULL
         """),
         {"id": venue_id}
     ).mappings().first()
@@ -376,28 +389,41 @@ def update_venue(venue_id: int, data: dict, request: Request,
     
     
     # v96: Check access via ownership OR entity_users
+    # Also pull venue_name + stripe_customer_id so we can detect a
+    # rename after the UPDATE and mirror the new name into Stripe
+    # (otherwise the Stripe dashboard + hosted invoices + receipts
+    # keep the old name indefinitely — see fix Jul 20 2026).
+    #
+    # Jul 21 2026 hotfix: `stripe_customer_id` lives on
+    # `entity_payment_settings`, NOT on `venues` — the earlier
+    # `v.stripe_customer_id` reference blew up with `no such column`
+    # and 500'd every save (nobody could rename a venue). LEFT JOIN
+    # via entity_type + entity_id to grab it.
     current_venue = db.execute(
         text("""
-            SELECT v.city, v.state FROM venues v
-            WHERE v.id = :id 
-            AND (
-                v.user_id = :uid 
-                OR EXISTS (
-                    SELECT 1 FROM entity_users eu 
-                    WHERE eu.entity_type = 'venue' 
-                    AND eu.entity_id = v.id 
-                    AND eu.user_id = :uid
-                )
-            )
+            SELECT v.city, v.state, v.venue_name, eps.stripe_customer_id
+              FROM venues v
+              LEFT JOIN entity_payment_settings eps
+                ON eps.entity_type = 'venue' AND eps.entity_id = v.id
+             WHERE v.id = :id
+             AND (
+                 v.user_id = :uid
+                 OR EXISTS (
+                     SELECT 1 FROM entity_users eu
+                     WHERE eu.entity_type = 'venue'
+                     AND eu.entity_id = v.id
+                     AND eu.user_id = :uid
+                 )
+             )
         """),
         {"id": venue_id, "uid": user.id}
     ).first()
 
     if not current_venue:
         raise HTTPException(403)
-    
+
     # Use current values if not provided in update
-    current_city, current_state = current_venue
+    current_city, current_state, _prior_venue_name, _stripe_customer_id = current_venue
 
     params = {
         "id": venue_id,
@@ -523,6 +549,57 @@ def update_venue(venue_id: int, data: dict, request: Request,
 )
     
     db.commit()
+
+    # Mirror the venue-name change into Stripe so the Customer.name
+    # (visible on the Stripe dashboard, hosted invoices, and any
+    # receipt/statement descriptor derived from it) stays in sync with
+    # the venue's chosen display name. Best-effort — a Stripe API
+    # failure shouldn't roll back the local update. Idempotent: if the
+    # name didn't change, we skip the call entirely.
+    _new_name = params.get("venue_name")
+    if _stripe_customer_id and _new_name and _new_name != _prior_venue_name:
+        try:
+            import stripe as _stripe_mod
+            _stripe_mod.Customer.modify(_stripe_customer_id, name=_new_name)
+            logger.info(f"[STRIPE] Customer.name updated for venue #{venue_id}: "
+                        f"{_prior_venue_name!r} → {_new_name!r}")
+        except Exception as e:
+            # Log but don't fail — the DB truth is what matters; Stripe
+            # can be reconciled later via retry or admin action.
+            logger.warning(f"[STRIPE] Customer.name update failed for venue "
+                           f"#{venue_id} (customer {_stripe_customer_id}): {e}")
+
+    # Invalidate cached flyer thumbnails on rename. Every non-template
+    # flyer for this venue has a rendered PNG thumbnail baked in with
+    # the old venue name; clearing forces the frontend to regenerate
+    # from live canvas data on next open. flyers.name (the download
+    # filename) is left alone — it self-heals on re-save and is
+    # rarely user-visible.
+    if _new_name and _new_name != _prior_venue_name:
+        try:
+            db.execute(
+                text("UPDATE flyers SET thumbnail_data = NULL "
+                     "WHERE venue_id = :vid AND is_template = 0"),
+                {"vid": venue_id}
+            )
+            db.commit()
+        except Exception as e:
+            logger.warning(f"[FLYERS] thumbnail invalidation failed for venue "
+                           f"#{venue_id} rename: {e}")
+
+        # Jul 2026: auto-migrate the vanity slug when the venue name
+        # changes, but only if the user never customized it (i.e. current
+        # slug == slugify(old_name)). Old slug parks in vanity_url_redirects
+        # for 90 days so previously-shared links keep working. See
+        # maybe_update_slug_on_rename in backend/routes/vanity.py.
+        try:
+            from backend.routes.vanity import maybe_update_slug_on_rename
+            maybe_update_slug_on_rename(
+                db, "venue", venue_id, _prior_venue_name, _new_name
+            )
+        except Exception as e:
+            logger.warning(f"[VANITY] slug rename skipped for venue #{venue_id}: {e}")
+
     return {"ok": True}
 
 @router.get("/venues/{venue_id}/preferred-requests")
@@ -709,10 +786,19 @@ def preferred_status(
 @router.get("/api/venues/{venue_id}/preferred-artists")
 def get_venue_preferred_artists(
     venue_id: int,
+    for_gig_date: str = None,
     user=Depends(get_current_user),
     db=Depends(get_db)
 ):
-    """Get all preferred artists for a venue"""
+    """Get all preferred artists for a venue.
+
+    Optional `for_gig_date=YYYY-MM-DD` — when provided, adds a `freq_status`
+    object to each artist row describing whether they are currently under
+    the venue's frequency policy for a hypothetical gig on that date.
+    Used by the Hold-gig artist picker so the venue sees a chip next to
+    each under-freq artist and is warned that adding them will require
+    waiving the rule. Without the param the response shape is unchanged.
+    """
     # Verify venue access (ownership OR entity_users)
     access = db.execute(
         text("""
@@ -786,58 +872,160 @@ def get_venue_preferred_artists(
         d = dict(r); d["is_banned"] = True
         result.append(d)
 
+    # Per-artist frequency status for the Hold-gig picker (Jun 2026).
+    # Returns nothing extra when the caller didn't ask for a specific
+    # gig date — keeps existing consumers wire-compatible.
+    if for_gig_date:
+        try:
+            from datetime import datetime as _dt
+            _gd = _dt.strptime(for_gig_date[:10], "%Y-%m-%d").date()
+            # Single query for the venue-default freq days — used as the
+            # fallback when an artist has no per-artist override.
+            _venue_freq_default = db.execute(
+                text("SELECT artist_frequency_days FROM venues WHERE id = :vid"),
+                {"vid": venue_id}
+            ).scalar()
+            for r in result:
+                if r.get("is_banned"):
+                    r["freq_status"] = None
+                    continue
+                # Per-artist override else venue default. status of the
+                # preferred_artists row doesn't gate the freq policy —
+                # the policy itself is venue-side.
+                _row = db.execute(
+                    text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) as freq_days
+                            FROM preferred_artists pa
+                            JOIN venues v ON v.id = pa.venue_id
+                            WHERE pa.venue_id = :vid AND pa.artist_id = :aid"""),
+                    {"vid": venue_id, "aid": r["artist_id"]}
+                ).mappings().first()
+                _freq_days = (_row["freq_days"] if _row else _venue_freq_default) or 0
+                if _freq_days <= 0:
+                    # 0 = no restriction
+                    r["freq_status"] = {"applies": False, "freq_days": 0}
+                    continue
+                # Closest booking at this venue, in either direction.
+                # Jul 2026 refactor: dropped `g.artist_id = :aid` OR-leg.
+                _booked = db.execute(text("""
+                    SELECT g.date FROM gigs g
+                    JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
+                    WHERE g.venue_id = :vid
+                      AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+                    ORDER BY ABS(julianday(g.date) - julianday(:date)) ASC
+                    LIMIT 1
+                """), {"vid": venue_id, "aid": r["artist_id"], "date": for_gig_date}).mappings().first()
+                if not _booked:
+                    r["freq_status"] = {"applies": True, "freq_days": int(_freq_days), "under_limit": False}
+                    continue
+                _last_dt = _dt.strptime(str(_booked["date"])[:10], "%Y-%m-%d").date()
+                _diff = (_gd - _last_dt).days
+                _abs = abs(_diff)
+                r["freq_status"] = {
+                    "applies": True,
+                    "freq_days": int(_freq_days),
+                    "under_limit": _abs <= int(_freq_days),
+                    "last_gig_date": str(_booked["date"])[:10],
+                    "days_between": _diff,
+                    "abs_days_between": _abs,
+                }
+        except Exception as _fse:
+            # Don't fail the whole endpoint if the freq enrichment trips
+            # over odd data — picker still works, just without chips.
+            import logging as _lg
+            _lg.getLogger("gigsfill").warning(f"freq_status enrichment failed venue={venue_id} date={for_gig_date}: {_fse}")
+
     return result
+
+@router.get("/api/venues/{venue_id}/delete-preview")
+def delete_venue_preview(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+    """Preview payload for the delete-venue modal. See
+    /api/artists/{id}/delete-preview for the shape rationale — same fields,
+    upcoming_gigs now lists artist_name of each booked counter-party."""
+    from backend.utils import utcnow_naive, check_venue_access
+    from backend.services.entity_delete import (
+        count_other_team_members, list_live_transactions,
+    )
+
+    row = db.execute(text("""
+        SELECT id, venue_name, user_id, deleted_at
+        FROM venues WHERE id = :vid
+    """), {"vid": venue_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Venue not found")
+
+    # BUG FIX (Jul 2026 audit): access-gate BEFORE the tombstone short-circuit.
+    is_owner = (row["user_id"] == user.id)
+    _is_member = bool(db.execute(text(
+        "SELECT 1 FROM entity_users WHERE entity_type='venue' AND entity_id=:vid AND user_id=:uid"
+    ), {"vid": venue_id, "uid": user.id}).first())
+    if not is_owner and not _is_member:
+        raise HTTPException(403, "You don't have access to this venue")
+
+    if row["deleted_at"]:
+        return {
+            "id": row["id"], "name": row["venue_name"], "is_owner": False,
+            "already_deleted": True,
+            "other_users_count": 0, "upcoming_gigs": [], "live_txns": [],
+        }
+
+    upcoming = db.execute(text("""
+        SELECT DISTINCT g.id as gig_id, g.date,
+               (SELECT GROUP_CONCAT(a.name, ', ')
+                  FROM gig_slots gs2
+                  LEFT JOIN artists a ON a.id = gs2.artist_id
+                  WHERE gs2.gig_id = g.id
+                    AND gs2.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
+                    AND gs2.artist_id IS NOT NULL) as artist_names
+        FROM gigs g
+        WHERE g.venue_id = :vid
+          AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
+          AND g.date >= :today
+        ORDER BY g.date ASC
+    """), {"vid": venue_id, "today": utcnow_naive().date().isoformat()}).mappings().all()
+
+    return {
+        "id": row["id"], "name": row["venue_name"], "is_owner": is_owner,
+        "already_deleted": False,
+        "other_users_count": count_other_team_members(db, "venue", venue_id, user.id),
+        "upcoming_gigs":    [dict(g) for g in upcoming],
+        "live_txns":        list_live_transactions(db, "venue", venue_id),
+    }
+
 
 @router.delete("/api/venues/{venue_id}")
 def delete_venue(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Delete venue and all associated data"""
-    import shutil
-    from pathlib import Path
-    
+    """SOFT-delete (tombstone) a venue. See services/entity_delete.delete_venue
+    for the exact pipeline. Owner-only — even entity_users role='owner'
+    co-owners are refused (deletion is reserved to the original creator on
+    venues.user_id).
+
+    Past gigs/slots/reviews/settled txns are PRESERVED so artist history
+    keeps rendering "[Deleted] <venue>" correctly. Future in-flight
+    bookings are cancelled with artist notifications. Live txns block with
+    409 — preview via GET /api/venues/{id}/delete-preview.
+    """
+    from backend.services.entity_delete import delete_venue as _delete_venue, _rm_tree
     try:
-        # Verify access. Audit fix (May 2026 part 3): allow the venue
-        # owner OR any entity_user whose role is 'owner' (co-owners).
-        # Lower-privilege roles (manager, booker) cannot delete the venue.
-        venue = db.execute(
-            text("SELECT user_id FROM venues WHERE id = :vid"),
-            {"vid": venue_id}
-        ).first()
-        if not venue:
-            raise HTTPException(404, "Venue not found")
-        is_owner = (venue[0] == user.id)
-        if not is_owner:
-            is_co_owner = bool(db.execute(
-                text("""SELECT 1 FROM entity_users
-                        WHERE entity_type = 'venue'
-                          AND entity_id = :vid
-                          AND user_id = :uid
-                          AND role = 'owner'"""),
-                {"vid": venue_id, "uid": user.id}
-            ).first())
-            if not is_co_owner:
-                raise HTTPException(403, "Only the venue owner (or a co-owner) can delete this venue")
-        
-        # Audit fix (May 2026 part 5): drop the vanity URL so the slug stops
-        # resolving — otherwise resolve_vanity returns an empty profile page.
-        try:
-            db.execute(text("DELETE FROM vanity_urls WHERE entity_type='venue' AND entity_id=:vid"), {"vid": venue_id})
-        except Exception:
-            pass
-        # Delete venue (cascades to gigs, media, etc)
-        db.execute(text("DELETE FROM venues WHERE id = :vid"), {"vid": venue_id})
-        
-        # Delete media folder
-        media_path = Path(f"media/venue_{venue_id}")
-        if media_path.exists():
-            shutil.rmtree(media_path)
-        
+        # Audit fix (Jul 2026): delete_venue now returns the list of
+        # filesystem paths to clean up AFTER the commit succeeds. Doing
+        # rmtree before commit meant a commit failure = permanent media
+        # loss with the venue still live.
+        _rm_paths = _delete_venue(db, venue_id, user.id) or []
         db.commit()
+        for _p in _rm_paths:
+            try:
+                _rm_tree(_p)
+            except Exception:
+                pass  # _rm_tree already logs its own failures
         return {"success": True}
     except HTTPException:
+        db.rollback()
         raise
     except Exception as e:
+        import logging as _log
+        _log.getLogger("gigsfill.venues").exception(f"delete_venue failed for venue={venue_id} user={user.id}: {e}")
         db.rollback()
-        raise HTTPException(500, "Failed to delete. Please try again.")
+        raise HTTPException(500, "Failed to delete venue. Please try again.")
 
 # v89: PROACTIVE PREFERRED ARTIST APPROVAL
 @router.post("/api/venues/{venue_id}/preferred-artists/{artist_id}/approve")
@@ -952,6 +1140,23 @@ def proactive_approve_preferred_artist(
             "created_at": utcnow_naive()
         }
     )
+
+    # Audit trail for the proactive approve path (Jul 2026 — same
+    # rationale as the four /api/preferred-artists/* handlers).
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "preferred_proactive_approve",
+            target_table="preferred_artists", target_id=None,
+            metadata={
+                "venue_id": int(venue_id),
+                "artist_id": int(artist_id),
+                "artist_name": artist_info["name"],
+                "venue_name": venue["venue_name"],
+            },
+        )
+    except Exception:
+        pass
 
     db.commit()
     return {"success": True, "message": f"{artist_info['name']} approved as preferred artist"}

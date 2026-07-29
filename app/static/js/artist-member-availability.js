@@ -57,28 +57,65 @@
             name: m.name,
             blackout_start: b.blackout_start,
             blackout_end: b.blackout_end,
+            reason: b.reason || '',
           });
         });
       });
-      flat.sort((a, b) => String(a.blackout_start).localeCompare(String(b.blackout_start)));
 
       if (!flat.length) {
-        wrap.innerHTML = '<p style="color:var(--text-gray);">No upcoming member blackouts. (Anything members add in their profile will show up here.)</p>';
+        wrap.innerHTML = '<p style="color:var(--text-gray);font-size:0.82rem;margin:0;">No upcoming member blackouts. (Anything members add in their profile will show up here.)</p>';
         return;
       }
 
-      wrap.innerHTML = `
-        <div style="display:flex;flex-direction:column;gap:4px;font-size:0.85rem;">
-          ${flat.map(b => `
-            <div style="display:flex;align-items:center;gap:18px;padding:6px 10px;background:rgba(255,255,255,0.02);border-radius:6px;">
-              <span style="color:var(--text);font-weight:500;min-width:210px;">
-                ${_esc(_rangeLabel(b.blackout_start, b.blackout_end))}
-              </span>
-              <span style="color:var(--text);">${_esc(b.name)}</span>
-            </div>
-          `).join('')}
-        </div>
-      `;
+      // 2026-07-25 rewrite: compact sortable table with Dates | Member |
+      // Reason columns. Previous flat list wrapped awkwardly and had no
+      // reason column. Sort state persists on the wrap element so click-to-
+      // sort round-trips through render() work.
+      let sortCol = wrap.dataset.sortCol || 'blackout_start';
+      let sortDir = parseInt(wrap.dataset.sortDir || '1', 10);
+      const sortIt = () => {
+        flat.sort((a, b) => {
+          const av = String(a[sortCol] || '').toLowerCase();
+          const bv = String(b[sortCol] || '').toLowerCase();
+          if (av < bv) return -1 * sortDir;
+          if (av > bv) return 1 * sortDir;
+          return 0;
+        });
+      };
+      const arrow = c => c !== sortCol ? '' : (sortDir === 1 ? ' ▲' : ' ▼');
+      const render = () => {
+        sortIt();
+        const th = 'padding:5px 10px;text-align:left;font-size:0.68rem;font-weight:700;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;';
+        const td = 'padding:5px 10px;font-size:0.78rem;color:var(--text);border-bottom:1px solid rgba(255,255,255,0.03);vertical-align:middle;';
+        wrap.innerHTML = `
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+              <th style="${th}" data-sort="blackout_start">Dates${arrow('blackout_start')}</th>
+              <th style="${th}" data-sort="name">Member${arrow('name')}</th>
+              <th style="${th}" data-sort="reason">Reason${arrow('reason')}</th>
+            </tr></thead>
+            <tbody>
+              ${flat.map(b => `
+                <tr>
+                  <td style="${td}white-space:nowrap;">${_esc(_rangeLabel(b.blackout_start, b.blackout_end))}</td>
+                  <td style="${td}">${_esc(b.name)}</td>
+                  <td style="${td}color:var(--text-gray);">${_esc(b.reason) || '<span style="opacity:0.4;">—</span>'}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        `;
+        wrap.querySelectorAll('th[data-sort]').forEach(h => {
+          h.onclick = () => {
+            const col = h.dataset.sort;
+            if (col === sortCol) sortDir *= -1;
+            else { sortCol = col; sortDir = 1; }
+            wrap.dataset.sortCol = sortCol;
+            wrap.dataset.sortDir = String(sortDir);
+            render();
+          };
+        });
+      };
+      render();
     } catch (e) {
       console.error('loadMemberAvailability:', e);
       section.style.display = '';

@@ -152,7 +152,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    getMonthDays(year, month).forEach(day => {
+    getMonthDays(year, month).forEach((day, _dayIdx) => {
       const iso = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
       const cell = document.createElement("div");
       cell.className = "day";
@@ -174,9 +174,22 @@ document.addEventListener("DOMContentLoaded", async () => {
         cell.classList.add("today");
       }
       
+      // Outlook-style month boundary label — prefix "Aug" (etc.) on:
+      //   • the 1st of every visible month (target + spillover), AND
+      //   • the very first cell in the grid so the top-left spillover
+      //     reads its month (e.g. "Jul 26" when viewing August).
+      // Same pattern as venue.create-gigs.js + artist.book-gigs.js so
+      // every calendar on the site reads identically.
       const dayNumber = document.createElement("div");
       dayNumber.className = "day-number";
-      dayNumber.textContent = day.getDate();
+      const _isFirstCell = _dayIdx === 0;
+      if (day.getDate() === 1 || _isFirstCell) {
+        const monAbbr = day.toLocaleString("default", { month: "short" });
+        dayNumber.textContent = monAbbr + " " + day.getDate();
+        dayNumber.classList.add("month-boundary");
+      } else {
+        dayNumber.textContent = day.getDate();
+      }
       cell.appendChild(dayNumber);
 
       const dayGigs = gigs.filter(g => g.date === iso).sort((a, b) => {
@@ -190,7 +203,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         dayGigs.forEach(g => {
           const div = document.createElement("div");
           div.className = `gig ${getGigClass(g)}`;
-          const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠' };
+          const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
           const icon = (icons[g.artist_type] || '🎵') + ' ';
           div.textContent = `${icon}${formatTime12Hour(g.start_time)} · ${g.venue_name}`;
           div.onclick = e => {
@@ -257,15 +270,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       ">
     `;
 
-    // Pre-fetch slot data for multi-slot gigs so we can show artist names.
-    // /public — anonymous viewers; the auth endpoint 401s + exposes
-    // door receipts.
-    await Promise.all(dayGigs.filter(g => g.status === 'booked' || (g.booked_slots_count > 0)).map(async g => {
-      try {
-        const r = await fetch(`/api/gigs/${g.id}/slots/public`);
-        if (r.ok) g._slots = (await r.json()).sort((a,b) => (a.start_time||'').localeCompare(b.start_time||''));
-      } catch(e) {}
-    }));
+    // /api/gigs/public now embeds `slots` for multi-slot gigs, mirrored
+    // to `_slots` by loadGigs() — no per-day fan-out needed.
 
     dayGigs.forEach(g => {
       const gigClass = getGigClass(g);
@@ -300,7 +306,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         artistDisplay = `<span style="color:var(--text-muted, #94a3b8);">Booked</span>`;
       }
 
-      const icons = {'Live Band':'\ud83c\udfb8','DJ':'\ud83c\udfa7','Comedian':'\ud83c\udfa4','Trivia Host':'\ud83e\udde0'};
+      const icons = {'Live Band':'\ud83c\udfb8','DJ':'\ud83c\udfa7','Comedian':'\ud83c\udfa4','Trivia Host':'\ud83e\udde0', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
       const icon = icons[g.artist_type] || '\ud83c\udfb5';
       const _timeLabel = `${formatTime12Hour(g.start_time)}${g.end_time ? ' \u2013 ' + formatTime12Hour(g.end_time) : ''}`;
 
@@ -410,8 +416,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     
     const isMultiSlot = gig.total_slots_count > 0;
     
+    const _titleStr = (gig.title && String(gig.title).trim()) || '';
     let content = `
       <div style="font-size: 0.95rem; line-height: 2;">
+        ${_titleStr ? `<div><span style="${labelStyle}">Event:</span> ${esc(_titleStr)}</div>` : ''}
         <div><span style="${labelStyle}">Date:</span> ${esc(gig.date)}</div>
         ${!isMultiSlot ? `<div><span style="${labelStyle}">Time:</span> ${formatTime12Hour(gig.start_time)} – ${formatTime12Hour(gig.end_time)}</div>` : ''}
         <div><span style="${labelStyle}">Venue:</span> <a href="/app/venue-profile.html?venue_id=${gig.venue_id}" target="_blank" rel="noopener" style="color: var(--cyan); text-decoration: none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${esc(gig.venue_name)}</a></div>
@@ -531,28 +539,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       const response = await fetch('/api/gigs/public');
       if (response.ok) {
         allGigs = await response.json();
-        // Hydrate g.slots from the PUBLIC slots endpoint. /api/gigs/{id}/slots
-        // requires authentication and exposes internal financial fields
-        // (pay, guarantee_cents, door_receipts_cents) so anonymous viewers
-        // got 401s + saw door receipts they shouldn't. The /public variant
-        // returns only the fields the hover card / day modal need.
-        try {
-          await Promise.all(
-            allGigs
-              .filter(g => g.is_multi_slot || g.total_slots_count > 0 || g.booked_slots_count > 0)
-              .map(async g => {
-                try {
-                  const r = await fetch(`/api/gigs/${g.id}/slots/public`);
-                  if (r.ok) {
-                    const sorted = (await r.json())
-                      .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
-                    g.slots = sorted;
-                    g._slots = sorted;
-                  }
-                } catch (_) {}
-              })
-          );
-        } catch (_) {}
+        // /api/gigs/public now returns `slots` for multi-slot gigs in a
+        // single batched query (Jun 30 2026 fix) — no per-gig fan-out
+        // needed. Mirror to `_slots` for code paths that still read it.
+        allGigs.forEach(g => {
+          if (g.slots && g.slots.length) {
+            g.slots.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+            g._slots = g.slots;
+          }
+        });
         gigs = [...allGigs];
         updateVenueList();
         updateArtistList();
@@ -661,15 +656,24 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
 
-      // Artist type filter
-      if (activeArtistTypes.length > 0) {
-        if (!gig.artist_type || !activeArtistTypes.includes(gig.artist_type)) {
-          return false;
-        }
+      // Artist type filter. 2026-07-26: always applied — the empty-list
+      // short-circuit ("no types selected = show all") was removed so
+      // unchecking every pill really means "show nothing." All pills
+      // default to ACTIVE on page load (see initArtistTypeDefaults below),
+      // so first render behaves the same as before this change.
+      if (!gig.artist_type || !activeArtistTypes.includes(gig.artist_type)) {
+        return false;
       }
 
-      // Band format filter
-      if (activeBandFormats.length > 0 && gig.artist_type === 'Live Band') {
+      // Band format filter — applies ONLY to Live Band gigs. 2026-07-26:
+      // dropped the "no formats selected = show all" short-circuit, same
+      // fix as the artist-type filter above. Now for a Live Band gig:
+      //   - matches if ANY of its comma-separated formats is active
+      //   - if no formats are selected, Live Band gigs are hidden
+      //   - a Live Band gig with no `band_formats` set at all never matches
+      //     (nothing to compare against)
+      // Non-Live-Band gigs are unaffected by this block.
+      if (gig.artist_type === 'Live Band') {
         if (!gig.band_formats) return false;
         const gigFormats = gig.band_formats.split(',').map(f => f.trim());
         const hasMatch = activeBandFormats.some(f => gigFormats.includes(f));
@@ -807,12 +811,35 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
+  // 2026-07-26: default every Artist Type pill to active on page load.
+  // Was previously all-inactive with an "empty = show all" short-circuit
+  // in applyFilters — confusing because unchecking every pill (which felt
+  // like "narrow to nothing") actually widened back to everything. Now the
+  // default is all-selected; unchecking a pill really excludes that type;
+  // unchecking every pill leaves the calendar blank.
+  //
+  // Set state directly (mirrors the active branch inside the click handler)
+  // instead of calling .click() so we don't fire applyFilters N times
+  // during init. loadGigs() below calls applyFilters once after data arrives.
+  document.querySelectorAll('.artist-type-filter-toggle').forEach(btn => {
+    btn.dataset.active = 'true';
+    btn.style.background = 'rgba(34, 197, 94, 0.2)';
+    btn.style.border = '1px solid rgba(34, 197, 94, 0.5)';
+    btn.style.color = '#22c55e';
+  });
+  // Live Band being active means the band-format sub-bubbles should be visible.
+  const _liveBandBtn = document.querySelector('.artist-type-filter-toggle[data-type="Live Band"]');
+  const _bandFmtDiv  = document.getElementById('bandFormatBubblesArtist');
+  if (_liveBandBtn && _bandFmtDiv && _liveBandBtn.dataset.active === 'true') {
+    _bandFmtDiv.style.display = 'block';
+  }
+
   // Band format toggles - AUTO-APPLY on click
   document.querySelectorAll('.band-format-filter-toggle').forEach(btn => {
     btn.addEventListener('click', () => {
       const isActive = btn.dataset.active === 'true';
       btn.dataset.active = !isActive;
-      
+
       if (!isActive) {
         btn.style.background = 'rgba(34, 197, 94, 0.2)';
         btn.style.border = '1px solid rgba(34, 197, 94, 0.5)';
@@ -822,10 +849,27 @@ document.addEventListener("DOMContentLoaded", async () => {
         btn.style.border = '1px solid rgba(255,255,255,0.2)';
         btn.style.color = 'var(--text-muted)';
       }
-      
+
       // Auto-apply filters
       applyFilters();
     });
+  });
+
+  // 2026-07-26: paint each band-format pill to its declared active state.
+  // The HTML markup already has data-active="true" on every format pill,
+  // but the initial inline style shows the inactive (grey) look. Walk
+  // them once at load and apply the green active styling to any that
+  // are declared active — matches what artist-type pills got above and
+  // fixes the "band format filter does nothing" bug (the filter always
+  // ran, but with 0 pills visually marked green the sensed active set
+  // WAS full-set anyway — this makes the visual state match the
+  // filter behavior on first render).
+  document.querySelectorAll('.band-format-filter-toggle').forEach(btn => {
+    if (btn.dataset.active === 'true') {
+      btn.style.background = 'rgba(34, 197, 94, 0.2)';
+      btn.style.border = '1px solid rgba(34, 197, 94, 0.5)';
+      btn.style.color = '#22c55e';
+    }
   });
 
   // VENUE AUTOCOMPLETE - COPIED from artist_book-gigs.js

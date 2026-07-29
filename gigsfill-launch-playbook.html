@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GigsFill — 90-Day Launch Playbook</title>
+<style>
+  @page { size: letter portrait; margin: 0.6in 0.55in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.45;
+    color: #1a1a1a;
+  }
+  h1 {
+    font-size: 22pt;
+    background: linear-gradient(90deg, #7c6bff, #06b6d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.4px;
+    margin-bottom: 4px;
+    line-height: 1.05;
+  }
+  h1 + .tagline {
+    font-size: 10.5pt;
+    color: #666;
+    font-style: italic;
+    margin-bottom: 24px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #7c6bff;
+  }
+  h2 {
+    font-size: 15pt;
+    color: #7c6bff;
+    margin-top: 26px;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1.5px solid #ddd;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 12pt;
+    color: #06b6d4;
+    margin-top: 16px;
+    margin-bottom: 6px;
+    break-after: avoid;
+  }
+  h4 {
+    font-size: 10.5pt;
+    color: #333;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 12px;
+    margin-bottom: 4px;
+    break-after: avoid;
+  }
+  p { margin-bottom: 8px; }
+  ul, ol { margin-left: 18px; margin-bottom: 10px; }
+  li { margin-bottom: 4px; line-height: 1.4; }
+  strong { color: #111; }
+  em { color: #444; }
+  code, .kbd {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: #f0f0f7;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9.5pt;
+  }
+  .callout {
+    background: #fef9c3;
+    border-left: 3px solid #f59e0b;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 10pt;
+    break-inside: avoid;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .callout.green {
+    background: rgba(34, 197, 94, 0.08);
+    border-color: #10b981;
+  }
+  .callout.blue {
+    background: rgba(6, 182, 212, 0.08);
+    border-color: #06b6d4;
+  }
+  .callout.pink {
+    background: rgba(236, 72, 153, 0.08);
+    border-color: #ec4899;
+  }
+  .post-box {
+    background: #fafafa;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 10px 0;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .post-box .meta {
+    font-size: 8.5pt;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+    font-weight: 700;
+  }
+  .post-box .body {
+    font-family: "Georgia", serif;
+    font-size: 10pt;
+    line-height: 1.5;
+    color: #222;
+    white-space: pre-wrap;
+  }
+  .post-box .visual {
+    font-size: 9pt;
+    color: #666;
+    font-style: italic;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed #ccc;
+  }
+  .post-box .hashtags {
+    font-size: 8.5pt;
+    color: #7c6bff;
+    margin-top: 6px;
+    line-height: 1.3;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0;
+    font-size: 9.5pt;
+  }
+  th, td {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid #e5e5e5;
+    vertical-align: top;
+  }
+  th {
+    background: #f4f2ff;
+    color: #7c6bff;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 9pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .day-block {
+    background: #f9f9fb;
+    border-left: 3px solid #7c6bff;
+    padding: 10px 14px;
+    margin: 10px 0;
+    break-inside: avoid;
+  }
+  .day-block h4 {
+    margin-top: 0;
+    color: #7c6bff;
+  }
+  .time-slot {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: #06b6d4;
+    font-weight: 700;
+    display: inline-block;
+    min-width: 55px;
+    font-size: 9pt;
+  }
+  .checkbox-list li {
+    padding-left: 22px;
+    position: relative;
+    list-style: none;
+  }
+  .checkbox-list li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 3px;
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid #666;
+    border-radius: 2px;
+  }
+  .checkbox-list {
+    margin-left: 0;
+  }
+  .toc {
+    background: #f4f2ff;
+    border: 1px solid #d4cdff;
+    padding: 14px 20px;
+    margin: 20px 0 24px 0;
+    break-inside: avoid;
+  }
+  .toc h3 {
+    margin-top: 0;
+    color: #7c6bff;
+  }
+  .toc ol {
+    columns: 2;
+    column-gap: 24px;
+    margin-left: 20px;
+  }
+  .toc li {
+    margin-bottom: 3px;
+    break-inside: avoid;
+    font-size: 9.5pt;
+  }
+  hr {
+    border: none;
+    border-top: 1px dashed #ccc;
+    margin: 20px 0;
+  }
+  .metric {
+    display: inline-block;
+    background: #1a1a2e;
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 9pt;
+    font-weight: 700;
+    margin: 0 2px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  footer {
+    margin-top: 30px;
+    padding-top: 12px;
+    border-top: 1px solid #ddd;
+    font-size: 8.5pt;
+    color: #888;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>GigsFill — 90-Day Launch Playbook</h1>
+<div class="tagline">Comprehensive rollout strategy · day-by-day · every post written · from zero to thousands</div>
+
+<div class="toc">
+<h3>Contents</h3>
+<ol>
+  <li>Executive summary</li>
+  <li>The math &amp; realistic 90-day goals</li>
+  <li>Pre-launch checklist (Days −3 to 0)</li>
+  <li>Phase 1 — Local Beachhead (Days 1–14)</li>
+  <li>Phase 2 — Content Flywheel (Days 15–45)</li>
+  <li>Phase 3 — Paid Amplification (Days 30–60)</li>
+  <li>Phase 4 — PR &amp; Partnerships (Days 45–90)</li>
+  <li>Social post bank (30+ posts, ready to publish)</li>
+  <li>Reels &amp; short-video scripts (10 scripts)</li>
+  <li>Email + DM outreach templates</li>
+  <li>Meta &amp; Google ad copy (with targeting)</li>
+  <li>Metrics — what to track, when to pivot</li>
+  <li>Tool stack &amp; budget breakdown</li>
+</ol>
+</div>
+
+<!-- =============================================================== -->
+<h2>1 · Executive Summary</h2>
+
+<p><strong>What you're doing:</strong> Launching a two-sided marketplace where the same problem lives on both sides — venues need reliable acts, artists need paid gigs. Your differentiator is that you handle the money (Stripe, contracts, auto-payouts, 1099-K) which every free tool (Facebook groups, group texts) doesn't. That's your wedge.</p>
+
+<p><strong>What NOT to try:</strong> "Go viral on TikTok." National TV. Product Hunt as your primary channel. This is a local, physical-world marketplace — venues have addresses, artists show up in person. Concentrate geographically. Ventura County + LA metro is your beachhead. Beat the free tools there before you touch Denver or Nashville.</p>
+
+<p><strong>The strategy in one sentence:</strong> Personally recruit the first 30 venues + 100 artists in your 25-mile radius using free trial as bait, use their real gigs as content, then amplify with paid ads once you have proof.</p>
+
+<p><strong>Budget:</strong> $2,000 – $3,500 over 90 days is enough. Zero is possible but slower. See §13 for allocation.</p>
+
+<div class="callout green">
+<strong>Your unfair advantage:</strong> You're a musician yourself (Fridays Past, Fifty Proof). You know venue owners. You know artists. You know the exact frustration this solves. Every time someone asks "why does this exist?", the answer is your own booking story. Lead with it. Nobody launching a marketplace has half the founder credibility you do.
+</div>
+
+<!-- =============================================================== -->
+<h2>2 · The Math &amp; Realistic 90-Day Goals</h2>
+
+<p>Marketplaces need liquidity. On the venue side, you need enough active venues that an artist opening the calendar sees gigs. On the artist side, you need enough artists that a venue posting a gig gets 3+ candidates within 48 hours. Those two thresholds are your <em>real</em> launch — user counts alone don't matter.</p>
+
+<table>
+<tr><th>Timeframe</th><th>Venues signed</th><th>Artists signed</th><th>Gigs posted</th><th>Gigs booked through GigsFill</th></tr>
+<tr><td>Day 14</td><td>10</td><td>40</td><td>25</td><td>8</td></tr>
+<tr><td>Day 30</td><td>25</td><td>120</td><td>75</td><td>30</td></tr>
+<tr><td>Day 60</td><td>75</td><td>400</td><td>250</td><td>110</td></tr>
+<tr><td>Day 90</td><td><strong>180</strong></td><td><strong>1,400</strong></td><td><strong>700</strong></td><td><strong>350</strong></td></tr>
+</table>
+
+<p><strong>Reach vs. conversions.</strong> "Thousands of people in front of the brand" happens by Day 30 through ads + social + press. <em>Paying, active users</em> follow ~30 days later. Don't confuse impressions with signups.</p>
+
+<div class="callout">
+<strong>The one metric that predicts survival:</strong> % of posted gigs that get booked through GigsFill within 7 days. Anything above 40% and the flywheel spins. Below 20% and your artist supply is too thin — recruit more artists before more venues.
+</div>
+
+<!-- =============================================================== -->
+<h2>3 · Pre-Launch Checklist (Days −3 to 0)</h2>
+
+<p>Three days of prep before you tell anyone. Skip this and you'll be building the plane while it's flying.</p>
+
+<h3>Analytics + tracking</h3>
+<ul class="checkbox-list">
+  <li>Install <strong>Google Analytics 4</strong> on gigsfill.com — track pageviews, signups, gig posts, gig bookings as events</li>
+  <li>Install <strong>Meta Pixel</strong> — required for retargeting ads later. Setup takes 15 minutes at business.facebook.com</li>
+  <li>Add a <strong>UTM tag scheme</strong>: every link you share must include <code>?utm_source=X&amp;utm_medium=Y&amp;utm_campaign=Z</code>. Free UTM builder: <em>ga-dev-tools.google/campaign-url-builder</em></li>
+  <li>Create a <strong>Notion or Google Sheet dashboard</strong> tracking daily signups by source (see §12 for template)</li>
+</ul>
+
+<h3>Social + owned channels</h3>
+<ul class="checkbox-list">
+  <li><strong>Instagram business account</strong>: @gigsfill or @gigsfill.com. Logo profile pic. Bio: "Book local live music. Get paid same-week. Ventura &amp; LA area." Link in bio: gigsfill.com</li>
+  <li><strong>Facebook business page</strong>: same handle, same bio. Enable "Send Message" CTA.</li>
+  <li><strong>LinkedIn company page</strong>: for venue-owner reach. Add yourself as founder.</li>
+  <li><strong>TikTok account</strong>: reserve the handle even if you won't post yet. Someone will squat it if you don't.</li>
+  <li><strong>Google Business Profile</strong>: register gigsfill.com as a business. Shows up in local searches.</li>
+</ul>
+
+<h3>Assets you'll need immediately</h3>
+<ul class="checkbox-list">
+  <li><strong>Logo variants</strong>: square (Instagram), rectangular (LinkedIn), on transparent + white background</li>
+  <li><strong>Brand colors documented</strong>: purple <span class="metric">#7C6BFF</span>, cyan <span class="metric">#06B6D4</span>, dark <span class="metric">#0F1419</span>. Use these across every visual for recognition.</li>
+  <li><strong>Photo shoot at 1 real gig</strong>: Fridays Past or Fifty Proof at 14 Cannons. 20–30 candid photos of the band, crowd, venue exterior, stage lights. This is your content bank for the next 60 days.</li>
+  <li><strong>Screenshots of the app</strong>: 8–10 crisp screenshots (calendar, gig modal, payment tab, booking flow, tax center). Blur any real names.</li>
+  <li><strong>One-pager PDF for venues</strong>: the demo cheat sheet we built earlier — pack them into every in-person meeting.</li>
+  <li><strong>Business cards</strong>: cheap, 250 count on Moo.com or Vistaprint. QR code → gigsfill.com. ~$40.</li>
+</ul>
+
+<h3>Product prep</h3>
+<ul class="checkbox-list">
+  <li>Verify Stripe 1099-K toggle is ON (you did this)</li>
+  <li>Verify Free Trial toggle for new venues works — venue can sign up, post gigs, get booked without adding a card</li>
+  <li>Create 3 "seed venues" in the DB — real Ventura County venues you have relationships with, pre-configured with the "Free Trial" flag ON so their first artist doesn't hit payment friction</li>
+  <li>Create 5–10 "seed artists" — friends who agree to be in the initial artist pool so venues see supply from day 1</li>
+</ul>
+
+<!-- =============================================================== -->
+<h2>4 · Phase 1 — Local Beachhead (Days 1–14)</h2>
+
+<p>This is <strong>the entire launch</strong>. Nail the beachhead in 14 days and everything after amplifies. Fumble it and no amount of ad spend saves you.</p>
+
+<div class="callout blue">
+<strong>Rule:</strong> Every venue and every artist in these 14 days gets a <em>personal touch</em>. Text, DM, phone call, or in-person. No cold-launched signup form. Marketplaces die when the first users feel like they landed on an empty parking lot.
+</div>
+
+<div class="day-block">
+<h4>Day 1 — Launch Day</h4>
+<ul>
+  <li><span class="time-slot">7:00 AM</span> — Coffee. Open the Notion dashboard. Deep breath.</li>
+  <li><span class="time-slot">8:00 AM</span> — Post <strong>Launch Announcement (Post #1)</strong> to Instagram + Facebook + LinkedIn simultaneously. Same copy, native to each platform.</li>
+  <li><span class="time-slot">9:00 AM</span> — Send <strong>Personal Network Email (Template A)</strong> to 30-50 people who know you personally. BCC everyone; make it feel personal.</li>
+  <li><span class="time-slot">10:30 AM</span> — Post the same launch message in these local FB groups (join if not already): "Ventura County Musicians", "LA Live Music Scene", "Conejo Valley Music", "Thousand Oaks Community", "Ventura County Small Business Network". Adjust wording slightly per group.</li>
+  <li><span class="time-slot">12:00 PM</span> — Lunch. Then hit "Product Hunt" — submit gigsfill.com (schedule for 12:01 AM Pacific tomorrow). Ask 10 friends via text to upvote at 8 AM tomorrow.</li>
+  <li><span class="time-slot">2:00 PM</span> — In-person: visit <strong>3 venues</strong> in your 15-mile radius. Not the big-name ones yet — the small bar or restaurant that hosts music 1–2 nights/week. Bring business cards + demo PDF. Ask for the owner or GM. Don't try to close; introduce yourself and hand them the sheet.</li>
+  <li><span class="time-slot">5:00 PM</span> — Post an <strong>Instagram Story</strong> (24hr): candid photo of one of the venues you visited (with permission), text overlay: "Welcoming @[venue] to the GigsFill family 🎸"</li>
+  <li><span class="time-slot">7:00 PM</span> — Update dashboard. Log everyone you spoke to. Note follow-ups.</li>
+</ul>
+</div>
+
+<div class="day-block">
+<h4>Days 2–5 — Personal outreach sprint</h4>
+<p>Daily rhythm:</p>
+<ul>
+  <li><span class="time-slot">Morning</span> — 30 min of DMs. Reply to Day-1 comments. Send follow-up notes to yesterday's venue visits.</li>
+  <li><span class="time-slot">Late morning</span> — Send <strong>10 personalized Artist DMs (Template B)</strong> to local artists you know (via Facebook, Instagram, personal contacts). Not a mass blast — actually mention their band name and a specific gig they've played.</li>
+  <li><span class="time-slot">Afternoon</span> — Visit <strong>4 more venues</strong>. Different neighborhoods each day.</li>
+  <li><span class="time-slot">Evening</span> — Post 1 piece of content from Content Bank. Pick from post #2 (venue spotlight) or #3 (artist spotlight).</li>
+  <li><span class="time-slot">Day 3</span> also: submit story pitch to <strong>Ventura County Star</strong> ("Local musician launches booking platform for Ventura venues") — see press pitch template.</li>
+</ul>
+</div>
+
+<div class="day-block">
+<h4>Days 6–7 — First weekend, first live post</h4>
+<p>Attend a live gig at one of your seed venues Friday or Saturday night. Not to network — to <em>make content</em>. Shoot:</p>
+<ul>
+  <li>A 10-second Reel of the crowd and band (great B-roll for months)</li>
+  <li>A photo of the artist's paycheck confirmation email from GigsFill on your phone with the venue lights blurred behind — visceral proof the platform works</li>
+  <li>A short interview clip (with venue owner or artist): "Why GigsFill?" — 30 seconds max</li>
+</ul>
+<p>Post Reel Saturday morning (best engagement window: 9–11 AM local). Cross-post to Facebook Reels &amp; TikTok.</p>
+</div>
+
+<div class="day-block">
+<h4>Days 8–14 — Iterate + amplify</h4>
+<ul>
+  <li>Every day: 3 venue visits + 10 artist DMs + 1 social post</li>
+  <li>Day 10: post Testimonial post from the first venue that's booked a gig (get their permission first — free t-shirt or Stripe credit if they'll do a 30-second video)</li>
+  <li>Day 12: submit to Chamber of Commerce (Thousand Oaks &amp; Ventura). ~$300 membership but includes networking events + newsletter placement</li>
+  <li>Day 14: pause. Review dashboard. If you're above the Day-14 target (10 venues / 40 artists), move to Phase 2. If not, add 3 more days of personal outreach before advancing.</li>
+</ul>
+</div>
+
+<!-- =============================================================== -->
+<h2>5 · Phase 2 — Content Flywheel (Days 15–45)</h2>
+
+<p>Now that you have real users, real gigs, and real bookings, content shifts from "hi we exist" to "look at what's happening on the platform." This is what convinces the next 100 venues without you having to visit them.</p>
+
+<h3>Weekly content calendar</h3>
+<table>
+<tr><th>Day</th><th>Content type</th><th>Where</th><th>Effort</th></tr>
+<tr><td>Monday</td><td>Venue spotlight (photo + 3-line caption)</td><td>IG feed + FB + LinkedIn</td><td>15 min</td></tr>
+<tr><td>Tuesday</td><td>Artist spotlight</td><td>IG feed + FB</td><td>15 min</td></tr>
+<tr><td>Wednesday</td><td>Educational "how it works"</td><td>IG carousel + LinkedIn post</td><td>25 min</td></tr>
+<tr><td>Thursday</td><td>"Gigs this weekend" roundup</td><td>IG Story + FB post</td><td>10 min</td></tr>
+<tr><td>Friday</td><td>Reel — behind the scenes at a gig</td><td>IG Reels + TikTok + FB Reels</td><td>45 min</td></tr>
+<tr><td>Saturday</td><td>Live-post from an actual gig</td><td>IG Story + FB Story</td><td>10 min</td></tr>
+<tr><td>Sunday</td><td>Weekly stat / social proof</td><td>IG feed + LinkedIn</td><td>15 min</td></tr>
+</table>
+
+<p>All 30+ specific posts are pre-written in §8. Batch on Sunday nights using <strong>Later.com</strong> or <strong>Meta Business Suite</strong> (free) — schedule 7 posts in ~1 hour, then forget about it for the week.</p>
+
+<h3>Days 15–45 daily rhythm</h3>
+<ul>
+  <li><span class="time-slot">Morning</span> — 20 min: reply to comments/DMs, post today's scheduled content confirmation</li>
+  <li><span class="time-slot">Midday</span> — 30 min: 5 artist DMs, 3 venue follow-up emails, 1 outreach to a new-adjacent city (Simi Valley, Oxnard, Camarillo, Agoura Hills)</li>
+  <li><span class="time-slot">Evening</span> — 15 min: dashboard update, plan tomorrow</li>
+</ul>
+
+<p><strong>Content flywheel checkpoints:</strong></p>
+<ul>
+  <li>Day 21: publish first blog post on gigsfill.com/blog — "5 things Ventura County bar owners don't know about booking live music" (SEO play — see §11 for topic ideas)</li>
+  <li>Day 28: launch email newsletter — "This Weekend at Ventura Venues" — weekly digest of Friday/Saturday gigs across your venue base. Auto-sent to every artist AND every venue on the platform. Value-add + organic top-of-mind reminder.</li>
+  <li>Day 35: repost 5 best-performing pieces on LinkedIn with different framing (venue-owner-focused)</li>
+  <li>Day 45: publish the 30-day "State of Ventura Live Music" post — real data from your platform ("47 gigs booked, $42K paid to local artists, average booking response &lt; 3 hours"). Pitch it to Ventura County Star. This is the story that gets you press.</li>
+</ul>
+
+<!-- =============================================================== -->
+<h2>6 · Phase 3 — Paid Amplification (Days 30–60)</h2>
+
+<p>Turn on paid ads only <em>after</em> you have real testimonials + platform activity to point at. Ads without proof are cold-water expensive.</p>
+
+<h3>Meta Ads (Instagram + Facebook)</h3>
+
+<p>Run <strong>2 campaigns simultaneously</strong>. Each has a specific goal.</p>
+
+<h4>Campaign A — Venue acquisition (starts Day 30)</h4>
+<ul>
+  <li><strong>Objective:</strong> Leads (Meta collects venue email + phone via native form)</li>
+  <li><strong>Audience:</strong> Small business owners, restaurant owners, bar owners, event coordinators. Location: 25-mile radius around Thousand Oaks, expanding to LA proper by Day 45. Age 30–65. Interests: "restaurant management", "small business", "live music" (combined).</li>
+  <li><strong>Budget:</strong> $15/day × 30 days = $450</li>
+  <li><strong>Creative:</strong> 3 ad variants (see §11 for copy). Photo of a real gig at 14 Cannons overlaid with headline text.</li>
+  <li><strong>Landing page:</strong> gigsfill.com/venues (a dedicated LP focused on venues — build if not exists)</li>
+</ul>
+
+<h4>Campaign B — Artist acquisition (starts Day 30)</h4>
+<ul>
+  <li><strong>Objective:</strong> Traffic → signup</li>
+  <li><strong>Audience:</strong> Musicians, DJs, comedians. Location: LA metro + Ventura County. Age 21–55. Interests: "musical instruments", "band member", "gigging musician", "open mic", "singer-songwriter". Use Meta's "detailed targeting" and layer 2–3 of these.</li>
+  <li><strong>Budget:</strong> $15/day × 30 days = $450</li>
+  <li><strong>Creative:</strong> Reel format (repurpose your Friday Reel). Copy: "Get paid within 5 business days after your gig. Sign up free →"</li>
+</ul>
+
+<h4>Campaign C — Retargeting (starts Day 40)</h4>
+<ul>
+  <li><strong>Objective:</strong> Conversions</li>
+  <li><strong>Audience:</strong> Website visitors last 30 days who did NOT sign up (Meta Pixel handles this)</li>
+  <li><strong>Budget:</strong> $8/day × 20 days = $160</li>
+  <li><strong>Creative:</strong> Testimonial video from a venue owner. Copy: "The bar down the street already switched. See why → gigsfill.com"</li>
+</ul>
+
+<h3>Google Ads (starts Day 45)</h3>
+
+<p><strong>Search intent is gold for you</strong> — venue owners actively Googling "how to book a band for my restaurant" are hot leads.</p>
+
+<ul>
+  <li><strong>Ad group 1:</strong> "book live music", "book a band", "book musicians", "hire a band for [venue type]". $15/day for 15 days = $225.</li>
+  <li><strong>Ad group 2 (artist-side, lower priority):</strong> "how to get paid gigs", "gig booking for musicians". $5/day for 15 days = $75.</li>
+  <li><strong>Keyword modifiers:</strong> "Ventura", "Los Angeles", "Thousand Oaks" — geo-lock so you're not paying for Denver traffic.</li>
+</ul>
+
+<h3>Total paid ad budget for Phase 3:</h3>
+<p><span class="metric">$1,360 total across 30 days</span>. Adjust weekly based on cost per signup. If a channel gives you signups under $15 each, double budget. If it's over $50, cut.</p>
+
+<!-- =============================================================== -->
+<h2>7 · Phase 4 — PR &amp; Partnerships (Days 45–90)</h2>
+
+<p>Free press and word-of-mouth from trusted institutions is what pushes you from "another SaaS" to "the platform everyone in the scene is using."</p>
+
+<h3>Press outlets to pitch (in priority order)</h3>
+<ol>
+  <li><strong>Ventura County Star</strong> (VC Star) — vcstar.com. Angle: local entrepreneur. Reporter: Robin Gonzales or business editor. Email pitch templated in §10.</li>
+  <li><strong>LA Weekly music section</strong> — laweekly.com. Angle: LA music scene infrastructure. Higher bar; pitch after you have real numbers (~Day 60).</li>
+  <li><strong>Ventura Music Life blog</strong> and any local music bloggers. Free content for them; free reach for you.</li>
+  <li><strong>Restaurant Owner Magazine / Nation's Restaurant News</strong> — pitch when you have restaurant/bar case studies.</li>
+  <li><strong>The Music Business Podcast</strong>, <strong>Musicians Tip Jar</strong>, <strong>Bandzoogle Podcast</strong> — pitch as a guest. Target 2 podcast appearances by Day 90.</li>
+</ol>
+
+<h3>Partnership targets</h3>
+<ul>
+  <li><strong>CSU Channel Islands Music Program</strong> — 200+ music students, all future gigging artists. Offer: free platform + a workshop on "How to book paid gigs as a working musician"</li>
+  <li><strong>Local music schools</strong> — School of Rock, McCabe's, private teachers. Referral partnership: they mention you to graduating students; you mention them in your onboarding as "check these out to level up."</li>
+  <li><strong>Ventura + Thousand Oaks + LA Chambers of Commerce</strong> — venue owners are in these. Sponsor one small event ($250–500) — get a booth or 5-min pitch.</li>
+  <li><strong>Sam Ash / Guitar Center store locations in Ventura + LA</strong> — leave business cards + flyers at the counter. Store managers usually say yes if you buy them a coffee.</li>
+  <li><strong>Ventura County Coast (tourism board)</strong> — they promote local venues to tourists. Offer them a widget/embed showing "live music this weekend" — great for their site, great backlink for you.</li>
+</ul>
+
+<!-- =============================================================== -->
+<h2>8 · Social Post Bank (30+ ready-to-publish posts)</h2>
+
+<p>Post #s are numbered so you can reference them in the daily plan. Each post has: copy (ready to paste), visual spec (what to shoot/design in Canva), hashtags, and best-time-to-post note.</p>
+
+<div class="post-box">
+<div class="meta">Post #1 · Instagram feed + Facebook + LinkedIn · LAUNCH DAY 8:00 AM</div>
+<div class="body">🎸 GigsFill is live.
+
+For 10 years I've watched Ventura County venues struggle to book solid acts, and watched local artists lose gigs because a text message went unanswered. So I built the fix.
+
+GigsFill is a booking platform for live music — venues post open nights, artists apply and book instantly, contracts sign themselves, and Stripe pays out the day after the gig. No group chats, no chasing checks, no more "the drummer canceled and we have nothing."
+
+If you own or manage a bar / restaurant / brewery / event space in Ventura or LA — DM me. First 25 venues get free-trial mode (no card, book real gigs).
+
+If you're a working musician, DJ, comedian, or MC — sign up at gigsfill.com. Takes 3 minutes. You'll show up on venue searches by tonight.
+
+Ventura, LA — let's fill the calendar.
+
+🔗 gigsfill.com</div>
+<div class="visual">VISUAL: hero photo of a real gig — Fridays Past or Fifty Proof at 14 Cannons (dim purple stage lights, crowd visible). Text overlay top-right: "NOW LIVE" in your purple #7C6BFF. Bottom-right: GigsFill logo. Use Canva template search: "concert launch announcement instagram".</div>
+<div class="hashtags">#GigsFill #VenturaCountyMusic #LALiveMusic #LocalMusic #BookingPlatform #IndependentMusicians #VenturaCA #ThousandOaks #LiveMusicLA #SupportLocalMusic</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #2 · Instagram feed · MONDAY (any week) — VENUE SPOTLIGHT template</div>
+<div class="body">🍻 Venue spotlight: [Venue Name]
+
+[One-sentence hook — e.g. "The best hidden patio in Thousand Oaks."]
+
+[Owner name] has been running [venue name] since [year]. They host [X] live music nights a week — [genre notes]. As of this week, they're posting their open dates on GigsFill.
+
+Artists — you can see their calendar and book instantly:
+gigsfill.com/venues/[venue-slug]
+
+Owners of similar venues — DM us. First month is free.</div>
+<div class="visual">VISUAL: 3-photo carousel. Slide 1: venue exterior at dusk. Slide 2: interior stage/room shot. Slide 3: crowd during a gig. Text overlay on slide 1: "VENUE SPOTLIGHT". Consistent purple/cyan bar across bottom of each slide with GigsFill logo.</div>
+<div class="hashtags">#[VenueName] #VenturaCountyMusic #LiveMusicVenue #SupportLocalBusiness #GigsFill #[VenueCity]</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #3 · Instagram feed · TUESDAY — ARTIST SPOTLIGHT template</div>
+<div class="body">🎤 Artist spotlight: [Band/Artist Name]
+
+[Genre] out of [city]. [Fun fact — e.g. "Been playing every Tuesday at The Copper Blues for two years."]
+
+They just booked their next 3 gigs through GigsFill — no phone tag, no waiting on a text back. Contract signed, Stripe payout scheduled.
+
+Venue owners — this is the caliber of act ready to fill your Friday. Search "[genre]" on gigsfill.com, they'll come up.
+
+Artists — [Band Name] made $[amount] this month gigging locally. You can too. Signup takes 3 minutes.</div>
+<div class="visual">VISUAL: single-photo post. Live-performance shot of the artist mid-song, band's face visible, dim colored stage lights. Text overlay: artist name in your purple, "ON GIGSFILL" in smaller cyan text below. Get artist's written permission before posting (they'll almost always say yes — free promo).</div>
+<div class="hashtags">#[ArtistName] #LiveMusic #[Genre]Music #GigsFill #VenturaCountyMusic #SupportLocalMusicians #IndependentArtist</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #4 · Instagram carousel · WEDNESDAY — EDUCATIONAL "how it works"</div>
+<div class="body">How to book a band for your restaurant in 4 steps (without the group-chat chaos) 👇
+
+1. Post your open date — takes 30 seconds. Pick artist type (band, DJ, comedian, karaoke MC), pay, done.
+
+2. Preferred artists get emailed automatically. They see the gig, they see the pay, they see the terms.
+
+3. First qualified artist books. Contract auto-generates. Both sides sign online. No PDF hell.
+
+4. Gig happens. Day after at 5 PM, the artist is paid via Stripe. Your card is charged the same day. Done.
+
+No more "the drummer bailed." No more "did we agree to $250 or $300?" No more chasing a check.
+
+Free trial for the first month. Link in bio.</div>
+<div class="visual">VISUAL: 5-slide carousel. Slide 1: hook headline "How to book a band in 4 steps". Slides 2-5: one step per slide with a big number + icon + short caption. Purple/cyan color scheme. Canva template: "swipe carousel infographic". Consistent template makes these easy to churn out weekly.</div>
+<div class="hashtags">#SmallBusinessTips #RestaurantOwner #BarOwner #LiveMusicBooking #GigsFill #EventPlanning #VenturaBusiness</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #5 · Instagram Story · THURSDAY — WEEKEND GIGS ROUNDUP</div>
+<div class="body">🎶 GIGS THIS WEEKEND 🎶
+
+FRI:
+🎸 [Band Name] at [Venue] · 8 PM
+🎤 [Artist Name] at [Venue] · 9 PM
+
+SAT:
+🎹 [Band Name] at [Venue] · 7 PM
+🎧 [DJ] at [Venue] · 10 PM
+
+SUN:
+🎙️ [Karaoke MC] at [Venue] · 6 PM
+
+Full calendar → link in bio</div>
+<div class="visual">VISUAL: vertical Instagram Story with dark background. Big header "GIGS THIS WEEKEND" in your purple. List format. Tag each venue's IG handle so they get notified and reshare. TAGGING = FREE REACH.</div>
+<div class="hashtags">#GigsThisWeekend #VenturaLiveMusic #LAMusicScene #WeekendVibes</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #6 · Reel · FRIDAY — 15-second behind-the-scenes</div>
+<div class="body">CAPTION: A GigsFill booking, start to finish 👇
+
+[Post the reel — see script #1 in section 9 for the video]
+
+3 hours from "we need someone for tonight" to "artist is on stage."
+
+If your booking process still runs on group text — try free at gigsfill.com
+
+🔗 link in bio</div>
+<div class="visual">VISUAL: See Reel Script #1 in section 9 for detailed shot list.</div>
+<div class="hashtags">#GigsFill #LiveMusicBooking #BehindTheScenes #MusicIndustry #SmallBusinessTech</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #7 · Instagram feed · SATURDAY — LIVE POST from a gig happening tonight</div>
+<div class="body">📍 Live from [Venue] tonight. [Artist Name] just took the stage. This gig was booked on GigsFill 6 days ago — contract signed same day, everyone knew exactly what was happening.
+
+This is what "the industry running smoothly" looks like. No text-message chaos. No confusion about pay. Musicians paid Monday morning.
+
+Come out. Have a beer. Watch the band. Tip in cash. And if you own a place that hosts live music — this can be your Friday too.
+
+gigsfill.com</div>
+<div class="visual">VISUAL: candid crowd/band photo (or a very short reel if you're feeling ambitious). Shoot from mid-crowd looking at stage. Dim stage lights are your friend. Even a phone photo looks moody + professional in the right light.</div>
+<div class="hashtags">#LiveMusic #[VenueName] #[ArtistName] #GigsFill #SaturdayNight #VenturaMusic</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #8 · Instagram feed · SUNDAY — WEEKLY STAT</div>
+<div class="body">📊 WEEK IN REVIEW
+
+This week on GigsFill:
+
+🎤 [X] gigs posted by venues
+🎸 [Y] gigs booked by artists
+💰 $[Z] paid out to local musicians
+
+That's [Y] Ventura County / LA nights where a bar owner didn't have to chase down a band, and where a musician got paid on time without an argument.
+
+We're just getting started.
+
+Onboarding new venues + artists this week — DM if you want in.</div>
+<div class="visual">VISUAL: simple stat card in Canva. Dark background, big numbers in your purple, small captions in cyan. Consistent template every Sunday — audience will start looking for it.</div>
+<div class="hashtags">#WeekInReview #GigsFill #LocalMusicEconomy #VenturaBusiness #IndependentMusicians</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #9 · LinkedIn · Any week — FOR VENUE OWNERS specifically</div>
+<div class="body">If you own or manage a bar/restaurant with live music: quick question.
+
+How much time do you spend each week booking bands? Texting? Chasing down whether so-and-so is confirmed? Paying them out?
+
+For most of the venue owners I've talked to in Ventura County the number is 4–6 hours a week. That's ¼ of a day, every week, on logistics that could run themselves.
+
+GigsFill runs itself: you post open dates, preferred artists apply, contracts auto-generate, Stripe pays them out the day after. You stop being the booking agent.
+
+First month free — no card required. Reply here or DM if you want a 10-min walkthrough.</div>
+<div class="visual">VISUAL: LinkedIn post — no image required, text-first works. If adding: a simple screenshot of the venue calendar view with a highlighted gig.</div>
+<div class="hashtags">#SmallBusiness #Hospitality #RestaurantBusiness #LiveMusic #BookingPlatform</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #10 · Instagram feed · TESTIMONIAL — publish as soon as you have one</div>
+<div class="body">"I used to spend Sunday nights texting five bands trying to fill Friday. Now I post the date on GigsFill, go to bed, and check the app in the morning to see who booked it."
+
+— [Owner Name], [Venue Name], [City]
+
+If that's your Sunday too, we should talk. Free trial → gigsfill.com</div>
+<div class="visual">VISUAL: photo of the owner AT their venue, quote as a graphic overlay. Or if they'll do it: 30-second video testimonial. Video always outperforms static.</div>
+<div class="hashtags">#Testimonial #GigsFill #RestaurantOwner #LiveMusicBusiness #VenturaBusiness</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #11–20 · CONTENT VARIANTS — rotate weekly</div>
+<div class="body">Rotate these themes so your feed stays fresh:
+
+#11 · "Before / After" carousel — before: chaotic text screenshots (mock up in Canva, use fake names). After: clean GigsFill calendar view. Caption: "This is what week 1 vs. week 4 looks like for our venues."
+
+#12 · "Meet the founder" reel — you at a venue, 60 seconds. "Why I built this." Founder story converts.
+
+#13 · Artist "Day in the Life" — one artist, three gigs across a weekend, all booked on GigsFill. Cash + paycheck screenshots.
+
+#14 · Venue metrics stat — "Our average venue books 4 gigs their first month" (once true).
+
+#15 · Live music culture post — "Why live music matters for a neighborhood bar" — non-salesy, values post. Broadens reach.
+
+#16 · Comparison chart — "Booking via GigsFill vs. group texts" side-by-side. Uses your brand colors.
+
+#17 · Artist genre spotlight — "This week: DJs" or "This week: Comedians". Highlights the platform's variety.
+
+#18 · Video: 30-second Stripe payout screen recording. "This is what payout day looks like." Payment porn works.
+
+#19 · "First gig booked" celebration post — spotlight a newly-signed venue's first booking. Tag them, they'll reshare.
+
+#20 · "Ask us anything" Story — 24hr Q&amp;A. Answers get repurposed into 5 more feed posts.</div>
+<div class="visual">Each of the above uses the same brand template family in Canva. Set up 5 master templates in Canva Pro ($12/mo) and swap the text — makes weekly content 15-minute work.</div>
+<div class="hashtags">Rotate a mix of #GigsFill, #VenturaMusic, #LALiveMusic, #IndependentMusicians, plus venue/artist tags.</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Post #21–30 · SEASONAL + EVENT POSTS</div>
+<div class="body">#21 · Fourth of July / Halloween / any major date — "Book your holiday weekend early — here are the open dates on GigsFill"
+
+#22 · "How to become a Preferred Artist" — carousel explaining that feature
+
+#23 · "Frequency limits explained" — venue-focused post about how the platform protects them from over-booking
+
+#24 · "1099-K explained for gigging musicians" — you're one of the few platforms that handles this cleanly. Educational content that reflects credibility.
+
+#25 · Reel: comedian doing a bit about booking chaos → cut to GigsFill screen. Humor sells.
+
+#26 · "Why we don't take a big cut" — transparency post about your platform fee.
+
+#27 · Cross-post to Reddit r/livemusic and r/smallbusiness weekly. Low effort, occasional big win.
+
+#28 · Instagram Live with a venue owner. 15 minutes. Real. Q&amp;A style.
+
+#29 · Instagram Live with an artist about the platform experience.
+
+#30 · Milestone celebration ("100 venues!", "$100k paid out!") — genuine, non-braggy, invitational close.</div>
+<div class="visual">Rotate creative formats: photo, reel, carousel, live, story. Instagram's algorithm rewards format variety.</div>
+<div class="hashtags">Mix as appropriate per post.</div>
+</div>
+
+<!-- =============================================================== -->
+<h2>9 · Reels &amp; Short-Video Scripts (10 scripts)</h2>
+
+<div class="callout blue">
+<strong>Format rule for all reels:</strong> 15–30 seconds max. Vertical (9:16). Hook in first 1.5 seconds. Text on screen (many people scroll silently). Trending audio when possible. Post between 9–11 AM local weekdays for max reach.
+</div>
+
+<div class="post-box">
+<div class="meta">Reel #1 · "A booking in 3 hours" · 20 seconds</div>
+<div class="body"><strong>Shot 1 (0-2s):</strong> Phone screen showing a text at 3:15 PM — "we need someone for tonight, drummer just canceled" — quickly typed reply "give me 20 min"
+<strong>Shot 2 (2-5s):</strong> Screen recording — venue user opens GigsFill, posts a new gig for tonight, hits publish
+<strong>Shot 3 (5-8s):</strong> Screen recording — artist's phone lights up with the notification, they open, they tap Book
+<strong>Shot 4 (8-11s):</strong> Screen recording — contract screen, e-sign, done
+<strong>Shot 5 (11-16s):</strong> Video — cut to that same artist walking on stage that night. Cheer from crowd.
+<strong>Shot 6 (16-20s):</strong> Text overlay: "3 hours. No group text. gigsfill.com"
+<br><br>
+<strong>AUDIO:</strong> Trending upbeat music (search "gig", "live music" trending audio in Reels library week-of).</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Reel #2 · "Payout day" · 15 seconds</div>
+<div class="body"><strong>Shot 1 (0-3s):</strong> Artist checking phone — "STRIPE — $475 deposited" notification. Grins.
+<strong>Shot 2 (3-6s):</strong> Cut to their instrument case being loaded into a car.
+<strong>Shot 3 (6-10s):</strong> Cut to next gig on their calendar in GigsFill.
+<strong>Shot 4 (10-15s):</strong> Text overlay: "Play the gig Saturday. Get paid Monday. gigsfill.com"</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Reel #3 · "Venue side, week 1 vs week 4" · 25 seconds</div>
+<div class="body"><strong>Shot 1 (0-5s):</strong> Venue owner scrolling through a chaotic group chat — timestamps show it took 3 days to fill a gig. Text overlay: "WEEK 0"
+<strong>Shot 2 (5-10s):</strong> Cut to the same owner opening GigsFill app. Two artists have already applied. Text overlay: "WEEK 4"
+<strong>Shot 3 (10-15s):</strong> Owner accepts one. Deal done in 10 seconds.
+<strong>Shot 4 (15-20s):</strong> Owner pouring a beer, smiling. Voiceover: "This is what stopped stressing about Friday looks like."
+<strong>Shot 5 (20-25s):</strong> Text overlay: "gigsfill.com · first month free"</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Reel #4 · Founder story · 45 seconds (feature reel)</div>
+<div class="body"><strong>Shot 1:</strong> You in front of a venue. "I've been playing shows for 20 years."
+<strong>Shot 2:</strong> "Every band I've been in has lost gigs the same way — venue texts you, you don't see it for 3 hours, they book someone else."
+<strong>Shot 3:</strong> "So I built the platform I wish existed."
+<strong>Shot 4:</strong> Quick app footage — calendar, booking, payout.
+<strong>Shot 5:</strong> "GigsFill. Made by a musician, for musicians and the venues that book them."
+<strong>Shot 6:</strong> Text overlay: "gigsfill.com"</div>
+</div>
+
+<div class="post-box">
+<div class="meta">Reels #5–10 · Rapid-fire ideas</div>
+<div class="body">#5 · Time-lapse of a venue calendar filling up over 30 days
+#6 · "Meet the artist" — quick interview clip with a booked artist (30 sec)
+#7 · "3 things every gig contract should have" — educational, low production
+#8 · "How Stripe pays you same-week" — quick screen recording
+#9 · POV of a musician getting a booking notification during dinner — books it while chewing
+#10 · Comedic — "when your drummer cancels" horror-movie framing, then cut to "when you have GigsFill" relief</div>
+</div>
+
+<!-- =============================================================== -->
+<h2>10 · Email &amp; DM Outreach Templates</h2>
+
+<h3>Template A — Personal network launch email (Day 1)</h3>
+<div class="post-box">
+<div class="meta">SUBJECT · GigsFill is live (and I could use your help)</div>
+<div class="body">Hey [Name],
+
+I finally launched GigsFill this morning. It's the platform I've been building for the past year — venues in Ventura + LA post live-music gigs, artists book them, Stripe handles the payout automatically.
+
+I need help getting the word out. Would you be willing to do ONE of these (whichever is easiest):
+
+1. If you know a bar / restaurant / brewery / event space owner in Ventura or LA county — forward this email to them or connect us. First 25 venues get free-trial mode with no card required.
+
+2. If you know a musician / DJ / comedian who plays local shows — send them to gigsfill.com. Takes 3 minutes to sign up.
+
+3. If you have 30 seconds, share our launch post on Instagram or Facebook: [link].
+
+That's it. No pressure. If you want a walkthrough of the platform I'll show you in 10 minutes over coffee or Zoom.
+
+Thanks for being in my corner.
+
+— John
+gigsfill.com · @gigsfill</div>
+</div>
+
+<h3>Template B — Cold DM to a local artist</h3>
+<div class="post-box">
+<div class="meta">CHANNEL · Instagram or Facebook Messenger · PERSONALIZE the first line</div>
+<div class="body">Hey [Name] — caught your set at [venue where you actually saw them] a couple weeks back, [genuine compliment about their sound].
+
+Quick pitch: I just launched GigsFill — a booking platform for local musicians and Ventura/LA venues. I built it because I got tired of losing gigs to slow group texts.
+
+You'd be a perfect fit for the artist pool we're building. Sign-up takes 3 min and you'll start showing up on venue searches immediately: gigsfill.com
+
+Zero cost to you. Ping me if you have any questions.
+
+— John · Fridays Past / Fifty Proof</div>
+</div>
+
+<h3>Template C — Cold email to a venue owner</h3>
+<div class="post-box">
+<div class="meta">SUBJECT · Quick idea for [Venue Name]'s booking</div>
+<div class="body">Hi [Name],
+
+I'm John — I play in Fridays Past and Fifty Proof (you may have seen us at 14 Cannons). I also just launched GigsFill, a booking platform designed for venues exactly like [Venue Name].
+
+The pitch is simple: you post your open dates, our preferred-artist pool applies, contracts auto-generate, and Stripe handles the payout the day after the gig. Cuts venue-side booking time from ~4 hours a week to about 20 minutes.
+
+For the first 25 Ventura County venues we're offering free-trial mode — no card, real bookings, one month to try it.
+
+Any interest in a 10-minute walkthrough? I can come by [Venue Name] during a quiet hour or do a Zoom, whichever works.
+
+Cheers,
+John Carta
+Founder, GigsFill
+gigsfill.com · booked@gigsfill.com · [phone]</div>
+</div>
+
+<h3>Template D — Follow-up email (send 4 days after Template C if no reply)</h3>
+<div class="post-box">
+<div class="meta">SUBJECT · Re: Quick idea for [Venue Name]'s booking</div>
+<div class="body">Hi [Name],
+
+Circling back on this in case it got buried. If the walkthrough isn't a fit right now, no worries at all — I'll drop off a one-pager next time I'm at [venue].
+
+If you'd rather just check it out solo: gigsfill.com/venues
+
+We're at [X] venues + [Y] artists in the area as of this week and gaining fast. Would love to have [Venue Name] in the mix.
+
+— John</div>
+</div>
+
+<h3>Template E — Press pitch (send Day 3–5)</h3>
+<div class="post-box">
+<div class="meta">SUBJECT · Local musician builds booking platform for Ventura County venues (story pitch)</div>
+<div class="body">Hi [Reporter Name],
+
+Quick story pitch — feel free to pass if it's not the right fit.
+
+I'm a local musician (Fridays Past, Fifty Proof — you may have seen us around Ventura County). Over 20 years of gigging I watched local venues lose bands to slow booking and local musicians lose paydays because a text message got missed. Six months ago I started building a fix. It's called GigsFill and we just went live.
+
+We're a two-sided platform: Ventura + LA venues post open gigs, local musicians book instantly, contracts auto-sign, and Stripe handles the payout. First 25 venues in the county are on free trial. As of today we have [X] active venues and [Y] artists.
+
+The story angle I think would resonate with your readers is the local-economy piece: we've paid out $[amount] to Ventura County musicians in [days] — money that would previously have gone through group-text limbo or gotten lost. Plus the founder-story arc — musician builds his own solution.
+
+Happy to hop on a phone call, meet at a coffee shop, or get you into a live gig to see the platform in action. My cell is [number].
+
+Thanks for considering,
+John Carta
+GigsFill · gigsfill.com</div>
+</div>
+
+<h3>Template F — Podcast pitch (send Day 40+)</h3>
+<div class="post-box">
+<div class="meta">SUBJECT · Guest pitch — GigsFill founder, Ventura County live music infrastructure</div>
+<div class="body">Hi [Host Name],
+
+Long-time listener of [Podcast Name] — [specific episode you liked, quick sentence about why].
+
+I'm the founder of GigsFill, a booking platform for live-music venues + working musicians. I'd love to come on to talk about:
+
+• The chicken-and-egg problem of two-sided marketplaces (and how we solved it locally-first)
+• Why Stripe Connect + automated 1099-K compliance is a massive underrated feature for working musicians
+• The state of live music economics in mid-tier markets like Ventura County
+• Why I built this while still gigging myself as a working musician
+
+Happy to record whenever. If your listener base skews toward working musicians or small venue owners, I think we'd have a good conversation.
+
+Best,
+John Carta
+gigsfill.com · [phone]</div>
+</div>
+
+<!-- =============================================================== -->
+<h2>11 · Meta &amp; Google Ad Copy (with targeting)</h2>
+
+<h3>Meta Ad #1 — VENUE, single-image feed</h3>
+<div class="post-box">
+<div class="meta">Objective · Leads · Budget $15/day</div>
+<div class="body"><strong>Primary text:</strong>
+Bar owners in Ventura + LA — book bands without the group-text chaos.
+GigsFill posts your open dates to local preferred artists, auto-generates contracts, and pays them out through Stripe. Cuts booking time from 4 hours/week to 20 minutes.
+First month free. No card required.
+👉 Sign up at gigsfill.com/venues
+
+<strong>Headline:</strong> Stop chasing bands to fill Friday.
+<strong>Description:</strong> Book Ventura + LA musicians in minutes. Free trial.
+<strong>CTA button:</strong> Sign Up
+
+<strong>Targeting:</strong>
+• Location: 25-mile radius from Thousand Oaks (or set custom Ventura County + LA metro polygon)
+• Age: 30–65
+• Interests: Restaurant management, Small business owners, Live music, Bar (business)
+• Layered targeting: must match "small business owner" OR "restaurant industry professional"
+• Behaviors: Small business owners
+• Language: English
+
+<strong>Visual:</strong> Photo of live gig at a Ventura venue, purple/cyan color grade, "FIRST MONTH FREE" text overlay bottom-left. Shot in 1:1 for feed, second version 9:16 for Stories.</div>
+</div>
+
+<h3>Meta Ad #2 — ARTIST, Reels format</h3>
+<div class="post-box">
+<div class="meta">Objective · Traffic → sign-up · Budget $15/day</div>
+<div class="body"><strong>Primary text:</strong>
+Working musician in Ventura or LA? Stop losing gigs to slow text replies.
+GigsFill shows you every open Friday within 25 miles. Book instantly. Stripe pays you the day after the gig.
+Sign-up: 3 minutes.
+👉 gigsfill.com
+
+<strong>Headline:</strong> Get paid for your next gig — automatically.
+<strong>Description:</strong> Book local paid shows. Get paid within a week.
+<strong>CTA button:</strong> Sign Up
+
+<strong>Targeting:</strong>
+• Location: 30-mile radius LA metro + Ventura County
+• Age: 21–55
+• Interests: Musical instruments, Band member, Gigging musician, Open mic, Songwriter, Recording studio
+• Behaviors: Frequent live event attendees
+• Language: English
+
+<strong>Visual:</strong> Repurpose Reel #2 ("Payout day") — 15 seconds. Vertical 9:16.</div>
+</div>
+
+<h3>Meta Ad #3 — RETARGETING</h3>
+<div class="post-box">
+<div class="meta">Objective · Conversions · Budget $8/day · starts Day 40</div>
+<div class="body"><strong>Primary text:</strong>
+Still thinking about it? Here's what happened when [Owner Name] at [Venue] switched to GigsFill:
+
+"I used to spend 4 hours a week booking. Now it's 20 minutes."
+
+Free-trial month is still open — no card required.
+👉 gigsfill.com
+
+<strong>Headline:</strong> Real venues. Real bookings.
+<strong>CTA button:</strong> Sign Up
+
+<strong>Targeting:</strong> Custom audience = website visitors last 30 days who did NOT complete signup event.
+
+<strong>Visual:</strong> 30-second testimonial video from a venue owner. Nothing beats a real person on camera for retargeting.</div>
+</div>
+
+<h3>Google Search Ad — VENUE keywords</h3>
+<div class="post-box">
+<div class="meta">Objective · Conversions · Budget $15/day</div>
+<div class="body"><strong>Keywords (exact/phrase match):</strong>
+"book a band for my restaurant"
+"how to book live music"
+"live music booking platform"
+"book musicians for restaurant"
+"hire a live band"
+"live music booking Ventura"
+"live music booking Los Angeles"
+
+<strong>Ad copy (3 variants — Google will A/B automatically):</strong>
+
+<em>Headline set A:</em>
+Headline 1: Book Live Music in Minutes
+Headline 2: Free Trial · No Card Required
+Headline 3: Ventura + LA Musicians
+Description 1: Post open dates. Preferred artists apply. Contracts auto-sign. Stripe pays them out.
+Description 2: Made by musicians for restaurants. See why local bars are switching.
+
+<em>Headline set B:</em>
+Headline 1: Stop Chasing Bands via Text
+Headline 2: Auto-Book Live Music
+Headline 3: GigsFill for Restaurants
+Description 1: Cut booking time from 4 hours a week to 20 minutes. First month free.
+Description 2: Vetted local artists. Auto contracts. Same-week Stripe payouts.
+
+<strong>Landing page:</strong> gigsfill.com/venues (build a dedicated LP if not exists)
+<strong>Ad extensions:</strong> Add site links to /how-it-works, /pricing, and /testimonials. Add call extension with your business phone.</div>
+</div>
+
+<!-- =============================================================== -->
+<h2>12 · Metrics — what to track, when to pivot</h2>
+
+<h3>Weekly dashboard (30-min review every Sunday night)</h3>
+<table>
+<tr><th>Metric</th><th>Green if</th><th>Yellow if</th><th>Red if</th></tr>
+<tr><td>Venue signups / week</td><td>&gt; 8</td><td>4–8</td><td>&lt; 4</td></tr>
+<tr><td>Artist signups / week</td><td>&gt; 40</td><td>15–40</td><td>&lt; 15</td></tr>
+<tr><td>% gigs booked within 7d</td><td>&gt; 40%</td><td>20–40%</td><td>&lt; 20%</td></tr>
+<tr><td>Avg cost per venue signup (paid ads)</td><td>&lt; $25</td><td>$25–75</td><td>&gt; $75</td></tr>
+<tr><td>Avg cost per artist signup (paid ads)</td><td>&lt; $8</td><td>$8–20</td><td>&gt; $20</td></tr>
+<tr><td>Instagram follower growth / week</td><td>&gt; 100</td><td>30–100</td><td>&lt; 30</td></tr>
+</table>
+
+<h3>Pivot triggers</h3>
+<ul>
+  <li><strong>Red on "% gigs booked within 7d"</strong> → your artist supply is thin. Freeze venue outreach for 5 days, spend that week on artist recruitment (DMs + local music school outreach). Everything else waits.</li>
+  <li><strong>Red on "Avg cost per venue signup"</strong> → paid ads aren't working. Kill them and 2x your in-person outreach. Not every product wins on paid ads — many marketplaces launch entirely through personal networks.</li>
+  <li><strong>Green across the board for 3+ weeks</strong> → increase paid ad budget by 50%. Expand geographic radius by 10 miles.</li>
+</ul>
+
+<!-- =============================================================== -->
+<h2>13 · Tool Stack &amp; Budget Breakdown</h2>
+
+<h3>Tools (essentials only)</h3>
+<table>
+<tr><th>Tool</th><th>Purpose</th><th>Cost / month</th><th>Setup time</th></tr>
+<tr><td>Canva Pro</td><td>All visuals</td><td>$12.99</td><td>0 min</td></tr>
+<tr><td>Later or Meta Business Suite</td><td>Schedule social posts</td><td>$0 – $18</td><td>15 min</td></tr>
+<tr><td>Google Analytics 4</td><td>Track signups by source</td><td>Free</td><td>15 min</td></tr>
+<tr><td>Meta Pixel</td><td>Retargeting</td><td>Free</td><td>15 min</td></tr>
+<tr><td>Notion or Google Sheet</td><td>Daily dashboard</td><td>Free</td><td>10 min</td></tr>
+<tr><td>Zapier (optional)</td><td>Auto-post cross-platform</td><td>$0 – $20</td><td>20 min</td></tr>
+<tr><td>CapCut</td><td>Reels editing (free, phone-based)</td><td>Free</td><td>0 min</td></tr>
+<tr><td>Moo / Vistaprint</td><td>Business cards (one-time)</td><td>$40 once</td><td>30 min</td></tr>
+</table>
+
+<h3>Full 90-day budget breakdown</h3>
+<table>
+<tr><th>Category</th><th>Amount</th><th>Notes</th></tr>
+<tr><td>Meta Ads (venue + artist + retargeting)</td><td>$1,060</td><td>$30/day × 30 + $8/day × 20</td></tr>
+<tr><td>Google Ads</td><td>$300</td><td>$20/day × 15</td></tr>
+<tr><td>Canva Pro (3 months)</td><td>$40</td><td>—</td></tr>
+<tr><td>Later scheduling (3 months)</td><td>$55</td><td>—</td></tr>
+<tr><td>Business cards + flyers</td><td>$60</td><td>—</td></tr>
+<tr><td>Chamber of Commerce (Thousand Oaks + Ventura)</td><td>$600</td><td>Optional but high-ROI</td></tr>
+<tr><td>Local sponsorship / event (Ventura Music Life or similar)</td><td>$500</td><td>Optional</td></tr>
+<tr><td>Testimonial incentives (Stripe credit / free t-shirts for early venue testimonials)</td><td>$150</td><td>—</td></tr>
+<tr><td>Contingency</td><td>$400</td><td>Always keep a buffer</td></tr>
+<tr><td><strong>TOTAL</strong></td><td><strong>$3,165</strong></td><td>Fits your "small marketing budget"</td></tr>
+</table>
+
+<div class="callout green">
+<strong>If budget is tight ($1000 or less)</strong> — cut Google Ads, cut Chamber, cut sponsorship. Everything else remains. You can launch on Meta Ads + Canva + your own time for under $1,000. The personal outreach in Phase 1 is 90% of your first wins anyway — paid ads only amplify a working funnel.
+</div>
+
+<!-- =============================================================== -->
+<h2>Final note — the one thing that matters</h2>
+
+<p>Every marketplace launch fails or wins on the same axis: <strong>are you willing to do things that don't scale for the first 60 days?</strong></p>
+
+<p>Personally visit 40 venues. DM 200 artists. Follow up 3 times each. Attend gigs to shoot content. Text venue owners about their Friday. Answer every early signup within an hour. Show up at the Ventura Chamber mixer.</p>
+
+<p>You have every technical piece in place. The product works. The Stripe pipeline works. The email notifications work. The demo cheat sheet exists. The 1099-K auto-issues. All the code is done.</p>
+
+<p>What's left is <em>you</em>, in person, in the local music scene, one venue and one musician at a time, for 90 days. That's the whole strategy.</p>
+
+<p>Then the flywheel spins.</p>
+
+<footer>
+<strong>GigsFill Launch Playbook</strong> · 90-Day Rollout Strategy · Created for John Carta · gigsfill.com
+</footer>
+
+</body>
+</html>

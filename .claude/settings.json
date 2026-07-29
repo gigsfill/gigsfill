@@ -160,7 +160,10 @@
       "Bash(sqlite3 -header -column backend.db \"PRAGMA table_info\\(transactions\\);\")",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8001/app/static/js/artist-booked-gigs-modal.js)",
+      "Bash(curl -s http://localhost:8001/app/artist-book-gigs.html)",
+      "Bash(sqlite3 /opt/gigsfill/backend.db \"SELECT DISTINCT entity_type FROM entity_users;\")"
     ]
   }
 }

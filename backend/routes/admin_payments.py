@@ -358,7 +358,9 @@ def search_payments(
         where.append("g.venue_id = :vid")
         params["vid"] = int(venue_id)
     if artist_id is not None:
-        where.append("(t.artist_id = :aid OR g.artist_id = :aid)")
+        # Jul 2026 refactor: dropped `OR g.artist_id = :aid` legacy fallback.
+        # `t.artist_id` is authoritative on transactions.
+        where.append("t.artist_id = :aid")
         params["aid"] = int(artist_id)
 
     if q:
@@ -418,8 +420,12 @@ def search_payments(
         LEFT JOIN artists a  ON a.id = t.artist_id
         LEFT JOIN artists a2 ON a2.id = g.artist_id
         WHERE {where_sql}
-        ORDER BY COALESCE(t.processed_at, t.scheduled_process_at, t.created_at) DESC,
-                 t.id DESC
+        -- Jul 2026: default sort switched to gig-date DESC per user
+        -- request ("most recent gigs at the top") — matches the new
+        -- Payments table layout where Gig Date is the leftmost column.
+        -- start_time as secondary keeps same-day gigs in reverse
+        -- chronological order; id DESC breaks ties deterministically.
+        ORDER BY g.date DESC, g.start_time DESC, t.id DESC
         LIMIT :lim OFFSET :off
     """), params).mappings().all()
 
@@ -453,12 +459,59 @@ def payment_stats(
         params["td"] = to_date
     where_sql = " AND ".join(where)
 
-    # Parent rows for revenue / commission
+    # Parent rows for revenue / commission / accounting totals.
+    # Jul 2026 merge of the Platform Settings → Payment Accounting sub-tab
+    # into this Payments tab:
+    #   • `gig_value_cents`   = SUM(amount_cents) on completed non-cancelled
+    #     rows. `amount_cents` is the gig pay ("gig_fee_cents" in /accounting's
+    #     JS payload is just an alias of this column).
+    #   • `stripe_fees_cents` = SUM(credit_card_fee_cents), the real Stripe
+    #     billing captured from balance_transaction. Legacy rows without a
+    #     captured fee show 0 here (rather than the 2.9% + $0.30 estimate
+    #     that /accounting reconstructs per-row) — trade-off for keeping this
+    #     aggregation a single indexable SQL SUM instead of per-row Python.
+    #   • `net_profit_cents`  = commission_cents − credit_card_fee_cents on
+    #     rows where a charge cleared; same fallback caveat as above.
+    # Cancelled rows contribute their `platform_fee_charged_cents` to
+    # commission but nothing to gig value (the gig didn't happen).
     parent = db.execute(text(f"""
         SELECT
             COUNT(*) as count,
             COALESCE(SUM(CASE WHEN t.status IN ('paid','transferred','charged') THEN t.venue_charge_cents ELSE 0 END), 0) as revenue_cents,
-            COALESCE(SUM(CASE WHEN t.status IN ('paid','transferred','charged') THEN t.commission_cents   ELSE 0 END), 0) as commission_cents,
+            COALESCE(SUM(
+              CASE
+                WHEN t.status IN ('paid','transferred','charged') THEN t.commission_cents
+                WHEN t.status = 'payment_cancelled'               THEN COALESCE(t.platform_fee_charged_cents, 0)
+                ELSE 0
+              END
+            ), 0) as commission_cents,
+            COALESCE(SUM(
+              CASE
+                WHEN t.status IN ('paid','transferred','charged','pending_transfer','transfer_failed')
+                THEN COALESCE(t.amount_cents, 0)
+                ELSE 0
+              END
+            ), 0) as gig_value_cents,
+            SUM(CASE
+                  WHEN t.status IN ('paid','transferred','charged','pending_transfer','transfer_failed')
+                  THEN 1 ELSE 0
+                END) as gig_value_count,
+            COALESCE(SUM(
+              CASE
+                WHEN t.status IN ('paid','transferred','charged','pending_transfer','transfer_failed','payment_cancelled')
+                THEN COALESCE(t.credit_card_fee_cents, 0)
+                ELSE 0
+              END
+            ), 0) as stripe_fees_cents,
+            COALESCE(SUM(
+              CASE
+                WHEN t.status IN ('paid','transferred','charged','pending_transfer','transfer_failed')
+                THEN COALESCE(t.commission_cents, 0) - COALESCE(t.credit_card_fee_cents, 0)
+                WHEN t.status = 'payment_cancelled'
+                THEN COALESCE(t.platform_fee_charged_cents, 0) - COALESCE(t.credit_card_fee_cents, 0)
+                ELSE 0
+              END
+            ), 0) as net_profit_cents,
             SUM(CASE WHEN t.status = 'scheduled'           THEN 1 ELSE 0 END) as scheduled,
             SUM(CASE WHEN t.status = 'charged'             THEN 1 ELSE 0 END) as charged,
             SUM(CASE WHEN t.status = 'paid'                THEN 1 ELSE 0 END) as paid,
@@ -484,9 +537,13 @@ def payment_stats(
 
     return {
         "count": parent["count"] if parent else 0,
-        "revenue_cents":    parent["revenue_cents"] if parent else 0,
-        "commission_cents": parent["commission_cents"] if parent else 0,
-        "payouts_cents":    child["payouts_cents"]    if child  else 0,
+        "revenue_cents":     parent["revenue_cents"]     if parent else 0,
+        "commission_cents":  parent["commission_cents"]  if parent else 0,
+        "payouts_cents":     child["payouts_cents"]      if child  else 0,
+        "gig_value_cents":   parent["gig_value_cents"]   if parent else 0,
+        "gig_value_count":   parent["gig_value_count"]   if parent else 0,
+        "stripe_fees_cents": parent["stripe_fees_cents"] if parent else 0,
+        "net_profit_cents":  parent["net_profit_cents"]  if parent else 0,
         "by_status": {
             "scheduled":       parent["scheduled"]       or 0,
             "charged":         parent["charged"]         or 0,

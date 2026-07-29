@@ -223,17 +223,23 @@ async function loadVenueBillingHistory() {
       //   - Paid ✓    : artist payout completed
       var statusMap = { paid:'Paid ✓', charged:'Processing', test:'Test', scheduled:'Scheduled', pending:'Upcoming', charge_retry:'Retrying', payment_failed:'Failed', pending_transfer:'Processing', transfer_failed:'Processing', payment_cancelled:'Cancelled', free_trial:'🎟 Free Trial' };
       var colorMap = { paid:'#10b981', charged:'#f59e0b', test:'#60a5fa', scheduled:'#8b5cf6', pending:'#8b5cf6', charge_retry:'#f97316', payment_failed:'#ef4444', pending_transfer:'#f59e0b', transfer_failed:'#f59e0b', payment_cancelled:'#f97316', free_trial:'#f59e0b' };
-      // Format time from "HH:MM" 24h or similar to 12h display
-      var rawTime = t.gig_time || t.start_time || '';
-      var displayTime = rawTime;
-      if (rawTime && rawTime.indexOf(':') > -1) {
-        var parts = rawTime.split(':');
-        var h = parseInt(parts[0], 10);
-        var m = parts[1] || '00';
+      // Format time from "HH:MM" 24h or similar to 12h display.
+      // Jul 2026: also format end_time when available and show the full
+      // range ("8:00 PM - 11:00 PM") to match how gig times render
+      // elsewhere on the site.
+      function _fmt12(raw) {
+        if (!raw || raw.indexOf(':') < 0) return raw || '';
+        var p = raw.split(':');
+        var h = parseInt(p[0], 10);
+        var m = p[1] || '00';
         var ampm = h >= 12 ? 'PM' : 'AM';
         h = h % 12 || 12;
-        displayTime = h + ':' + m + ' ' + ampm;
+        return h + ':' + m + ' ' + ampm;
       }
+      var rawTime = t.gig_time || t.start_time || '';
+      var rawEnd  = t.gig_end_time || t.end_time || '';
+      var displayTime = _fmt12(rawTime);
+      if (rawEnd) displayTime = displayTime + ' - ' + _fmt12(rawEnd);
       var isCx = t.status === 'payment_cancelled';
       var isFreeTrial = t.status === 'free_trial';
       var gigFeeCents = t.amount_cents || 0;
@@ -351,8 +357,15 @@ function renderVenueBillingTable() {
   };
 
   var hdrStyle = 'cursor:pointer;user-select:none;padding:8px 10px;font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid rgba(255,255,255,0.08);white-space:nowrap;';
-  var html = '<table style="width:100%;border-collapse:collapse;table-layout:fixed;">';
-  html += '<colgroup><col style="width:14%"><col style="width:10%"><col style="width:22%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:12%"></colgroup>';
+  // min-width 720px ensures the 7-column table stays readable — the
+  // wrapper (#venueBillingHistory) has overflow-x:auto so on a 375px
+  // portrait phone the table scrolls sideways instead of squishing
+  // every cell to ~40px and wrapping "Platform Fee" over 3 lines.
+  var html = '<table style="width:100%;min-width:720px;border-collapse:collapse;table-layout:fixed;">';
+  // Order: Date | Time | Artist | Gig Fee | Platform Fee | Total Paid | Status.
+  // Date column tightened to 11% (fits "Dec 24, 2026"), Time widened
+  // to 15% for "8:00 PM - 11:00 PM" ranges; Artist absorbs the surplus.
+  html += '<colgroup><col style="width:11%"><col style="width:15%"><col style="width:22%"><col style="width:12%"><col style="width:14%"><col style="width:14%"><col style="width:12%"></colgroup>';
   html += '<thead><tr>';
   html += '<th style="' + hdrStyle + 'text-align:left;" onclick="venueBillSortBy(\'gig_date_sort\')">Date' + arrow('gig_date_sort') + '</th>';
   html += '<th style="' + hdrStyle + 'text-align:left;">Time</th>';
@@ -374,14 +387,42 @@ function renderVenueBillingTable() {
       ? '<a href="/app/artist-profile.html?artist_id=' + (parseInt(t.artist_id, 10) || 0) + '" style="color:var(--text-white);text-decoration:none;border-bottom:1px dashed rgba(255,255,255,0.3);" onmouseover="this.style.color=\'#a78bfa\'" onmouseout="this.style.color=\'var(--text-white)\'">' + _vsp_esc(t.artist_name) + '</a>'
       : _vsp_esc(t.artist_name);
     var isCancelled = t.rawStatus === 'payment_cancelled';
-    var statusCell = '<span style="color:' + t.statusColor + ';">' + t.status + '</span>';
+    // Jul 2026: per-status hover explanation — venue sees what "Processing"
+    // vs "Paid ✓" actually means in the payment lifecycle without having
+    // to ask support. Returns a plain string for `title=` (browser-native
+    // tooltip, no CSS/layout risk).
+    function _statusExplain(rawStatus, displayStatus) {
+      var explanations = {
+        // Terminal states
+        paid:             'Paid ✓ — your card was successfully charged and the artist has been paid from those funds. Nothing more to do on this gig.',
+        payment_cancelled:'Cancelled — the payment for this gig was cancelled. If the artist still needs to be paid, click "Pay Artist?" to reinstate it.',
+        payment_failed:   'Failed — after 3 charge attempts we still could not collect payment. Your venue account is now suspended. Update your card in Payments → Payment Method to reactivate.',
+        transfer_failed:  'Transfer Failed — we successfully charged your card but could not transfer funds to the artist. Support will resolve this manually; the artist has been notified.',
+        free_trial:       '🎟 Free Trial — this gig used a free-trial credit. No money was charged to your card.',
+        // Non-terminal
+        scheduled:        'Scheduled — the gig is confirmed and booked. Your card will be charged the day after the gig at 5:00 PM local time.',
+        pending:          'Upcoming — the gig is confirmed and booked. Your card will be charged the day after the gig at 5:00 PM local time.',
+        charged:          'Processing — the gig has started or completed. Your card was charged and we are now processing the artist payout. This typically completes within 1 business day.',
+        pending_transfer: 'Processing — your card was charged; the artist transfer is queued. Should complete within a few hours.',
+        charge_retry:     'Retrying — your card was declined on the first attempt. We will automatically retry over the next 48 hours. Please update your payment card in Payments → Payment Method if the card is expired or changed.',
+      };
+      // Fall back on displayStatus when the raw status isn't in the map.
+      return explanations[rawStatus] ||
+        (displayStatus === 'Upcoming'
+          ? 'Upcoming — the gig is confirmed and booked. Your card will be charged the day after the gig at 5:00 PM local time.'
+          : displayStatus === 'Processing'
+            ? 'Processing — the gig has started or completed. Your card was charged and we are now processing the artist payout. This typically completes within 1 business day.'
+            : 'Status: ' + displayStatus);
+    }
+    var _statusTip = _vsp_esc(_statusExplain(t.rawStatus, t.status));
+    var statusCell = '<span title="' + _statusTip + '" style="color:' + t.statusColor + ';cursor:help;">' + t.status + '</span>';
     if (isCancelled) {
       // Cancelled artist_payout child → per-slot reinstate (passes
       // slot_id to the new endpoint). Cancelled venue_charge parent
       // → legacy whole-gig reinstate (no slot_id). The dispatcher
       // is showReinstatePaymentModal(txnId, slotId).
       var _slotArg = t.cancelled_slot_id != null ? ', ' + parseInt(t.cancelled_slot_id, 10) : '';
-      statusCell = '<span style="color:#f97316;">Cancelled</span> '
+      statusCell = '<span title="' + _statusTip + '" style="color:#f97316;cursor:help;">Cancelled</span> '
         + '<a href="javascript:void(0)" onclick="showReinstatePaymentModal(' + t.txn_id + _slotArg + ')" '
         + 'style="color:#a78bfa;font-size:0.7rem;text-decoration:none;border-bottom:1px dashed rgba(167,139,250,0.5);cursor:pointer;white-space:nowrap;">Pay Artist?</a>';
     }
@@ -416,9 +457,27 @@ function renderVenueBillingTable() {
     var gigFeeCell = hoverHtml
       ? '<span class="gf-pay-hover-host" style="position:relative;cursor:help;border-bottom:1px dashed rgba(255,255,255,0.25);">' + feeStyled + hoverHtml + '</span>'
       : feeStyled;
+    // Jul 2026: hover tooltip on the Total Paid amount — shows the
+    // venue what actually gets charged to their card and how it breaks
+    // down. Terminal-state ("paid") wording is past-tense; non-terminal
+    // wording is future-tense.
+    var _amtTerminal = { paid:1, payment_cancelled:1, payment_failed:1, free_trial:1 }[t.rawStatus];
+    var _amtTip;
+    if (t.rawStatus === 'payment_cancelled') {
+      _amtTip = 'Platform fee owed on the cancelled booking: $' + t.total_paid.toFixed(2) + '. The gig fee is not owed (artist did not perform). Click "Pay Artist?" to reinstate the payment.';
+    } else if (t.rawStatus === 'free_trial') {
+      _amtTip = '🎟 Free trial — nothing was charged to your card. Amount shown is what the gig would have cost.';
+    } else if (t.rawStatus === 'payment_failed') {
+      _amtTip = 'This is the amount we tried to charge your card ($' + t.gig_fee.toFixed(2) + ' gig fee + $' + t.platform_fee.toFixed(2) + ' platform fee). All 3 attempts failed. Update your card to retry.';
+    } else if (_amtTerminal) {
+      _amtTip = 'Your card was charged $' + t.total_paid.toFixed(2) + ' — $' + t.gig_fee.toFixed(2) + ' gig fee (paid to artist) + $' + t.platform_fee.toFixed(2) + ' platform fee (GigsFill).';
+    } else {
+      _amtTip = 'Your card will be charged $' + t.total_paid.toFixed(2) + ' the day after the gig — $' + t.gig_fee.toFixed(2) + ' gig fee (paid to artist) + $' + t.platform_fee.toFixed(2) + ' platform fee (GigsFill).';
+    }
+    var _amtTipEsc = _vsp_esc(_amtTip);
     var totalPaidCell = isCancelled
-      ? '<span style="font-weight:700;color:#f97316;">$' + t.total_paid.toFixed(2) + '</span><div style="font-size:0.7rem;color:var(--text-muted);">platform fee</div>'
-      : '<span style="font-weight:700;">$' + t.total_paid.toFixed(2) + '</span>';
+      ? '<span title="' + _amtTipEsc + '" style="font-weight:700;color:#f97316;cursor:help;border-bottom:1px dashed rgba(249,115,22,0.4);">$' + t.total_paid.toFixed(2) + '</span><div style="font-size:0.7rem;color:var(--text-muted);">platform fee</div>'
+      : '<span title="' + _amtTipEsc + '" style="font-weight:700;cursor:help;border-bottom:1px dashed rgba(255,255,255,0.25);">$' + t.total_paid.toFixed(2) + '</span>';
     html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
     html += '<td style="padding:10px;font-size:0.85rem;color:var(--text-gray);">' + t.gig_date + '</td>';
     html += '<td style="padding:10px;font-size:0.85rem;color:var(--text-gray);">' + (t.gig_time || '') + '</td>';

@@ -8,7 +8,8 @@
 <meta name="description" content="Sign up for GigsFill as a musician or venue. Create your profile, list gigs, and connect with the live music community.">
 <meta name="robots" content="index, follow">
 <link rel="canonical" href="https://gigsfill.com/app/signup-new.html">
-<link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+<link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
 <meta name="theme-color" content="#0f1419">
@@ -301,6 +302,8 @@ textarea { min-height: 60px !important; max-height: 80px; }
 <option value="DJ">DJ</option>
 <option value="Comedian">Comedian</option>
 <option value="Trivia Host">Trivia Host</option>
+<option value="Open Mic MC">Open Mic MC</option>
+<option value="Karaoke MC">Karaoke MC</option>
 </select>
 </div>
 <div class="field" id="bandFormatsField" style="display: none;">
@@ -360,6 +363,17 @@ textarea { min-height: 60px !important; max-height: 80px; }
 <span>Full Band</span>
 </label>
 </div>
+</div>
+<!-- Jul 1 2026: MC-type equipment opt-in on signup. Hidden until the
+     user picks Open Mic MC or Karaoke MC in the artistType select. -->
+<div class="field" id="mcEquipmentField" style="display: none;">
+<label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+<input type="checkbox" id="signupHasOwnEquipment">
+<span>I bring my own equipment (PA, mic, speakers, cables)</span>
+</label>
+<p style="margin:6px 0 0 26px; color: var(--text-gray,#94a3b8); font-size: 0.75rem;">
+Venues can require this. When they do, you'll only be matched with the gig if this is checked. You can change it later on your profile.
+</p>
 </div>
 <div class="field">
 <label class="required">City</label>
@@ -566,8 +580,8 @@ textarea { min-height: 60px !important; max-height: 80px; }
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
-<script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/signup-new-init.js?v=7"></script>
+<script src="/app/static/js/gf-modals.js?v=8"></script>
+<script src="/app/static/js/signup-new-init.js?v=8"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>

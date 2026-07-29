@@ -149,7 +149,9 @@ function showForgotPasswordModal() {
     </div>
   `;
   
-  showModal('Reset Password', modalHTML, [
+  // Uses static template HTML (no user input) → opt in via showModalHTML
+  // now that plain showModal() escapes by default (Jul 2026 audit F-M6).
+  showModalHTML('Reset Password', modalHTML, [
     { text: 'Cancel', onClick: null },
     { text: 'Send Reset Link', primary: true, onClick: sendPasswordReset }
   ]);
@@ -255,7 +257,7 @@ initCityAutocomplete({ inputId: 'searchCity' });
         'font-size: 0.72rem; color: var(--text-gray);' +
         ' margin-top: 4px; line-height: 1.4;';
       note.innerHTML =
-        'We guessed your city from your IP address - ' +
+        'We guessed your city from your current location - ' +
         '<a href="#" class="gf-city-guess-change"' +
         ' style="color: var(--cyan); text-decoration: none;' +
         ' border-bottom: 1px dashed rgba(6,182,212,0.55);">change</a>' +

@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -40,6 +41,16 @@
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
+    /* Section header gradient (matches artist-book-gigs.html + venue-create-gigs.html — Jul 2026). */
+    .gradient-title {
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      width: fit-content;
+    }
+
     .admin-container {
       max-width: 1100px;
       margin: 0 auto;
@@ -771,7 +782,7 @@
   
   <script src="/app/static/js/auth.guard.js?v=3"></script>
   <script src="/app/static/js/api-globals.js?v=11"></script>
-  <script src="/app/static/js/user-dropdown.js?v=9"></script>
+  <script src="/app/static/js/user-dropdown.js?v=11"></script>
 
   <div class="admin-container">
 
@@ -784,13 +795,16 @@
 
     <div class="tabs">
       <button class="tab active" onclick="switchTab('platform')">Platform Settings</button>
+      <button class="tab" onclick="switchTab('directory')">Directory</button>
       <button class="tab" onclick="switchTab('payments')">Payments</button>
-      <button class="tab" onclick="switchTab('support')">Support</button>
-      <button class="tab" onclick="switchTab('templates')">Email Templates</button>
-      <button class="tab" onclick="switchTab('flyertemplates')">Flyer Templates</button>
+      <!-- Jul 2026 restructure: Demo Requests + Support Tickets + Contact
+           Messages are all inbound-visitor "someone wants a response"
+           channels — collapsed onto one Messages top-level tab with
+           three sub-tabs. Badge sums unread counts across all three. -->
+      <button class="tab" onclick="switchTab('messages')">Messages <span id="messagesTabBadge" style="display:none;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:4px;vertical-align:middle;"></span></button>
+      <button class="tab" onclick="switchTab('templates')">Templates</button>
       <button class="tab" onclick="switchTab('affiliates')">Affiliates</button>
-      <button class="tab" onclick="switchTab('analytics')">Analytics</button>
-      <button class="tab" onclick="switchTab('dblogs')">DB / Logs</button>
+      <button class="tab" onclick="switchTab('dblogs')">Stats/DB/Logs</button>
     </div>
 
     <!-- PLATFORM SETTINGS TAB -->
@@ -821,15 +835,10 @@
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:8px;align-items:center;">
         <span style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px;">Site Status</span>
 
-        <!-- Payments live/off -->
+        <!-- Payments: always live (Test Mode removed Jul 1 2026) -->
         <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
           <span style="font-size:0.7rem;color:var(--text-gray);">💳 Payments</span>
-          <span id="paymentsStatusLabel" style="font-size:0.7rem;font-weight:700;color:#ef4444;">OFF</span>
-          <div style="position:relative;width:36px;height:20px;">
-            <input type="checkbox" id="paymentsEnabled" onchange="togglePaymentsEnabled()" style="opacity:0;width:0;height:0;position:absolute;">
-            <div id="paymentsToggleTrack" onclick="document.getElementById('paymentsEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
-            <div id="paymentsToggleThumb" onclick="document.getElementById('paymentsEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
-          </div>
+          <span style="font-size:0.7rem;font-weight:700;color:#10b981;">LIVE</span>
         </div>
 
         <!-- Affiliate program on/off (quick toggle mirrors affiliate settings) -->
@@ -905,7 +914,7 @@
       <!-- ── DATA DRILLDOWN ────────────────────────────────────────────────── -->
       <div class="content-card" id="dataSection" style="display:none;padding:12px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
-          <h2 class="section-header" id="dataTitle" style="font-size:0.85rem;font-weight:700;margin:0;color:var(--cyan);">Users</h2>
+          <h2 class="section-header gradient-title" id="dataTitle" style="font-size:0.85rem;font-weight:700;margin:0;">Users</h2>
           <div style="display:flex;gap:8px;align-items:center;">
             <input type="text" id="searchInput" placeholder="Search…" style="padding:5px 10px;font-size:0.78rem;background:#0d1220;border:1px solid var(--border);border-radius:6px;color:var(--text);width:180px;" oninput="filterDsSearch(this.value)">
             <button onclick="changePage(-1)" id="prevBtn" style="padding:4px 10px;font-size:0.75rem;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text);cursor:pointer;">← Prev</button>
@@ -922,7 +931,6 @@
         <button class="ps-subtab active" onclick="switchPsTab('email')">Email Settings</button>
         <button class="ps-subtab" onclick="switchPsTab('text')">Text Settings</button>
         <button class="ps-subtab" onclick="switchPsTab('payment')">Payment Settings</button>
-        <button class="ps-subtab" onclick="switchPsTab('accounting')">Payment Accounting</button>
         <button class="ps-subtab" onclick="switchPsTab('flags')">Venue Flags</button>
         <button class="ps-subtab" onclick="switchPsTab('digest')">Digest Queue</button>
         <button class="ps-subtab" onclick="switchPsTab('connect-health')">Account Health</button>
@@ -1232,17 +1240,11 @@
         <div style="text-align:center;margin-top:6px;color:var(--cyan);font-weight:600;font-size:0.78rem;opacity:0;transition:opacity .3s;" id="paymentSaveIndicator">✓ Payment Settings Saved</div>
       </div>
 
-      <!-- ── Sub-tab: Payment Accounting ── -->
-      <div class="ps-subtab-content" id="ps-accounting">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <span style="font-size:0.78rem;font-weight:700;color:var(--text);">💰 Payment Accounting</span>
-          <button onclick="showAccountingExportModal()" style="padding:5px 12px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.4);border-radius:6px;color:#c4b5fd;cursor:pointer;font-size:0.72rem;font-weight:600;">📥 Export</button>
-        </div>
-        <div id="accountingSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
-        <div style="font-size:0.7rem;color:var(--text-gray);margin-bottom:6px;">All transactions processed through GigsFill</div>
-        <div id="accountingTable" style="overflow-x:auto;"></div>
-        <div id="accountingPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;"></div>
-      </div>
+      <!-- Payment Accounting sub-tab was merged into the top-level
+           Payments tab on 2026-07-20: the 5 accounting bubbles now
+           sit alongside the operational KPIs (honoring the same date
+           filter — better than the old all-time-only view), and the
+           📥 Export button lives in the Payments header. -->
 
       <!-- ── Sub-tab: Digest Queue — visibility into the open-gig
            daily-digest pipeline (Jun 19 2026). Two tables: who has
@@ -1302,6 +1304,24 @@
           </div>
         </div>
         <div id="connectHealthList"></div>
+
+        <!-- 2026-07-25: Recent Alerts history — dismissed + auto-resolved
+             system alerts from the last N days. Prevents dismissed alerts
+             from becoming invisible; also gives a quick audit trail of
+             what fired and how it resolved. -->
+        <div id="alertsHistorySection" style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+            <div>
+              <span style="font-size:0.78rem;font-weight:700;color:var(--text);">Recent Alerts</span>
+              <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">
+                Dismissed (last 30d) and auto-resolved (last 7d) system alerts. Dismissed rows re-appear in the top banner if the underlying condition trips again.
+              </span>
+            </div>
+            <button type="button" onclick="if(typeof loadAlertsHistory==='function')loadAlertsHistory()"
+              style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+          </div>
+          <div id="alertsHistoryList" style="font-size:0.75rem;color:var(--text-gray);">Loading…</div>
+        </div>
       </div>
 
       <div class="ps-subtab-content" id="ps-flags">
@@ -1353,6 +1373,7 @@
             <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">All venues + artists. Click any row for actions.</span>
           </div>
           <div style="display:flex;gap:6px;">
+            <button onclick="showAccountingExportModal()" style="padding:5px 12px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.4);border-radius:6px;color:#c4b5fd;cursor:pointer;font-size:0.72rem;font-weight:600;" title="Export accounting data (CSV / print)">📥 Export</button>
             <button onclick="apOpenReconcile()" style="padding:5px 12px;background:rgba(139,92,246,0.15);border:1px solid rgba(139,92,246,0.45);border-radius:6px;color:#c4b5fd;cursor:pointer;font-size:0.72rem;font-weight:600;">⟳ Reconcile</button>
             <button onclick="apReload()" style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
           </div>
@@ -1364,7 +1385,15 @@
           <button onclick="apOpenBulk()" style="padding:4px 12px;background:rgba(6,182,212,0.18);border:1px solid rgba(6,182,212,0.45);border-radius:5px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">Bulk action…</button>
           <button onclick="apClearSelection()" style="padding:4px 12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:5px;color:var(--text-gray);cursor:pointer;font-size:0.72rem;">Clear</button>
         </div>
-        <div id="apStats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px;"></div>
+        <!-- Payments snapshot: one clean row of 6 money bubbles
+             (Transactions, Revenue, Payouts, Commission, Stripe Fees,
+             Net Profit) + a conditional alert-pill row that only
+             appears when a status count > 0. renderStats does the
+             layout with flex inside; container is a plain block.
+             #apHeroStats kept as an empty div for backwards compat
+             with older cached JS revs — it's cleared by the JS. -->
+        <div id="apHeroStats" style="display:none;"></div>
+        <div id="apStats" style="margin-bottom:14px;"></div>
 
         <!-- Pinned-entity filter chips (shown when admin clicks a venue/artist name in the table) -->
         <div id="apPinnedFilters" style="display:none;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;"></div>
@@ -1403,19 +1432,143 @@
       </div>
     </div>
 
-    <div class="tab-content" id="support-tab">
+    <!-- DIRECTORY TAB — full-fidelity browse of every user / artist /
+         venue on the platform. Three sub-tabs; each renders a rich
+         column set (aggregations, ratings, lifetime totals) that the
+         old Platform Settings drill-down bubbles never surfaced. Row
+         click → detail modal with every field + link to public profile
+         (artists/venues) so admin can inspect fast. Delete lives per
+         row for users (fires the cascade endpoint added Jul 21 2026).
+         Search box + column-sort + pagination match the Payments and
+         Messages tab feel. Added Jul 21 2026 (batch 4). -->
+    <div class="tab-content" id="directory-tab">
+      <div class="ps-subtabs">
+        <button class="ps-subtab active" onclick="switchDirectorySubTab('users')">Users <span id="dirUsersCount" style="color:var(--text-muted);font-weight:400;">(–)</span></button>
+        <button class="ps-subtab" onclick="switchDirectorySubTab('artists')">Artists <span id="dirArtistsCount" style="color:var(--text-muted);font-weight:400;">(–)</span></button>
+        <button class="ps-subtab" onclick="switchDirectorySubTab('venues')">Venues <span id="dirVenuesCount" style="color:var(--text-muted);font-weight:400;">(–)</span></button>
+      </div>
+      <div class="ps-subtab-content active" id="directory-users" style="padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
+          <input type="text" id="dirUsersSearch" placeholder="🔍 Search name, email, phone…" oninput="window._dirFilter('users', this.value)"
+                 style="flex:1;min-width:260px;padding:7px 12px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.78rem;">
+          <button onclick="window._dirLoad('users', true)" style="padding:6px 14px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+        </div>
+        <div id="dirUsersTable" style="overflow-x:auto;min-height:120px;"></div>
+        <div id="dirUsersPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;font-size:0.72rem;color:var(--text-gray);"></div>
+      </div>
+      <div class="ps-subtab-content" id="directory-artists" style="padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
+          <input type="text" id="dirArtistsSearch" placeholder="🔍 Search name, city, state, type…" oninput="window._dirFilter('artists', this.value)"
+                 style="flex:1;min-width:260px;padding:7px 12px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.78rem;">
+          <button onclick="window._dirLoad('artists', true)" style="padding:6px 14px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+        </div>
+        <div id="dirArtistsTable" style="overflow-x:auto;min-height:120px;"></div>
+        <div id="dirArtistsPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;font-size:0.72rem;color:var(--text-gray);"></div>
+      </div>
+      <div class="ps-subtab-content" id="directory-venues" style="padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
+          <input type="text" id="dirVenuesSearch" placeholder="🔍 Search name, city, state, owner…" oninput="window._dirFilter('venues', this.value)"
+                 style="flex:1;min-width:260px;padding:7px 12px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.78rem;">
+          <button onclick="window._dirLoad('venues', true)" style="padding:6px 14px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+        </div>
+        <div id="dirVenuesTable" style="overflow-x:auto;min-height:120px;"></div>
+        <div id="dirVenuesPagination" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:8px;font-size:0.72rem;color:var(--text-gray);"></div>
+      </div>
+    </div>
+
+    <!-- MESSAGES TAB — houses Demo Requests, Help & Support Tickets, and
+         Contact Messages as three sub-tabs. All three are inbound-
+         visitor channels; grouping them puts everything requiring a
+         response in one place. Auto-defaults to the leftmost sub-tab
+         with unread items (falls through to Demo Requests when the
+         queue is clean). See switchMessagesSubTab in admin.html scripts. -->
+    <div class="tab-content" id="messages-tab">
+      <div class="ps-subtabs">
+        <button class="ps-subtab active" onclick="switchMessagesSubTab('demos')">
+          Demo Requests
+          <span id="demosPendingBadge" style="display:none;background:#ef4444;color:#fff;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:4px;vertical-align:middle;"></span>
+        </button>
+        <button class="ps-subtab" onclick="switchMessagesSubTab('tickets')">
+          Help &amp; Support Tickets
+          <span id="supportTicketsBadge" style="display:none;background:#ef4444;color:#fff;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:4px;vertical-align:middle;"></span>
+        </button>
+        <button class="ps-subtab" onclick="switchMessagesSubTab('contact')">
+          Contact Messages
+          <span id="contactMessagesBadge" style="display:none;background:#ef4444;color:#fff;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:4px;vertical-align:middle;"></span>
+        </button>
+      </div>
+
+      <!-- ─── Sub-tab: Demo Requests ───────────────────────────────── -->
+      <div class="ps-subtab-content active" id="messages-demos">
+      <!-- Pipeline settings — lives up here on the Demo sub-tab (not
+           buried in the Settings tab) so the notify email + default
+           meeting URL are editable in the same place admin is working
+           the queue. Same API keys as the Settings tab. -->
+      <div class="content-card" style="padding:14px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <span style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;">Pipeline settings</span>
+          <span style="font-size:0.7rem;color:var(--text-gray);">Notify address gets every new request. Meeting URL (Teams / Zoom / Meet) is embedded in every confirmation, reminder, and calendar invite — prospects join in-browser.</span>
+        </div>
+        <div id="demoMeetingUrlWarn" style="display:none;margin:0 0 10px 0;padding:8px 12px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:6px;font-size:0.72rem;color:#fcd34d;line-height:1.5;">
+          ⚠️ <strong>No default meeting URL set.</strong> Scheduled-demo emails will read <em>"we'll follow up with the video call link before the demo"</em> until you paste a link below — or set a per-row URL on the row's <span style="color:#86efac;">🎥 Set URL</span> button.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;">
+          <div class="field">
+            <label style="font-size:0.7rem;">Demo Request Notify Email</label>
+            <input type="email" id="demoRequestAdminEmail" placeholder="jcarta@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+          </div>
+          <div class="field">
+            <label style="font-size:0.7rem;" title="Personal Teams / Zoom / Google Meet meeting-room URL. This link is embedded into every scheduled-demo confirmation, reminder, and calendar invite. Prospects join via browser — no account needed on their end.">Default Demo Meeting URL</label>
+            <input type="url" id="demoMeetingUrl" placeholder="https://teams.microsoft.com/l/meetup-join/…" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+          </div>
+        </div>
+      </div>
+
+      <div class="content-card" style="padding:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;">
+          <div>
+            <span style="font-size:0.85rem;font-weight:700;color:var(--text);">Demo Requests</span>
+            <span style="font-size:0.7rem;color:var(--text-gray);margin-left:8px;">Prospect intakes with 3 preferred times. Accept or decline directly here.</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <label style="color:var(--text-gray);font-size:0.7rem;">Show:</label>
+            <select id="demosFilter" onchange="if(window.loadDemoRequests) loadDemoRequests(this.value)" style="padding:5px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.72rem;">
+              <option value="all" selected>All</option>
+              <option value="pending">Pending only</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="completed">Completed</option>
+              <option value="no_show">No Show</option>
+              <option value="declined">Declined</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <button onclick="if(window.loadDemoRequests) loadDemoRequests();" style="padding:5px 12px;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);border-radius:6px;color:var(--cyan);cursor:pointer;font-size:0.72rem;font-weight:600;">↺ Refresh</button>
+          </div>
+        </div>
+        <div id="demoRequestsList" style="display:flex;flex-direction:column;gap:10px;">
+          <p style="color:var(--text-gray);font-size:0.75rem;text-align:center;padding:30px 20px;">Loading…</p>
+        </div>
+      </div>
+      </div><!-- /#messages-demos -->
+
+      <!-- ─── Sub-tab: Help & Support Tickets ─────────────────────── -->
+      <div class="ps-subtab-content" id="messages-tickets">
       <div class="content-card" style="padding:14px;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
           <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;flex:1;min-width:120px;">Help &amp; Support Tickets</div>
           <input type="text" id="supportSearchInput" placeholder="Search tickets…" oninput="filterSupportTickets(this.value)"
             style="padding:6px 10px;font-size:0.75rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);width:200px;">
-          <select id="supportStatusFilter" onchange="filterSupportTicketsByStatus(this.value)"
-            style="padding:6px 10px;font-size:0.75rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);">
-            <option value="all">All Statuses</option>
-            <option value="open">Open</option>
-            <option value="closed">Closed</option>
-          </select>
-          <button onclick="loadSupportTickets()" style="padding:5px 12px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.3);border-radius:5px;color:var(--cyan);font-size:0.7rem;cursor:pointer;">↺ Refresh</button>
+          <!-- Dropdown + refresh stay glued together via inner flex gap:4 so
+               they never wrap apart. Dropdown width:auto so it sizes to the
+               widest option ("All Statuses") + native chevron, nothing more. -->
+          <div style="display:flex;align-items:center;gap:4px;">
+            <select id="supportStatusFilter" onchange="filterSupportTicketsByStatus(this.value)"
+              style="padding:6px 26px 6px 10px;font-size:0.75rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);width:auto;">
+              <option value="all">All Statuses</option>
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+            </select>
+            <button onclick="loadSupportTickets()" style="padding:5px 12px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.3);border-radius:5px;color:var(--cyan);font-size:0.7rem;cursor:pointer;">↺ Refresh</button>
+          </div>
         </div>
         <div id="supportTableContainer" style="min-height:200px;">
           <p style="color:var(--text-gray);text-align:center;font-size:0.85rem;padding:40px 0;">Loading tickets…</p>
@@ -1426,11 +1579,54 @@
           <button id="supportNextBtn" onclick="supportPage(1)" style="padding:4px 12px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text-white);font-size:0.7rem;cursor:pointer;" disabled>Next ›</button>
         </div>
       </div>
-    </div>
+      </div><!-- /#messages-tickets -->
+
+      <!-- ─── Sub-tab: Contact Messages ───────────────────────────── -->
+      <div class="ps-subtab-content" id="messages-contact">
+      <div class="content-card" style="padding:14px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;flex:1;min-width:120px;">
+            Contact Messages
+            <span id="contactNewInlineBadge" style="display:none;background:#ef4444;color:#fff;font-size:0.6rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px;vertical-align:middle;letter-spacing:0.02em;text-transform:none;"></span>
+          </div>
+          <!-- Search + filter dropdown + refresh — all client-side filtering
+               over the same stashed row set (see admin-contact.js). Search
+               style + width mirror the Support Tickets search above. -->
+          <input type="text" id="contactSearchInput" placeholder="Search messages…"
+            oninput="if(window.filterContactMessages) filterContactMessages(this.value)"
+            style="padding:6px 10px;font-size:0.75rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);width:200px;">
+          <div style="display:flex;align-items:center;gap:4px;">
+            <select id="contactFilter" onchange="if(window.loadContactMessages) loadContactMessages(this.value)" style="padding:6px 26px 6px 10px;font-size:0.75rem;background:#151b28;border:1px solid var(--border);border-radius:6px;color:var(--text-white);width:auto;">
+              <option value="all" selected>All</option>
+              <option value="new">New only</option>
+              <option value="replied">Replied</option>
+            </select>
+            <button onclick="if(window.loadContactMessages) loadContactMessages();" style="padding:5px 12px;background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.3);border-radius:5px;color:var(--cyan);font-size:0.7rem;cursor:pointer;">↺ Refresh</button>
+          </div>
+        </div>
+        <div id="contactMessagesList" style="min-height:120px;">
+          <p style="color:var(--text-gray);text-align:center;font-size:0.85rem;padding:40px 0;">Loading messages…</p>
+        </div>
+        <!-- Pagination + count, matches the Support Tickets footer. -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px;">
+          <button id="contactPrevBtn" onclick="contactPage(-1)" style="padding:4px 12px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text-white);font-size:0.7rem;cursor:pointer;" disabled>‹ Prev</button>
+          <span id="contactPageInfo" style="font-size:0.72rem;color:var(--text-gray);">1 / 1 (0 messages)</span>
+          <button id="contactNextBtn" onclick="contactPage(1)" style="padding:4px 12px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;color:var(--text-white);font-size:0.7rem;cursor:pointer;" disabled>Next ›</button>
+        </div>
+      </div>
+      </div><!-- /#messages-contact -->
+    </div><!-- /#messages-tab -->
 
 
     <!-- EMAIL TEMPLATES TAB -->
     <div class="tab-content" id="templates-tab">
+      <div class="ps-subtabs">
+        <button class="ps-subtab active" onclick="switchTemplatesSubTab('email')">📧 Email Templates</button>
+        <button class="ps-subtab"        onclick="switchTemplatesSubTab('flyer')">🎨 Flyer Templates</button>
+      </div>
+
+      <!-- Email Templates subtab (default) -->
+      <div class="ps-subtab-content active" id="templates-email">
       <div class="content-card">
 
         <!-- ℹ️ Template workflow info banner -->
@@ -1542,11 +1738,11 @@
           <p>Select a template from the dropdown above to preview and edit</p>
         </div>
       </div>
-    </div>
+      </div><!-- /templates-email -->
 
-    <!-- FLYER TEMPLATES TAB -->
-    <div class="tab-content" id="flyertemplates-tab">
-      <div class="content-card">
+      <!-- Flyer Templates subtab -->
+      <div class="ps-subtab-content" id="templates-flyer" style="padding:16px;">
+            <div class="content-card">
         <div style="margin-bottom:20px;">
           <h2 style="margin:0 0 4px;font-size:1.1rem;color:#e2e8f0;">🎨 Flyer Templates</h2>
           <p style="margin:0;font-size:0.8rem;color:#94a3b8;">Design the site-wide default flyer template that all venues use when no custom template is set.</p>
@@ -1571,8 +1767,8 @@
           </div>
         </div>
       </div>
+      </div>
     </div>
-
     <!-- AFFILIATES TAB -->
     <div class="tab-content" id="affiliates-tab">
       <div class="content-card" style="padding:0;">
@@ -1724,9 +1920,21 @@
       </div>
     </div>
 
-    <!-- ANALYTICS TAB -->
-    <div class="tab-content" id="analytics-tab">
 
+    <!-- ACCOUNTING TAB -->
+
+
+    <!-- DB/LOGS TAB (consolidated; Database default, Logs as subtab) -->
+    <div class="tab-content" id="dblogs-tab">
+      <div class="ps-subtabs">
+        <button class="ps-subtab active" onclick="switchDbLogsTab('analytics')">📊 Analytics</button>
+        <button class="ps-subtab"        onclick="switchDbLogsTab('database')">🗄️ Database</button>
+        <button class="ps-subtab"        onclick="switchDbLogsTab('logs')">🪵 Logs</button>
+      </div>
+
+      <!-- Analytics subtab (was the standalone top-level Analytics tab
+           until Jul 22 2026 when it was merged into Stats/DB/Logs). -->
+      <div class="ps-subtab-content active" id="dblogs-analytics">
       <!-- Header row -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
         <div>
@@ -1784,7 +1992,7 @@
         <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-pending-contracts">—</span><span class="ps-stat-lbl">Pending Sign</span></div>
         <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-preferred-pairs">—</span><span class="ps-stat-lbl">Preferred Pairs</span></div>
         <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-active-waitlist">—</span><span class="ps-stat-lbl">On Waitlist</span></div>
-        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);" onclick="switchTab('support')"><span class="ps-stat-val" style="color:#a78bfa;" id="an-open-tickets">—</span><span class="ps-stat-lbl">Open Tickets</span></div>
+        <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);" onclick="switchTab('messages'); if(window.switchMessagesSubTab) switchMessagesSubTab('tickets');"><span class="ps-stat-val" style="color:#a78bfa;" id="an-open-tickets">—</span><span class="ps-stat-lbl">Open Tickets</span></div>
         <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-tickets-7d">—</span><span class="ps-stat-lbl">Tickets (7d)</span></div>
         <div class="ps-stat" style="border-color:rgba(139,92,246,0.25);background:rgba(139,92,246,0.06);"><span class="ps-stat-val" style="color:#a78bfa;" id="an-pending-preferred">—</span><span class="ps-stat-lbl">Pref Pending</span></div>
       </div>
@@ -1852,16 +2060,6 @@
         <div id="an-revenue-labels" style="display:none;"></div>
       </div>
 
-    </div>
-
-    <!-- ACCOUNTING TAB -->
-
-
-    <!-- DB/LOGS TAB (consolidated; Database default, Logs as subtab) -->
-    <div class="tab-content" id="dblogs-tab">
-      <div class="ps-subtabs">
-        <button class="ps-subtab active" onclick="switchDbLogsTab('database')">🗄️ Database</button>
-        <button class="ps-subtab"        onclick="switchDbLogsTab('logs')">🪵 Logs</button>
       </div>
 
       <!-- Logs subtab content -->
@@ -1931,7 +2129,7 @@
       </div><!-- /#dblogs-logs -->
 
       <!-- Database subtab content (default active) -->
-      <div class="ps-subtab-content active" id="dblogs-database">
+      <div class="ps-subtab-content" id="dblogs-database">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
         <div>
           <h2 style="font-size:1rem;color:var(--text);margin:0 0 2px;">🗄️ Database Browser</h2>
@@ -2054,7 +2252,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tinymce/6.8.2/tinymce.min.js" referrerpolicy="no-referrer"></script>
   
   <script src="/app/static/js/modals.js"></script>
-  <script src="/app/static/js/gf-modals.js?v=7"></script>
+  <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
 
 <script>
@@ -2136,7 +2334,6 @@ function switchPsTab(tab) {
   if (btn) btn.classList.add('active');
   const panel = document.getElementById('ps-' + tab);
   if (panel) panel.classList.add('active');
-  if (tab === 'accounting') { typeof loadAccounting === 'function' && loadAccounting(); }
   if (tab === 'payment') {
     typeof loadPaymentSettings === 'function' && loadPaymentSettings();
     typeof loadVenuePaymentOverrides === 'function' && loadVenuePaymentOverrides();
@@ -2148,9 +2345,11 @@ function switchPsTab(tab) {
 }
 
 function switchDbLogsTab(tab) {
-  // Sub-tabs inside the DB/Logs top-level tab. Scoped to the dblogs-tab
-  // container so we don't disturb the Platform Settings or Affiliates
-  // sub-tabs (which share the .ps-subtab class).
+  // Sub-tabs inside the Stats/DB/Logs top-level tab. Scoped to the
+  // dblogs-tab container so we don't disturb the Platform Settings or
+  // Affiliates sub-tabs (which share the .ps-subtab class).
+  // Jul 22 2026: 'analytics' added as the default sub-tab after the
+  // standalone Analytics tab was folded in here.
   const container = document.getElementById('dblogs-tab');
   if (!container) return;
   container.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
@@ -2160,23 +2359,49 @@ function switchDbLogsTab(tab) {
   const panel = document.getElementById('dblogs-' + tab);
   if (panel) panel.classList.add('active');
   // Lazy-load on first activation of each subtab
-  if (tab === 'logs'     && typeof fetchLogs === 'function') fetchLogs(true);
-  if (tab === 'database' && typeof initDbTab === 'function') initDbTab();
+  if (tab === 'analytics' && typeof loadAnalytics === 'function') loadAnalytics();
+  if (tab === 'logs'      && typeof fetchLogs === 'function')     fetchLogs(true);
+  if (tab === 'database'  && typeof initDbTab === 'function')     initDbTab();
   // Stop logs auto-refresh when leaving the Logs subtab
   if (tab !== 'logs' && typeof stopLogsAutoRefresh === 'function') stopLogsAutoRefresh();
+}
+
+// Templates tab sub-tab switcher (Jul 22 2026). Scoped to
+// #templates-tab so the .ps-subtab / .ps-subtab-content classes
+// don't collide with the ones inside Platform Settings, Messages,
+// Affiliates, Directory, or Stats/DB/Logs. Fires the appropriate
+// loader on activation (both idempotent).
+function switchTemplatesSubTab(tab) {
+  const container = document.getElementById('templates-tab');
+  if (!container) return;
+  container.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
+  container.querySelectorAll('.ps-subtab-content').forEach(c => c.classList.remove('active'));
+  const btn = container.querySelector('.ps-subtab[onclick*="' + tab + '"]');
+  if (btn) btn.classList.add('active');
+  const panel = document.getElementById('templates-' + tab);
+  if (panel) panel.classList.add('active');
+  if (tab === 'email' && typeof loadEmailTemplates    === 'function') loadEmailTemplates();
+  if (tab === 'flyer' && typeof loadAdminFlyerTemplates === 'function') loadAdminFlyerTemplates();
 }
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=2"></script>
-<script src="/app/static/js/admin-platform.js?v=7"></script>
-<script src="/app/static/js/admin-payments.js?v=26"></script>
+<script src="/app/static/js/admin-platform.js?v=13"></script>
+<script src="/app/static/js/admin-payments.js?v=32"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
-<script src="/app/static/js/admin-affiliate.js?v=2"></script>
+<script src="/app/static/js/admin-affiliate.js?v=3"></script>
 <script src="/app/static/js/admin-flags.js?v=3"></script>
 <script src="/app/static/js/admin-digest.js?v=3"></script>
 <script src="/app/static/js/admin-alerts.js?v=1"></script>
-<script src="/app/static/js/admin-connect-health.js?v=2"></script>
-<script src="/app/static/js/admin-init.js?v=2"></script>
+<script src="/app/static/js/admin-connect-health.js?v=3"></script>
+<!-- demo-request-modal.js is loaded here so admin-demos.js can reuse the
+     GfDatePicker + dark time selects for the decline-modal's slot picker.
+     The auto-open-on-?reschedule path inside it is gated to homepage only. -->
+<script src="/app/static/js/demo-request-modal.js?v=20"></script>
+<script src="/app/static/js/admin-demos.js?v=19"></script>
+<script src="/app/static/js/admin-contact.js?v=11"></script>
+<script src="/app/static/js/admin-init.js?v=6"></script>
+<script src="/app/static/js/admin-directory.js?v=5"></script>
 <script src="/app/static/js/sw-register.js"></script>
 
 <script>
@@ -2198,19 +2423,105 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeof stopLogsAutoRefresh === 'function') stopLogsAutoRefresh();
 
     // Tab-specific loaders
-    if (tab === 'support')       { typeof loadSupportTickets === 'function'    && loadSupportTickets(); }
-    if (tab === 'templates')     { typeof loadEmailTemplates === 'function'     && loadEmailTemplates(); }
-    if (tab === 'flyertemplates'){ typeof loadAdminFlyerTemplates === 'function' && loadAdminFlyerTemplates(); }
-    if (tab === 'analytics')     { typeof loadAnalytics === 'function'          && loadAnalytics(); }
+    if (tab === 'messages')      { typeof _messagesActivate === 'function' && _messagesActivate(); }
+    if (tab === 'templates')     {
+      // Jul 22 2026: Flyer Templates merged into this tab as a
+      // sub-tab. Default view is Email; switchTemplatesSubTab
+      // fires the appropriate loader.
+      typeof switchTemplatesSubTab === 'function' && switchTemplatesSubTab('email');
+    }
     if (tab === 'dblogs')        {
-      // Default subtab is Database — fire its loader on top-level activation.
-      // The Logs loader fires when the user clicks the Logs subtab.
-      typeof initDbTab === 'function' && initDbTab();
+      // Jul 22 2026: Analytics is now a sub-tab here (default on entry).
+      // switchPsTab uses a global .ps-subtab-content selector that
+      // clobbers our sub-tab state, so explicitly re-select every time.
+      typeof switchDbLogsTab === 'function' && switchDbLogsTab('analytics');
     }
     if (tab === 'affiliates')    { typeof loadAffiliatesTab === 'function'      && loadAffiliatesTab(); }
     if (tab === 'platform')      { typeof loadEmailSettings === 'function'      && loadEmailSettings(); }
+    // Payments had no tab-entry loader — the KPI strip + hero row +
+    // table + pagination all only rendered on user action (Refresh
+    // click or filter change). Firing apReload on entry paints the
+    // whole console immediately.
+    if (tab === 'payments')      { typeof apReload === 'function'               && apReload(); }
+    // Directory tab: load current sub-tab (defaults to Users on first entry).
+    if (tab === 'directory')     { typeof _dirActivate === 'function'            && _dirActivate(); }
   };
 });
+
+// ── Messages tab: sub-tab switcher + auto-default + top-level badge ──
+//
+// Three sub-tabs (Demo Requests / Help & Support / Contact Messages)
+// live under the Messages top-level tab. Each has its own loader in
+// its module (admin-demos.js, admin-init.js, admin-contact.js) that
+// updates a per-sub-tab badge with the unread count. When the top-
+// level tab is activated we load all three, then auto-select the
+// leftmost sub-tab with unread items (fallback: Demo Requests).
+function switchMessagesSubTab(name) {
+  const container = document.getElementById('messages-tab');
+  if (!container) return;
+  container.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
+  container.querySelectorAll('.ps-subtab-content').forEach(c => c.classList.remove('active'));
+  const btn = container.querySelector('.ps-subtab[onclick*="' + name + '"]');
+  if (btn) btn.classList.add('active');
+  const panel = document.getElementById('messages-' + name);
+  if (panel) panel.classList.add('active');
+  // Fire the sub-tab's loader so the list refreshes on open.
+  if (name === 'demos'   && typeof window.loadDemoRequests   === 'function') window.loadDemoRequests();
+  if (name === 'tickets' && typeof window.loadSupportTickets === 'function') window.loadSupportTickets();
+  if (name === 'contact' && typeof window.loadContactMessages === 'function') window.loadContactMessages();
+}
+window.switchMessagesSubTab = switchMessagesSubTab;
+
+// Called on switchTab('messages'). Fires all three loaders in parallel
+// (they update their per-sub-tab badges as they go), then auto-selects
+// the leftmost sub-tab that has any unread. If none, keeps whichever
+// sub-tab is currently active (defaults to Demo Requests on first open
+// per the HTML markup).
+async function _messagesActivate() {
+  const tasks = [];
+  if (typeof window.loadDemoRequests    === 'function') tasks.push(Promise.resolve(window.loadDemoRequests()));
+  if (typeof window.loadSupportTickets  === 'function') tasks.push(Promise.resolve(window.loadSupportTickets()));
+  if (typeof window.loadContactMessages === 'function') tasks.push(Promise.resolve(window.loadContactMessages()));
+  try { await Promise.all(tasks); } catch (_) {}
+  // Read badge counts (0 when hidden) in left-to-right sub-tab order.
+  const badgeCount = (id) => {
+    const el = document.getElementById(id);
+    if (!el || el.style.display === 'none') return 0;
+    const n = parseInt((el.textContent || '').trim(), 10);
+    return isNaN(n) ? 0 : n;
+  };
+  const order = [
+    { key: 'demos',   n: badgeCount('demosPendingBadge')    },
+    { key: 'tickets', n: badgeCount('supportTicketsBadge')  },
+    { key: 'contact', n: badgeCount('contactMessagesBadge') },
+  ];
+  const firstUnread = order.find(x => x.n > 0);
+  if (firstUnread) {
+    switchMessagesSubTab(firstUnread.key);
+  }
+  _updateMessagesTotalBadge();
+}
+window._messagesActivate = _messagesActivate;
+
+// Sum the three sub-tab badges into the top-level Messages tab badge.
+// Called by each loader after it updates its own badge (see
+// admin-demos.js, admin-init.js, admin-contact.js).
+function _updateMessagesTotalBadge() {
+  const badgeCount = (id) => {
+    const el = document.getElementById(id);
+    if (!el || el.style.display === 'none') return 0;
+    const n = parseInt((el.textContent || '').trim(), 10);
+    return isNaN(n) ? 0 : n;
+  };
+  const total = badgeCount('demosPendingBadge')
+              + badgeCount('supportTicketsBadge')
+              + badgeCount('contactMessagesBadge');
+  const top = document.getElementById('messagesTabBadge');
+  if (!top) return;
+  if (total > 0) { top.style.display = 'inline-block'; top.textContent = String(total); }
+  else           { top.style.display = 'none'; }
+}
+window._updateMessagesTotalBadge = _updateMessagesTotalBadge;
 </script>
 
 <!-- Affiliate 1099 Confirm Modal -->

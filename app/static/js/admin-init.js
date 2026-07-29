@@ -150,10 +150,13 @@ async function loadAnalytics() {
     // Top Cities
     const tc = document.getElementById('an-top-cities');
     if (d.top_cities && d.top_cities.length) {
+      // Jul 2026 audit fix: search terms come from raw public search
+      // input logged to search_events. Un-escaped city/state gave an
+      // XSS surface into every admin's browser via the Analytics tab.
       tc.innerHTML = d.top_cities.map((c,i) => `
         <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <span style="color:var(--text-white);">${i+1}. ${c.city}${c.state ? ', '+c.state : ''}</span>
-          <span style="color:var(--cyan);font-weight:700;">${c.searches}</span>
+          <span style="color:var(--text-white);">${i+1}. ${esc(c.city)}${c.state ? ', '+esc(c.state) : ''}</span>
+          <span style="color:var(--cyan);font-weight:700;">${esc(c.searches)}</span>
         </div>`).join('');
     } else { tc.innerHTML = '<p style="color:var(--text-gray);">No search data yet</p>'; }
 
@@ -162,8 +165,8 @@ async function loadAnalytics() {
     if (d.events_by_type && d.events_by_type.length) {
       et.innerHTML = d.events_by_type.map(e => `
         <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <span style="color:var(--text-gray);text-transform:capitalize;">${(e.event_type||'').replace(/_/g,' ')}</span>
-          <span style="color:var(--cyan);font-weight:700;">${e.count}</span>
+          <span style="color:var(--text-gray);text-transform:capitalize;">${esc((e.event_type||'').replace(/_/g,' '))}</span>
+          <span style="color:var(--cyan);font-weight:700;">${esc(e.count)}</span>
         </div>`).join('');
     } else { et.innerHTML = '<p style="color:var(--text-gray);">No events yet</p>'; }
 
@@ -284,6 +287,17 @@ async function loadSupportTickets() {
       filteredSupportTickets = allSupportTickets.filter(t => (t.status || 'open') === supportStatusFilter);
     }
     renderSupportTickets();
+
+    // Jul 2026: Help & Support Tickets is now a sub-tab under the
+    // Messages top-level tab. Update its badge with the open-ticket
+    // count and re-sum the top-level Messages tab total.
+    const openCount = allSupportTickets.filter(t => (t.status || 'open') === 'open').length;
+    const subBadge = document.getElementById('supportTicketsBadge');
+    if (subBadge) {
+      if (openCount > 0) { subBadge.style.display = 'inline-block'; subBadge.textContent = String(openCount); }
+      else               { subBadge.style.display = 'none'; }
+    }
+    if (typeof window._updateMessagesTotalBadge === 'function') window._updateMessagesTotalBadge();
   } catch (error) {
     console.error('Error loading support tickets:', error);
     if (container) container.innerHTML = '<p style="color: #ef4444; text-align: center; font-size: 0.85rem; padding: 40px 0;">Failed to load tickets: ' + error.message + '</p>';
@@ -372,6 +386,7 @@ function renderSupportTickets() {
           <th style="padding: 6px 8px; cursor: pointer; user-select: none; width: 130px; white-space: nowrap;" onclick="sortSupportTickets('category')">Category${arrow('category')}</th>
           <th style="padding: 6px 8px; cursor: pointer; user-select: none;" onclick="sortSupportTickets('subject')">Subject${arrow('subject')}</th>
           <th style="padding: 6px 8px; cursor: pointer; user-select: none; width: 80px; white-space: nowrap;" onclick="sortSupportTickets('status')">Status${arrow('status')}</th>
+          <th style="padding: 6px 4px; width: 32px;"></th>
         </tr>
       </thead>
       <tbody>
@@ -386,6 +401,13 @@ function renderSupportTickets() {
               <td style="padding: 6px 8px; white-space: nowrap;"><span style="background: rgba(6,182,212,0.15); color: var(--cyan); padding: 1px 6px; border-radius: 3px; font-size: 0.65rem; text-transform: uppercase;">${esc(t.category || '--')}</span></td>
               <td style="padding: 6px 8px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(t.subject || '--')}${t.reply_count ? ` <span style="background: rgba(6,182,212,0.2); color: var(--cyan); padding: 0 5px; border-radius: 8px; font-size: 0.6rem; font-weight: 600;">${t.reply_count}</span>` : ''}</td>
               <td style="padding: 6px 8px;"><span style="color: ${statusColor}; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">${esc(t.status || 'open')}</span></td>
+              <td style="padding: 6px 4px; text-align: right;">
+                <button onclick="event.stopPropagation();deleteSupportTicket(${t.id})"
+                        title="Delete permanently"
+                        style="background:transparent;border:0;color:#94a3b8;font-size:0.85rem;cursor:pointer;padding:2px 6px;border-radius:4px;line-height:1;"
+                        onmouseover="this.style.color='#fca5a5';this.style.background='rgba(239,68,68,0.1)';"
+                        onmouseout="this.style.color='#94a3b8';this.style.background='transparent';">🗑</button>
+              </td>
             </tr>
           `;
         }).join('')}
@@ -614,13 +636,82 @@ async function updateTicketStatus(ticketId, status) {
   }
 }
 
+// Hard delete a support ticket + its replies. Confirmed via the shared
+// showStyledModal (same UX as contact-messages delete) so the row
+// disappears from the queue and the sub-tab badge re-decrements.
+function deleteSupportTicket(ticketId) {
+  const t = (allSupportTickets || []).find(x => x.id === ticketId) || {};
+  const who = t.user_name || t.user_email || 'this user';
+  const subj = t.subject || '(no subject)';
+  const doDelete = async () => {
+    try {
+      const res = await fetch('/api/admin/support-tickets/' + ticketId, {
+        method: 'DELETE', credentials: 'include'
+      });
+      let body = null;
+      try { body = await res.json(); } catch (_) {}
+      if (!res.ok) {
+        if (window.showStyledModal) {
+          window.showStyledModal('Could not delete',
+            '<p style="margin:0;font-size:0.9rem;color:var(--text-gray,#94a3b8);">' +
+              esc((body && body.detail) || ('HTTP ' + res.status)) + '</p>',
+            [{ text: 'OK', style: 'ghost' }], { size: 'sm', tone: 'error' });
+        } else {
+          alert('Delete failed: ' + ((body && body.detail) || res.status));
+        }
+        return;
+      }
+      // Drop the row locally so we don't wait for the reload flicker,
+      // then reload to refresh the badge / pagination.
+      allSupportTickets = (allSupportTickets || []).filter(x => x.id !== ticketId);
+      filteredSupportTickets = (filteredSupportTickets || []).filter(x => x.id !== ticketId);
+      renderSupportTickets();
+      if (typeof loadSupportTickets === 'function') loadSupportTickets();
+    } catch (e) {
+      if (window.showStyledModal) {
+        window.showStyledModal('Network error',
+          '<p style="margin:0;font-size:0.9rem;color:var(--text-gray,#94a3b8);">Could not reach the server.</p>',
+          [{ text: 'OK', style: 'ghost' }], { size: 'sm', tone: 'error' });
+      } else {
+        alert('Network error');
+      }
+    }
+  };
+  if (window.showStyledModal) {
+    window.showStyledModal('Delete ticket?',
+      '<p style="margin:0 0 12px;color:var(--text-gray,#94a3b8);font-size:0.9rem;line-height:1.5;">' +
+        'Permanently delete <strong style="color:var(--text,#e5e7eb);">' + esc(subj) + '</strong> ' +
+        'from <strong style="color:var(--text,#e5e7eb);">' + esc(who) + '</strong> and all its replies?' +
+      '</p>' +
+      '<p style="margin:0;color:var(--text-gray,#94a3b8);font-size:0.82rem;line-height:1.5;">' +
+        '<strong style="color:#fca5a5;">This cannot be undone.</strong> To keep the audit trail, mark it <em>closed</em> instead.' +
+      '</p>',
+      [
+        { text: 'Keep it', style: 'ghost' },
+        // Wrap in a sync fire-and-forget so gf-modals closes the confirm
+        // on first click. Passing the async `doDelete` directly would
+        // return a Promise → modal stays open → a second click fires a
+        // duplicate DELETE that lands after the row is gone (404
+        // "ticket not found"). Match contact-messages' pattern.
+        { text: '🗑 Delete', style: 'danger', onClick: function () { doDelete(); } },
+      ], { size: 'sm', tone: 'error' });
+  } else {
+    if (confirm('Delete ticket "' + subj + '"? This cannot be undone.')) doDelete();
+  }
+}
+window.deleteSupportTicket = deleteSupportTicket;
+
 // ============================================
-// ACCOUNTING TAB
+// ACCOUNTING EXPORT
 // ============================================
+// The old Payment Accounting sub-tab (summary bubbles + full table +
+// pagination + sort) was merged into the top-level Payments tab on
+// 2026-07-20. What remains here is just the Export flow — the modal +
+// its CSV/print emitter — which still needs the row-level accounting
+// dataset (fields like venue_fee_cents, gigsfill_profit_cents, etc.)
+// that the operational /api/admin/payments/search response doesn't
+// carry. Data is now lazy-loaded on modal open via `showAccountingExportModal`.
 let _acctData = [];
-let _acctSort = { col: 'gig_date', dir: -1 };
-let _acctPage = 1;
-const ACCT_PER_PAGE = 20;
 
 function _fmt12(ts) {
   if (!ts) return '';
@@ -633,167 +724,20 @@ function _fmt12(ts) {
 
 function _cents(v) { return '$' + (v / 100).toFixed(2); }
 
-async function loadAccounting() {
-  const container = document.getElementById('accountingTable');
-  try {
-    const res = await fetch('/api/admin/accounting', { credentials: 'include' });
-    if (!res.ok) { container.innerHTML = '<p style="color:#ef4444;">Failed to load accounting data</p>'; return; }
-    _acctData = await res.json();
-    _acctPage = 1;
-    renderAccountingSummary();
-    renderAccountingTable();
-  } catch (e) { container.innerHTML = '<p style="color:#ef4444;">Error: ' + e.message + '</p>'; }
-}
-
-function renderAccountingSummary() {
-  const el = document.getElementById('accountingSummary');
-
-  // Status buckets (what counts as "completed" for accounting purposes):
-  //   - 'paid'              → transfer fully settled
-  //   - 'charged'           → venue charged, transfer pending (or already transferred but not yet bank-settled)
-  //   - 'pending_transfer'  → venue charged, transfer hasn't fired yet
-  //   - 'transfer_failed'   → venue charged, transfer crashed; awaiting retry
-  //   - 'payment_cancelled' → venue cancelled before payout; platform fee may have been charged
-  // (Cancelled gigs are still "completed" for accounting because money was moved.)
-  const COMPLETED_STATUSES = ['paid','charged','pending_transfer','transfer_failed','payment_cancelled'];
-  // "Successful" txns where the artist actually got paid (or will, once retry settles).
-  // Cancelled gigs aren't successful — they were called off. transfer_failed is in progress.
-  const SUCCESS_STATUSES = ['paid','charged','pending_transfer'];
-
-  let txnCount = 0, successCount = 0;
-  let totalGigValue = 0;        // Sum of gig pay across non-cancelled completed txns
-  let totalFees = 0;            // Platform revenue earned (mutually exclusive: commission OR cancel fee, not both)
-  let totalStripeFees = 0;      // Stripe processing on actual charges
-  let totalProfit = 0;          // GF Profit (already calculated row-by-row by backend)
-
-  _acctData.forEach(t => {
-    if (!COMPLETED_STATUSES.includes(t.status)) return;
-    txnCount++;
-    if (SUCCESS_STATUSES.includes(t.status)) successCount++;
-
-    if (t.status === 'payment_cancelled') {
-      // Cancelled — only the cancel fee counts as platform revenue. The original
-      // commission_cents is moot because no charge was scheduled / nothing was paid out.
-      // Gig value also doesn't contribute (the gig didn't happen).
-      totalFees += (t.platform_fee_on_cancel_cents || 0);
-    } else {
-      // Successful or in-flight charge — full commission counts as platform revenue.
-      totalFees += (t.commission_cents || 0);
-      totalGigValue += (t.gig_fee_cents || 0);
-    }
-
-    totalStripeFees += (t.stripe_fee_cents || 0);
-    totalProfit += (t.gigsfill_profit_cents || 0);
-  });
-
-  // Average gig value over the txns that actually contributed to it (non-cancelled completed)
-  const gigValueCount = _acctData.filter(t =>
-    COMPLETED_STATUSES.includes(t.status) && t.status !== 'payment_cancelled'
-  ).length;
-  const avgGigValue = gigValueCount > 0 ? totalGigValue / gigValueCount : 0;
-
-  const card = (label, val, color, sub) => `<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px 16px;min-width:120px;">
-    <div style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">${label}</div>
-    <div style="font-size:1.1rem;font-weight:700;color:${color};">${val}</div>
-    ${sub ? `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">${sub}</div>` : ''}
-  </div>`;
-  el.innerHTML = card('Completed Txns', txnCount, 'var(--text-white)', successCount + ' successful')
-    + card('Total Gig Value', _cents(totalGigValue), '#06b6d4', 'avg ' + _cents(avgGigValue))
-    + card('Total Fees', _cents(totalFees), '#8b5cf6', 'platform revenue')
-    + card('Stripe Costs', _cents(totalStripeFees), '#f59e0b', 'processing')
-    + card('Net Profit', _cents(totalProfit), '#10b981', 'after Stripe');
-}
-
-function renderAccountingTable() {
-  const container = document.getElementById('accountingTable');
-  let data = _acctData.slice();
-  const sort = _acctSort;
-
-  data.sort((a, b) => {
-    let av = a[sort.col], bv = b[sort.col];
-    if (sort.col === 'gig_date') { av = av || ''; bv = bv || ''; }
-    if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv||'').toLowerCase(); }
-    if (av < bv) return -1 * sort.dir;
-    if (av > bv) return 1 * sort.dir;
-    return 0;
-  });
-
-  const totalPages = Math.max(1, Math.ceil(data.length / ACCT_PER_PAGE));
-  if (_acctPage > totalPages) _acctPage = totalPages;
-  const start = (_acctPage - 1) * ACCT_PER_PAGE;
-  const pageData = data.slice(start, start + ACCT_PER_PAGE);
-
-  if (data.length === 0) { container.innerHTML = '<p style="color:var(--text-muted);">No transactions found.</p>'; return; }
-
-  const arrow = (col) => {
-    if (sort.col !== col) return ' <span style="opacity:0.3;font-size:0.6rem;">⇅</span>';
-    return sort.dir === 1 ? ' <span style="font-size:0.6rem;">▲</span>' : ' <span style="font-size:0.6rem;">▼</span>';
-  };
-
-  const hs = 'cursor:pointer;user-select:none;padding:6px 8px;font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.03em;border-bottom:1px solid rgba(255,255,255,0.1);white-space:nowrap;';
-  const statusColors = { paid:'#10b981', test:'#60a5fa', scheduled:'#8b5cf6', charged:'#f59e0b', charge_retry:'#f97316', payment_failed:'#ef4444', transfer_failed:'#ef4444', payment_cancelled:'#f97316', pending_transfer:'#f59e0b' };
-  const statusLabels = { paid:'Paid', test:'Test', scheduled:'Scheduled', charged:'Charged', charge_retry:'Retry', payment_failed:'Failed', transfer_failed:'Xfer Fail', payment_cancelled:'Cancelled', pending_transfer:'Pending Xfer' };
-
-  let html = '<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">';
-  html += '<thead><tr>';
-  html += `<th style="${hs}text-align:left;" onclick="acctSortBy('gig_date')">Date${arrow('gig_date')}</th>`;
-  html += `<th style="${hs}text-align:left;">Time</th>`;
-  html += `<th style="${hs}text-align:left;" onclick="acctSortBy('venue_name')">Venue${arrow('venue_name')}</th>`;
-  html += `<th style="${hs}text-align:left;" onclick="acctSortBy('artist_name')">Artist${arrow('artist_name')}</th>`;
-  html += `<th style="${hs}text-align:left;" onclick="acctSortBy('status')">Status${arrow('status')}</th>`;
-  html += `<th style="${hs}text-align:right;" onclick="acctSortBy('gig_fee_cents')">Gig Paid${arrow('gig_fee_cents')}</th>`;
-  html += `<th style="${hs}text-align:right;">Venue Fee</th>`;
-  html += `<th style="${hs}text-align:right;">Venue Charged</th>`;
-  html += `<th style="${hs}text-align:right;">Artist Fee</th>`;
-  html += `<th style="${hs}text-align:right;">Artist Payout</th>`;
-  html += `<th style="${hs}text-align:right;">Stripe Fee</th>`;
-  html += `<th style="${hs}text-align:right;" onclick="acctSortBy('gigsfill_profit_cents')">GF Profit${arrow('gigsfill_profit_cents')}</th>`;
-  html += '</tr></thead><tbody>';
-
-  pageData.forEach(t => {
-    const timeStr = t.start_time && t.end_time ? _fmt12(t.start_time) + ' - ' + _fmt12(t.end_time) : (t.start_time ? _fmt12(t.start_time) : '');
-    const sColor = statusColors[t.status] || '#f59e0b';
-    const sLabel = statusLabels[t.status] || t.status;
-    const isCancelled = t.status === 'payment_cancelled';
-    const venueCharged = isCancelled ? t.platform_fee_on_cancel_cents : t.venue_charge_cents;
-    const profitColor = t.gigsfill_profit_cents > 0 ? '#10b981' : (t.gigsfill_profit_cents < 0 ? '#ef4444' : 'var(--text-muted)');
-
-    html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
-    html += `<td style="padding:6px 8px;color:var(--text-gray);white-space:nowrap;">${esc(t.gig_date || '')}</td>`;
-    html += `<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;font-size:0.73rem;">${esc(timeStr)}</td>`;
-    html += `<td style="padding:6px 8px;color:var(--text-white);overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;" title="${esc(t.venue_name)}">${esc(t.venue_name)}</td>`;
-    html += `<td style="padding:6px 8px;color:var(--text-white);overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;" title="${esc(t.artist_name)}">${esc(t.artist_name)}</td>`;
-    html += `<td style="padding:6px 8px;"><span style="color:${sColor};font-weight:600;font-size:0.73rem;">${sLabel}</span></td>`;
-    html += `<td style="padding:6px 8px;text-align:right;color:var(--text-white);">${_cents(t.gig_fee_cents)}</td>`;
-    html += `<td style="padding:6px 8px;text-align:right;color:#f59e0b;">${_cents(t.venue_fee_cents)}</td>`;
-    html += `<td style="padding:6px 8px;text-align:right;color:#10b981;font-weight:600;">${_cents(venueCharged)}</td>`;
-    html += `<td style="padding:6px 8px;text-align:right;color:#f59e0b;">${_cents(t.artist_fee_cents)}</td>`;
-    html += `<td style="padding:6px 8px;text-align:right;color:#ef4444;">${isCancelled ? '—' : _cents(t.artist_payout_cents)}</td>`;
-    html += `<td style="padding:6px 8px;text-align:right;color:#ef4444;">${_cents(t.stripe_fee_cents)}</td>`;
-    html += `<td style="padding:6px 8px;text-align:right;color:${profitColor};font-weight:700;">${_cents(t.gigsfill_profit_cents)}</td>`;
-    html += '</tr>';
-  });
-  html += '</tbody></table>';
-  container.innerHTML = html;
-
-  // Pagination
-  const pagEl = document.getElementById('accountingPagination');
-  const bs = 'background:rgba(255,255,255,0.05);border:1px solid var(--glass-border,rgba(255,255,255,0.1));color:var(--text);padding:4px 10px;border-radius:4px;font-size:0.75rem;cursor:pointer;';
-  const ds = bs + 'opacity:0.3;cursor:default;';
-  pagEl.innerHTML = `<span style="font-size:0.75rem;color:var(--text-muted);">Page ${_acctPage} of ${totalPages} (${data.length} records)</span>
-    <button onclick="acctGoPage(${_acctPage - 1})" style="${_acctPage <= 1 ? ds : bs}" ${_acctPage <= 1 ? 'disabled' : ''}>◀ Prev</button>
-    <button onclick="acctGoPage(${_acctPage + 1})" style="${_acctPage >= totalPages ? ds : bs}" ${_acctPage >= totalPages ? 'disabled' : ''}>Next ▶</button>`;
-}
-
-function acctSortBy(col) {
-  if (_acctSort.col === col) { _acctSort.dir *= -1; } else { _acctSort.col = col; _acctSort.dir = col === 'gig_date' ? -1 : 1; }
-  _acctPage = 1;
-  renderAccountingTable();
-}
-function acctGoPage(p) { _acctPage = p; renderAccountingTable(); }
-
 // Export modal
-function showAccountingExportModal() {
+async function showAccountingExportModal() {
+  // Jul 2026: the Payment Accounting sub-tab under Platform Settings
+  // is gone (merged into the Payments tab), so `_acctData` is no
+  // longer populated eagerly by `switchPsTab('accounting')`. Lazy-load
+  // it here — the endpoint returns the full row-level dataset the
+  // export needs (venue_fee_cents / artist_fee_cents / etc.) that the
+  // Payments /search response doesn't include.
+  if (!_acctData || _acctData.length === 0) {
+    try {
+      const res = await fetch('/api/admin/accounting', { credentials: 'include' });
+      if (res.ok) _acctData = await res.json();
+    } catch (_) { /* Export step will show "No data in selected range" if empty. */ }
+  }
   document.getElementById('accountingExportModal').style.display = 'flex';
 }
 function closeAccountingExportModal() {

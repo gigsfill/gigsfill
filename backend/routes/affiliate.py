@@ -1075,11 +1075,8 @@ def run_quarterly_affiliate_payouts(db):
     stripe_key = db.execute(text(
         "SELECT setting_value FROM platform_settings WHERE setting_key = 'admin_stripe_secret_key'"
     )).scalar()
-    payments_live = db.execute(text(
-        "SELECT setting_value FROM platform_settings WHERE setting_key = 'payments_enabled'"
-    )).scalar()
-    has_stripe = bool(stripe_key and not stripe_key.startswith("•") and
-                      payments_live and str(payments_live).lower() in ("true", "1"))
+    # Test Mode removed (Jul 1 2026) — stripe key presence is the gate.
+    has_stripe = bool(stripe_key and not stripe_key.startswith("•"))
 
     if has_stripe:
         import stripe
@@ -1089,9 +1086,17 @@ def run_quarterly_affiliate_payouts(db):
     # removed `GROUP_CONCAT(DISTINCT ae.venue_id) as venue_ids` — the column
     # was selected but never read, and GROUP_CONCAT is SQLite-only (PG uses
     # string_agg). Dead code + Postgres incompatibility in one line.
+    # Jul 2026 audit (M-H4): also snapshot MAX(id) at SUM time. The
+    # UPDATE below then scopes to `id <= :snapshot_max_id`, so any new
+    # affiliate_earnings row inserted between SUM and UPDATE keeps its
+    # payout_id IS NULL and rolls into next quarter. Previously the
+    # `WHERE payout_id IS NULL` UPDATE stamped the payout_id on rows
+    # that weren't in `total` — affiliate was underpaid AND those rows
+    # showed "paid" forever.
     affiliates = db.execute(text("""
         SELECT ae.affiliate_user_id,
-               SUM(ae.earned_cents) as total_cents
+               SUM(ae.earned_cents) as total_cents,
+               MAX(ae.id) as snapshot_max_id
         FROM affiliate_earnings ae
         WHERE ae.payout_id IS NULL
         GROUP BY ae.affiliate_user_id
@@ -1101,6 +1106,7 @@ def run_quarterly_affiliate_payouts(db):
     for aff in affiliates:
         uid        = aff["affiliate_user_id"]
         total      = aff["total_cents"]
+        snapshot_max_id = aff["snapshot_max_id"]  # M-H4 race guard
         meets_min  = total >= min_cents
 
         # Build per-venue breakdown for email
@@ -1197,11 +1203,15 @@ def run_quarterly_affiliate_payouts(db):
                         SET status = 'paid', stripe_transfer_id = :tid, paid_at = CURRENT_TIMESTAMP
                         WHERE id = :pid
                     """), {"tid": transfer_id, "pid": payout_id})
-                    # Link earnings to payout
+                    # Link ONLY the earnings snapshotted at SUM time
+                    # (Jul 2026 audit M-H4). Post-SUM accruals stay
+                    # payout_id IS NULL and roll into next quarter.
                     db.execute(text("""
                         UPDATE affiliate_earnings SET payout_id = :pid
-                        WHERE affiliate_user_id = :uid AND payout_id IS NULL
-                    """), {"pid": payout_id, "uid": uid})
+                        WHERE affiliate_user_id = :uid
+                          AND payout_id IS NULL
+                          AND id <= :snap
+                    """), {"pid": payout_id, "uid": uid, "snap": snapshot_max_id})
                     db.commit()
                 except Exception as e:
                     logger.error(f"Affiliate payout transfer failed for user {uid}: {e}")
@@ -1227,20 +1237,31 @@ def run_quarterly_affiliate_payouts(db):
         except Exception as e:
             logger.error(f"Affiliate quarterly email error for user {uid}: {e}")
 
-        # Check 1099 threshold
+        # Check 1099 threshold.
+        # Audit fix (Jun 2026): use an explicit calendar-year boundary range
+        # (paid_at >= Jan-1 AND paid_at < Jan-1 next year) instead of
+        # `strftime('%Y', ap.paid_at) = :yr`. strftime is SQLite-only —
+        # on Postgres production it threw, and the bare `except: pass`
+        # silently swallowed the error so this 1099 cutoff alert never
+        # fired. Compliance risk: admin was never warned when an
+        # affiliate crossed the IRS-reportable threshold.
         try:
             year = utcnow_naive().year
+            year_start = f"{year}-01-01"
+            year_end = f"{year + 1}-01-01"
             ytd = db.execute(text("""
                 SELECT COALESCE(SUM(ae.earned_cents), 0)
                 FROM affiliate_earnings ae
                 JOIN affiliate_payouts ap ON ap.id = ae.payout_id
                 WHERE ae.affiliate_user_id = :uid
-                  AND ap.status IN ('paid') AND strftime('%Y', ap.paid_at) = :yr
-            """), {"uid": uid, "yr": str(year)}).scalar() or 0
+                  AND ap.status IN ('paid')
+                  AND ap.paid_at >= :y0
+                  AND ap.paid_at <  :y1
+            """), {"uid": uid, "y0": year_start, "y1": year_end}).scalar() or 0
             if ytd >= threshold_cents:
                 logger.info(f"Affiliate user {uid} has ${ytd/100:.2f} YTD — may need 1099 for {year}")
-        except Exception:
-            pass
+        except Exception as _99e:
+            logger.warning(f"1099 threshold check failed for affiliate user {uid}: {_99e}")
 
 
 def _send_quarterly_affiliate_email(db, uid, user_name, email, total_cents, venue_rows, quarter, meets_min, min_cents, transfer_id):

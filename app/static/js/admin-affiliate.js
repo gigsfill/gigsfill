@@ -15,9 +15,15 @@ async function loadAffiliatesTab() {
 // ── Subtab Switching ──────────────────────────────────────────────────────────
 
 function switchAffTab(name) {
-  document.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.ps-subtab-content').forEach(c => c.classList.remove('active'));
-  const btn = document.querySelector(`.ps-subtab[onclick*="${name}"]`);
+  // Scope to #affiliates-tab so we don't stomp on unrelated .ps-subtab /
+  // .ps-subtab-content nodes elsewhere on the page — and, more subtly,
+  // so the [onclick*="accounting"] selector picks *Affiliate Accounting*
+  // instead of the earlier-in-DOM "Payment Accounting" sub-tab that also
+  // matches (the reason this button wasn't highlighting).
+  const container = document.getElementById('affiliates-tab') || document;
+  container.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
+  container.querySelectorAll('.ps-subtab-content').forEach(c => c.classList.remove('active'));
+  const btn = container.querySelector(`.ps-subtab[onclick*="${name}"]`);
   if (btn) btn.classList.add('active');
   const panel = document.getElementById(`aff-${name}`);
   if (panel) panel.classList.add('active');

@@ -3,6 +3,7 @@ import logging
 from sqlalchemy import text
 from backend.db import get_db
 from backend.routes.auth import get_current_user
+from backend.rate_limiter import limiter
 from backend.utils import get_all_entity_users
 from backend.utils import utcnow_naive
 logger = logging.getLogger("gigsfill.preferred_artists")
@@ -316,9 +317,15 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
     default_freq_days = venue_defaults["artist_frequency_days"] if venue_defaults else 0
     
     # v97: First get all preferred artists with override fields
+    # Sort by closest-gig-to-today (Jun 2026):
+    #   1. Artists with an upcoming/today gig first, sorted by date ASC
+    #      then earliest slot start_time (so the 7-9 PM artist beats the
+    #      9-11 PM artist on the same day).
+    #   2. Then artists with only past gigs, most-recent past first.
+    #   3. Then artists with no booked history, alphabetical.
     artists_result = db.execute(
         text("""
-            SELECT 
+            SELECT
                 pa.id as preferred_id,
                 pa.artist_id,
                 pa.status as preferred_status,
@@ -328,22 +335,62 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
                 a.name as artist_name,
                 a.city as artist_city,
                 a.state as artist_state,
-                (SELECT MAX(gd) FROM (
-                    SELECT g2.date as gd FROM gigs g2 
-                    WHERE g2.artist_id = pa.artist_id 
-                    AND g2.venue_id = pa.venue_id 
-                    AND g2.status = 'booked'
-                    UNION ALL
-                    SELECT g3.date as gd FROM gig_slots gs 
+                -- Jul 2026 refactor: every 5-leg UNION here collapsed
+                -- to slot-only reads. Post-backfill (db.setup_database),
+                -- every gig has a `gig_slots` row and `gigs.artist_id`
+                -- was a dupe of `gig_slots.artist_id` for single-slot
+                -- gigs — the legacy legs were returning identical rows.
+                -- MAX(latest booked slot date at this venue).
+                (SELECT MAX(g2.date) FROM gig_slots gs
+                    JOIN gigs g2 ON gs.gig_id = g2.id
+                    WHERE gs.artist_id = pa.artist_id
+                      AND g2.venue_id = pa.venue_id
+                      AND gs.status = 'booked'
+                ) as latest_gig_date,
+                -- Earliest upcoming-or-today booked slot date. NULL if
+                -- no future bookings (sorted to the bottom below).
+                (SELECT MIN(g3.date) FROM gig_slots gs
                     JOIN gigs g3 ON gs.gig_id = g3.id
-                    WHERE gs.artist_id = pa.artist_id 
-                    AND g3.venue_id = pa.venue_id 
-                    AND gs.status = 'booked'
-                )) as latest_gig_date
+                    WHERE gs.artist_id = pa.artist_id
+                      AND g3.venue_id = pa.venue_id
+                      AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+                      AND date(g3.date) >= date('now', 'localtime')
+                ) as next_gig_date,
+                -- Tiebreaker: earliest slot start_time on next_gig_date
+                -- so a 7 PM set beats a 9 PM set on the same night.
+                (SELECT MIN(gs4.start_time)
+                    FROM gig_slots gs4
+                    JOIN gigs g4 ON g4.id = gs4.gig_id
+                    WHERE g4.venue_id = pa.venue_id
+                      AND gs4.artist_id = pa.artist_id
+                      AND gs4.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+                      AND date(g4.date) = (
+                        SELECT MIN(g5.date) FROM gig_slots gs5
+                        JOIN gigs g5 ON gs5.gig_id = g5.id
+                        WHERE gs5.artist_id = pa.artist_id
+                          AND g5.venue_id = pa.venue_id
+                          AND gs5.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+                          AND date(g5.date) >= date('now', 'localtime')
+                      )
+                ) as next_gig_start_time
             FROM preferred_artists pa
             JOIN artists a ON pa.artist_id = a.id
             WHERE pa.venue_id = :venue_id
-            ORDER BY CASE WHEN latest_gig_date IS NULL THEN 1 ELSE 0 END, latest_gig_date DESC, a.name
+            ORDER BY
+                -- Bucket 1: has upcoming gig. Bucket 2: only past gigs.
+                -- Bucket 3: no booked history. Bucket index ascending.
+                CASE
+                  WHEN next_gig_date IS NOT NULL THEN 0
+                  WHEN latest_gig_date IS NOT NULL THEN 1
+                  ELSE 2
+                END,
+                -- Within bucket 1: closest upcoming gig first, then
+                -- earliest start_time on that day.
+                next_gig_date ASC,
+                next_gig_start_time ASC,
+                -- Within bucket 2: most recent past first.
+                latest_gig_date DESC,
+                a.name
         """),
         {"venue_id": venue_id}
     ).mappings().all()
@@ -357,7 +404,12 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
     gigs_result = db.execute(
         text("""
             SELECT
-                g.id, g.artist_id, g.date, g.start_time, g.end_time,
+                g.id, g.artist_id, g.date,
+                -- Slot times beat gig-umbrella times so the My Artists card
+                -- shows the artist's actual set (e.g. 9-11 PM), not the
+                -- whole evening's 7 PM – 1 AM range (Jun 2026 fix).
+                COALESCE(gs.start_time, g.start_time) as start_time,
+                COALESCE(gs.end_time, g.end_time) as end_time,
                 g.status, g.title, g.pay, g.notes, g.artist_type, g.band_formats,
                 COALESCE(g.is_multi_slot, 0) as is_multi_slot,
                 gs.deal_type, gs.door_pct, gs.guarantee_cents,
@@ -375,7 +427,11 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
     slot_gigs_result = db.execute(
         text("""
             SELECT DISTINCT
-                g.id, gs.artist_id, g.date, g.start_time, g.end_time,
+                g.id, gs.artist_id, g.date,
+                -- Per-slot times for multi-slot gigs — gigs.start_time
+                -- is the umbrella, gig_slots.start_time is this artist's
+                -- actual set (Jun 2026 fix).
+                gs.start_time, gs.end_time,
                 'booked' as status, g.title, gs.pay, g.notes, g.artist_type, g.band_formats,
                 COALESCE(g.is_multi_slot, 0) as is_multi_slot,
                 gs.deal_type, gs.door_pct, gs.guarantee_cents,
@@ -413,6 +469,17 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
     # Override only applies when the artist is currently 'approved' at this venue —
     # revoked/denied/pending rows still carry the override columns from before, but
     # the per-artist negotiated rate no longer applies.
+    # Jul 2026 audit (P-H8): hoist the venue timezone lookup + today
+    # computation OUT of the per-artist loop. Was O(N artists) get_venue_timezone
+    # calls, all against the SAME venue_id.
+    try:
+        from backend.utils import get_venue_timezone as _gvt
+        from datetime import datetime as _pa_dt
+        _venue_tz = _gvt(db, venue_id)
+        _today_str = _pa_dt.now(_venue_tz).strftime("%Y-%m-%d")
+    except Exception:
+        from datetime import date as _date
+        _today_str = _date.today().isoformat()
     result = []
     for artist in artists_result:
         artist_dict = dict(artist)
@@ -447,18 +514,8 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
         artist_dict["venue_default_pay_cents"] = default_pay_cents or 0
         artist_dict["venue_default_freq_days"] = default_freq_days or 0
         
-        # Calculate next_gig_date — use platform timezone so gigs tonight aren't excluded
-        # TZ FIX: use the VENUE's timezone (the gigs belong to this venue),
-        # not platform tz. Otherwise next-gig-date is off by 1 day near UTC
-        # midnight for venues outside the platform tz.
-        try:
-            from backend.utils import get_venue_timezone as _gvt
-            from datetime import datetime as _pa_dt
-            today = _pa_dt.now(_gvt(db, venue_id)).strftime("%Y-%m-%d")
-        except Exception:
-            from datetime import date
-            today = date.today().isoformat()
-        future_gigs = [g for g in artist_gigs if g["date"] >= today]
+        # Calculate next_gig_date. Venue TZ + today hoisted above (P-H8).
+        future_gigs = [g for g in artist_gigs if g["date"] >= _today_str]
         artist_dict["next_gig_date"] = future_gigs[0]["date"] if future_gigs else None
         
         result.append(artist_dict)
@@ -498,6 +555,12 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
             FROM gig_waitlist w
             JOIN gigs g ON g.id = w.gig_id
             WHERE g.venue_id = :venue_id
+              -- Exclude hold-source rows (Jul 2026 fix). Hold offers
+              -- are venue-initiated private invitations, NOT public
+              -- waitlist entries. Surfacing them under the My Artists
+              -- "Waitlisted" badge was misleading — the user reported
+              -- two hold-invited artists showing as "1 of 2 / 2 of 2".
+              AND COALESCE(w.source, 'cancellation') = 'cancellation'
         """),
         {"venue_id": venue_id}
     ).mappings().all()
@@ -564,8 +627,7 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
                COUNT(DISTINCT g.id) AS gigs_count
         FROM artists a
         JOIN gigs g ON g.venue_id = :vid AND (
-              g.artist_id = a.id
-              OR EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = a.id)
+              EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = a.id)
               OR EXISTS (SELECT 1 FROM gig_contracts gc WHERE gc.gig_id = g.id AND gc.artist_id = a.id)
               OR EXISTS (SELECT 1 FROM transactions t WHERE t.gig_id = g.id AND t.artist_id = a.id)
         )
@@ -663,8 +725,7 @@ def get_artist_past_gigs_at_venue(venue_id: int, artist_id: int,
         WHERE g.venue_id = :vid
           AND date(g.date) < date(:today)
           AND (
-            g.artist_id = :aid
-            OR EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
+            EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
             OR EXISTS (SELECT 1 FROM gig_contracts gc WHERE gc.gig_id = g.id AND gc.artist_id = :aid)
             OR EXISTS (SELECT 1 FROM transactions t WHERE t.gig_id = g.id AND t.artist_id = :aid)
           )
@@ -775,8 +836,7 @@ def get_venue_past_gigs_for_artist(artist_id: int, venue_id: int,
         WHERE g.venue_id = :vid
           AND date(g.date) < date(:today)
           AND (
-            g.artist_id = :aid
-            OR EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
+            EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
             OR EXISTS (SELECT 1 FROM gig_contracts gc WHERE gc.gig_id = g.id AND gc.artist_id = :aid)
             OR EXISTS (SELECT 1 FROM transactions t WHERE t.gig_id = g.id AND t.artist_id = :aid)
           )
@@ -852,50 +912,31 @@ async def save_artist_gig_note(artist_id: int, gig_id: int, venue_id: int,
 @router.get("/api/artists/{artist_id}/gigs-at-venue/{venue_id}")
 def get_artist_gigs_at_venue(artist_id: int, venue_id: int, db=Depends(get_db)):
     """Get artist's gigs at a specific venue ordered by closest date first"""
-    # Regular gigs
-    regular = db.execute(
-        text("""
-            SELECT id, date, start_time, end_time, status, title, pay
-            FROM gigs
-            WHERE artist_id = :artist_id 
-                AND venue_id = :venue_id
-            ORDER BY 
-                CASE WHEN date >= DATE('now', 'localtime') THEN 0 ELSE 1 END,
-                ABS(JULIANDAY(date) - JULIANDAY('now'))
-        """),
-        {"artist_id": artist_id, "venue_id": venue_id}
-    ).mappings().all()
-    
-    # Slot bookings
+    # Jul 2026 refactor: was two queries (single-slot via gigs.artist_id,
+    # multi-slot via gig_slots.artist_id) merged with Python dedup. Post-
+    # backfill every booked/pending slot carries artist_id, so one slot-only
+    # query returns the same union. No status filter — this endpoint has
+    # always included past/cancelled gigs so venues see full history.
     slot_gigs = db.execute(
         text("""
-            SELECT DISTINCT g.id, g.date, gs.start_time, gs.end_time, 'booked' as status, g.title, gs.pay
+            SELECT DISTINCT g.id, g.date, gs.start_time, gs.end_time,
+                            gs.status, g.title, gs.pay
             FROM gig_slots gs
             JOIN gigs g ON gs.gig_id = g.id
             WHERE gs.artist_id = :artist_id
                 AND g.venue_id = :venue_id
-                AND gs.status = 'booked'
-            ORDER BY 
+            ORDER BY
                 CASE WHEN g.date >= DATE('now', 'localtime') THEN 0 ELSE 1 END,
                 ABS(JULIANDAY(g.date) - JULIANDAY('now'))
         """),
         {"artist_id": artist_id, "venue_id": venue_id}
     ).mappings().all()
-    
-    seen_ids = set()
-    result = []
-    for r in regular:
-        seen_ids.add(r['id'])
-        result.append(dict(r))
-    for r in slot_gigs:
-        if r['id'] not in seen_ids:
-            seen_ids.add(r['id'])
-            result.append(dict(r))
-    
-    return result
+
+    return [dict(r) for r in slot_gigs]
 
 @router.put("/api/preferred-artists/{id}/approve")
-def approve_preferred_artist(id: int, db=Depends(get_db), user=Depends(get_current_user)):
+@limiter.limit("10/minute")
+def approve_preferred_artist(id: int, request: Request, db=Depends(get_db), user=Depends(get_current_user)):
     """Approve a preferred artist request"""
     from datetime import datetime
     from backend.utils import check_venue_access
@@ -1019,13 +1060,37 @@ def approve_preferred_artist(id: int, db=Depends(get_db), user=Depends(get_curre
                 }
             )
     except Exception as e:
+        # Jul 2026 audit (E-H4): don't silent-pass on SMTP failure — leave a log breadcrumb.
+        import logging as _pa_log
+        _pa_log.getLogger("gigsfill.preferred_artists").warning(
+            f"preferred-artist email dispatch failed (silent-pass replaced by log): {e}"
+        )
+
+    # Audit trail (Jul 2026): every preferred_artists mutation writes to
+    # admin_audit_log so if a row goes missing later we have a paper
+    # trail — see incident 2026-07-13 where Fifty Proof's row at
+    # 14 Cannons vanished with no reconstructable cause.
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "preferred_approve",
+            target_table="preferred_artists", target_id=id,
+            metadata={
+                "venue_id": int(request_info["venue_id"]),
+                "artist_id": int(request_info["artist_id"]),
+                "artist_name": request_info["artist_name"],
+                "venue_name": request_info["venue_name"],
+            },
+        )
+    except Exception:
         pass
-    
+
     db.commit()
     return {"ok": True}
 
 @router.put("/api/preferred-artists/{id}/deny")
-def deny_preferred_artist(id: int, db=Depends(get_db), user=Depends(get_current_user)):
+@limiter.limit("10/minute")
+def deny_preferred_artist(id: int, request: Request, db=Depends(get_db), user=Depends(get_current_user)):
     """Deny a preferred artist request"""
     from datetime import datetime
     from backend.utils import check_venue_access
@@ -1146,13 +1211,33 @@ def deny_preferred_artist(id: int, db=Depends(get_db), user=Depends(get_current_
                 }
             )
     except Exception as e:
+        # Jul 2026 audit (E-H4): don't silent-pass on SMTP failure — leave a log breadcrumb.
+        import logging as _pa_log
+        _pa_log.getLogger("gigsfill.preferred_artists").warning(
+            f"preferred-artist email dispatch failed (silent-pass replaced by log): {e}"
+        )
+
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "preferred_deny",
+            target_table="preferred_artists", target_id=id,
+            metadata={
+                "venue_id": int(request_info["venue_id"]),
+                "artist_id": int(request_info["artist_id"]),
+                "artist_name": request_info["artist_name"],
+                "venue_name": request_info["venue_name"],
+            },
+        )
+    except Exception:
         pass
-    
+
     db.commit()
     return {"ok": True}
 
 @router.put("/api/preferred-artists/{id}/revoke")
-def revoke_preferred_artist(id: int, db=Depends(get_db), user=Depends(get_current_user)):
+@limiter.limit("10/minute")
+def revoke_preferred_artist(id: int, request: Request, db=Depends(get_db), user=Depends(get_current_user)):
     """
     v73: Revoke preferred status for an artist
     - Changes status from 'approved' to 'revoked'
@@ -1266,8 +1351,27 @@ def revoke_preferred_artist(id: int, db=Depends(get_db), user=Depends(get_curren
                 }
             )
     except Exception as e:
+        # Jul 2026 audit (E-H4): don't silent-pass on SMTP failure — leave a log breadcrumb.
+        import logging as _pa_log
+        _pa_log.getLogger("gigsfill.preferred_artists").warning(
+            f"preferred-artist email dispatch failed (silent-pass replaced by log): {e}"
+        )
+
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "preferred_revoke",
+            target_table="preferred_artists", target_id=id,
+            metadata={
+                "venue_id": int(request_info["venue_id"]),
+                "artist_id": int(request_info["artist_id"]),
+                "artist_name": request_info["artist_name"],
+                "venue_name": request_info["venue_name"],
+            },
+        )
+    except Exception:
         pass
-    
+
     db.commit()
     return {"ok": True}
 
@@ -1317,13 +1421,32 @@ async def update_preferred_artist_override(id: int, request: Request, db=Depends
         params["freq"] = int(val) if val is not None and val != '' else None
     
     if updates:
+        # Snapshot the row before so the audit log captures the
+        # original pay/frequency values, not just the new ones.
+        _before = db.execute(
+            text("SELECT pay_dollars_override, pay_cents_override, "
+                 "frequency_days_override FROM preferred_artists WHERE id = :id"),
+            {"id": id}
+        ).mappings().first()
         # Safe: `updates` list only contains hardcoded column assignment strings
         db.execute(
             text(f"UPDATE preferred_artists SET {', '.join(updates)} WHERE id = :id"),
             params
         )
+        try:
+            from backend.utils import log_admin_action
+            log_admin_action(
+                db, user, "preferred_override_update",
+                target_table="preferred_artists", target_id=id,
+                before=dict(_before) if _before else None,
+                after={k: v for k, v in params.items() if k != "id"},
+                metadata={"venue_id": int(record["venue_id"])},
+                request=request,
+            )
+        except Exception:
+            pass
         db.commit()
-    
+
     return {"ok": True}
 
 
@@ -1354,6 +1477,16 @@ def ban_artist(venue_id: int, artist_id: int, data: dict = {},
         {"vid": venue_id, "aid": artist_id, "uid": user.id, "reason": reason}
     )
 
+    # Snapshot the row we're about to nuke so the audit log has a
+    # `before` payload — the DELETE below is destructive and this is
+    # the last chance to record what existed.
+    _pa_before = db.execute(
+        text("SELECT id, status, pay_dollars_override, pay_cents_override, "
+             "frequency_days_override, created_at "
+             "FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"),
+        {"vid": venue_id, "aid": artist_id}
+    ).mappings().first()
+
     # Remove from preferred_artists entirely
     db.execute(
         text("DELETE FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"),
@@ -1371,6 +1504,27 @@ def ban_artist(venue_id: int, artist_id: int, data: dict = {},
                 AND gig_id IN (SELECT id FROM gigs WHERE venue_id = :vid)"""),
         {"aid": artist_id, "vid": venue_id}
     )
+
+    # Audit trail — this is the ONLY code path that hard-deletes a
+    # preferred_artists row, so log it aggressively. Includes the row
+    # snapshot in `before_json` for full forensic reconstruction.
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "preferred_delete_by_ban",
+            target_table="preferred_artists",
+            target_id=(_pa_before["id"] if _pa_before else None),
+            before=dict(_pa_before) if _pa_before else None,
+            metadata={
+                "venue_id": int(venue_id),
+                "artist_id": int(artist_id),
+                "artist_name": artist["name"] if artist else None,
+                "reason": reason,
+            },
+        )
+    except Exception:
+        pass
+
     db.commit()
 
     # Notify artist via Activity Center + email
@@ -1456,8 +1610,7 @@ def unban_artist(venue_id: int, artist_id: int,
     has_history = db.execute(text("""
         SELECT 1 FROM gigs g
         WHERE g.venue_id = :vid AND (
-            g.artist_id = :aid
-            OR EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
+            EXISTS (SELECT 1 FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
             OR EXISTS (SELECT 1 FROM gig_contracts gc WHERE gc.gig_id = g.id AND gc.artist_id = :aid)
             OR EXISTS (SELECT 1 FROM transactions t WHERE t.gig_id = g.id AND t.artist_id = :aid)
         ) LIMIT 1

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Cookie, HTTPException, Form, Depends
-from backend.db import SessionLocal
+from backend.db import SessionLocal, get_db
 from backend.models import ArtistMedia, VenueMedia, Artist, Venue
 from backend.routes.auth import verify_session_token, SESSION_COOKIE_NAME, get_current_user
 from sqlalchemy import text
@@ -166,18 +166,17 @@ def user_can_access_venue(db, venue_id: int, user_id: int) -> bool:
 # GET ARTIST MEDIA (JSON SAFE)
 # -----------------------------------------
 @router.get("/api/artists/{artist_id}/media")
-def get_artist_media(artist_id: int):
-    db = SessionLocal()
-
+def get_artist_media(artist_id: int, db=Depends(get_db)):
+    # Audit fix (Jul 1 2026): swapped to Depends(get_db) which handles
+    # teardown via try/finally in db.py:get_db — the previous manual
+    # `db = SessionLocal() ... db.close()` pattern leaked the session
+    # on any raise before .close() (validation error, ORM error, etc).
     rows = (
         db.query(ArtistMedia)
         .filter(ArtistMedia.artist_id == artist_id)
         .order_by(ArtistMedia.display_order)
         .all()
     )
-
-    db.close()
-
     # 🚨 MUST RETURN JSON-SERIALIZABLE DATA
     return [
         {
@@ -204,22 +203,21 @@ def upload_media(
     file: UploadFile | None = File(None),
     video_url: str | None = Form(None),
     title: str | None = Form(None),
-    session_token: str | None = Cookie(default=None)
+    user=Depends(get_current_user),
+    db=Depends(get_db),  # Audit fix (Jul 1 2026): teardown via get_db.
 ):
-
-    if not session_token:
-        raise HTTPException(401, "Not logged in")
-    
-    user_id = verify_session_token(session_token)
+    # BUG FIX (Jul 2026 audit): switched from raw verify_session_token to
+    # get_current_user Depends so password-rotation session invalidation
+    # (auth._reject_if_password_rotated) fires here. Previously any stolen
+    # session token remained valid for artist media uploads even after the
+    # owner changed their password.
+    user_id = user.id
 
     if media_type not in ["profile", "picture", "audio", "video", "audio_link"]:
         raise HTTPException(400, "Invalid media type")
 
-    db = SessionLocal()
-
     # Check ownership OR entity_users access
     if not user_can_access_artist(db, artist_id, user_id):
-        db.close()
         raise HTTPException(403, "You don't have access to this artist")
 
     # MP3 cap: max 3 audio file uploads per artist (audio_link URLs uncapped)
@@ -231,7 +229,6 @@ def upload_media(
             .count()
         )
         if existing_audio >= 3:
-            db.close()
             raise HTTPException(
                 400,
                 "You've reached the 3 MP3 file limit. Delete an existing MP3 "
@@ -296,7 +293,6 @@ def upload_media(
     # VIDEO / AUDIO_LINK (URL-based; both use the video_url column)
     else:
         if not video_url:
-            db.close()
             raise HTTPException(400, "video_url required")
 
         media = ArtistMedia(
@@ -310,7 +306,6 @@ def upload_media(
     db.add(media)
     db.commit()
     db.refresh(media)
-    db.close()
 
     return {
         "id": media.id,
@@ -326,135 +321,101 @@ def upload_media(
 # UPDATE MEDIA
 # -----------------------------------------
 @router.put("/api/media/{media_id}")
-def update_media(media_id: int, data: dict, user=Depends(get_current_user)):
-    db = SessionLocal()
-
+def update_media(media_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     m = (
         db.query(ArtistMedia).filter(ArtistMedia.id == media_id).first()
         or
         db.query(VenueMedia).filter(VenueMedia.id == media_id).first()
     )
-
     if not m:
-        db.close()
         raise HTTPException(404)
-
     # Verify ownership
     if isinstance(m, ArtistMedia):
         if not user_can_access_artist(db, m.artist_id, user.id):
-            db.close()
             raise HTTPException(403, "Access denied")
     else:
         if not user_can_access_venue(db, m.venue_id, user.id):
-            db.close()
             raise HTTPException(403, "Access denied")
-
-    for k, v in data.items():
-        if hasattr(m, k):
-            setattr(m, k, v)
-
+    # Audit fix (Jul 2026 full-site audit): explicit allowlist. Previous
+    # `setattr(m, k, v) for k in data if hasattr(m, k)` let a caller
+    # overwrite `file_path` / `artist_id` / `venue_id` on media they
+    # already owned — then the DELETE handler would `os.remove()` any
+    # server file the app process can write, and moving `artist_id`
+    # planted content on a victim entity's profile.
+    _EDITABLE = {"title", "caption", "display_order", "video_url", "media_type"}
+    for k in _EDITABLE:
+        if k in data and hasattr(m, k):
+            setattr(m, k, data[k])
     db.commit()
-    db.close()
     return {"ok": True}
 
 @router.put("/api/venues/media/{media_id}")
-def update_venue_media(media_id: int, data: dict, user=Depends(get_current_user)):
-    db = SessionLocal()
-
+def update_venue_media(media_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     m = db.query(VenueMedia).filter(VenueMedia.id == media_id).first()
-
     if not m:
-        db.close()
         raise HTTPException(404)
-
     if not user_can_access_venue(db, m.venue_id, user.id):
-        db.close()
         raise HTTPException(403, "Access denied")
-
-    for k, v in data.items():
-        if hasattr(m, k):
-            setattr(m, k, v)
-
+    # Same allowlist as /api/media/{id} — see comment there.
+    _EDITABLE = {"title", "caption", "display_order", "video_url", "media_type"}
+    for k in _EDITABLE:
+        if k in data and hasattr(m, k):
+            setattr(m, k, data[k])
     db.commit()
-    db.close()
     return {"ok": True}
 
 @router.delete("/api/venues/media/{media_id}")
-def delete_venue_media(media_id: int, user=Depends(get_current_user)):
-    db = SessionLocal()
-
+def delete_venue_media(media_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     m = db.query(VenueMedia).filter(VenueMedia.id == media_id).first()
-
     if not m:
-        db.close()
         raise HTTPException(404)
-
     if not user_can_access_venue(db, m.venue_id, user.id):
-        db.close()
         raise HTTPException(403, "Access denied")
-
     # Delete file from disk if it exists
     if m.file_path:
         file_on_disk = m.file_path.lstrip("/")
         if os.path.exists(file_on_disk):
             os.remove(file_on_disk)
-
     db.delete(m)
     db.commit()
-    db.close()
     return {"ok": True}
 
 # -----------------------------------------
 # DELETE MEDIA
 # -----------------------------------------
 @router.delete("/api/media/{media_id}")
-def delete_media(media_id: int, user=Depends(get_current_user)):
-    db = SessionLocal()
-
+def delete_media(media_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     m = (
         db.query(ArtistMedia).filter(ArtistMedia.id == media_id).first()
         or
         db.query(VenueMedia).filter(VenueMedia.id == media_id).first()
     )
-
     if not m:
-        db.close()
         raise HTTPException(404)
-
     # Verify ownership
     if isinstance(m, ArtistMedia):
         if not user_can_access_artist(db, m.artist_id, user.id):
-            db.close()
             raise HTTPException(403, "Access denied")
     else:
         if not user_can_access_venue(db, m.venue_id, user.id):
-            db.close()
             raise HTTPException(403, "Access denied")
-
     # Delete file from disk if it exists
     if m.file_path:
         file_on_disk = m.file_path.lstrip("/")
         if os.path.exists(file_on_disk):
             os.remove(file_on_disk)
-
     db.delete(m)
     db.commit()
-    db.close()
     return {"ok": True}
 
 @router.get("/api/venues/{venue_id}/media")
-def get_venue_media(venue_id: int):
-    db = SessionLocal()
-
+def get_venue_media(venue_id: int, db=Depends(get_db)):
     rows = (
-        db.query(VenueMedia)   # ✅ CORRECT
+        db.query(VenueMedia)
         .filter(VenueMedia.venue_id == venue_id)
         .order_by(VenueMedia.display_order)
         .all()
     )
-
-    db.close()
-
     return [
         {
             "id": m.id,
@@ -476,21 +437,18 @@ def upload_venue_media(
     file: UploadFile | None = File(None),
     video_url: str | None = Form(None),
     title: str | None = Form(None),
-    session_token: str | None = Cookie(default=None)
+    user=Depends(get_current_user),
+    db=Depends(get_db),  # Audit fix (Jul 1 2026): teardown via get_db.
 ):
-    if not session_token:
-        raise HTTPException(401, "Not logged in")
-    
-    user_id = verify_session_token(session_token)
+    # BUG FIX (Jul 2026 audit): same fix as upload_media — use get_current_user
+    # so password-rotation session invalidation is applied.
+    user_id = user.id
 
     if media_type not in ["profile", "picture", "video"]:
         raise HTTPException(400)
 
-    db = SessionLocal()
-
     # Check ownership OR entity_users access
     if not user_can_access_venue(db, venue_id, user_id):
-        db.close()
         raise HTTPException(403, "You don't have access to this venue")
 
     order = (
@@ -556,7 +514,5 @@ def upload_venue_media(
     db.add(media)
     db.commit()
     db.refresh(media)
-    db.close()
-
     return {"ok": True}
 

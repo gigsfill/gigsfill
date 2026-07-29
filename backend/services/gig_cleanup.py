@@ -51,13 +51,26 @@ def assert_no_charged_transactions(db, gig_id: int, artist_id: int = None):
     instead of silently dropping the audit trail.
 
     Door-deal extension (Jun 2026): also block cancellation when any of the
-    gig's slots have been SETTLED (settled_at IS NOT NULL). Once a door
-    deal is settled the transaction amount has been bumped to the full
-    receipts-based payout. Letting that cancel without going through the
-    explicit refund/reversal flow would charge the venue and leave the
-    artist with money (or vice versa) — a real cash loss.
+    gig's slots have been SETTLED (settled_at IS NOT NULL).
+
+    Race-safety (Jul 2026 audit): the check + subsequent cleanup are not
+    atomic against the payout_scheduler which atomically claims a
+    'scheduled' row into 'processing'. Reduce the window by explicitly
+    committing before returning (so any concurrent 'processing' transition
+    is visible on our next read), and include 'processing' in the state
+    set. Full atomicity would need SELECT FOR UPDATE / BEGIN IMMEDIATE
+    which isn't portable across our SQLite/Postgres shim — the narrow
+    window that remains is acceptable given the scheduler's own idempotency
+    on the txn id.
     """
     from fastapi import HTTPException
+    # Force any pending state changes to be visible before we assert.
+    # Cheap on SQLite; on Postgres a no-op transaction boundary.
+    try:
+        db.commit()
+    except Exception:
+        try: db.rollback()
+        except Exception: pass
     placeholders = ", ".join(f"'{s}'" for s in CHARGED_TRANSACTION_STATUSES)
     if artist_id is None:
         row = db.execute(
@@ -303,6 +316,66 @@ def cleanup_gig_records(db, gig_id: int, artist_id: int = None):
         raise
 
 
+def cleanup_hold_records(db, gig_id: int, *, delete_rows: bool = False) -> None:
+    """Cancellation-side cleanup for the Hold-Gig feature (Jun 2026 audit).
+
+    Called whenever a gig is cancelled / deleted / has its booked artist
+    cancelled. Three of the cancellation endpoints had no hold-aware
+    cleanup, so:
+      - hold_status stayed 'active'/'exhausted' (gig still hidden from
+        public search forever)
+      - In-flight email links stayed valid (an artist could click their
+        old email Accept link and try to book a slot that no longer exists)
+      - On a subsequent /hold/start the old hold_waitlist rows would be
+        replayed, causing duplicate offer emails to artists who had
+        already declined the previous cycle.
+
+    Two modes:
+      - delete_rows=False (default — used by "keep_open" cancellation
+        paths): mark in-flight offers consumed (offer_declined=1,
+        offer_expires_at=now) and clear hold_status on the gig. Rows
+        survive for audit history.
+      - delete_rows=True (used by full-gig delete paths): also DELETE
+        every hold-source waitlist row + matching waitlist_offered
+        tokens. Cleaner state for downstream replay.
+
+    Idempotent — safe to call on a gig with no hold history.
+    """
+    try:
+        # Invalidate any in-flight offer first so a stale email click
+        # hits respond_to_hold_offer's "no longer active" branch.
+        db.execute(
+            text("""UPDATE gig_waitlist
+                    SET offer_declined = 1,
+                        offer_expires_at = CURRENT_TIMESTAMP
+                    WHERE gig_id = :gid
+                      AND source = 'hold'
+                      AND offer_sent = 1
+                      AND offer_declined = 0"""),
+            {"gid": gig_id}
+        )
+        if delete_rows:
+            db.execute(
+                text("DELETE FROM gig_waitlist WHERE gig_id = :gid AND source = 'hold'"),
+                {"gid": gig_id}
+            )
+            try:
+                db.execute(
+                    text("DELETE FROM waitlist_offered WHERE gig_id = :gid"),
+                    {"gid": gig_id}
+                )
+            except Exception as _woe:
+                logger.warning(f"cleanup_hold_records waitlist_offered skip: {_woe}")
+        # Clear hold state on the gig itself so the gig becomes
+        # publicly visible again (or is fully wound down).
+        db.execute(
+            text("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
+            {"gid": gig_id}
+        )
+    except Exception as e:
+        logger.warning(f"cleanup_hold_records failed gig={gig_id}: {e}")
+
+
 def delete_gig_completely(db, gig_id: int):
     """
     Delete a gig and ALL related records: slots, transactions, contracts,
@@ -334,7 +407,71 @@ def delete_gig_completely(db, gig_id: int):
         db.execute(text("DELETE FROM waitlist_offered WHERE gig_id = :gid"), {"gid": gig_id})
     except Exception as _woe:
         logger.warning(f"delete_gig_completely waitlist_offered skip: {_woe}")
+    # Audit YELLOW fix (Jul 1 2026): gig_cancelled_artists was left behind
+    # on gig delete. If a gig id ever recycles (Postgres serial gap +
+    # admin manual reset), a stale row could exclude an artist from a
+    # totally unrelated future gig's blast. Optional table — wrapped.
+    try:
+        db.execute(text("DELETE FROM gig_cancelled_artists WHERE gig_id = :gid"), {"gid": gig_id})
+    except Exception as _gcae:
+        logger.warning(f"delete_gig_completely gig_cancelled_artists skip: {_gcae}")
+    # pending_approval_tokens carries per-(gig, artist) email approval
+    # tokens that never expire on their own — clear on gig delete so a
+    # recycled id can't replay.
+    try:
+        db.execute(text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid"), {"gid": gig_id})
+    except Exception as _pate:
+        logger.warning(f"delete_gig_completely pending_approval_tokens skip: {_pate}")
     db.execute(text("DELETE FROM artist_reviews WHERE gig_id = :gid"), {"gid": gig_id})
+    # BUG FIX (Jul 2026 audit): venue_reviews.gig_id is nullable, so a stale
+    # row was left behind pointing at the deleted gig. The public
+    # list_venue_reviews payload then exposed a dead gig_id. NULL the FK
+    # instead of deleting so the review (rating + text) survives — that's
+    # the same policy user-account delete now uses for authored reviews.
+    try:
+        db.execute(text("UPDATE venue_reviews SET gig_id = NULL WHERE gig_id = :gid"), {"gid": gig_id})
+    except Exception as _vre:
+        logger.warning(f"delete_gig_completely venue_reviews.gig_id NULL skip: {_vre}")
     db.execute(text("DELETE FROM gig_slots WHERE gig_id = :gid"), {"gid": gig_id})
+    # Jul 1 2026: capture the recurring_group_id BEFORE deleting so we
+    # can clean up an orphaned singleton series after the row is gone.
+    try:
+        _rgid_row = db.execute(
+            text("SELECT recurring_group_id FROM gigs WHERE id = :gid"),
+            {"gid": gig_id}
+        ).mappings().first()
+        _rgid = (_rgid_row or {}).get("recurring_group_id")
+    except Exception:
+        _rgid = None
     db.execute(text("DELETE FROM gigs WHERE id = :gid"), {"gid": gig_id})
+    # Series-shrink cleanup (Jul 1 2026): if this delete leaves the
+    # recurring group with fewer than 2 members, the survivor(s) aren't
+    # really a "series" anymore — a series-of-one is just a standalone
+    # gig. Null out the recurring_* fields on the survivors so the
+    # frontend doesn't render "🔁 This gig is part of a recurring
+    # series" for a lone gig. User-visible case: venue deletes all
+    # other members of a series; the last one still claims series
+    # membership in the modal.
+    if _rgid:
+        try:
+            _remaining = db.execute(
+                text("SELECT COUNT(*) FROM gigs WHERE recurring_group_id = :rgid"),
+                {"rgid": _rgid}
+            ).scalar() or 0
+            if int(_remaining) < 2:
+                db.execute(
+                    text("""UPDATE gigs SET
+                                recurring_group_id = NULL,
+                                is_recurring = 0,
+                                recurring_interval_weeks = NULL,
+                                recurring_days_of_week = NULL,
+                                recurring_end_type = NULL,
+                                recurring_end_after = NULL,
+                                recurring_end_by_date = NULL
+                            WHERE recurring_group_id = :rgid"""),
+                    {"rgid": _rgid}
+                )
+                logger.info(f"[SERIES_CLEANUP] delete_gig_completely: recurring group {_rgid[:12] if isinstance(_rgid,str) else _rgid} shrank to {int(_remaining)} member(s); cleared recurring fields on survivor(s).")
+        except Exception as _sce:
+            logger.warning(f"delete_gig_completely series-shrink cleanup skip for rgid={_rgid}: {_sce}")
     logger.debug(f"Deleted gig={gig_id} and all related records")

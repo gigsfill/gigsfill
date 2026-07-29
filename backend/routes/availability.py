@@ -121,20 +121,18 @@ def add_blackout(artist_id: int, data: dict,
         raise HTTPException(400, "Blackout range cannot exceed 1 year")
 
     # ─── Check 1: Booked gigs (always blocking — never overridable) ───
-    # Looks at both single-slot bookings (gigs.artist_id) and multi-slot (gig_slots)
-    # because the codebase has both shapes (see Section 16 item #21).
+    # Jul 2026 refactor: dropped the `g.artist_id = :aid` OR-leg. Every
+    # gig has a `gig_slots` row now (backfill in db.setup_database), and
+    # `gigs.artist_id` was a duplicate of `gig_slots.artist_id` for
+    # single-slot gigs. Slot-only path handles both shapes.
     booked_conflicts = db.execute(
         text("""
             SELECT DISTINCT g.id, g.date, g.title FROM gigs g
+            JOIN gig_slots gs ON gs.gig_id = g.id
             WHERE g.status = 'booked'
               AND date(g.date) BETWEEN date(:start) AND date(:end)
-              AND (
-                  g.artist_id = :aid
-                  OR EXISTS (
-                      SELECT 1 FROM gig_slots gs
-                      WHERE gs.gig_id = g.id AND gs.artist_id = :aid AND gs.status = 'booked'
-                  )
-              )
+              AND gs.artist_id = :aid
+              AND gs.status = 'booked'
             ORDER BY g.date
             LIMIT 5
         """),
@@ -436,25 +434,28 @@ def me_add_blackout(data: dict, user=Depends(get_current_user), db=Depends(get_d
         for aid in artist_ids:
             if int(aid) not in my_artist_ids:
                 raise HTTPException(403, f"You're not a member of artist {aid}")
-        # Insert one row per artist
+        # Insert one row per artist. 2026-07-25: RETURNING id inline
+        # (was: separate last_insert_rowid() call — per-connection so it
+        # returned the wrong id when the pool swapped connections between
+        # INSERT and follow-up SELECT).
         new_ids = []
         for aid in artist_ids:
-            db.execute(text("""
+            nid = db.execute(text("""
                 INSERT INTO user_availability (user_id, artist_id, blackout_start, blackout_end, reason)
-                VALUES (:uid, :aid, :bs, :be, :r)
+                VALUES (:uid, :aid, :bs, :be, :r) RETURNING id
             """), {"uid": user.id, "aid": int(aid),
-                   "bs": blackout_start, "be": blackout_end, "r": reason})
-            new_ids.append(db.execute(text("SELECT last_insert_rowid()")).scalar())
+                   "bs": blackout_start, "be": blackout_end, "r": reason}).scalar()
+            new_ids.append(nid)
         db.commit()
         return {"ok": True, "ids": new_ids, "count": len(new_ids)}
     else:
-        # NULL artist_id → applies to all my artists
-        db.execute(text("""
+        # NULL artist_id → applies to all my artists. Same RETURNING id fix.
+        nid = db.execute(text("""
             INSERT INTO user_availability (user_id, artist_id, blackout_start, blackout_end, reason)
-            VALUES (:uid, NULL, :bs, :be, :r)
-        """), {"uid": user.id, "bs": blackout_start, "be": blackout_end, "r": reason})
+            VALUES (:uid, NULL, :bs, :be, :r) RETURNING id
+        """), {"uid": user.id, "bs": blackout_start, "be": blackout_end, "r": reason}).scalar()
         db.commit()
-        return {"ok": True, "ids": [db.execute(text("SELECT last_insert_rowid()")).scalar()], "count": 1}
+        return {"ok": True, "ids": [nid], "count": 1}
 
 
 @router.delete("/api/me/availability/{blackout_id}")

@@ -53,7 +53,7 @@ class MyVenuesRedesign {
       
       if (venuesResponse.ok) {
         this.venues = await venuesResponse.json();
-        
+
         // Clear gigs_loaded flag so data is fresh after cancel/reload
         this.venues.forEach(v => { v.gigs_loaded = false; });
         
@@ -495,7 +495,7 @@ class MyVenuesRedesign {
                   } else {
                     payDisp = null;
                   }
-                  const gigIcon = ({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'}[gig.artist_type] || '🎵');
+                  const gigIcon = ({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'}[gig.artist_type] || '🎵');
                   return `
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:5px 8px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); border-radius:5px; margin-bottom:4px;">
                       <div onclick="myVenuesRedesign.showGigDetails(${gig.id})" style="font-size:0.82rem; color:#e2e8f0; display:flex; align-items:center; gap:10px; flex-wrap:wrap; cursor:pointer;" onmouseover="this.parentElement.style.background='rgba(239,68,68,0.14)'" onmouseout="this.parentElement.style.background='rgba(239,68,68,0.08)'">
@@ -760,7 +760,11 @@ if (document.readyState === 'loading') {
     }
   }
 }
-// Delegated event listener for flyer buttons — CSP-safe replacement for inline onclick
+// Delegated event listener for flyer buttons — CSP-safe replacement for inline onclick.
+// CAPTURE phase (Jul 2026 fix): the outer gig-list container has
+// `onclick="event.stopPropagation()"` which swallowed the bubble before
+// document could see it. Capturing runs on the way DOWN, before any
+// stopPropagation in the bubble chain.
 document.addEventListener('click', function(e) {
   const btn = e.target.closest('.gig-flyer-btn');
   if (!btn) return;
@@ -777,7 +781,7 @@ document.addEventListener('click', function(e) {
       }
     })
     .catch(function() { alert('Could not load flyer.'); });
-});
+}, true);  // true = capture phase
 
 // Build "Rate Venue" / "Edit Review" button for My Venues tab
 function _buildRateVenueBtn(venue, venueId, venueName) {

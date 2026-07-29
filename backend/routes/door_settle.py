@@ -93,7 +93,7 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
             {"gid": gig_id}
         ).mappings().first()
         _parent_status = (_parent and _parent.get("status")) or ""
-        if _parent_status not in ("scheduled", "test"):
+        if _parent_status not in ("scheduled",):
             raise HTTPException(
                 400,
                 "Settlement already in flight — the venue charge has moved past 'scheduled' "
@@ -178,14 +178,29 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
         i = s.find(' [door-settled')
         return s if i < 0 else s[:i]
 
+    # BUG FIX (Jul 2026 audit): re-check `status = 'scheduled'` in the UPDATE
+    # WHERE to protect against a race where the payout scheduler atomically
+    # claims the row into 'processing' between our SELECT at line 156 and
+    # this UPDATE. If rowcount is 0 for a given row, the scheduler beat us
+    # to it — leaving the child at the OLD amount_cents while the settle
+    # audit note describes NEW terms. Log and drop into the off-platform
+    # fallback so the venue is told the settle didn't move money.
     txn_updated_count = 0
     for r in _cur:
         new_notes = (_strip_settle_suffix(r["notes"]) or '') + audit_note
-        db.execute(
-            text("UPDATE transactions SET amount_cents = :final, notes = :notes WHERE id = :id"),
+        _res = db.execute(
+            text("UPDATE transactions SET amount_cents = :final, notes = :notes "
+                 "WHERE id = :id AND status = 'scheduled'"),
             {"final": final_pay_cents, "notes": new_notes, "id": r["id"]}
         )
-        txn_updated_count += 1
+        if (_res.rowcount or 0) > 0:
+            txn_updated_count += 1
+        else:
+            logger.warning(
+                f"[SETTLE] txn {r['id']} slipped out of 'scheduled' before we could "
+                f"anchor the door-settle amount — scheduler likely claimed it. "
+                f"Falling through to off-platform delta path."
+            )
 
     # Fallback path: legacy rows (pre-multi-slot) wrote notes='Artist N'
     # with no Slot prefix. If nothing matched the slot-scoped filter,
@@ -284,7 +299,8 @@ def configure_deal(gig_id: int, slot_id: int, data: dict,
     The actual settled pay is computed at POST /settle once door
     receipts are filed."""
     slot = db.execute(
-        text("""SELECT gs.id, gs.status, gs.settled_at, g.venue_id
+        text("""SELECT gs.id, gs.status, gs.settled_at, gs.artist_id,
+                       g.venue_id
                 FROM gig_slots gs JOIN gigs g ON g.id = gs.gig_id
                 WHERE gs.id = :sid AND gs.gig_id = :gid"""),
         {"sid": slot_id, "gid": gig_id}
@@ -294,6 +310,30 @@ def configure_deal(gig_id: int, slot_id: int, data: dict,
     check_venue_access(db, slot["venue_id"], user.id)
     if slot["settled_at"]:
         raise HTTPException(400, "Cannot change deal after settlement")
+
+    # BUG FIX (Jul 2026 audit): once a slot is booked, its deal terms are
+    # anchored into the accompanying artist_payout transaction (amount_cents,
+    # artist_payout_cents, commission_cents — see _create_booking_transaction).
+    # Editing guarantee_cents / door_pct / deal_type post-booking without
+    # re-anchoring the txn would let the venue silently underpay the artist
+    # (or overpay themselves via _recompute_gig_fees). Refuse.
+    if slot["status"] in ("booked","pending_contract","awaiting_venue_contract","pending_venue_approval"):
+        _live_txn = db.execute(
+            text("""SELECT 1 FROM transactions
+                    WHERE gig_id = :gid AND artist_id = :aid
+                      AND transaction_type IN ('artist_payout','single')
+                      AND status NOT IN ('payment_cancelled','account_deleted')
+                    LIMIT 1"""),
+            {"gid": gig_id, "aid": slot.get("artist_id")}
+        ).first()
+        if _live_txn:
+            raise HTTPException(
+                409,
+                "DEAL_LOCKED_BY_BOOKING: This slot is booked and has an active "
+                "artist payout tied to the current deal terms. Cancel the booking "
+                "first to change guarantee / door percent, or wait until after "
+                "settlement to adjust."
+            )
 
     deal_type = (data.get("deal_type") or "flat").lower()
     if deal_type not in ("flat", "door"):
@@ -350,7 +390,7 @@ def list_pending_settlements(gig_id: int,
                   SELECT 1 FROM transactions t
                   WHERE t.gig_id = gs.gig_id
                     AND t.transaction_type = 'venue_charge'
-                    AND t.status IN ('scheduled', 'test')
+                    AND t.status = 'scheduled'
                 )
               )
             ORDER BY gs.slot_number

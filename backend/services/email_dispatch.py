@@ -244,9 +244,21 @@ def _fetch_venue_detail_vars(db, venue_id, gig_notes=None):
         else:
             lighting_info = 'No'
 
+        # Jul 2026 full-site audit (E-H1): venue_address_link went into
+        # emails as raw HTML, so a `"` in the address (or malicious
+        # markup embedded via venue edit) escaped the href and injected
+        # scripts. HTML-escape the visible text AND the href attr.
+        import html as _html
+        _addr_visible = _html.escape(venue_address) if venue_address else ''
+        _addr_href = _html.escape(_maps_url(venue_address), quote=True) if venue_address else ''
+        _addr_link = (
+            f'<a href="{_addr_href}" target="_blank" style="color: #8b5cf6; text-decoration: none;">{_addr_visible}</a>'
+            if venue_address and venue_address != 'Not provided'
+            else _addr_visible
+        )
         return {
             'venue_address':      venue_address,
-            'venue_address_link': f'<a href="{_maps_url(venue_address)}" target="_blank" style="color: #8b5cf6; text-decoration: none;">{venue_address}</a>' if venue_address and venue_address != 'Not provided' else venue_address,
+            'venue_address_link': _addr_link,
             'venue_capacity':  venue_capacity,
             'arrival_info':    arrival_info,
             'stage_info':      stage_info,
@@ -307,17 +319,14 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
         """), _slot_params).mappings().all()
 
         if not booked_slots:
-            # Fallback: try gig.artist_id
-            if gig["artist_id"]:
-                fallback_artist = db.execute(text("SELECT id, name FROM artists WHERE id = :aid"), {"aid": gig["artist_id"]}).mappings().first()
-                if fallback_artist:
-                    booked_slots = [{"artist_id": gig["artist_id"], "artist_name": fallback_artist["name"],
-                                     "start_time": gig["start_time"], "end_time": gig["end_time"],
-                                     "pay": gig["pay"], "artist_type": gig["artist_type"],
-                                     "band_formats": gig["band_formats"], "styles": gig["styles"]}]
-            if not booked_slots:
-                logger.error(f"[BOOKING EMAIL] No booked slots for gig {gig_id}")
-                return
+            # Jul 2026: legacy single-slot gig.artist_id fallback removed.
+            # Backfill in db.setup_database ensures every gig has ≥1
+            # gig_slots row, so if no booked_slots came back from the
+            # slot query, there really is no booking to email about.
+            # (The old fallback synthesized a slot from gig-level fields
+            # for pre-multi-slot data; that shape no longer exists.)
+            logger.error(f"[BOOKING EMAIL] No booked slots for gig {gig_id}")
+            return
 
         email_service = EmailService(db)
         venue_vars = _fetch_venue_detail_vars(db, gig["venue_id"], gig_notes=gig.get("notes", ""))
@@ -398,9 +407,15 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
                         _venue_geo["latitude"], _venue_geo["longitude"]
                     )
                     if _dist is not None and _dist > _far_miles:
+                        # Jul 2026 full-site audit (E-H1): escape the
+                        # user-controlled fragments before interpolating
+                        # into the "safe HTML" block. Whitelist covers the
+                        # wrapper only, not `artist_name`/city/state.
+                        import html as _html
                         _mi = int(round(_dist))
-                        _v_loc = ", ".join([p for p in [_venue_geo.get("city"), _venue_geo.get("state")] if p]) or "the venue's area"
-                        _a_loc = ", ".join([p for p in [_art_geo.get("city"), _art_geo.get("state")] if p]) or "out of the area"
+                        _v_loc = _html.escape(", ".join([p for p in [_venue_geo.get("city"), _venue_geo.get("state")] if p]) or "the venue's area")
+                        _a_loc = _html.escape(", ".join([p for p in [_art_geo.get("city"), _art_geo.get("state")] if p]) or "out of the area")
+                        _art_name_esc = _html.escape(slot.get("artist_name") or "this artist")
                         email_vars['far_notice_artist'] = (
                             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
                             f'style="margin:16px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;'
@@ -414,7 +429,7 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
                             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
                             f'style="margin:16px 0;"><tr><td style="background:#eff6ff;border:1px solid #bfdbfe;'
                             f'border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#1e40af;">'
-                            f'📍 Heads up: <strong>{slot.get("artist_name") or "this artist"}</strong> is based in '
+                            f'📍 Heads up: <strong>{_art_name_esc}</strong> is based in '
                             f'<strong>{_a_loc}</strong>, about <strong>{_mi} miles</strong> away. They booked through '
                             f'your open-gig window. If this looks like a mistake, you can cancel the booking from the '
                             f'gig details.</td></tr></table>'
@@ -876,20 +891,16 @@ def send_contract_sign_email(db, venue_id: int, artist_id: int, gig_id: int, gig
                 if atype:  slot_rows_html.append(ROW.format(label="Type",   color="#111827", weight="500", value=atype))
                 if lineup: slot_rows_html.append(ROW.format(label="Lineup", color="#111827", weight="500", value=lineup))
                 if styles: slot_rows_html.append(ROW.format(label="Styles", color="#111827", weight="500", value=styles))
+        # Jul 2026: legacy single-slot fallback removed — every gig has a
+        # gig_slots row (see db.setup_database backfill). If we hit this
+        # branch it means the caller's slot query returned nothing when it
+        # should have, so we log and produce no rows rather than silently
+        # swapping in gig-level umbrella data.
         elif gig_row:
-            # Legacy single-slot fallback — use gig's umbrella time + pay
-            t_s = format_time_12hr(gig_row["start_time"] or '')
-            t_e = format_time_12hr(gig_row["end_time"]   or '')
-            time_str = f"{t_s} – {t_e}" if t_e else t_s
-            pay = _fmt_pay(gig_row.get("pay"))
-            atype  = gig_row.get("artist_type") or ''
-            lineup = _commas(gig_row.get("band_formats"))
-            styles = _commas(gig_row.get("styles"))
-            slot_rows_html.append(ROW.format(label="Time",  color="#111827", weight="500", value=time_str))
-            slot_rows_html.append(ROW.format(label="Pay",   color="#059669", weight="600", value=f"${pay}"))
-            if atype:  slot_rows_html.append(ROW.format(label="Type",   color="#111827", weight="500", value=atype))
-            if lineup: slot_rows_html.append(ROW.format(label="Lineup", color="#111827", weight="500", value=lineup))
-            if styles: slot_rows_html.append(ROW.format(label="Styles", color="#111827", weight="500", value=styles))
+            logger.warning(
+                f"[CONTRACT SIGN EMAIL] gig {gig_row.get('id','?')} has no matching slots — "
+                f"slot rows may have been deleted out of band. Email will have empty terms."
+            )
 
         slots_html = ''.join(slot_rows_html)
         gig_title  = (gig_row.get("title") if gig_row else '') or ''
@@ -984,10 +995,17 @@ def send_gig_edited_emails(db, gig_id: int):
         }
 
         # Collect all booked artists from slots
+        # BUG FIX (Jul 2026 audit): match the status set notify_gig_edited uses
+        # so artists mid-contract-flow (pending_contract / awaiting_venue_contract
+        # / pending_venue_approval) get the edit email in addition to the in-app
+        # notification. Previously they got the notification but no email — a
+        # silent divergence per the audit report.
+        _IN_FLIGHT = ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
         artist_ids = set()
         slots_all = db.execute(text("""
             SELECT DISTINCT artist_id FROM gig_slots
-            WHERE gig_id = :gid AND status = 'booked' AND artist_id IS NOT NULL
+            WHERE gig_id = :gid AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+              AND artist_id IS NOT NULL
         """), {"gid": gig_id}).fetchall()
         for s in slots_all:
             artist_ids.add(s[0])
@@ -1008,7 +1026,8 @@ def send_gig_edited_emails(db, gig_id: int):
                 SELECT start_time, end_time, pay, artist_type, band_formats, styles,
                        deal_type, door_pct, guarantee_cents
                 FROM gig_slots
-                WHERE gig_id = :gid AND artist_id = :aid AND status = 'booked'
+                WHERE gig_id = :gid AND artist_id = :aid
+                  AND status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                 LIMIT 1
             """), {"gid": gig_id, "aid": aid}).mappings().first()
             if slot:
@@ -1091,7 +1110,7 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
         # terms — flat OR "$X guarantee + Y% of door". For flat deals we
         # keep the venue-override-aware effective pay.
         _slot_row = db.execute(text("""
-            SELECT pay, deal_type, door_pct, guarantee_cents
+            SELECT pay, deal_type, door_pct, guarantee_cents, start_time, end_time
             FROM gig_slots
             WHERE gig_id = :gid AND artist_id = :aid
               AND status IN ('booked', 'pending_contract', 'awaiting_venue_contract', 'pending_venue_approval')
@@ -1103,6 +1122,12 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
         else:
             effective_pay = _get_effective_pay_for_slot(db, venue_id, artist_id, base_pay)
             pay_display = f"{effective_pay:,.2f}"
+
+        # Jul 2026 bug fix: use the artist's slot times, not the gig umbrella,
+        # so approval-request emails show the actual slot the artist requested
+        # (8-10pm) instead of the whole gig window (7-11pm) on multi-slot gigs.
+        _slot_start = (_slot_row.get('start_time') if _slot_row else None) or gig_details.get('start_time')
+        _slot_end   = (_slot_row.get('end_time')   if _slot_row else None) or gig_details.get('end_time')
 
         # Generate a one-time approval token. Audit fix (May 2026 part 5):
         # previously this overwrote a single `gigs.approval_token` column —
@@ -1119,8 +1144,16 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
             # request supersedes its predecessor.
             db.execute(_text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid"),
                        {"gid": gig_id, "aid": artist_id})
-            db.execute(_text("INSERT INTO pending_approval_tokens (token, gig_id, artist_id, created_at) VALUES (:tok, :gid, :aid, :now)"),
-                       {"tok": approval_token, "gid": gig_id, "aid": artist_id, "now": _utcnow_naive()})
+            # Jul 2026 audit (B-C2): populate `expires_at` so a venue
+            # that never acts can't leave a valid replayable token forever.
+            # 72h window matches the artist's typical wait tolerance for
+            # a same-day booking response.
+            _now_utc = _utcnow_naive()
+            from datetime import timedelta as _td
+            _expires_at = _now_utc + _td(hours=72)
+            db.execute(_text("INSERT INTO pending_approval_tokens (token, gig_id, artist_id, created_at, expires_at) VALUES (:tok, :gid, :aid, :now, :exp)"),
+                       {"tok": approval_token, "gid": gig_id, "aid": artist_id,
+                        "now": _now_utc, "exp": _expires_at})
         except Exception as _pe:
             logger.warning(f"[APPROVAL_EMAIL] pending_approval_tokens write failed: {_pe}")
         db.execute(_text("UPDATE gigs SET approval_token = :tok WHERE id = :gid"),
@@ -1151,8 +1184,8 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
             'venue_id':    str(venue_id),
             'gig_id':      str(gig_id),
             'date':        format_email_date(gig_details.get('date', '')),
-            'start_time':  format_time_12hr(gig_details.get('start_time')),
-            'end_time':    format_time_12hr(gig_details.get('end_time')),
+            'start_time':  format_time_12hr(_slot_start),
+            'end_time':    format_time_12hr(_slot_end),
             'pay':         pay_display,
             'approve_url': approve_url,
             'deny_url':    deny_url,
@@ -1202,7 +1235,7 @@ def send_approval_decision_emails(db, gig_details: dict, artist_id: int,
         venue_id = gig_details.get('venue_id')
         gig_id = gig_details.get('id') or gig_details.get('gig_id')
         _slot_row = db.execute(text("""
-            SELECT pay, deal_type, door_pct, guarantee_cents
+            SELECT pay, deal_type, door_pct, guarantee_cents, start_time, end_time
             FROM gig_slots
             WHERE gig_id = :gid AND artist_id = :aid
               AND status IN ('booked', 'pending_contract', 'awaiting_venue_contract', 'pending_venue_approval')
@@ -1215,14 +1248,18 @@ def send_approval_decision_emails(db, gig_details: dict, artist_id: int,
             pay_display = f"{effective_pay:,.2f}"
         notification_type = 'artist_booking_approved' if approved else 'artist_booking_denied'
 
+        # Jul 2026 bug fix: render artist's slot time, not gig umbrella.
+        _slot_start = (_slot_row.get('start_time') if _slot_row else None) or gig_details.get('start_time')
+        _slot_end   = (_slot_row.get('end_time')   if _slot_row else None) or gig_details.get('end_time')
+
         slot_vars = {"slot_info": slot_info} if slot_info else {}
 
         email_vars = {
             'artist_name': gig_details.get('artist_name', ''),
             'venue_name':  gig_details.get('venue_name', ''),
             'date':        format_email_date(gig_details.get('date', '')),
-            'start_time':  format_time_12hr(gig_details.get('start_time')),
-            'end_time':    format_time_12hr(gig_details.get('end_time')),
+            'start_time':  format_time_12hr(_slot_start),
+            'end_time':    format_time_12hr(_slot_end),
             'pay':         pay_display,
             **slot_vars,
         }

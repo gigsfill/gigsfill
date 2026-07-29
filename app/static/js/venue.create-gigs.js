@@ -233,7 +233,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       const doorOn = !!row.querySelector('.slot-door-checkbox')?.checked;
       const pay = parseFloat((row.querySelector('.slot-pay-amount')?.value || '0').replace(/,/g, '')) || 0;
       const guarRaw = parseFloat((row.querySelector('.slot-door-guarantee')?.value || '0').replace(/,/g, '')) || 0;
-      const hasMoney = doorOn ? guarRaw > 0 : pay > 0;
+      const doorPctRaw = parseInt(row.querySelector('.slot-door-pct')?.value || '0', 10) || 0;
+      // Door slots require BOTH a guarantee AND a door %, per venue
+      // direction (a slot can't be all-guarantee or all-door — both
+      // pieces must be entered explicitly).
+      const hasMoney = doorOn ? (guarRaw > 0 && doorPctRaw > 0) : pay > 0;
       if (!start || !end || !type || !hasMoney) return false;
       if (type === 'Live Band') {
         const hasFormat = row.querySelectorAll('.slot-lineup-cb:checked').length > 0;
@@ -284,12 +288,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     ['change', 'input', 'blur'].forEach(evt => {
       slotList.addEventListener(evt, handler, true);
     });
+    // Also observe DOM mutations so the pill state refreshes when slot
+    // rows are populated programmatically (e.g. when opening the Edit
+    // modal for an existing gig — addSlotRow injects rows synchronously
+    // and no input events fire, so the previous handlers wouldn't catch
+    // that case). MutationObserver fires once per row added/removed.
+    try {
+      const mo = new MutationObserver(() => _updateHoldPillState());
+      mo.observe(slotList, { childList: true, subtree: false });
+    } catch (_) {}
     // First call
     _updateHoldPillState();
   }
   // Run once on load + once per slot mutation. We hook via a setTimeout
   // since the slot DOM is built later in DOMContentLoaded.
   setTimeout(_wireHoldReadinessWatchers, 0);
+  // Expose for openGigModal to nudge the pill on existing-gig edit.
+  window._updateHoldPillState = _updateHoldPillState;
 
   // ── Email-artists toggle ─────────
   if (holdEmailBtn) {
@@ -462,15 +477,40 @@ document.addEventListener("DOMContentLoaded", async () => {
       holdMasterList.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">None of your preferred artists match the artist type set on the slot(s) above.</div>';
       return;
     }
-    holdMasterList.innerHTML = eligible.map(a => {
+    // Summary one-liner when at least one eligible artist is under
+    // the venue's frequency policy (Jun 2026). Tells the venue what
+    // adding them does — `gigs.frequency_exempt=1` is set by the
+    // /hold/start endpoint when this list goes out.
+    const _underFreq = eligible.filter(a => {
+      const aid = parseInt(a.artist_id || a.id, 10);
+      return window._holdArtistFreq && window._holdArtistFreq[aid];
+    }).length;
+    // In Series mode (Recurring + Hold) the freq rule is NOT waived —
+    // each artist's bundled-offer modal greys out dates that conflict
+    // per their picks. Use a different message so the venue isn't told
+    // the rule will be lifted (which would be wrong here).
+    const _isSeriesMode = !!(recurringCheckbox && recurringCheckbox.checked);
+    let _summary = '';
+    if (_underFreq > 0) {
+      if (_isSeriesMode) {
+        _summary = `<div style="font-size:0.66rem;color:#fbbf24;margin:0 6px 8px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.25);border-radius:4px;padding:6px 8px;line-height:1.35;"><strong>${_underFreq} artist${_underFreq!==1?'s':''}</strong> ${_underFreq===1?'is':'are'} currently under this venue's frequency policy. They can still be invited — their bundled-offer modal will grey out dates that conflict with the rule.</div>`;
+      } else {
+        _summary = `<div style="font-size:0.66rem;color:#fbbf24;margin:0 6px 8px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.25);border-radius:4px;padding:6px 8px;line-height:1.35;"><strong>${_underFreq} artist${_underFreq!==1?'s':''}</strong> ${_underFreq===1?'is':'are'} under this venue's frequency policy. Adding them will waive the rule for this gig only.</div>`;
+      }
+    }
+    holdMasterList.innerHTML = _summary + eligible.map(a => {
       const aid = parseInt(a.artist_id || a.id, 10);
       const nm = _escHtml(window._holdArtistMap[aid]);
       const paySuffix = window._holdPayForArtist(aid);
       const icon = _holdTypeIcon(a.artist_type);
+      const fs = window._holdArtistFreq ? window._holdArtistFreq[aid] : null;
+      const freqChip = fs
+        ? `<span title="Last gig here ${fs.abs_days_between} day${fs.abs_days_between!==1?'s':''} ${fs.days_between>0?'before':'after'} this gig (venue requires ${fs.freq_days})" style="flex:0 0 auto;font-size:0.62rem;font-weight:600;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.30);border-radius:3px;padding:1px 5px;margin-left:6px;">freq ${fs.abs_days_between}d</span>`
+        : '';
       return `<button type="button" class="hold-master-row${(window._holdArtistOrder || []).includes(aid) ? ' is-selected' : ''}" data-aid="${aid}" title="${_escHtml(a.artist_type || 'Artist')}">
         <span style="display:inline-flex;align-items:center;gap:5px;width:100%;">
           <span style="flex:0 0 auto;font-size:0.85em;line-height:1;">${icon}</span>
-          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>${freqChip}
         </span>
       </button>`;
     }).join('');
@@ -493,7 +533,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function _loadHoldPicker() {
     if (!holdMasterList) return;
     try {
-      const res = await fetch(`/api/venues/${venueId}/preferred-artists`, { credentials: 'include' });
+      // Pass the chosen gig date so the endpoint returns per-artist
+      // freq_status. Picker chip + summary note depend on it
+      // (Jun 2026 — Hold-Gig add-artist UX). NOTE: `gigDate` is a
+      // <span> in the modal (not an <input>), so .value is undefined —
+      // read from selectedGig.date which is set when the modal opens.
+      const _gd = (typeof selectedGig === 'object' && selectedGig && selectedGig.date)
+        ? String(selectedGig.date).slice(0, 10) : '';
+      const _qs = _gd ? `?for_gig_date=${encodeURIComponent(_gd)}` : '';
+      const res = await fetch(`/api/venues/${venueId}/preferred-artists${_qs}`, { credentials: 'include' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const approved = (Array.isArray(data) ? data : (data.preferred_artists || []))
@@ -508,6 +556,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       _holdApprovedCache = approved;
       window._holdArtistMap = {};
       window._holdArtistPay = {};
+      // Freq-status cache lets the picker render the "freq Nd" chip +
+      // the summary note (Jun 2026). Indexed by artist id.
+      window._holdArtistFreq = {};
       approved.forEach(a => {
         const aid = parseInt(a.artist_id || a.id, 10);
         window._holdArtistMap[aid] = a.name || a.artist_name || ('Artist ' + aid);
@@ -520,6 +571,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         const cents = Number(a.pay_cents_override) || 0;
         if (dollars > 0 || cents > 0) {
           window._holdArtistPay[aid] = dollars + cents / 100;
+        }
+        if (a.freq_status && a.freq_status.under_limit) {
+          window._holdArtistFreq[aid] = a.freq_status;
         }
       });
       // Pay-suffix helper. The column header reads "(Override Pay)" so
@@ -542,6 +596,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     holdCheckbox.addEventListener('change', async () => {
       if (holdCheckbox.checked) {
         holdPanel.style.display = 'block';
+        // Sync the series-mode hint based on whether Recurring is also
+        // currently on (the hint sits inside the Hold panel, so it
+        // only matters when the panel is open).
+        const _hint = document.getElementById('holdSeriesHint');
+        if (_hint) {
+          _hint.style.display = (recurringCheckbox && recurringCheckbox.checked) ? 'block' : 'none';
+        }
         if (!holdMasterList._loaded) {
           await _loadHoldPicker();
           holdMasterList._loaded = true;
@@ -552,18 +613,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   }
+  // (Removed stale gigDateInput change-listener: gigDate is a <span>
+  // in the modal, not an <input>, and the gig's date is fixed once
+  // the modal opens — picked from the calendar before openGigModal
+  // runs. selectedGig.date is the canonical source on _loadHoldPicker.)
 
   // Recurring checkbox: toggle options, and confirm before detaching an existing gig from series
   if (recurringCheckbox && recurringOptions) {
     recurringCheckbox.addEventListener('change', () => {
-      // Hide / restore the Hold pill when recurring is toggled
-      if (holdToggleRow) {
-        holdToggleRow.style.display = recurringCheckbox.checked ? 'none' : '';
-      }
+      // Hold + Recurring is now SUPPORTED (Jul 2026 — Phase 5).
+      // Picking both stages the same waitlist on every series instance;
+      // each artist gets ONE bundled email listing every date.
+      // Show the series-mode hint inside the hold panel when both are on.
+      const _seriesHint = document.getElementById('holdSeriesHint');
+      if (_seriesHint) _seriesHint.style.display = recurringCheckbox.checked ? 'block' : 'none';
       if (recurringCheckbox.checked) {
-        // Force-off the hold + collapse panel so it doesn't ship in the POST
-        if (holdCheckbox) holdCheckbox.checked = false;
-        if (holdPanel) holdPanel.style.display = 'none';
         recurringOptions.style.display = 'block';
         // Reset end type inputs to clean state when showing for the first time
         resetEndType();
@@ -879,7 +943,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function addSlotRow(startTime = '', endTime = '', payDollars = '', payCents = '', slotArtistType = '', slotBandFormats = '', slotStyles = '',
-                      dealType = 'flat', doorPct = 0, guaranteeCents = 0) {
+                      dealType = 'flat', doorPct = 0, guaranteeCents = 0, applyOverride = 0,
+                      slotRequiresEquipment = null) {
+    // Jul 1 2026: MC-type equipment gate. `null` = unspecified (new slot);
+    // for MC types the checkbox defaults to checked (venue picks equipment
+    // burden), for non-MC types the field is unused. Existing gigs pass
+    // the persisted value (true/false).
     slotCounter++;
     const slotList = document.getElementById('slotList');
     const slotNum = slotList.children.length + 1;
@@ -960,13 +1029,35 @@ document.addEventListener("DOMContentLoaded", async () => {
         <span aria-hidden="true" style="visibility:hidden; font-size:0.68rem; flex-shrink:0;">to</span>
         <span aria-hidden="true" style="width:96px; flex-shrink:0; visibility:hidden;">&nbsp;</span>
         <span class="slot-door-inputs">
-          <span class="slot-door-label-text" data-tooltip="This amount will supercede any Artist Pay Override you set in the My Artists tab.">Guarantee Pay:</span>
+          <span class="slot-door-label-text" data-tooltip="The guarantee is the floor pay for this slot. By default the per-artist override does NOT apply to door slots — toggle the checkbox below to honor it.">Guarantee Pay:</span>
           <span class="slot-door-symbol">$</span>
           <input type="text" class="slot-door-guarantee" value="${_formatPayAmount(Math.floor(guaranteeCents / 100), guaranteeCents % 100)}" inputmode="decimal" maxlength="12" placeholder="0.00">
           <span class="slot-door-plus">+</span>
-          <span class="slot-door-label-text">% of door:</span>
+          <span class="slot-door-label-text" data-tooltip="What % of the cover charge at the door will you split with the artist?">% of door:</span>
           <input type="text" class="slot-door-pct" value="${doorPct}" inputmode="numeric" maxlength="3" placeholder="0">
         </span>
+      </div>
+      <!-- "Apply artist override" toggle row. Mirrors the same hidden-
+           spacer alignment as slot-door-row so the checkbox sits under
+           the slot-door-inputs column rather than over to the right of
+           the modal. Lives in its own row so it can wrap cleanly. -->
+      <!-- Apply-override row sits directly below the door-inputs row.
+           Hidden spacers reproduce the same left-offset so the
+           checkbox lands UNDER "Guarantee" in the row above, not
+           centered in the modal. Inline styles force flex-direction
+           row + margin:0 to defeat the legacy .modal label rule in
+           modals-legacy.css that sets column + 16px margin — without
+           those overrides the checkbox stacks above the text. -->
+      <div class="slot-door-override-row" style="display:${dealType === 'door' ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:4px;">
+        <span aria-hidden="true" style="min-width:44px; flex-shrink:0; visibility:hidden; font-size:0.78rem; font-weight:700;">Slot ${slotNum}</span>
+        <span aria-hidden="true" style="width:96px; flex-shrink:0; visibility:hidden;">&nbsp;</span>
+        <span aria-hidden="true" style="visibility:hidden; font-size:0.68rem; flex-shrink:0;">to</span>
+        <span aria-hidden="true" style="width:96px; flex-shrink:0; visibility:hidden;">&nbsp;</span>
+        <label class="slot-door-apply-override-label" style="display:flex; flex-direction:row; align-items:center; gap:6px; margin:0; padding:0; font-size:0.72rem; font-weight:500; color:var(--text-muted); cursor:pointer; white-space:nowrap;"
+          title="When checked, an artist with an override, pay set by you under &quot;My Artists&quot;, will be paid that amount as a guaranteed payment instead of the amount entered above.">
+          <input type="checkbox" class="slot-door-apply-override" ${applyOverride ? 'checked' : ''} style="margin:0; flex-shrink:0; vertical-align:middle;">
+          <span style="white-space:nowrap;">Use Artist Override Pay For Guarantee Pay</span>
+        </label>
       </div>
       <!-- Two-row meta layout:
              Line 1: [Type ▾]  [Solo][Duo][Trio][Full Band]   (lineup, green)
@@ -981,7 +1072,21 @@ document.addEventListener("DOMContentLoaded", async () => {
           <option value="DJ" ${slotArtistType === 'DJ' ? 'selected' : ''}>🎧 DJ</option>
           <option value="Comedian" ${slotArtistType === 'Comedian' ? 'selected' : ''}>🎤 Comedian</option>
           <option value="Trivia Host" ${slotArtistType === 'Trivia Host' ? 'selected' : ''}>❓ Trivia Host</option>
+          <option value="Open Mic MC" ${slotArtistType === 'Open Mic MC' ? 'selected' : ''}>🎙️ Open Mic MC</option>
+          <option value="Karaoke MC" ${slotArtistType === 'Karaoke MC' ? 'selected' : ''}>🎶 Karaoke MC</option>
         </select>
+        <!-- Jul 1 2026: MC-type equipment gate lives at the SAME LEVEL
+             as the type select (direct sibling in .slot-meta-row's flex
+             row) so it sits horizontally next to the dropdown. Visibility
+             toggled via the .mc-visible class (see venue-create-gigs.html
+             stylesheet for the layout guarantees — !important beats any
+             stray override). Content ordering is guaranteed inline; the
+             checkbox and span both have flex-shrink:0 + white-space:nowrap. -->
+        <label class="slot-equipment-row ${(slotArtistType === 'Open Mic MC' || slotArtistType === 'Karaoke MC') ? 'mc-visible' : ''}">
+          <input type="checkbox" class="slot-requires-equipment-cb"
+                 ${(slotRequiresEquipment === false) ? '' : 'checked'}>
+          <span>Artist must bring own equipment (Mics, Speakers, Cables, etc.)</span>
+        </label>
         <div class="slot-pills-wrap">
           <div class="slot-lineup-row" style="display:${isLiveBand ? 'flex' : 'none'};">
             ${allLineup.map(f => `<label class="slot-pill"><input type="checkbox" class="slot-lineup-cb" value="${f}" ${selFormats.includes(f) ? 'checked' : ''} hidden><span>${f}</span></label>`).join('')}
@@ -1006,6 +1111,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // (which sits BELOW the header). Clicking the toggle button flips the
     // hidden checkbox; clicking the (greyed) pay pill flips door off.
     const doorRow = row.querySelector('.slot-door-row');
+    const doorOverrideRow = row.querySelector('.slot-door-override-row');
     const doorToggle = row.querySelector('.slot-door-checkbox');
     const doorPill = row.querySelector('.slot-door-pill');
     const doorToggleBtn = row.querySelector('.slot-door-toggle-btn');
@@ -1013,6 +1119,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     function _applyDoorState() {
       const on = doorToggle && doorToggle.checked;
       if (doorRow) doorRow.style.display = on ? 'flex' : 'none';
+      // Show/hide the apply_override row in lockstep with the door row.
+      if (doorOverrideRow) doorOverrideRow.style.display = on ? 'flex' : 'none';
       // Grey out the pay pill when door is on — visually communicates that
       // the deal terms (not the pay pill) drive what the artist actually gets.
       // We keep pointer-events live so the click-to-reactivate-flat handler
@@ -1109,6 +1217,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       const isLB = typeSelect.value === 'Live Band';
       stylesRow.style.display = isLB ? 'flex' : 'none';
       lineupRow.style.display = isLB ? 'flex' : 'none';
+      // Jul 1 2026: MC-type equipment gate toggle. Show/hide the
+      // "requires equipment" checkbox based on whether the type is
+      // Open Mic MC or Karaoke MC. First time it becomes visible in a
+      // session, default to checked (venue picks equipment burden).
+      const equipRow = row.querySelector('.slot-equipment-row');
+      const equipCb = row.querySelector('.slot-requires-equipment-cb');
+      const isMC = typeSelect.value === 'Open Mic MC' || typeSelect.value === 'Karaoke MC';
+      // .mc-visible class toggles the row on/off — CSS in venue-create-gigs.html
+      // handles the actual layout (inline-flex vs display:none) with !important.
+      if (equipRow) equipRow.classList.toggle('mc-visible', isMC);
+      if (equipCb && isMC && !equipCb.dataset._touched) {
+        equipCb.checked = true;
+      }
+      if (equipCb) equipCb.dataset._touched = '1';
       // Clear any stale Live-Band error on this slot (don't show a new
       // one here — that's reserved for click-away / save).
       _updateLiveBandSlotError(row, false);
@@ -1347,11 +1469,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       const guaranteeDollars = parseFloat(guaranteeRaw) || 0;
       const doorPct = parseInt(row.querySelector('.slot-door-pct')?.value || '0', 10) || 0;
       const guaranteeCents = doorOn ? Math.round(guaranteeDollars * 100) : 0;
+      const applyOverrideOn = doorOn && !!row.querySelector('.slot-door-apply-override')?.checked;
       const effectivePay = doorOn ? guaranteeDollars : pay;
+      // Jul 1 2026: MC-type equipment gate. Only send `requires_equipment`
+      // when the slot's artist_type is Open Mic MC or Karaoke MC; other
+      // types leave the field null (unspecified → no filter downstream).
+      const isMC = artistType === 'Open Mic MC' || artistType === 'Karaoke MC';
+      const equipCb = row.querySelector('.slot-requires-equipment-cb');
+      const requiresEquipment = isMC ? (equipCb ? equipCb.checked : true) : null;
       slots.push({ slot_number: i + 1, start_time: start, end_time: end, pay: effectivePay,
                     deal_type: dealType, door_pct: doorOn ? doorPct : 0,
                     guarantee_cents: guaranteeCents,
-                    artist_type: artistType, band_formats: bandFormats, styles: styles });
+                    apply_override: applyOverrideOn ? 1 : 0,
+                    artist_type: artistType, band_formats: bandFormats, styles: styles,
+                    requires_equipment: requiresEquipment });
     });
     return slots;
   }
@@ -1412,15 +1543,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       return false;
     }
 
-    // Door-deal sanity: a slot can't be deal_type='door' with both guarantee=0
-    // AND door_pct=0 — that produces a "0 + 0% of 0" booking which would
-    // charge the venue nothing and pay the artist nothing. Surface clearly
-    // so the user sets at least one of the two before saving.
+    // Door-deal sanity: a slot with Door Split selected must have BOTH
+    // a Guarantee Pay AND a % of door entered. Per venue direction —
+    // neither value can be left at 0, both pieces of the deal must be
+    // explicit. (Pre-Jun 2026 the rule was "at least one of the two";
+    // tightened to "both required" so the venue can't accidentally
+    // create a $0-floor + door-only or pure-flat-disguised-as-door slot.)
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
-      if (s.deal_type === 'door' && (s.guarantee_cents || 0) === 0 && (s.door_pct || 0) === 0) {
-        showSlotError(`Slot ${i + 1}: Door Split is selected but Guarantee Pay and % of door are both empty. Enter at least one, or switch back to flat pay.`);
-        return false;
+      if (s.deal_type === 'door') {
+        const guaCents = s.guarantee_cents || 0;
+        const pct = s.door_pct || 0;
+        if (guaCents === 0 || pct === 0) {
+          showSlotError(`Slot ${i + 1}: Door Split needs BOTH a Guarantee Pay and a % of door. Enter both values, or switch back to flat pay.`);
+          return false;
+        }
       }
     }
 
@@ -1617,26 +1754,74 @@ document.addEventListener("DOMContentLoaded", async () => {
       const slots = getSlotData();
       if (!slots.length) { showSlotError('Add at least one slot before saving.'); return; }
       if (!validateSlots()) return;
-      const name = await _gfPromptString(
-        '💾 Save as Template',
-        'Give this template a name so you can reuse it later.',
-        'e.g. Friday Night Live, Brunch Acoustic'
-      );
-      if (!name) return;
       // Strip per-gig junk (slot_number is recomputed on apply, pay → in payload).
       // Persist door-deal terms so a template saved with door split rehydrates
       // with the same terms instead of falling back to flat.
-      const payload = {
-        name: name,
-        slots: slots.map(s => ({
-          start_time: s.start_time, end_time: s.end_time, pay: s.pay,
-          artist_type: s.artist_type, band_formats: s.band_formats, styles: s.styles,
-          deal_type: s.deal_type || 'flat',
-          door_pct: s.door_pct || 0,
-          guarantee_cents: s.guarantee_cents || 0,
-        }))
-      };
+      const slotPayload = slots.map(s => ({
+        start_time: s.start_time, end_time: s.end_time, pay: s.pay,
+        artist_type: s.artist_type, band_formats: s.band_formats, styles: s.styles,
+        deal_type: s.deal_type || 'flat',
+        door_pct: s.door_pct || 0,
+        guarantee_cents: s.guarantee_cents || 0,
+      }));
+      _gfShowSaveTemplateModal(slotPayload);
+    });
+  }
+
+  // Save-as-Template modal (Jun 2026): the prior one-line name prompt
+  // only ever created a new template. Per user request, also surface
+  // the list of existing templates so the venue can click one to
+  // OVERWRITE it — useful when iterating on a template's slot config
+  // without piling up duplicates like "Friday Night Live", "Friday
+  // Night Live (v2)", etc.
+  async function _gfShowSaveTemplateModal(slotPayload) {
+    if (!window.showStyledModal) return;
+    const _esc = (s) => String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const existing = Array.isArray(_gigTemplates) ? _gigTemplates : [];
+    const newNameInputId = '_gfTplNewName_' + Date.now();
+
+    const existingRowsHtml = existing.length === 0
+      ? `<p style="margin:0;font-size:0.78rem;color:var(--text-muted);font-style:italic;">No saved templates yet — give one a name below to save your first.</p>`
+      : existing.map(t => {
+          const count = (t.slots || []).length;
+          return `<button type="button" class="_gfTplOverwriteRow" data-tpl-id="${parseInt(t.id, 10)}" data-tpl-name="${_esc(t.name)}"
+                    style="display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;text-align:left;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);border-radius:6px;padding:9px 12px;margin-bottom:6px;color:var(--text);cursor:pointer;font-size:0.82rem;transition:background 0.15s,border-color 0.15s;"
+                    onmouseover="this.style.background='rgba(245,158,11,0.10)';this.style.borderColor='rgba(245,158,11,0.4)';"
+                    onmouseout="this.style.background='rgba(255,255,255,0.04)';this.style.borderColor='rgba(255,255,255,0.10)';">
+                    <span><span style="font-weight:600;">${_esc(t.name)}</span> <span style="color:var(--text-muted);font-size:0.74rem;">(${count} slot${count === 1 ? '' : 's'})</span></span>
+                    <span style="color:#fbbf24;font-size:0.72rem;font-weight:600;">↻ Overwrite</span>
+                  </button>`;
+        }).join('');
+
+    const html =
+      `<div style="display:flex;flex-direction:column;gap:18px;">
+        <!-- New template -->
+        <div>
+          <label style="display:block;font-size:0.78rem;font-weight:600;color:var(--cyan);margin:0 0 6px;">Save as new template</label>
+          <input type="text" id="${newNameInputId}" placeholder="e.g. Friday Night Live, Brunch Acoustic"
+            style="width:100%;background:var(--bg);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:8px 10px;color:var(--text);font-size:0.86rem;">
+          <p style="margin:6px 0 0;font-size:0.72rem;color:var(--text-muted);">Press Enter or click Save New to create.</p>
+        </div>
+        <!-- Existing list (overwrite) -->
+        <div>
+          <label style="display:block;font-size:0.78rem;font-weight:600;color:#fbbf24;margin:0 0 8px;">Or overwrite an existing template</label>
+          <div style="max-height:240px;overflow-y:auto;">
+            ${existingRowsHtml}
+          </div>
+        </div>
+      </div>`;
+
+    let _resolved = false;
+    const _doCreate = async () => {
+      if (_resolved) return;
+      const el = document.getElementById(newNameInputId);
+      const name = (el && el.value || '').trim();
+      if (!name) { if (el) el.focus(); return false; }  // keep modal open
+      _resolved = true;
       try {
+        const payload = { name, slots: slotPayload };
         if (window.apiPostSafe) {
           await window.apiPostSafe(`/api/venues/${window.venueId}/gig-templates`, payload);
         } else {
@@ -1646,11 +1831,67 @@ document.addEventListener("DOMContentLoaded", async () => {
           });
         }
         await refreshGigTemplates();
-        (typeof showAlert === 'function' ? showAlert : alert)(`Template "${name.trim()}" saved.`);
+        (typeof showAlert === 'function' ? showAlert : alert)(`Template "${name}" saved.`);
       } catch (e) {
         (typeof showAlert === 'function' ? showAlert : alert)((e && e.message) || 'Failed to save template');
       }
-    });
+    };
+
+    const _doOverwrite = async (tplId, tplName) => {
+      if (_resolved) return;
+      _resolved = true;
+      try {
+        const url = `/api/venues/${window.venueId}/gig-templates/${parseInt(tplId, 10)}`;
+        if (window.apiPutSafe) {
+          await window.apiPutSafe(url, { slots: slotPayload });
+        } else {
+          await fetch(url, {
+            method: 'PUT', credentials: 'include',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ slots: slotPayload })
+          });
+        }
+        await refreshGigTemplates();
+        (typeof showAlert === 'function' ? showAlert : alert)(`Template "${tplName}" updated.`);
+        if (window.closeAllModals) window.closeAllModals();
+      } catch (e) {
+        _resolved = false;  // allow retry
+        (typeof showAlert === 'function' ? showAlert : alert)((e && e.message) || 'Failed to overwrite template');
+      }
+    };
+
+    window.showStyledModal(
+      '💾 Save as Template',
+      html,
+      [
+        { text: 'Cancel',    style: 'ghost' },
+        { text: 'Save New',  style: 'primary', onClick: _doCreate },
+      ],
+      { size: 'md' }
+    );
+
+    // Wire the overwrite rows + Enter-to-save shortcut once the modal is mounted.
+    setTimeout(() => {
+      const overlay = document.querySelector('.gfm-modal-overlay');
+      if (!overlay) return;
+      overlay.querySelectorAll('._gfTplOverwriteRow').forEach(btn => {
+        btn.addEventListener('click', () => {
+          _doOverwrite(btn.dataset.tplId, btn.dataset.tplName);
+        });
+      });
+      const input = overlay.querySelector('#' + newNameInputId);
+      if (input) {
+        input.focus();
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            _doCreate().then(() => {
+              if (_resolved && window.closeAllModals) window.closeAllModals();
+            });
+          }
+        });
+      }
+    }, 50);
   }
 
   // Styled template picker — replaces the native <select> dropdown so the
@@ -2024,6 +2265,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   function invalidateGigs() {
     gigsCacheDirty = true;
   }
+  // Exposed so external scripts (e.g. venue-hold-offers-banner.js)
+  // can force a cache miss before calling window.refreshGigs.
+  window.invalidateGigs = invalidateGigs;
   let venueData = null; // Store venue default values
   window.venueBlinkSettings = {}; // Blink settings per notification_key
 
@@ -2167,6 +2411,22 @@ document.addEventListener("DOMContentLoaded", async () => {
       endDate = new Date(y, mo - 1, d + 1, h, min, 0);
     }
     return new Date() > endDate;
+  }
+
+  // Jul 2026: door-receipt settlement cutoff. Payout scheduler fires txns at
+  // gig_date + 1 day at 5 PM in the venue's local timezone (see routes/gigs.py
+  // payout_date computation). Once the txn moves past 'scheduled', backend at
+  // door_settle.py:88 rejects any further settle attempts. Hide the "Add Door
+  // Receipts" button once we cross that wall time so the UX matches the guard —
+  // no clickable button that would 400 on save.
+  function isPastDoorSettleCutoff(gig) {
+    if (!gig || !gig.date) return false;
+    const [y, mo, d] = gig.date.split('-').map(Number);
+    // Cutoff: day after gig at 5:00 PM browser-local. Venue users are typically
+    // in the venue's timezone, so this aligns with the venue-local 5 PM the
+    // payout scheduler uses.
+    const cutoff = new Date(y, mo - 1, d + 1, 17, 0, 0);
+    return new Date() > cutoff;
   }
 
 
@@ -2331,6 +2591,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
 async function renderCalendar() {
+    // Exposed so external scripts (e.g. venue-hold-offers-banner.js)
+    // can request a calendar refresh after a hold-related action like
+    // Open-to-All or Cancel Gig.
+    window.refreshGigs = renderCalendar;
     calendarEl.innerHTML = "";
 
     const year = currentDate.getFullYear();
@@ -2353,7 +2617,8 @@ async function renderCalendar() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    for (const day of days) {
+    for (let _dayIdx = 0; _dayIdx < days.length; _dayIdx++) {
+      const day = days[_dayIdx];
       const iso = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
       const cell = document.createElement("div");
       cell.className = "day";
@@ -2377,9 +2642,21 @@ async function renderCalendar() {
         cell.classList.add("today");
       }
       
+      // Outlook-style month boundary label — prefix "Aug" (etc.) on:
+      //   • the 1st of every visible month (target + spillover), AND
+      //   • the very first cell in the grid so admin knows what month
+      //     the top-left spillover belongs to (e.g. "Jul 26" when
+      //     viewing August — otherwise it'd read "26" ambiguously).
       const dayNumber = document.createElement("div");
       dayNumber.className = "day-number";
-      dayNumber.textContent = day.getDate();
+      const _isFirstCell = _dayIdx === 0;
+      if (day.getDate() === 1 || _isFirstCell) {
+        const monAbbr = day.toLocaleString("default", { month: "short" });
+        dayNumber.textContent = monAbbr + " " + day.getDate();
+        dayNumber.classList.add("month-boundary");
+      } else {
+        dayNumber.textContent = day.getDate();
+      }
       cell.appendChild(dayNumber);
 
       // Get and SORT gigs for this day by start_time (earliest to latest)
@@ -2393,7 +2670,7 @@ async function renderCalendar() {
         gigsContainer.className = "gigs-container";
         
         dayGigs.forEach(g => {
-          const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠' };
+          const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
           const icon = icons[g.artist_type] || '🎵';
           
           if (g.slots && g.slots.length > 0) {
@@ -2404,7 +2681,16 @@ async function renderCalendar() {
               const slotDiv = document.createElement("div");
               const slotBooked = slot.status === 'booked';
               const slotPendingApproval = slot.status === 'pending_venue_approval';
-              const parentPending = slot.status === 'pending_contract';
+              // Both pending_contract (artist hasn't signed yet) AND
+              // awaiting_venue_contract (artist signed, venue needs to
+              // countersign) should paint the slot as pending-contract-venue
+              // — that's the urgent red-blink state telling the venue
+              // they have action to take. Jun 2026 user report: a
+              // Hold-accept that flows through the digital contract
+              // signing modal lands the slot in awaiting_venue_contract;
+              // the prior check (only `pending_contract`) let that slot
+              // render green/open which masked the action item.
+              const parentPending = slot.status === 'pending_contract' || slot.status === 'awaiting_venue_contract';
               const slotStarted = !parentPending && !slotPendingApproval && isSlotStartedToday(g, slot);
               const _slotHasWaitlist = g.status !== 'cancelled' && !slotBooked && !slotStarted && !parentPending && !slotPendingApproval && !!g.has_active_waitlist && !isPast && !isGigEndPassed(g);
               const slotCls = g.status === 'cancelled' ? 'cancelled' : slotPendingApproval ? 'pending-venue-approval' : parentPending ? 'pending-contract-venue' : (slotStarted ? 'started' : slotBooked ? 'booked' : (_slotHasWaitlist ? 'waitlist-pending' : (!isPast && window.getBlinkStyle && window.getBlinkStyle(g) ? 'blast-open' : 'open')));
@@ -2463,17 +2749,14 @@ async function renderCalendar() {
                 // this slot and override start/end times so the hover
                 // card renders this slot in isolation.
                 //
-                // IMPORTANT: also flip is_multi_slot:false. The hover
-                // card's multi-slot branch drops artist chips from the
-                // header (names are supposed to come from the per-slot
-                // breakdown, which only renders when slots.length>=2).
-                // With our trimmed 1-slot view, the multi-slot branch
-                // would render just "Booked" — no artist name anywhere.
-                // Routing through single-slot puts the artist back in
-                // the header as a chip.
+                // Trimming slots to [slot] (length=1) automatically routes
+                // the hover card through its single-slot branch post-Jul-2026
+                // (branch gate is now slots.length > 1, not is_multi_slot).
+                // That branch puts the artist name back in the header as a
+                // chip — the multi-slot branch drops chips since names live
+                // in the per-slot breakdown which only shows for 2+ slots.
                 window.attachGigHoverCard(slotDiv, {
                   ...g,
-                  is_multi_slot: false,
                   slots: [slot],
                   artist_name: slot.artist_name,
                   artist_id: slot.artist_id,
@@ -2545,21 +2828,20 @@ async function renderCalendar() {
         cell.appendChild(gigsContainer);
         
         // Add click handler to day cell - open Create Gig modal when clicking on empty space
+        // Jul 2026: spillover (other-month) cells are still bookable —
+        // only past dates block creation. Fixed after users complained
+        // they couldn't create a Sep 1 gig while viewing August.
         cell.onclick = (e) => {
           if (e.target === cell || e.target === dayNumber) {
-            if (!isCurrentMonth || isPast) return;
+            if (isPast) return;
             openGigModal({ date: iso, status: "open" });
           }
         };
       } else {
-        // No gigs - allow creating new gig on future dates in current month
+        // No gigs - allow creating new gig on any future date (including
+        // spillover cells from the prev/next month).
         cell.onclick = () => {
-          if (!isCurrentMonth) {
-            return;
-          }
-          if (isPast) {
-            return;
-          }
+          if (isPast) return;
           openGigModal({ date: iso, status: "open" });
         };
       }
@@ -2603,7 +2885,7 @@ async function renderCalendar() {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     });
 
-    const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'};
+    const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
 
     const rows = dayGigs.map(g => {
       const isPendingContract = g.status === 'pending_contract' || g.status === 'awaiting_venue_contract'
@@ -2689,7 +2971,7 @@ async function renderCalendar() {
       </div>`;
     }).join('');
 
-    body.innerHTML = `<div style="display:grid;grid-auto-rows:auto;row-gap:10px;width:100%;min-width:820px;font-size:0.7rem;">${rows}</div>`;
+    body.innerHTML = `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;"><div style="display:grid;grid-auto-rows:auto;row-gap:10px;width:100%;min-width:820px;font-size:0.7rem;">${rows}</div></div>`;
 
     if (modalActions) {
       modalActions.innerHTML = `
@@ -2815,6 +3097,12 @@ async function renderCalendar() {
     async function openGigModal(gig) {
     selectedGig = gig;
     selectedDate = gig.date;
+    // Invalidate the Hold-picker freq cache: freq_status is per gig
+    // date, and the modal can be opened for different dates in a
+    // session. Re-fetch on next Hold-panel open (Jun 2026).
+    if (typeof holdMasterList !== 'undefined' && holdMasterList) {
+      holdMasterList._loaded = false;
+    }
     // Refresh gig templates dropdown (Jun 2026 feature) — quietly best-effort.
     if (typeof window._refreshGigTemplates === 'function') {
       try { window._refreshGigTemplates(); } catch (_) {}
@@ -2827,6 +3115,16 @@ async function renderCalendar() {
     ['_msgArtistBtn','_rateArtistBtn','_venueGigBtnRow','_approveBtn','_denyBtn','editGigBtn'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     // Restore any hidden permanent modal action buttons
     ['saveGig','cancelGig','deleteGig','flyerGigBtn'].forEach(id => { const el = document.getElementById(id); if (el) el.style.removeProperty('display'); });
+    // Clean up any previously-injected status banners (waitlist /
+    // blast). They get re-inserted later only when the new gig's
+    // state warrants them. Without this top-level cleanup, a banner
+    // from a previously-opened gig (e.g. a held gig with active
+    // waitlist that the venue just cancelled) sticks in the DOM and
+    // appears on the next modal open — even on a brand-new empty-day
+    // Create Gig modal where no gig context exists yet.
+    ['venue-waitlist-banner','venue-blast-banner'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.remove();
+    });
 
     // Default: hide the templates row (lives in the modal header). The
     // CREATE-mode branch below re-enables it. All other branches (edit,
@@ -2879,6 +3177,25 @@ async function renderCalendar() {
     } else {
       const existing = document.getElementById('holdMgmtPanel');
       if (existing) existing.remove();
+    }
+
+    // ── HOLD-pill visibility for the edit modal ──────────────────────
+    // For a gig that is already held the hold-mgmt panel above is the
+    // surface; the toggle pill makes no sense (would double-set). Hide
+    // it. For everything else (create + non-held edit) we leave the
+    // pill visible so the venue can ADD a hold to an existing open gig
+    // — the user's stated request was that the pill should be active
+    // on existing gigs too.
+    if (holdToggleRow) {
+      if (gig && gig.id && gig.hold_status) {
+        holdToggleRow.style.display = 'none';
+      } else {
+        holdToggleRow.style.display = '';
+      }
+      // Reset state so a previous edit session's toggle doesn't carry
+      // over (e.g. user opens a held gig, then opens an unheld one).
+      if (holdCheckbox) holdCheckbox.checked = false;
+      if (holdPanel) holdPanel.style.display = 'none';
     }
 
     const recurringBlock = document.getElementById("recurringBlock");
@@ -3017,7 +3334,7 @@ async function renderCalendar() {
           <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 4px;">Requesting to book:</div>
           <a href="/app/artist-profile.html?artist_id=${approvalArtistId}" target="_blank"
              style="color: #fbbf24; font-weight: 600; font-size: 1.1rem; text-decoration: none;">
-            ${gig.artist_name || 'Unknown Artist'}
+            ${esc(gig.artist_name || 'Unknown Artist')}
           </a>
         </div>
         <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 0.95rem; line-height: 1.6; margin-bottom: 16px;">
@@ -3033,7 +3350,7 @@ async function renderCalendar() {
       infoHTML += `
         <div style="padding: 14px; background: rgba(217,119,6,0.08); border: 1px solid rgba(217,119,6,0.3); border-radius: 8px;">
           <p style="color:#d1d5db; margin:0 0 4px 0; font-size:0.9rem; line-height:1.5;">
-            <strong style="color:#fbbf24;">${gig.artist_name || 'This artist'}</strong> is requesting same-day approval${slotDesc}.
+            <strong style="color:#fbbf24;">${esc(gig.artist_name || 'This artist')}</strong> is requesting same-day approval${slotDesc}.
           </p>
           <p style="color:#9ca3af; margin:0; font-size:0.82rem;">Approve to confirm their booking, or deny to keep the slot open.</p>
         </div>`;
@@ -3518,9 +3835,43 @@ async function renderCalendar() {
           gigDateInput.textContent = formatDateForDisplay(gig.date);
         }
         
-        // v97: Show recurring options when editing a recurring gig
+        // v97: Show recurring options when editing a recurring gig.
+        // Jul 1 2026 (revised v=231): a gig is treated as part of a
+        // LIVE series only if it has at least one sibling within a
+        // reasonable interval window — otherwise "editing this gig's
+        // recurring settings affects the series" is misleading because
+        // the series pattern is broken (gaps, orphans, singleton tails).
+        //
+        // Window rule: sibling must be within `interval_weeks * 2`
+        // weeks in either direction. For weekly series (interval=1)
+        // that's a 14-day window on each side, which covers the normal
+        // one-skip case (venue cancelled just one occurrence). Two full
+        // intervals missing → the series is effectively broken and each
+        // survivor should render as standalone.
+        //
+        // Example the user hit: gig 545 (Aug 8) had gig 540 (Jul 4) as
+        // its only sibling — 35 days apart in a weekly series. Both
+        // are now treated as standalone until the venue rebuilds a
+        // proper series around them.
         const recurringBlock = document.getElementById("recurringBlock");
+        const _venueGigsForSeriesCheck = (typeof venueGigsCache !== 'undefined' && Array.isArray(venueGigsCache)) ? venueGigsCache : [];
+        let _isPartOfLiveSeries = false;
         if (gig.recurring_group_id) {
+          const _thisDate = gig.date ? new Date(gig.date + 'T00:00:00') : null;
+          const _intervalWeeks = Math.max(1, parseInt(gig.recurring_interval_weeks || 1, 10) || 1);
+          const _windowMs = _intervalWeeks * 2 * 7 * 24 * 60 * 60 * 1000;
+          const _nearbySiblings = _thisDate
+            ? _venueGigsForSeriesCheck.filter(g => {
+                if (!g || g.recurring_group_id !== gig.recurring_group_id) return false;
+                if (g.id === gig.id) return false;
+                if (!g.date) return false;
+                const _d = new Date(g.date + 'T00:00:00');
+                return Math.abs(_d - _thisDate) <= _windowMs;
+              }).length
+            : 0;
+          _isPartOfLiveSeries = _nearbySiblings > 0;
+        }
+        if (_isPartOfLiveSeries) {
           // Show recurring checkbox row but keep it checked and disabled
           const recurringRow = document.querySelector('.modal-row:has(#recurringGig)');
           if (recurringRow) {
@@ -3623,7 +3974,9 @@ async function renderCalendar() {
                            slot.styles || '',
                            slot.deal_type || 'flat',
                            slot.door_pct || 0,
-                           slot.guarantee_cents || 0);
+                           slot.guarantee_cents || 0,
+                           slot.apply_override ? 1 : 0,
+                           (slot.requires_equipment === 1 || slot.requires_equipment === true) ? true : (slot.requires_equipment === 0 || slot.requires_equipment === false ? false : null));
               }
             }
           } catch(e) {
@@ -3864,7 +4217,9 @@ async function renderCalendar() {
         slot.styles || gig.styles || '',
         slot.deal_type || 'flat',
         slot.door_pct || 0,
-        slot.guarantee_cents || 0);
+        slot.guarantee_cents || 0,
+        slot.apply_override ? 1 : 0,
+                           (slot.requires_equipment === 1 || slot.requires_equipment === true) ? true : (slot.requires_equipment === 0 || slot.requires_equipment === false ? false : null));
       // Lock: hide artist type / styles / lineup rows on the last-added slot row
       const slotList = document.getElementById('slotList');
       const lastRow = slotList ? slotList.lastElementChild : null;
@@ -3936,7 +4291,9 @@ async function renderCalendar() {
             slot.styles || gig.styles || '',
             slot.deal_type || 'flat',
             slot.door_pct || 0,
-            slot.guarantee_cents || 0);
+            slot.guarantee_cents || 0,
+            slot.apply_override ? 1 : 0,
+            (slot.requires_equipment === 1 || slot.requires_equipment === true) ? true : (slot.requires_equipment === 0 || slot.requires_equipment === false ? false : null));
         }
       });
     } else {
@@ -3974,8 +4331,20 @@ async function renderCalendar() {
   }
 
   // ─── WAITLIST VIEWER FOR VENUE ────────────────────────────────────────────────
-async function _renderWaitlistBtn(gigId, slotId, venueId, slotNum) {
+async function _renderWaitlistBtn(gigId, slotId, venueId, slotNum, gig) {
   try {
+    // Hide per-slot waitlist button while the gig is in a HOLD cycle
+    // (active or exhausted). Per venue direction: holds are gig-level,
+    // not per-slot — all slots are subject to the same hold list. The
+    // hold-mgmt panel rendered at the top of the modal already shows
+    // every hold artist's state (Booked / Declined / On Clock / In
+    // Queue), so a per-slot "View Waitlist" button on top of it would
+    // duplicate the same info under a misleading "waitlist" label.
+    // Once the venue clears the hold (Open to All / Cancel), this
+    // returns to the standard per-slot cancellation-waitlist UX.
+    if (gig && (gig.hold_status === 'active' || gig.hold_status === 'exhausted')) {
+      return '';
+    }
     const res = await fetch(`/api/venues/${venueId}/gigs/${gigId}/waitlist`, { credentials: 'include' });
     if (!res.ok) return '';
     const list = await res.json();
@@ -4033,7 +4402,7 @@ window.openWaitlistModal = async function(gigId, venueId, slotLabel) {
       return `<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
         <span style="font-weight:700;color:var(--accent-cyan,#06b6d4);min-width:22px;text-align:right;">${pos}</span>
         <a href="/app/artist-profile.html?artist_id=${entry.artist_id}" target="_blank"
-           style="color:var(--text-primary,#e2e8f0);text-decoration:none;flex:1;font-weight:600;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${entry.artist_name}</a>
+           style="color:var(--text-primary,#e2e8f0);text-decoration:none;flex:1;font-weight:600;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${esc(entry.artist_name || '')}</a>
         ${badge}
       </div>`;
     }).join('');
@@ -4051,7 +4420,7 @@ window.openWaitlistModal = async function(gigId, venueId, slotLabel) {
 };
 
 async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, deleteBtn, saveBtn, cancelGigBtn) {
-    const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠' };
+    const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
     const icon = icons[gig.artist_type] || '🎵';
     const eventLabel = gig.title || `${gig.artist_type || 'Multi-Slot'} Night`;
     modalTitle.textContent = isPastGig ? `Past Event Details` : `Gig Details`;
@@ -4094,15 +4463,20 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       </div>
     `;
     
-    const typeIcons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠' };
+    const typeIcons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
     // Always sort by start_time ascending before rendering
     slots.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
 
     // Pre-fetch waitlist HTML for each booked slot (async, before building HTML string)
     const _slotWaitlistHtml = {};
+    // Pass the gig (with its full slot list) so _renderWaitlistBtn
+    // can hide the button when the gig still has open slots — the
+    // cancellation waitlist UX only matters when the gig is fully
+    // closed.
+    const _gigForWl = Object.assign({}, gig, { slots });
     for (const slot of slots) {
       if (slot.status === 'booked') {
-        _slotWaitlistHtml[slot.id] = await _renderWaitlistBtn(gig.id, slot.id, gig.venue_id, slot.slot_number);
+        _slotWaitlistHtml[slot.id] = await _renderWaitlistBtn(gig.id, slot.id, gig.venue_id, slot.slot_number, _gigForWl);
       }
     }
 
@@ -4151,7 +4525,18 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       // Per-slot check (isSlotStartedToday) — multi-slot gigs can have slot
       // 1 already underway while slot 2 hasn't started yet; only the
       // in-progress slot loses its cancel affordance.
+      //
+      // Jul 1 2026 tightening: also hide the ✕ on ANY slot whose parent
+      // gig is currently in progress. Matches the "Cancel and edit
+      // actions are unavailable while the gig is running" banner and
+      // the disabled Cancel Gig button — same rule for consistency.
+      // Once the show has started, per-slot cancels create the same
+      // chaos as a full gig cancel (walk-in booking, blast, contract
+      // reversal — none of it can complete during a live performance).
       const _slotHasStarted = isSlotStartedToday(gig, slot);
+      const _gigInProgress = (typeof isGigStartedToday === 'function' && isGigStartedToday(gig))
+                             && (typeof isGigEndPassed !== 'function' || !isGigEndPassed(gig));
+      const _slotCancelHidden = isPastGig || _slotHasStarted || _gigInProgress;
       if (isBooked) {
         // Audit fix (May 2026 part 8): inline-onclick string args now use
         // jsAttr (JSON.stringify-based) which emits its own outer quotes
@@ -4166,7 +4551,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         const _aid_safe = parseInt(slot.artist_id, 10) || 0;
         const _sid_safe = parseInt(slot.id, 10) || 0;
         const _snum_safe = parseInt(slot.slot_number, 10) || 0;
-        const cancelBtn = (!isPastGig && !_slotHasStarted)
+        const cancelBtn = !_slotCancelHidden
           ? `<button onclick="cancelSlotBooking(${_gid_safe}, ${_sid_safe}, ${_snum_safe}, ${_aid_safe || 'null'})"
                style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 9px;font-size:0.75rem;cursor:pointer;white-space:nowrap;"
                title="Cancel this slot booking">✕</button>`
@@ -4184,7 +4569,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         // simple and doesn't need to JSON-escape attribute values
         // (which broke embedded quotes last commit).
         let doorReceiptsBtn = '';
-        if (slot.deal_type === 'door' && _slotHasStarted) {
+        if (slot.deal_type === 'door' && _slotHasStarted && !isPastDoorSettleCutoff(gig)) {
           window.__doorSlotData = window.__doorSlotData || {};
           window.__doorSlotData[slot.id] = {
             slot_id: slot.id, slot_number: slot.slot_number,
@@ -4224,8 +4609,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           </div>
         `;
       } else {
-        // Open/empty slot ✕ — also hidden if this specific slot has started.
-        const _openCancelBtn = (!isPastGig && !_slotHasStarted)
+        // Open/empty slot ✕ — hidden if this specific slot has started
+        // OR the whole gig is in progress (Jul 1 2026 consistency with
+        // the disabled Cancel Gig button — see _slotCancelHidden above).
+        const _openCancelBtn = !_slotCancelHidden
           ? `<button onclick="cancelSlotBooking(${gig.id}, ${slot.id}, ${slot.slot_number}, null)"
                style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:3px 9px;font-size:0.75rem;cursor:pointer;white-space:nowrap;"
                title="Remove this slot from the gig">✕</button>`
@@ -4468,15 +4855,19 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         const ov = document.createElement('div');
         ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10000;display:flex;align-items:center;justify-content:center;';
         ov.innerHTML = `
-          <div style="background:#1a1a2e;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:24px;max-width:400px;width:92%;box-shadow:0 16px 48px rgba(0,0,0,0.5);text-align:center;">
+          <div style="background:#1a1a2e;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:24px;max-width:420px;width:92%;box-shadow:0 16px 48px rgba(0,0,0,0.5);text-align:center;">
             <div style="font-size:2rem;margin-bottom:12px;">🗑️</div>
-            <h3 style="margin:0 0 10px;color:#f0f0f0;font-size:1rem;font-weight:700;">Remove Slot ${slotN}?</h3>
+            <h3 style="margin:0 0 10px;color:#f0f0f0;font-size:1rem;font-weight:700;">Permanently delete Slot ${slotN}?</h3>
             <p style="color:#94a3b8;margin:0 0 20px;font-size:0.88rem;line-height:1.5;">
-              This open slot has no artist booked. It will be removed from the event.
+              This will <strong>delete the slot row from the gig</strong> — it won't show up at all anywhere afterwards.
+              No artist is currently booked, so nothing else changes.
+              <br><br>
+              <span style="color:#fbbf24;">Want to leave the row in place but mark it cancelled?</span>
+              Use <em>Cancel empty slots</em> on the hold-management panel instead.
             </p>
             <div style="display:flex;gap:10px;justify-content:center;">
               <button id="_openSlotNo" class="btn ghost" style="padding:8px 20px;font-size:0.85rem;">Never Mind</button>
-              <button id="_openSlotYes" style="padding:8px 20px;font-size:0.85rem;background:#dc3545;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Remove Slot</button>
+              <button id="_openSlotYes" style="padding:8px 20px;font-size:0.85rem;background:#dc3545;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Delete Slot</button>
             </div>
           </div>
         `;
@@ -4517,6 +4908,9 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           }
           document.getElementById('gigModal').classList.add('hidden');
           invalidateGigs(); await renderCalendar();
+          if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+            try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
+          }
           if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
           // Refresh Payments tab — pre-gig cancellations delete the transaction
           // from the DB so without this the cancelled gig keeps showing as
@@ -4545,6 +4939,9 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           }
           document.getElementById('gigModal').classList.add('hidden');
           invalidateGigs(); await renderCalendar();
+          if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+            try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
+          }
           showAlert('Gig removed from calendar.', 'Gig Deleted');
         } catch(e) {
           showAlert('Failed to delete gig: ' + e.message, 'Error');
@@ -4833,12 +5230,23 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     // blast prompt naturally re-appears later if the hold exhausts
     // and the venue chooses "Open to all" from the exhausted-hold UI.
     if (holdArtistIds.length > 0) {
+      // Nudge the venue-side Pending Offers banner to repaint
+      // immediately so the new held gig shows up at the top of the
+      // calendar without waiting for the 60s poll. Without this the
+      // banner was empty for up to a minute after a hold-create.
+      if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+        try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
+      }
       showGigSuccess(`Gig created on hold for ${holdArtistIds.length} artist${holdArtistIds.length !== 1 ? 's' : ''}.`);
       return;
     }
-    // Show blast prompt immediately — it IS the success confirmation
-    // Don't show showGigSuccess first (it would cover the blast modal)
-    if (newGig && daysUntil >= 0) {
+    // Held gigs are PRIVATE while the rotation runs — skip the blast
+    // prompt (Jul 2026 fix: same gap as the recurring-create path).
+    if (holdEnabled && holdArtistIds.length > 0) {
+      showGigSuccess(`Gig created with ${slots.length} slot${slots.length > 1 ? 's' : ''}! Hold offer is going out to your artist list now.`);
+    } else if (newGig && daysUntil >= 0) {
+      // Show blast prompt immediately — it IS the success confirmation
+      // Don't show showGigSuccess first (it would cover the blast modal)
       _showNewGigBlastPrompt(
         [{id: newGig.id, date: newGig.date, daysUntil, slotCount: slots.length}],
         window.venueBlinkSettings || {},
@@ -4869,11 +5277,24 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     const gigStyles = slots[0].styles || null;
 
     // Generate recurring dates
-    const dates = generateRecurringDates();
+    let dates = generateRecurringDates();
     if (dates.length === 0) {
       showAlert("Please select at least one day of the week for recurring gigs.");
       return;
     }
+
+    // Show confirm-dates modal so the venue can uncheck any specific
+    // dates they don't want before the POST loop runs. Same shell as
+    // the select-gigs-to-save modal used on recurring edits; wired
+    // in `_askDatesToCreate` below. Returns filtered array of date
+    // strings the venue kept, or null if they cancelled outright.
+    const _confirmed = await _askDatesToCreate(dates);
+    if (_confirmed === null) return;
+    if (_confirmed.length === 0) {
+      showAlert("Please keep at least one date checked, or click Cancel to abort.");
+      return;
+    }
+    dates = _confirmed;
 
     // Generate unique recurring group ID
     const recurringGroupId = `recur_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -4899,6 +5320,20 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     const endTime = slots[slots.length - 1].end_time;
     const pay = slots[0].pay;
 
+    // Series-hold inputs (Jul 2026 — Phase 5). When the venue ticked
+    // both Hold + Recurring, the same artist list is sent on every
+    // instance POST. Backend stages waitlist rows on each gig with
+    // defer_kickoff=True (no per-gig email); a single kickoff call
+    // after the loop fires ONE bundled email per artist for the whole
+    // series via /api/series/{rgid}/hold/start.
+    const _holdEnabledR = !!(holdCheckbox && holdCheckbox.checked);
+    const _holdArtistIdsR = _holdEnabledR ? (window._holdArtistOrder || []) : [];
+    const _holdEmailR = (function () {
+      const t = document.getElementById('holdEmailToggle');
+      if (!t) return true;
+      return !t.dataset.off || t.dataset.off === '0';
+    })();
+
     // Create all gigs in the series with proper database fields
     const gigData = {
       start_time: startTime,
@@ -4916,7 +5351,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       recurring_days_of_week: selectedDays.join(','),
       recurring_end_type: endType,
       recurring_end_after: endAfter,
-      recurring_end_by_date: endBy
+      recurring_end_by_date: endBy,
+      hold_artist_ids: _holdArtistIdsR,
+      hold_email_artists: _holdEmailR,
+      hold_offer_window_hours: 24,
     };
 
     const _createdGigEntries = [];
@@ -4966,6 +5404,21 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       }
     }
 
+    // Series-hold kickoff (Jul 2026). After every instance is staged,
+    // tell the backend to fire ONE bundled offer email per artist
+    // across the whole series. Per-gig rotation was deferred at
+    // creation time so this single call drives the initial round.
+    if (_holdEnabledR && _holdArtistIdsR.length > 0 && _createdGigEntries.length > 0) {
+      try {
+        await api(`/api/series/${recurringGroupId}/hold/start`, { method: 'POST', body: '{}' });
+      } catch (_e) {
+        // Hold-kickoff failure shouldn't block the create — the gigs
+        // are already on the calendar; the venue can resolve via the
+        // hold-management panel on any series instance.
+        console.warn('series hold start failed', _e);
+      }
+    }
+
     // If any dates failed, tell the user — earlier ones were already created.
     if (_failedDates.length > 0) {
       const list = _failedDates.slice(0, 6).map(f => `<li><strong>${f.date}</strong>: ${f.reason}</li>`).join('');
@@ -4980,8 +5433,14 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
 
     modal.classList.add('hidden');
     invalidateGigs(); await renderCalendar(); // Make sure calendar refreshes
-    // Show blast prompt immediately — skip success modal so it isn't hidden behind blast
-    if (_createdGigEntries.length > 0) {
+    // Held gigs are PRIVATE — they're hidden from the public list while
+    // the hold rotation runs, so a blast email asking "Open these to
+    // all artists?" is contradictory. Skip the blast prompt entirely
+    // when the series ships with a hold (Jul 2026 fix).
+    if (_holdEnabledR && _holdArtistIdsR.length > 0) {
+      showGigSuccess("Recurring gigs created! Hold offers are going out to your artist list now.");
+    } else if (_createdGigEntries.length > 0) {
+      // Show blast prompt immediately — skip success modal so it isn't hidden behind blast
       _showNewGigBlastPrompt(_createdGigEntries, window.venueBlinkSettings || {}, venueId);
     } else {
       showGigSuccess("Recurring gigs created!");
@@ -5051,6 +5510,46 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         })
       });
     }
+    // ── Post-creation Hold start (Jun 2026) ─────────────────────────
+    // If the venue toggled Hold ON in the edit modal AND this gig
+    // wasn't already held, fire the new POST /hold/start endpoint
+    // after the normal save. Lets a venue add a hold to any existing
+    // open gig — feature parity with create-time hold setup. Skipped
+    // for booked-edit (booked gigs aren't holdable) and for silent
+    // saves (auto-saves shouldn't trigger an offer email).
+    if (!silent && !(selectedGig && selectedGig._isBookedEdit)) {
+      try {
+        const _holdOn = document.getElementById('holdGigCheckbox')?.checked;
+        const _alreadyHeld = !!(selectedGig && selectedGig.hold_status);
+        if (_holdOn && !_alreadyHeld) {
+          const artistIds = window._holdArtistOrder || [];
+          if (artistIds.length > 0) {
+            const emailNow = document.getElementById('holdEmailArtistsBtn')?.dataset.on === 'true';
+            await api(`/api/gigs/${gigId}/hold/start`, {
+              method: 'POST',
+              body: JSON.stringify({
+                artist_ids: artistIds,
+                hold_email_artists: emailNow,
+                hold_offer_window_hours: 24,
+              })
+            });
+            // Repaint the venue Pending Offers banner so the newly-
+            // held gig shows up immediately (mirrors the create flow).
+            if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+              try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
+            }
+          }
+        }
+      } catch (e) {
+        // Hold failure shouldn't kill the save — log and surface a
+        // soft warning. The gig itself saved successfully.
+        console.error('Hold setup failed:', e);
+        if (typeof showAlert === 'function') {
+          showAlert('Gig saved, but the Hold setup failed. Try opening the gig and toggling Hold again.', 'Hold not set');
+        }
+      }
+    }
+
     // Clear stale slots cache so next modal open re-fetches from DB
     if (selectedGig) delete selectedGig.slots;
     _recurringSnapshot = null; // discard snapshot — changes were saved
@@ -5378,8 +5877,13 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             }
           } catch(e) {}
           
-          const artistList = bookedArtists.length > 0 ? bookedArtists.join(', ') : 'Booked artists';
-          
+          // Jul 2026 audit fix: escape each artist name BEFORE joining
+          // so an artist named `</strong><script>...</script>` can't
+          // XSS the venue's browser via the cancel modal.
+          const artistList = bookedArtists.length > 0
+            ? bookedArtists.map(esc).join(', ')
+            : 'Booked artists';
+
           const cancellationHTML = `
             <div id="cancellationSection" style="margin-top: 24px; padding: 16px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px;">
               <p style="color: #ef4444; margin: 0 0 12px 0; line-height: 1.6;">
@@ -5429,6 +5933,14 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           if (typeof loadVenueBillingHistory === 'function') await loadVenueBillingHistory();
 
           invalidateGigs(); await renderCalendar();
+          // Repaint the venue Pending Offers banner immediately so a
+          // held gig that was just cancelled disappears from the top
+          // strip without waiting for the 60s poll (Jun 2026 user
+          // report — banner showed "1 Pending Hold" for ~a minute
+          // after the gig was already gone from the calendar).
+          if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+            try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
+          }
           showGigSuccess("Event cancelled");
         } catch (e) {
           deleteBtn.disabled = false;
@@ -5445,6 +5957,9 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             deleteBtn.dataset.confirmDelete = 'false';
             deleteBtn.dataset.multiSlotDelete = 'false';
             invalidateGigs(); await renderCalendar();
+            if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+              try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
+            }
             showGigSuccess("Event deleted");
           } catch (e) {
             deleteBtn.disabled = false;
@@ -5474,7 +5989,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         const cancellationHTML = `
           <div id="cancellationSection" style="margin-top: 24px; padding: 16px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px;">
             <p style="color: #ef4444; margin: 0 0 12px 0; line-height: 1.6;">
-              <strong>This gig is booked!</strong> ${selectedGig.artist_name || 'The artist'} will be notified but we recommend communicating with the Artist so it is understood why this gig is being cancelled.
+              <strong>This gig is booked!</strong> ${esc(selectedGig.artist_name || 'The artist')} will be notified but we recommend communicating with the Artist so it is understood why this gig is being cancelled.
             </p>
             <label style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
               <span style="font-weight: 500; color: #ffffff;">Reason For Cancelling:</span>
@@ -5839,6 +6354,92 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     seriesModal.classList.remove("hidden");
   };
 
+  // ─── Confirm-create-dates modal ─────────────────────────────────
+  // Promise-based helper. Shows a checkbox list of the dates about to
+  // be created (all checked by default), lets venue uncheck any, and
+  // resolves with the kept subset — or `null` if they hit Cancel.
+  //
+  // Called from the recurring submit path just after `generateRecurringDates()`
+  // and before the POST loop. Same visual shell as selectGigsModal so
+  // the two modes (create-time picker vs edit-time picker) feel like
+  // one system.
+  const confirmCreateDatesModal = document.getElementById("confirmCreateDatesModal");
+  const createDatesList          = document.getElementById("createDatesList");
+  const selectAllCreateDates     = document.getElementById("selectAllCreateDates");
+  const confirmCreateDates       = document.getElementById("confirmCreateDates");
+  const cancelCreateDates        = document.getElementById("cancelCreateDates");
+  const createDatesCount         = document.getElementById("createDatesCount");
+
+  function _updateCreateDatesCount() {
+    const boxes = createDatesList.querySelectorAll('input[type="checkbox"]');
+    const checked = createDatesList.querySelectorAll('input[type="checkbox"]:checked').length;
+    if (createDatesCount) {
+      createDatesCount.textContent = `${checked} / ${boxes.length} selected`;
+    }
+    // Reflect the check-state onto the select-all box
+    selectAllCreateDates.checked = boxes.length > 0 && checked === boxes.length;
+  }
+
+  function _askDatesToCreate(dates) {
+    return new Promise((resolve) => {
+      // Populate the checkbox list
+      createDatesList.innerHTML = '';
+      dates.forEach((date, i) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;margin:2px 0;background:rgba(255,255,255,0.03);border-radius:4px;cursor:pointer;font-size:0.83rem;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.value = date;
+        cb.id = `create-date-${i}`;
+        cb.className = 'create-date-checkbox';
+        cb.style.cssText = 'width:14px;height:14px;';
+        const label = document.createElement('label');
+        label.htmlFor = cb.id;
+        label.style.cssText = 'flex:1;cursor:pointer;color:var(--text);';
+        label.textContent = formatDateForDisplay(date);
+        row.appendChild(cb);
+        row.appendChild(label);
+        createDatesList.appendChild(row);
+        row.onclick = (e) => {
+          if (e.target !== cb) { cb.checked = !cb.checked; _updateCreateDatesCount(); }
+        };
+        cb.onchange = _updateCreateDatesCount;
+      });
+      selectAllCreateDates.checked = true;
+      _updateCreateDatesCount();
+
+      // Wire (replace) the select-all + confirm/cancel handlers so the
+      // Promise resolves exactly once and stale handlers from prior
+      // opens don't leak state.
+      selectAllCreateDates.onchange = () => {
+        createDatesList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+          cb.checked = selectAllCreateDates.checked;
+        });
+        _updateCreateDatesCount();
+      };
+
+      const _cleanup = () => {
+        confirmCreateDates.onclick = null;
+        cancelCreateDates.onclick = null;
+        selectAllCreateDates.onchange = null;
+        confirmCreateDatesModal.classList.add('hidden');
+      };
+      confirmCreateDates.onclick = () => {
+        const kept = Array.from(createDatesList.querySelectorAll('input[type="checkbox"]:checked'))
+          .map(cb => cb.value);
+        _cleanup();
+        resolve(kept);
+      };
+      cancelCreateDates.onclick = () => {
+        _cleanup();
+        resolve(null);
+      };
+
+      confirmCreateDatesModal.classList.remove('hidden');
+    });
+  }
+
   prevBtn.onclick = () => {
     currentDate.setMonth(currentDate.getMonth() - 1);
     renderCalendar();
@@ -5875,7 +6476,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     const modalHTML = `
       <div id="approvalModal" class="modal-overlay">
         <div class="modal">
-          <h3>Approve ${artistData.artist_name}</h3>
+          <h3>Approve ${esc(artistData.artist_name || '')}</h3>
           <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
             Would you like to customize the default values for this artist?
           </p>
@@ -5969,6 +6570,28 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
   window.invalidateGigs = invalidateGigs;
   window.renderCalendar = renderCalendar;
   window.getBlinkStyle = getBlinkStyle;
+
+  // Jun 2026: Open the Edit Gig modal by gig id — used by the venue
+  // Pending Offers banner's Cancel Gig/Slots button so the venue can
+  // selectively cancel unbooked slots OR cancel the entire gig from
+  // the same UI they already use for editing. Pulls the gig from cache
+  // (or re-fetches if the cache is dirty / id missing) so openGigModal
+  // gets the full gig object it expects.
+  window.openGigById = async function (gigId) {
+    if (!gigId) return;
+    try {
+      let g = (venueGigsCache || []).find(x => parseInt(x.id, 10) === parseInt(gigId, 10));
+      if (!g) {
+        // Cache miss — refetch and try again.
+        venueGigsCache = await api(`/venues/${venueId}/gigs`);
+        gigsCacheDirty = false;
+        g = (venueGigsCache || []).find(x => parseInt(x.id, 10) === parseInt(gigId, 10));
+      }
+      if (g) openGigModal(g);
+    } catch (e) {
+      console.error('openGigById failed:', e);
+    }
+  };
   
   // v90: Initialize artist search functionality
   initializeArtistSearch(venueId, venueData);
@@ -5993,7 +6616,89 @@ function initializeArtistSearch(venueId, venueData) {
   const cityAutocomplete = document.getElementById('artistCityAutocomplete');
   
   const bandFormatBubbles = document.getElementById('bandFormatBubbles');
-  
+  const styleBubbles = document.getElementById('styleBubbles');
+
+  // v96: Populate Styles pills row (parallel to Lineup)
+  const _VCG_STYLE_OPTIONS = ['Country','Hip-Hop','Indie','Jazz','Latin','Pop','Reggae','Rock'];
+  const _vcgStyleListEl = document.getElementById('styleBubblesList');
+  if (_vcgStyleListEl) {
+    _vcgStyleListEl.innerHTML = _VCG_STYLE_OPTIONS.map(s =>
+      `<button class="style-toggle" data-active="false" data-style="${s}" style="`
+      + `padding: 4px 6px;`
+      + `background: rgba(255,255,255,0.05);`
+      + `border: 1px solid rgba(255,255,255,0.2);`
+      + `color: var(--text-muted);`
+      + `border-radius: 6px;`
+      + `cursor: pointer;`
+      + `transition: all 0.2s;`
+      + `font-size: 0.75rem;`
+      + `font-weight: 500;`
+      + `">${s}</button>`
+    ).join('');
+    _vcgStyleListEl.querySelectorAll('.style-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const isActive = btn.dataset.active === 'true';
+        btn.dataset.active = (!isActive).toString();
+        if (btn.dataset.active === 'true') {
+          btn.style.background = 'rgba(34, 197, 94, 0.2)';
+          btn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+          btn.style.color = '#22c55e';
+        } else {
+          btn.style.background = 'rgba(255,255,255,0.05)';
+          btn.style.borderColor = 'rgba(255,255,255,0.2)';
+          btn.style.color = 'var(--text-muted)';
+        }
+        applyFilters();
+      });
+    });
+  }
+
+  // v96: tracks last artist-name+city key so auto-populate only fires when the
+  // narrowing inputs change — subsequent pill deselections stay intact.
+  let _vcgLastAutoPopKey = '';
+
+  function _vcgSetPillActive(btn, active) {
+    if (!btn) return;
+    if (active) {
+      btn.dataset.active = 'true';
+      btn.style.background = 'rgba(34, 197, 94, 0.2)';
+      btn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+      btn.style.color = '#22c55e';
+    } else {
+      btn.dataset.active = 'false';
+      btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.style.borderColor = 'rgba(255,255,255,0.2)';
+      btn.style.color = 'var(--text-muted)';
+    }
+  }
+
+  // v96: Given the narrowed artist set, activate Type/Lineup/Style pills whose
+  // values appear in ANY of those artists; deactivate the rest. Show/hide the
+  // Lineup + Styles containers based on whether Live Band ends up active.
+  function _vcgAutoPopulateFromArtists(list) {
+    const foundTypes = new Set();
+    const foundLineups = new Set();
+    const foundStyles = new Set();
+    list.forEach(a => {
+      const t = (a.artist_type || '').trim();
+      if (t) foundTypes.add(t);
+      if (a.band_formats) a.band_formats.split(',').map(x => x.trim()).forEach(f => f && foundLineups.add(f));
+      if (a.styles) a.styles.split(',').map(x => x.trim()).forEach(s => s && foundStyles.add(s));
+    });
+    document.querySelectorAll('.artist-type-toggle').forEach(btn => {
+      _vcgSetPillActive(btn, foundTypes.has(btn.dataset.type));
+    });
+    document.querySelectorAll('.band-format-toggle').forEach(btn => {
+      _vcgSetPillActive(btn, foundLineups.has(btn.dataset.format));
+    });
+    document.querySelectorAll('.style-toggle').forEach(btn => {
+      _vcgSetPillActive(btn, foundStyles.has(btn.dataset.style));
+    });
+    const lbActive = foundTypes.has('Live Band');
+    if (bandFormatBubbles) bandFormatBubbles.style.display = lbActive ? 'block' : 'none';
+    if (styleBubbles) styleBubbles.style.display = lbActive ? 'block' : 'none';
+  }
+
   // v93: Load preferred artists
   async function loadPreferredArtists() {
     try {
@@ -6058,22 +6763,19 @@ function initializeArtistSearch(venueId, venueData) {
     return activeTypes.length > 0;
   }
   
-  // v93: Auto-apply filters on input change
+  // v96: Auto-apply filters on input change (no active-filters gate — auto-populate
+  // now activates matching pills the moment a venue name / city is typed).
   searchArtistInput.addEventListener('input', () => {
     clearTimeout(searchArtistInput.filterTimeout);
     searchArtistInput.filterTimeout = setTimeout(() => {
-      if (hasActiveFilters()) {
-        applyFilters();
-      }
+      applyFilters();
     }, 300);
   });
-  
+
   searchCityInput.addEventListener('input', () => {
     clearTimeout(searchCityInput.filterTimeout);
     searchCityInput.filterTimeout = setTimeout(() => {
-      if (hasActiveFilters()) {
-        applyFilters();
-      }
+      applyFilters();
     }, 300);
   });
   
@@ -6107,16 +6809,29 @@ function initializeArtistSearch(venueId, venueData) {
         btn.style.color = 'var(--text-muted)';
       }
       
-      // Show/hide band format bubbles
+      // Show/hide band format + style bubbles
       const liveBandButton = Array.from(artistTypeButtons).find(b => b.dataset.type === 'Live Band');
-      if (liveBandButton && liveBandButton.dataset.active === 'true') {
-        bandFormatBubbles.style.display = 'block';
-      } else {
-        bandFormatBubbles.style.display = 'none';
-      }
-      
-      // v93: AUTO-APPLY filters
+      const liveOn = liveBandButton && liveBandButton.dataset.active === 'true';
+      if (bandFormatBubbles) bandFormatBubbles.style.display = liveOn ? 'block' : 'none';
+      if (styleBubbles) styleBubbles.style.display = liveOn ? 'block' : 'none';
+
+      // v96: AUTO-APPLY filters
       applyFilters();
+
+      // Jul 2026 (revised): when Live Band is turned ON, default every
+      // Lineup + Style pill to active so the search starts unfiltered.
+      // Runs AFTER applyFilters() (which may internally call
+      // _vcgAutoPopulateFromArtists to override pills based on the
+      // narrowed artist list) so our defaults win — otherwise auto-
+      // populate would clobber us right back to only "Pop / Rock" if
+      // that's all that appears in the narrowed set. Then we call
+      // applyFilters ONCE more with the new pill state so the results
+      // reflect the widened filter.
+      if (btn.dataset.type === 'Live Band') {
+        document.querySelectorAll('.band-format-toggle').forEach(b => _vcgSetPillActive(b, liveOn));
+        document.querySelectorAll('.style-toggle')       .forEach(b => _vcgSetPillActive(b, liveOn));
+        applyFilters();
+      }
     });
   });
   
@@ -6137,10 +6852,8 @@ function initializeArtistSearch(venueId, venueData) {
         btn.style.color = 'var(--text-muted)';
       }
       
-      // v93: AUTO-APPLY filters
-      if (hasActiveFilters()) {
-        applyFilters();
-      }
+      // v96: AUTO-APPLY filters
+      applyFilters();
     });
   });
   
@@ -6324,77 +7037,83 @@ function initializeArtistSearch(venueId, venueData) {
     return R * c;
   }
   
-  // v90: Apply filters
+  // v96: Apply filters — mirrors artist-side Search Gigs pattern.
+  // Artist name + city NARROW the set first; pill selections (Type/Lineup/Style)
+  // further filter afterward. Zero active Types → empty result even with an
+  // artist name typed. Live Band + zero Lineups OR zero Styles → no Live Band
+  // artists returned. When artist name or city changes, auto-populate the Type/
+  // Lineup/Style pills to whatever appears in the narrowed set.
   function applyFilters() {
-    
     const artistNameFilter = searchArtistInput.value.toLowerCase().trim();
     const cityFilter = searchCityInput.value.toLowerCase().trim();
     const mileRadius = parseInt(mileRadiusInput.value) || 20;
-    
-    // Get active artist types
-    const activeTypes = Array.from(artistTypeButtons)
-      .filter(btn => btn.dataset.active === 'true')
-      .map(btn => btn.dataset.type);
-    
-    
-    // v94: REMOVED RESTRICTION - No required fields
-    // If user types artist name, that takes priority
-    
-    // Get active lineup options (only if Live Band is active)
-    const liveBandActive = activeTypes.includes('Live Band');
-    const activeBandFormats = liveBandActive ? Array.from(bandFormatButtons)
-      .filter(btn => btn.dataset.active === 'true')
-      .map(btn => btn.dataset.format) : [];
-    
-    
-    // Find city coordinates
+
+    // Narrow by artist name first
+    let narrowed = allArtists.slice();
+    if (artistNameFilter) {
+      narrowed = narrowed.filter(a => a.name && a.name.toLowerCase().includes(artistNameFilter));
+    }
+    // Narrow by city + radius
     let cityCoords = null;
     if (cityFilter && cities && Array.isArray(cities)) {
       const cityData = cities.find(c => c.city.toLowerCase() === cityFilter);
-      if (cityData) {
-        cityCoords = { lat: cityData.lat, lon: cityData.lon };
+      if (cityData) cityCoords = { lat: cityData.lat, lon: cityData.lon };
+    }
+    if (cityCoords) {
+      narrowed = narrowed.filter(a => {
+        if (!a.latitude || !a.longitude) return true;
+        return calculateDistance(cityCoords.lat, cityCoords.lon, a.latitude, a.longitude) <= mileRadius;
+      });
+    } else if (cityFilter) {
+      narrowed = narrowed.filter(a => a.city && a.city.toLowerCase().includes(cityFilter));
+    }
+
+    // v96: Auto-populate pills when the narrowing inputs change
+    const _autoPopKey = `${artistNameFilter}|${cityFilter}`;
+    if (_autoPopKey !== _vcgLastAutoPopKey) {
+      _vcgLastAutoPopKey = _autoPopKey;
+      if (artistNameFilter || cityFilter) {
+        _vcgAutoPopulateFromArtists(narrowed);
       }
     }
-    
-    // Filter artists
-    filteredArtists = allArtists.filter(artist => {
-      // v94: If artist name is entered, ONLY filter by name - ignore all other criteria
-      if (artistNameFilter) {
-        return artist.name.toLowerCase().includes(artistNameFilter);
-      }
-      
-      // If no artist name, apply other filters independently
-      
-      // Artist type filter - ONLY apply if types are selected
-      if (activeTypes.length > 0 && !activeTypes.includes(artist.artist_type)) {
-        return false;
-      }
-      
-      // v93: Band format filter (only for Live Bands when Live Band type is selected)
-      if (artist.artist_type === 'Live Band' && liveBandActive) {
-        if (activeBandFormats.length === 0) {
-          // No lineup options selected = don't show any Live Bands
-          return false;
+
+    // Read pill state (after possible auto-populate above)
+    const activeTypes = Array.from(artistTypeButtons)
+      .filter(btn => btn.dataset.active === 'true')
+      .map(btn => btn.dataset.type);
+    const liveBandActive = activeTypes.includes('Live Band');
+    const activeBandFormats = Array.from(bandFormatButtons)
+      .filter(btn => btn.dataset.active === 'true')
+      .map(btn => btn.dataset.format);
+    const activeStyles = Array.from(document.querySelectorAll('.style-toggle'))
+      .filter(btn => btn.dataset.active === 'true')
+      .map(btn => btn.dataset.style);
+    const _liveBandBlocked = liveBandActive && (activeBandFormats.length === 0 || activeStyles.length === 0);
+
+    // Zero active types → empty result (matches Search Gigs)
+    if (activeTypes.length === 0) {
+      filteredArtists = [];
+      displayArtists();
+      return;
+    }
+
+    filteredArtists = narrowed.filter(artist => {
+      const at = (artist.artist_type || '').trim();
+      if (!activeTypes.includes(at)) return false;
+      if (at === 'Live Band') {
+        if (_liveBandBlocked) return false;
+        if (activeBandFormats.length > 0 && artist.band_formats) {
+          const af = artist.band_formats.split(',').map(f => f.trim()).filter(Boolean);
+          if (af.length > 0 && !af.some(f => activeBandFormats.includes(f))) return false;
         }
-        // Some lineup options selected = check if artist matches
-        const artistFormats = (artist.band_formats || '').split(',').map(f => f.trim());
-        const hasMatchingFormat = artistFormats.some(f => activeBandFormats.includes(f));
-        if (!hasMatchingFormat) {
-          return false;
+        if (activeStyles.length > 0 && artist.styles) {
+          const as = artist.styles.split(',').map(s => s.trim()).filter(Boolean);
+          if (as.length > 0 && !as.some(s => activeStyles.includes(s))) return false;
         }
       }
-      
-      // Distance filter - ONLY apply if city is entered
-      if (cityCoords && artist.latitude && artist.longitude) {
-        const distance = calculateDistance(cityCoords.lat, cityCoords.lon, artist.latitude, artist.longitude);
-        if (distance > mileRadius) {
-          return false;
-        }
-      }
-      
       return true;
     });
-    
+
     displayArtists();
   }
   
@@ -6467,8 +7186,7 @@ function initializeArtistSearch(venueId, venueData) {
     }).join('');
   }
   
-  // v90: Event listeners
-  document.getElementById('applyArtistFilters').addEventListener('click', applyFilters);
+  // v96: Event listeners — Apply Filters button removed (auto-apply on every change)
   document.getElementById('clearArtistFilters').addEventListener('click', () => {
     searchArtistInput.value = '';
     searchCityInput.value = '';
@@ -6482,18 +7200,28 @@ function initializeArtistSearch(venueId, venueData) {
       btn.style.color = 'var(--text-muted)';
     });
     
-    // Reset all lineup options to active (but hide container)
+    // v96: Reset all lineup + style options to INACTIVE (matches Search Gigs)
     bandFormatButtons.forEach(btn => {
-      btn.dataset.active = 'true';
-      btn.style.background = 'rgba(34, 197, 94, 0.2)';
-      btn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
-      btn.style.color = '#22c55e';
+      btn.dataset.active = 'false';
+      btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.style.borderColor = 'rgba(255,255,255,0.2)';
+      btn.style.color = 'var(--text-muted)';
     });
-    
-    bandFormatBubbles.style.display = 'none';
-    
-    // Show all artists (no filters)
-    filteredArtists = [...allArtists];
+    document.querySelectorAll('.style-toggle').forEach(btn => {
+      btn.dataset.active = 'false';
+      btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.style.borderColor = 'rgba(255,255,255,0.2)';
+      btn.style.color = 'var(--text-muted)';
+    });
+
+    if (bandFormatBubbles) bandFormatBubbles.style.display = 'none';
+    if (styleBubbles) styleBubbles.style.display = 'none';
+
+    // v96: reset auto-populate key so next narrowing input triggers a fresh populate
+    _vcgLastAutoPopKey = '';
+
+    // v96: Cleared everything → nothing to show (matches Search Gigs).
+    filteredArtists = [];
     displayArtists();
   });
   
@@ -7360,7 +8088,16 @@ window._showNewGigBlastPrompt = async function(gigEntries, blastSettings, _venue
       '</table>' +
     '</div>';
 
-  window.showStyledModal(
+  // Capture the overlay returned by showStyledModal so the button handler
+  // can read its own checkboxes reliably. Was using document.querySelector
+  // ('.gfm-modal-overlay') which returns the FIRST match in DOM order — if
+  // an earlier modal was still stacked (e.g. the "some dates skipped" failure
+  // modal shown by the recurring path before this blast prompt), the reader
+  // grabbed that earlier overlay's checkboxes (empty), gigSelections came out
+  // empty, and the batch-blast fetch never fired. Fixed Jul 2026 after 14
+  // Cannons' Saturday-recurring blast silently no-oped because 2026-08-08
+  // conflicted with an existing gig, triggering the failure modal first.
+  const _blastOverlay = window.showStyledModal(
     '⚡ Send Blast Emails?',
     bodyHtml,
     [
@@ -7371,8 +8108,8 @@ window._showNewGigBlastPrompt = async function(gigEntries, blastSettings, _venue
       {
         text: 'Send Selected Blasts', style: 'primary',
         onClick: async () => {
-          // Read checkbox state from the current modal (which is still open).
-          const overlay = document.querySelector('.gfm-modal-overlay');
+          // Read checkbox state from THIS modal's overlay reference.
+          const overlay = _blastOverlay || document.querySelector('.gfm-modal-overlay');
           if (!overlay) return; // safety
           const gigSelections = [];
           for (const g of rows) {

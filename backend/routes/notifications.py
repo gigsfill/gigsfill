@@ -76,10 +76,14 @@ def get_notifications(user=Depends(get_current_user), db=Depends(get_db)):
 
     # Enrich slot-specific notifications with the slot's actual start_time.
     # Without this, Activity Center shows the parent gig start_time (e.g. 7pm
-    # = slot 1) for a notification that's about slot 2 at 9pm. We parse the
-    # "Slot N" suffix from the message and look up that slot's start_time.
+    # = slot 1) for a notification that's about slot 2 at 9pm.
+    # Jul 2026 audit (P-H7): was N+1 (one SELECT per notification with a
+    # "Slot N" suffix — up to 50/open). Now: parse ALL (gig_id, slot_num)
+    # pairs first, batch-fetch every referenced slot in ONE query, then
+    # attach.
     import re as _re
-    out = []
+    parsed_rows = []
+    needed_pairs: set[tuple[int, int]] = set()
     for row in rows:
         d = dict(row)
         msg = d.get("message") or ""
@@ -87,15 +91,34 @@ def get_notifications(user=Depends(get_current_user), db=Depends(get_db)):
         if m and d.get("gig_id"):
             try:
                 slot_num = int(m.group(1))
-                slot_row = db.execute(
-                    text("SELECT start_time FROM gig_slots WHERE gig_id = :gid AND slot_number = :sn LIMIT 1"),
-                    {"gid": d["gig_id"], "sn": slot_num}
-                ).first()
-                if slot_row and slot_row[0]:
-                    d["slot_start_time"] = slot_row[0]
-                    d["slot_number"] = slot_num
+                d["_slot_pair"] = (int(d["gig_id"]), slot_num)
+                needed_pairs.add(d["_slot_pair"])
             except Exception:
                 pass
+        parsed_rows.append(d)
+
+    slot_start_by_pair: dict[tuple[int, int], str] = {}
+    if needed_pairs:
+        # gig_slots is indexed on gig_id; a WHERE gig_id IN (...) followed
+        # by a Python filter on slot_number is faster + more portable than
+        # a compound (gig_id, slot_number) OR chain.
+        gid_list = list({p[0] for p in needed_pairs})
+        # SQLite / Postgres both accept `IN :gids` when we expand.
+        _placeholders = ",".join([f":gid{i}" for i in range(len(gid_list))])
+        _params = {f"gid{i}": g for i, g in enumerate(gid_list)}
+        _slot_rows = db.execute(
+            text(f"SELECT gig_id, slot_number, start_time FROM gig_slots WHERE gig_id IN ({_placeholders})"),
+            _params
+        ).mappings().all()
+        for sr in _slot_rows:
+            slot_start_by_pair[(int(sr["gig_id"]), int(sr["slot_number"]))] = sr["start_time"]
+
+    out = []
+    for d in parsed_rows:
+        pair = d.pop("_slot_pair", None)
+        if pair and pair in slot_start_by_pair:
+            d["slot_start_time"] = slot_start_by_pair[pair]
+            d["slot_number"] = pair[1]
         out.append(d)
     return out
 
@@ -159,8 +182,14 @@ def mark_all_read(user=Depends(get_current_user), db=Depends(get_db)):
 
 @router.delete("/api/notifications/{notification_id}")
 def delete_notification(notification_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Delete a notification"""
-    db.execute(
+    """Delete a notification. Only the owning user can delete their own.
+
+    Audit fix (Jul 2026): return 404 when no row matched instead of
+    silent ok — helps the UI distinguish "already gone" from "wrong id
+    / not yours" and prevents test scripts from thinking phantom
+    deletions succeeded.
+    """
+    result = db.execute(
         text("""
             DELETE FROM notifications
             WHERE id = :notif_id AND user_id = :user_id
@@ -168,4 +197,6 @@ def delete_notification(notification_id: int, user=Depends(get_current_user), db
         {"notif_id": notification_id, "user_id": user.id}
     )
     db.commit()
+    if getattr(result, "rowcount", 0) == 0:
+        raise HTTPException(404, "Notification not found")
     return {"ok": True}

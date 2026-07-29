@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Leave a Review — GigsFill</title>
-  <link rel="icon" href="/app/static/img/favicon.png" type="image/png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png" type="image/png">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -23,6 +24,7 @@
       color: var(--text-white);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       min-height: 100vh;
+      min-height: 100dvh;  /* iOS Safari address bar tracking — see gigsfill-modern.css .app-shell. */
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -300,5 +302,6 @@
 })();
 </script>
 
+<script src="/app/static/js/gf-modals.js?v=8"></script>
 </body>
 </html>

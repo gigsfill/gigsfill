@@ -91,16 +91,16 @@ def create_template(venue_id: int, data: dict,
     ).scalar() or 0
     if cnt >= 50:
         raise HTTPException(400, "Maximum 50 templates per venue — delete an old one first")
-    res = db.execute(
+    # 2026-07-25: RETURNING id inline (pool-swap safety).
+    new_id = db.execute(
         text("""
             INSERT INTO gig_templates (venue_id, name, slots_json, notes, created_by_user_id)
-            VALUES (:vid, :name, :slots, :notes, :uid)
+            VALUES (:vid, :name, :slots, :notes, :uid) RETURNING id
         """),
         {"vid": venue_id, "name": name, "slots": json.dumps(slots),
          "notes": notes, "uid": user.id}
-    )
+    ).scalar()
     db.commit()
-    new_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
     return {"ok": True, "id": new_id, "name": name}
 
 

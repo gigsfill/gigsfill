@@ -260,49 +260,13 @@ def calendar_feed(token: str, db=Depends(get_db)):
         raise HTTPException(404, "Calendar not found")
     user_id = user["id"]
 
-    # Walk every relevant booked gig for this user. Covers:
-    #   - Artist-owner: their own artists, plus any artists they're an
-    #     entity_user of (multi-user accounts).
-    #   - Venue-owner: their venues + entity_user venues.
-    # Single query union'd — duplicates collapsed by (gig_id, slot_id).
+    # Jul 2026 refactor: every gig is now slot-based (backfill ensures every
+    # gig has ≥1 gig_slots row). Dropped the legacy single-slot UNION leg
+    # that pulled from gigs.artist_id + gigs.start_time/end_time/pay — those
+    # gig-level fields are dupes of the slot's values post-backfill, so
+    # the union was returning the SAME row from both legs.
     rows = db.execute(
         text("""
-            SELECT DISTINCT
-                g.id as gig_id,
-                NULL as slot_id,
-                g.date,
-                g.start_time,
-                g.end_time,
-                g.title,
-                g.pay,
-                g.notes,
-                v.venue_name,
-                v.city, v.state,
-                a.name as artist_name,
-                -- Door deals are slot-level only — single-slot gigs are always
-                -- flat, but we select these columns as NULL so both arms of the
-                -- UNION have matching shape. CAST(NULL AS ...) is required on
-                -- Postgres which strictly type-checks UNION columns; SQLite is
-                -- lenient but accepts the cast as a no-op.
-                CAST(NULL AS TEXT)    as deal_type,
-                CAST(NULL AS INTEGER) as door_pct,
-                CAST(NULL AS INTEGER) as guarantee_cents
-            FROM gigs g
-            JOIN venues v ON v.id = g.venue_id
-            LEFT JOIN artists a ON a.id = g.artist_id
-            WHERE g.status IN ('booked','awaiting_venue_contract')
-              AND g.is_multi_slot = 0
-              AND (
-                v.user_id = :uid
-                OR a.user_id = :uid
-                OR EXISTS (SELECT 1 FROM entity_users eu
-                           WHERE eu.user_id = :uid
-                             AND ((eu.entity_type = 'venue'  AND eu.entity_id = v.id)
-                               OR (eu.entity_type = 'artist' AND eu.entity_id = a.id)))
-              )
-
-            UNION
-
             SELECT DISTINCT
                 g.id as gig_id,
                 gs.id as slot_id,

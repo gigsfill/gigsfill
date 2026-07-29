@@ -790,7 +790,7 @@
   let _venueExecPage = 1;
   const _execPerPage = 20;
   let _venueExecFilter = 'all'; // 'all' = show everything, 'pending' = upcoming, 'completed' = past
-  let _venueExecSort = { col: 'gig_date', dir: 1 }; // 1 = asc (soonest first), -1 = desc
+  let _venueExecSort = { col: 'gig_date', dir: -1 }; // -1 = desc (most recent first), 1 = asc
   function setExecFilter(value) {
     _venueExecFilter = value || 'all';
     _venueExecPage = 1;
@@ -816,7 +816,13 @@
 
   function execSortBy(col) {
     if (_venueExecSort.col === col) _venueExecSort.dir *= -1;
-    else { _venueExecSort.col = col; _venueExecSort.dir = col === 'gig_date' ? 1 : 1; }
+    else {
+      _venueExecSort.col = col;
+      // For Date, default new clicks to most-recent-first (desc) since
+      // that's what venues care about by default. All other text
+      // columns default to A→Z (asc).
+      _venueExecSort.dir = col === 'gig_date' ? -1 : 1;
+    }
     _venueExecPage = 1;
     renderVenueExecutedContracts();
   }

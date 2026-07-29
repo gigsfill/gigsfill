@@ -2,17 +2,56 @@
 Analytics routes for tracking public user activity
 """
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import sqlite3
-from backend.db import get_db_connection as _analytics_conn
+from backend.db import get_db_connection as _analytics_conn, get_db
 from backend.routes.admin import check_admin
+from backend.routes.auth import get_current_user
+from backend.rate_limiter import limiter
+from sqlalchemy import text as _sql_text
 import hashlib
 import json
 import os
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+
+
+def _require_entity_owner_or_admin(entity_type: str, entity_id: int, user) -> None:
+    """Owner-or-team-member-or-admin gate for per-entity analytics endpoints.
+
+    Jul 2026 audit fix: previously every /stats/* endpoint was open to any
+    anonymous caller, letting competitors scrape per-venue click totals,
+    visitor counts, and search patterns. This helper checks ownership on
+    the entity row + entity_users membership + admin fallback.
+    """
+    from backend.utils import to_admin_bool
+    if to_admin_bool(getattr(user, "is_admin", None)):
+        return  # admin sees everything
+    _sess = _analytics_conn()
+    try:
+        _sess.row_factory = sqlite3.Row
+        _cur = _sess.cursor()
+        table = "artists" if entity_type == "artist" else "venues"
+        _cur.execute(
+            f"SELECT user_id FROM {table} WHERE id = ? AND deleted_at IS NULL",
+            (entity_id,)
+        )
+        row = _cur.fetchone()
+        if not row:
+            raise HTTPException(404, f"{entity_type} not found")
+        if row["user_id"] == user.id:
+            return
+        _cur.execute(
+            "SELECT 1 FROM entity_users WHERE entity_type = ? AND entity_id = ? AND user_id = ?",
+            (entity_type, entity_id, user.id)
+        )
+        if _cur.fetchone():
+            return
+    finally:
+        _sess.close()
+    raise HTTPException(403, f"You don't have access to this {entity_type}'s analytics")
 
 DATABASE_PATH = os.environ.get("DATABASE_PATH", "backend.db")
 
@@ -40,10 +79,14 @@ def hash_ip(ip: str) -> str:
     return hashlib.sha256(salted.encode()).hexdigest()[:16]
 
 @router.post("/track")
+@limiter.limit("30/minute")
 async def track_event(event: TrackEventRequest, request: Request):
     """
     Track a public user activity event.
     No authentication required - this is for anonymous tracking.
+    Rate-limited (Jul 1 2026 audit fix): 30/min per IP prevents an
+    anonymous attacker from bloating the analytics table by looping
+    POSTs (each write inserts one row).
     """
     try:
         conn = get_db()
@@ -87,8 +130,8 @@ async def track_event(event: TrackEventRequest, request: Request):
         return {"status": "error", "message": str(e)}
 
 @router.get("/stats/cities")
-async def get_city_stats():
-    """Get aggregated city search statistics (for admin/dashboard)"""
+async def get_city_stats(admin=Depends(check_admin)):
+    """Get aggregated city search statistics (admin-only, Jul 2026 audit)."""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -108,8 +151,8 @@ async def get_city_stats():
     return results
 
 @router.get("/stats/gigs")
-async def get_gig_stats():
-    """Get aggregated gig click statistics"""
+async def get_gig_stats(admin=Depends(check_admin)):
+    """Get aggregated gig click statistics (admin-only, Jul 2026 audit)."""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -129,8 +172,8 @@ async def get_gig_stats():
     return results
 
 @router.get("/stats/summary")
-async def get_summary_stats():
-    """Get overall activity summary"""
+async def get_summary_stats(admin=Depends(check_admin)):
+    """Get overall activity summary (admin-only, Jul 2026 audit)."""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -226,8 +269,9 @@ async def get_summary_stats():
     }
 
 @router.get("/stats/details")
-async def get_detail_events(event_type: Optional[str] = None, period: Optional[str] = None):
-    """Get detailed events filtered by type or time period"""
+async def get_detail_events(event_type: Optional[str] = None, period: Optional[str] = None,
+                            admin=Depends(check_admin)):
+    """Get detailed events filtered by type or time period (admin-only, Jul 2026 audit)."""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -269,8 +313,8 @@ async def get_detail_events(event_type: Optional[str] = None, period: Optional[s
     return results
 
 @router.get("/stats/visitors")
-async def get_visitor_details():
-    """Get unique visitor details with location info"""
+async def get_visitor_details(admin=Depends(check_admin)):
+    """Get unique visitor details with location info (admin-only, Jul 2026 audit)."""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -296,8 +340,10 @@ async def get_visitor_details():
     return results
 
 @router.get("/stats/venue/{venue_id}")
-async def get_venue_stats(venue_id: int):
-    """Get analytics for a specific venue"""
+async def get_venue_stats(venue_id: int, user=Depends(get_current_user)):
+    """Get analytics for a specific venue. Jul 2026 audit: owner/team/admin only.
+    Previously anonymous — competitors could scrape click stats."""
+    _require_entity_owner_or_admin("venue", venue_id, user)
     conn = get_db()
     cursor = conn.cursor()
     
@@ -382,8 +428,9 @@ async def get_venue_stats(venue_id: int):
     }
 
 @router.get("/stats/artist/{artist_id}")
-async def get_artist_stats(artist_id: int):
-    """Get analytics for a specific artist"""
+async def get_artist_stats(artist_id: int, user=Depends(get_current_user)):
+    """Get analytics for a specific artist. Jul 2026 audit: owner/team/admin only."""
+    _require_entity_owner_or_admin("artist", artist_id, user)
     conn = get_db()
     cursor = conn.cursor()
     
@@ -560,29 +607,25 @@ async def get_admin_dashboard_stats(admin=Depends(check_admin)):
     gig_clicks_7d            = q("SELECT COUNT(*) FROM public_activity WHERE event_type='gig_click' AND created_at > datetime('now','-7 days')")
 
     # ── Top lists ────────────────────────────────────────────────────
-    # "Bookings" = distinct artist-venue performance commitments. For
-    # single-slot, that's a row in `gigs` with artist_id set. For multi-slot,
-    # each booked `gig_slot` is its own commitment (a 3-slot gig with 2
-    # booked artists is 2 bookings, not 1). Without the slot leg, multi-slot
-    # bookings were silently dropped from the top lists — artists who only
-    # do multi-slot work would be invisible to the admin analytics view.
+    # Jul 2026 refactor: dropped the legacy `gigs.artist_id` UNION leg —
+    # it was counting single-slot bookings TWICE post-backfill (leg 1 hit
+    # gigs.artist_id, leg 2 hit gig_slots.artist_id for the same booking).
+    # Every booking now has a `gig_slots` row so the slot leg is
+    # sufficient. Each booked slot = one commitment (a 3-slot gig with 2
+    # booked artists = 2 bookings, not 1).
     top_venues_booked = qa("""
-        SELECT v.venue_name, COUNT(*) as bookings FROM (
-            SELECT venue_id FROM gigs WHERE artist_id IS NOT NULL
-            UNION ALL
-            SELECT g.venue_id FROM gig_slots gs JOIN gigs g ON g.id = gs.gig_id
-            WHERE gs.artist_id IS NOT NULL AND gs.status = 'booked'
-        ) b
-        JOIN venues v ON v.id = b.venue_id
+        SELECT v.venue_name, COUNT(*) as bookings
+        FROM gig_slots gs
+        JOIN gigs g ON g.id = gs.gig_id
+        JOIN venues v ON v.id = g.venue_id
+        WHERE gs.artist_id IS NOT NULL AND gs.status = 'booked'
         GROUP BY v.id ORDER BY bookings DESC LIMIT 8
     """)
     top_artists_booked = qa("""
-        SELECT a.name, COUNT(*) as bookings FROM (
-            SELECT artist_id FROM gigs WHERE artist_id IS NOT NULL
-            UNION ALL
-            SELECT artist_id FROM gig_slots WHERE artist_id IS NOT NULL AND status = 'booked'
-        ) b
-        JOIN artists a ON a.id = b.artist_id
+        SELECT a.name, COUNT(*) as bookings
+        FROM gig_slots gs
+        JOIN artists a ON a.id = gs.artist_id
+        WHERE gs.artist_id IS NOT NULL AND gs.status = 'booked'
         GROUP BY a.id ORDER BY bookings DESC LIMIT 8
     """)
     top_cities = qa("""
@@ -591,37 +634,29 @@ async def get_admin_dashboard_stats(admin=Depends(check_admin)):
           AND created_at > datetime('now','-30 days')
         GROUP BY city, state ORDER BY searches DESC LIMIT 8
     """)
-    # Recent bookings: union single-slot (gigs.artist_id) with multi-slot
-    # (gig_slots.artist_id). For multi-slot, each booked slot shows as its
-    # own row with that slot's pay. We don't have a `booked_at` column on
-    # gig_slots, so multi-slot rows order by slot creation time — same
-    # imprecision the original single-slot path had (it used g.created_at,
-    # not booking time). "Recent" here is best-effort, not exact.
-    # Pay column applies the venue's per-artist pay override when status='approved'.
-    # Returns max(b.pay, override) so the admin sees what the artist is actually being paid.
-    # Uses CASE for SQLite/Postgres portability (SQLite has MAX(a,b), Postgres uses GREATEST).
+    # Jul 2026 refactor: dropped legacy `gigs.artist_id` UNION leg (was
+    # double-counting single-slot bookings post-backfill). One row per
+    # booked slot. Orders by slot creation time — best-effort "recent",
+    # same imprecision the original had. Pay column applies the venue's
+    # per-artist pay override when status='approved' so admin sees what
+    # the artist is actually being paid. CASE used for SQLite/PG parity.
     recent_bookings = qa("""
         SELECT g.id, g.date,
-               CASE WHEN (COALESCE(pa.pay_dollars_override,0) + COALESCE(pa.pay_cents_override,0)/100.0) > COALESCE(b.pay,0)
+               CASE WHEN (COALESCE(pa.pay_dollars_override,0) + COALESCE(pa.pay_cents_override,0)/100.0) > COALESCE(gs.pay,0)
                     THEN (COALESCE(pa.pay_dollars_override,0) + COALESCE(pa.pay_cents_override,0)/100.0)
-                    ELSE COALESCE(b.pay,0)
+                    ELSE COALESCE(gs.pay,0)
                END as pay,
                a.name as artist_name, v.venue_name
-        FROM (
-            SELECT id as gig_id, artist_id, pay, created_at FROM gigs WHERE artist_id IS NOT NULL
-            UNION ALL
-            SELECT gs.gig_id, gs.artist_id, gs.pay, gs.created_at
-            FROM gig_slots gs
-            WHERE gs.artist_id IS NOT NULL AND gs.status = 'booked'
-        ) b
-        JOIN gigs g ON g.id = b.gig_id
-        JOIN artists a ON a.id = b.artist_id
+        FROM gig_slots gs
+        JOIN gigs g ON g.id = gs.gig_id
+        JOIN artists a ON a.id = gs.artist_id
         JOIN venues v ON v.id = g.venue_id
         LEFT JOIN preferred_artists pa
             ON pa.venue_id = g.venue_id
-           AND pa.artist_id = b.artist_id
+           AND pa.artist_id = gs.artist_id
            AND pa.status = 'approved'
-        ORDER BY b.created_at DESC LIMIT 10
+        WHERE gs.artist_id IS NOT NULL AND gs.status = 'booked'
+        ORDER BY gs.created_at DESC LIMIT 10
     """)
     recent_signups = qa("""
         SELECT id, email, created_at,

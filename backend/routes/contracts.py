@@ -64,38 +64,48 @@ async def _read_and_validate_pdf(file: "UploadFile", max_mb: int = 20) -> bytes:
 def _apply_slot_pay_override(db, slot_id: int, venue_id: int, artist_id: int):
     """After booking a slot, update its pay to max(current_pay, artist_override) if override exists.
 
-    Override only applies when the relationship is 'approved' — pending/denied/revoked
-    rows still carry the old override columns, but the per-artist negotiated rate no
-    longer applies. Missed in the part 10m pay-override audit; fixed here.
+    Rule (Jun 2026 — matches book_slot / respond_to_hold_offer):
+      - Flat slot → bump slot.pay to override if higher (always).
+      - Door slot → bump guarantee_cents AND mirror into pay ONLY when
+                    slot.apply_override = 1. Default 0 means door
+                    guarantee is final regardless of override —
+                    venue's per-slot opt-in toggle on the door config UI.
 
-    DOOR-DEAL SAFETY (Jun 2026): when the slot has deal_type='door', the
-    pay column carries the guarantee floor that the venue explicitly set
-    for THIS slot. Letting the venue's standing per-artist override raise
-    that floor here would (a) silently desync the booking charge from the
-    "guarantee + X% of door" terms shown in the email + contract, and (b)
-    take away the venue's ability to use door split as a per-gig opt-out
-    from the standing override (which is the design the user asked for —
-    pick door split for the gig where you don't want to pay the full
-    override fee). Door slots skip the override; the guarantee is final.
+    Override only applies when the preferred_artists relationship is
+    'approved' — pending/denied/revoked rows still carry the old
+    override columns but should not influence pay.
     """
     try:
         slot = db.execute(
-            text("SELECT pay, deal_type FROM gig_slots WHERE id = :sid"),
+            text("""SELECT pay, deal_type, guarantee_cents,
+                           COALESCE(apply_override, 0) as apply_override
+                    FROM gig_slots WHERE id = :sid"""),
             {"sid": slot_id}
         ).mappings().first()
         if not slot:
             return
-        # Door slots use guarantee terms set per-gig — standing override
-        # does not apply.
-        if (slot.get("deal_type") or "").lower() == "door":
-            return
-        base_pay = float(slot["pay"] or 0)
         override = db.execute(
             text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id=:vid AND artist_id=:aid AND status='approved'"),
             {"vid": venue_id, "aid": artist_id}
         ).mappings().first()
-        if override and override["pay_dollars_override"] is not None:
-            override_pay = float(override["pay_dollars_override"]) + float(override["pay_cents_override"] or 0) / 100
+        if not (override and override["pay_dollars_override"] is not None):
+            return
+        override_pay = float(override["pay_dollars_override"]) + float(override["pay_cents_override"] or 0) / 100
+
+        is_door = (slot.get("deal_type") or "").lower() == "door"
+        door_opted_in = is_door and int(slot.get("apply_override") or 0) == 1
+
+        if is_door:
+            if not door_opted_in:
+                return  # apply_override=0 → guarantee is final
+            cur_gua_dollars = float(slot.get("guarantee_cents") or 0) / 100.0
+            if override_pay > cur_gua_dollars:
+                db.execute(
+                    text("UPDATE gig_slots SET guarantee_cents = :gc, pay = :pay WHERE id = :sid"),
+                    {"gc": int(round(override_pay * 100)), "pay": override_pay, "sid": slot_id}
+                )
+        else:
+            base_pay = float(slot["pay"] or 0)
             if override_pay > base_pay:
                 db.execute(
                     text("UPDATE gig_slots SET pay = :pay WHERE id = :sid"),
@@ -130,42 +140,12 @@ def _contract_display_filename(venue_name: str, artist_name: str, gig_date, suff
 # HELPERS
 # ============================================
 
-def check_venue_access(db, venue_id: int, user_id: int):
-    """Verify user has access to this venue (owner or entity_user)"""
-    row = db.execute(
-        text("""
-            SELECT 1 FROM venues v
-            WHERE v.id = :vid AND (
-                v.user_id = :uid
-                OR EXISTS (
-                    SELECT 1 FROM entity_users eu
-                    WHERE eu.entity_type = 'venue' AND eu.entity_id = v.id AND eu.user_id = :uid
-                )
-            )
-        """),
-        {"vid": venue_id, "uid": user_id}
-    ).first()
-    if not row:
-        raise HTTPException(403, "You don't have access to this venue")
-
-
-def check_artist_access(db, artist_id: int, user_id: int):
-    """Verify user has access to this artist (owner or entity_user)"""
-    row = db.execute(
-        text("""
-            SELECT 1 FROM artists a
-            WHERE a.id = :aid AND (
-                a.user_id = :uid
-                OR EXISTS (
-                    SELECT 1 FROM entity_users eu
-                    WHERE eu.entity_type = 'artist' AND eu.entity_id = a.id AND eu.user_id = :uid
-                )
-            )
-        """),
-        {"aid": artist_id, "uid": user_id}
-    ).first()
-    if not row:
-        raise HTTPException(403, "You don't have access to this artist")
+# BUG FIX (Jul 2026 audit): use the canonical helpers from backend.utils so
+# tombstone filtering (`deleted_at IS NULL`) is applied consistently. The
+# local copies below used to omit the filter, letting contract endpoints
+# (sign / countersign / view template / upload PDF / generate auto contract)
+# accept tombstoned entities.
+from backend.utils import check_venue_access, check_artist_access  # noqa: F401
 
 
 def format_pay(pay_cents):
@@ -525,6 +505,104 @@ Phone: {artist_owner_phone or '{{artist_phone}}'}</p>""")
     return "\n\n".join(sections)
 
 
+def _re_render_body_if_pending(db, contract_row: dict) -> str:
+    """Re-render a `pending` gig-contract's body from LIVE venue/artist
+    data. Called on GET endpoints so a rename that happens between
+    booking (contract create) and signing doesn't leave the artist
+    signing a document with the old party name — otherwise the stored
+    `rendered_body` snapshot keeps whatever the names were at create
+    time.
+
+    Once the contract is signed, the stored body is FROZEN (correct —
+    it's a legal artifact). This helper is a no-op for signed / any
+    non-pending status.
+
+    Runs the same substitution paths the create endpoints use
+    (auto_generated → generate_auto_contract, custom_builder → the
+    replacements-dict loop). pdf_upload templates have no body render
+    so we return the stored value as-is.
+    """
+    if contract_row.get("status") not in ("pending", "hold"):
+        return contract_row.get("rendered_body") or ""
+
+    vc_id = contract_row.get("venue_contract_id")
+    if not vc_id:
+        return contract_row.get("rendered_body") or ""
+
+    template = db.execute(
+        text("SELECT * FROM venue_contracts WHERE id = :vid"),
+        {"vid": vc_id}
+    ).mappings().first()
+    if not template:
+        return contract_row.get("rendered_body") or ""
+    template = dict(template)
+
+    gig_id = contract_row.get("gig_id")
+    venue_id = contract_row.get("venue_id")
+    artist_id = contract_row.get("artist_id")
+    slot_id = contract_row.get("slot_id")
+    if not (gig_id and venue_id and artist_id):
+        return contract_row.get("rendered_body") or ""
+
+    ctype = template.get("contract_type")
+    if ctype == "auto_generated":
+        try:
+            return generate_auto_contract(db, gig_id, venue_id, artist_id, slot_id=slot_id)
+        except Exception as _e:
+            logger.warning(f"[CONTRACT] live re-render failed for pending contract "
+                            f"#{contract_row.get('id')}, falling back to stored: {_e}")
+            return contract_row.get("rendered_body") or ""
+
+    if ctype == "custom_builder":
+        body = template.get("contract_body", "") or ""
+        if not body:
+            return contract_row.get("rendered_body") or ""
+        try:
+            gig_data = db.execute(text("SELECT * FROM gigs WHERE id = :gid"), {"gid": gig_id}).mappings().first()
+            artist_data = db.execute(
+                text("SELECT a.*, u.first_name||' '||u.last_name as full_name, u.email, u.phone FROM artists a JOIN users u ON a.user_id=u.id WHERE a.id=:aid"),
+                {"aid": artist_id}
+            ).mappings().first()
+            venue_data = db.execute(
+                text("SELECT * FROM venues WHERE id = :vid"), {"vid": venue_id}
+            ).mappings().first()
+            # Slot-aware start/end — match the create path (line ~872-882)
+            slot_start = slot_end = None
+            if slot_id:
+                sr = db.execute(text("SELECT start_time, end_time FROM gig_slots WHERE id = :sid"),
+                                {"sid": slot_id}).mappings().first()
+                if sr:
+                    slot_start, slot_end = sr.get("start_time"), sr.get("end_time")
+            replacements = {
+                "artist_name":  artist_data["name"]      if artist_data else "",
+                "artist_contact_name": artist_data["full_name"] if artist_data else "",
+                "artist_email": artist_data["email"]     if artist_data else "",
+                "artist_phone": artist_data["phone"]     if artist_data else "",
+                "artist_city":  artist_data["city"]      if artist_data else "",
+                "artist_state": artist_data["state"]     if artist_data else "",
+                "venue_name":   venue_data["venue_name"] if venue_data else "",
+                "venue_address":venue_data["address_line_1"] if venue_data else "",
+                "venue_city":   venue_data["city"]       if venue_data else "",
+                "venue_state":  venue_data["state"]      if venue_data else "",
+                "gig_date":     gig_data["date"]         if gig_data else "",
+                "gig_start_time": format_time_12hr(slot_start or (gig_data["start_time"] if gig_data else "")),
+                "gig_end_time":   format_time_12hr(slot_end   or (gig_data["end_time"]   if gig_data else "")),
+                "gig_pay":      _get_effective_pay_str(db, dict(gig_data), venue_id, artist_id, slot_id=slot_id) if gig_data else "$0",
+                "gig_title":    gig_data["title"]        if gig_data else "",
+            }
+            for key, val in replacements.items():
+                safe_val = val if key == "gig_pay" else _ce(val)
+                body = body.replace(f"{{{{{key}}}}}", str(safe_val or ""))
+            return body
+        except Exception as _e:
+            logger.warning(f"[CONTRACT] custom-builder live re-render failed for pending contract "
+                            f"#{contract_row.get('id')}, falling back to stored: {_e}")
+            return contract_row.get("rendered_body") or ""
+
+    # pdf_upload has no textual body render
+    return contract_row.get("rendered_body") or ""
+
+
 # ============================================
 # VENUE CONTRACT TEMPLATES — CRUD
 # ============================================
@@ -591,11 +669,14 @@ def create_venue_contract(venue_id: int, data: dict, user=Depends(get_current_us
         {"vid": venue_id}
     )
 
-    db.execute(
+    # 2026-07-25: RETURNING id inline. Old pattern (separate SELECT
+    # last_insert_rowid) is per-connection and can return a stale id from
+    # another pool connection.
+    new_id = db.execute(
         text("""
             INSERT INTO venue_contracts
                 (venue_id, contract_type, name, is_active, require_for_booking, per_gig_pdf, contract_body, custom_fields, created_at, updated_at)
-            VALUES (:vid, :type, :name, 1, :req, :pgp, :body, :fields, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (:vid, :type, :name, 1, :req, :pgp, :body, :fields, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING id
         """),
         {
             "vid": venue_id,
@@ -606,10 +687,7 @@ def create_venue_contract(venue_id: int, data: dict, user=Depends(get_current_us
             "body": contract_body,
             "fields": custom_fields,
         }
-    )
-
-    # Get the new ID
-    new_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+    ).scalar()
 
     # Audit fix (May 2026 part 8): post-insert race-loser reconciliation.
     # Two concurrent POSTs both ran the DEACTIVATE-then-INSERT pattern above
@@ -706,11 +784,34 @@ def delete_venue_contract(venue_id: int, contract_id: int, user=Depends(get_curr
         db.commit()
         return {"ok": True, "deactivated": True, "message": "Contract is in use by existing gigs. It has been deactivated instead of deleted."}
     
+    # Audit fix (Jul 2026 delete-audit): remove the uploaded PDF from
+    # disk before deleting the row. Without this the PDF sat forever
+    # under `app/static/uploads/contracts/venue_{vid}/contract_{cid}_*`.
+    # Snapshot pdf_file_path first (it's cleared by the DELETE below).
+    try:
+        _pdf_row = db.execute(
+            text("SELECT pdf_file_path FROM venue_contracts WHERE id = :cid AND venue_id = :vid"),
+            {"cid": contract_id, "vid": venue_id}
+        ).mappings().first()
+        _pdf_path = (_pdf_row or {}).get("pdf_file_path") if _pdf_row else None
+    except Exception:
+        _pdf_path = None
+
     db.execute(
         text("DELETE FROM venue_contracts WHERE id = :cid AND venue_id = :vid"),
         {"cid": contract_id, "vid": venue_id}
     )
     db.commit()
+
+    if _pdf_path:
+        try:
+            import os as _os
+            _abs = _pdf_path.lstrip("/")
+            if _os.path.isfile(_abs):
+                _os.remove(_abs)
+        except Exception:
+            pass  # best effort — DB row is gone either way
+
     return {"ok": True}
 
 
@@ -896,14 +997,15 @@ def create_gig_contract(gig_id: int, request: Request, user=Depends(get_current_
     elif template["contract_type"] == "pdf_upload":
         pdf_file_path = template.get("pdf_file_path", "")
     
-    # Create gig contract instance
-    db.execute(
+    # Create gig contract instance. 2026-07-25: RETURNING id inline
+    # (old pattern was per-connection and vulnerable to pool swaps).
+    new_id = db.execute(
         text("""
             INSERT INTO gig_contracts
                 (gig_id, venue_contract_id, venue_id, artist_id, contract_type,
                  rendered_body, filled_fields, pdf_file_path, status, created_at)
             VALUES (:gig_id, :vc_id, :vid, :aid, :type,
-                    :body, '{}', :pdf, 'pending', CURRENT_TIMESTAMP)
+                    :body, '{}', :pdf, 'pending', CURRENT_TIMESTAMP) RETURNING id
         """),
         {
             "gig_id": gig_id,
@@ -914,10 +1016,8 @@ def create_gig_contract(gig_id: int, request: Request, user=Depends(get_current_
             "body": rendered_body,
             "pdf": pdf_file_path,
         }
-    )
+    ).scalar()
     db.commit()
-    
-    new_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
     
     return {"ok": True, "contract_id": new_id, "contract_type": template["contract_type"], "status": "pending"}
 
@@ -977,6 +1077,12 @@ def get_gig_contract(contract_id: int, user=Depends(get_current_user), db=Depend
     row["is_venue_user"] = bool(venue_access)
     row["is_artist_user"] = bool(artist_access)
 
+    # Live re-render for pending/hold contracts so a rename that
+    # happened between booking and signing doesn't leave the artist
+    # signing a doc with the old party name. Signed contracts keep
+    # the stored (historical) body untouched.
+    row["rendered_body"] = _re_render_body_if_pending(db, row)
+
     return row
 
 
@@ -1034,6 +1140,8 @@ def get_gig_contract_by_gig(gig_id: int, request: Request, user=Depends(get_curr
 
     result = dict(row)
     result["has_contract"] = True
+    # Live re-render for pending — see _re_render_body_if_pending.
+    result["rendered_body"] = _re_render_body_if_pending(db, result)
     return result
 
 
@@ -1084,18 +1192,26 @@ def sign_contract(contract_id: int, data: dict, request: Request, user=Depends(g
     signature_name = data.get("signature_name", "").strip()
     if not signature_name:
         raise HTTPException(400, "Signature name is required")
-    
+
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         client_ip = forwarded.split(",")[0].strip()
-    
+
     # Save filled fields if provided
     filled_fields = json.dumps(data.get("filled_fields", {}))
-    
+
     now = utcnow_naive().isoformat() + 'Z'
-    
+
+    # Freeze the LIVE-rendered body at sign time so the signed record
+    # captures whatever the party names were at signing — not whatever
+    # they were at contract create. If either party renamed between
+    # booking and signing, the stored body is stale; re-render once
+    # here and persist so the PDF + audit both reflect what the artist
+    # actually agreed to.
+    _fresh_body = _re_render_body_if_pending(db, contract)
+
     # Audit fix (May 2026 part 3): atomic-claim guard. The Python-side
     # status check above is non-atomic; two concurrent sign requests
     # (double-clicked button, retried email link) would both pass the
@@ -1107,6 +1223,7 @@ def sign_contract(contract_id: int, data: dict, request: Request, user=Depends(g
             UPDATE gig_contracts SET
                 status = 'artist_signed',
                 filled_fields = :fields,
+                rendered_body = :body,
                 artist_signature_name = :sig_name,
                 artist_signature_date = :sig_date,
                 artist_signature_ip = :sig_ip
@@ -1114,6 +1231,7 @@ def sign_contract(contract_id: int, data: dict, request: Request, user=Depends(g
         """),
         {
             "fields": filled_fields,
+            "body": _fresh_body,
             "sig_name": signature_name,
             "sig_date": now,
             "sig_ip": client_ip,
@@ -1581,9 +1699,37 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
     contract = dict(contract)
     
     check_venue_access(db, contract["venue_id"], user.id)
-    
+
     if contract["status"] != "artist_signed":
         raise HTTPException(400, "Artist must sign first")
+
+    # Audit fix (Jul 2026 audit — B-H3): re-check that the artist is not
+    # banned at this venue BEFORE flipping the slot to 'booked' and
+    # firing the venue charge. A ban may have been added between
+    # artist-sign (T) and countersign (T+48h). Book paths already gate
+    # on bans at click time; the countersign path used to silently move
+    # money for a banned artist.
+    _art_id_for_ban = contract.get("artist_id")
+    if _art_id_for_ban:
+        try:
+            _ban_row = db.execute(
+                text("SELECT 1 FROM venue_artist_bans WHERE venue_id = :vid AND artist_id = :aid LIMIT 1"),
+                {"vid": contract["venue_id"], "aid": _art_id_for_ban}
+            ).first()
+            if _ban_row:
+                # Return the contract to draft state so the venue can
+                # explicitly cancel it via the normal flow, and refuse
+                # the countersign action loudly rather than silently
+                # transferring money to a banned artist.
+                raise HTTPException(
+                    409,
+                    "This artist has been banned from your venue since the contract was drafted. "
+                    "Cancel the contract via the gig details page — money will not be moved."
+                )
+        except HTTPException:
+            raise
+        except Exception as _be:
+            logger.warning(f"countersign ban recheck lookup failed for contract {contract_id}: {_be}")
     
     signature_name = data.get("signature_name", "").strip()
     if not signature_name:
@@ -1741,8 +1887,15 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
                 {"gid": contract["gig_id"], "aid": artist_id}
             )
         else:
+            # Audit YELLOW fix (Jul 1 2026): for multi-slot gigs
+            # Jul 2026 refactor: every gig is now slot-based (is_multi_slot=1
+            # for every row post-backfill). We NEVER write gigs.artist_id
+            # anymore — the booked artist lives on gig_slots.artist_id. This
+            # eliminates the leak the old is_multi_slot branch was working
+            # around (see git history for the May 2026 incident that added
+            # the branch).
             db.execute(
-                text("UPDATE gigs SET artist_id = :aid, "
+                text("UPDATE gigs SET "
                      "    contract_hold_artist_id = CASE WHEN contract_hold_artist_id = :aid THEN NULL ELSE contract_hold_artist_id END, "
                      "    contract_hold_expires_at = CASE WHEN contract_hold_artist_id = :aid OR contract_hold_artist_id IS NULL THEN NULL ELSE contract_hold_expires_at END, "
                      "    radius_blast_token = NULL "
@@ -1799,17 +1952,34 @@ def countersign_contract(contract_id: int, data: dict, request: Request, user=De
             db.commit()
         except Exception as _wle:
             logger.warning(f"Waitlist cleanup on countersign failed: {_wle}")
-        # Create payment transaction only now that venue has countersigned (gig officially booked)
-        _create_booking_transaction(
-            db, contract["gig_id"], venue_id, artist_id,
-            gig_pay, gig_date
-        )
+        # Create payment transaction only now that venue has countersigned (gig officially booked).
+        # CRITICAL: pass slot_id so _create_booking_transaction can detect door deals
+        # and anchor the booking-time amount to the slot's guarantee_cents (rather
+        # than applying preferred-artist overrides to a door slot, which would
+        # over-charge the venue and over-pay the artist before /settle runs).
+        # For multi-slot bookings where one artist holds multiple slots, create
+        # one transaction per slot — each slot may have its own deal_type/guarantee.
+        try:
+            _cs_slot_rows = db.execute(text(
+                "SELECT id FROM gig_slots WHERE gig_id=:gid AND artist_id=:aid AND status='booked' ORDER BY id ASC"
+            ), {"gid": contract["gig_id"], "aid": artist_id}).mappings().all()
+        except Exception:
+            _cs_slot_rows = []
+        if _cs_slot_rows:
+            for _row in _cs_slot_rows:
+                _create_booking_transaction(
+                    db, contract["gig_id"], venue_id, artist_id,
+                    gig_pay, gig_date, slot_id=_row["id"]
+                )
+        else:
+            _create_booking_transaction(
+                db, contract["gig_id"], venue_id, artist_id,
+                gig_pay, gig_date
+            )
         # Send booked-gig emails — only for the slot just countersigned
         try:
             from backend.services.email_dispatch import send_booking_emails
-            _cs_slot = db.execute(text(
-                "SELECT id FROM gig_slots WHERE gig_id=:gid AND artist_id=:aid AND status='booked' ORDER BY id DESC LIMIT 1"
-            ), {"gid": contract["gig_id"], "aid": artist_id}).scalar()
+            _cs_slot = _cs_slot_rows[-1]["id"] if _cs_slot_rows else None
             send_booking_emails(db, contract["gig_id"], slot_id=_cs_slot)
         except Exception as e:
             import traceback
@@ -2355,6 +2525,75 @@ def _apply_slot_booking(db, gig_id: int, slot_id, artist_id: int, hold_expires, 
             raise HTTPException(409, "SLOT_TAKEN: This gig was just booked by someone else. Please refresh.")
 
 
+def _hold_cleanup_after_contract_book(db, gig_id: int, artist_id: int, hold_token: str = None):
+    """Cleanup after a Hold-offered artist books via the contract flow.
+
+    Called from book_with_contract right before each successful return.
+    Consumes the artist's hold-waitlist row, advances rotation if the
+    gig has more open slots, and marks the gig fully booked when no
+    slots remain. Idempotent — safe to call when the gig isn't held or
+    when this artist had no hold offer (no-op).
+
+    Returns True if we handled cleanup, False if no hold context.
+    """
+    from sqlalchemy import text as _t
+    try:
+        # Determine if this artist had an in-flight hold offer on this
+        # gig. Either we have a token (preferred — exact match) or we
+        # fall back to "this artist, source=hold, sent and not declined".
+        if hold_token:
+            wl = db.execute(
+                _t("""SELECT id FROM gig_waitlist
+                      WHERE gig_id = :gid AND artist_id = :aid AND source = 'hold'
+                        AND offer_token = :tok"""),
+                {"gid": gig_id, "aid": artist_id, "tok": hold_token}
+            ).first()
+        else:
+            wl = db.execute(
+                _t("""SELECT id FROM gig_waitlist
+                      WHERE gig_id = :gid AND artist_id = :aid AND source = 'hold'
+                        AND offer_sent = 1 AND offer_declined = 0"""),
+                {"gid": gig_id, "aid": artist_id}
+            ).first()
+        if not wl:
+            return False  # not a hold context, nothing to do
+
+        # Mark the offer consumed (offer_declined=1 doubles as "in-flight cleared")
+        db.execute(
+            _t("""UPDATE gig_waitlist SET offer_declined = 1,
+                                          offer_expires_at = CURRENT_TIMESTAMP
+                  WHERE id = :wlid"""),
+            {"wlid": wl[0]}
+        )
+
+        # Check remaining open slots — advance rotation OR exhaust gig.
+        more_open = db.execute(
+            _t("SELECT COUNT(*) FROM gig_slots WHERE gig_id = :gid AND status = 'open'"),
+            {"gid": gig_id}
+        ).scalar()
+        if more_open and more_open > 0:
+            db.commit()
+            try:
+                from backend.services.gig_hold import send_next_hold_offer
+                send_next_hold_offer(db, gig_id)
+            except Exception as _ne:
+                logger.warning(f"[HOLD][contract-book] advance next offer failed gig={gig_id}: {_ne}")
+        else:
+            # All slots booked — flip hold_status to NULL since hold is
+            # complete. gig.status is set by the booking flow already
+            # (or stays pending_contract; doesn't matter for hold UI).
+            db.execute(
+                _t("UPDATE gigs SET hold_status = NULL WHERE id = :gid"),
+                {"gid": gig_id}
+            )
+            db.commit()
+        logger.info(f"[HOLD][contract-book] cleaned up hold offer for gig={gig_id} artist={artist_id}")
+        return True
+    except Exception as e:
+        logger.warning(f"[HOLD][contract-book] cleanup failed gig={gig_id} artist={artist_id}: {e}")
+        return False
+
+
 @router.post("/api/gigs/{gig_id}/book-with-contract")
 def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
     """
@@ -2362,13 +2601,20 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
     For digital contracts: books gig + creates contract + signs it atomically.
     For PDF contracts: books gig as pending_contract with hold.
     For per-gig PDF: books gig as awaiting_venue_contract with hold.
+
+    Hold integration (Jun 2026): if `hold_token` is passed in the body
+    or query, after the slot is booked we call
+    _hold_cleanup_after_contract_book to mark the hold-waitlist row
+    consumed + advance the rotation, so a held-gig contract-flow
+    booking ends with the same hold state as a direct /hold/accept.
     """
     from datetime import timedelta
-    
+
     artist_id = data.get("artist_id") or request.query_params.get("artist_id")
     if not artist_id:
         raise HTTPException(400, "artist_id required")
     artist_id = int(artist_id)
+    hold_token = data.get("hold_token") or request.query_params.get("hold_token")
     
     # Verify artist access
     artist = db.execute(
@@ -2453,7 +2699,11 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
     ).first()
     _is_preferred_bwc = bool(_real_pref_bwc and _real_pref_bwc[0] == "approved")
     _ensure_approval_columns(db)
-    if _is_same_day_booking(str(gig.get("date", "")), gig.get("start_time")) and not _is_preferred_bwc:
+    # Jul 2026 full-site audit: pass venue_id so the TZ conversion in
+    # _is_same_day_booking uses the venue's local time zone (matches
+    # book_gig at gigs.py:2639 and book_slot at gigs.py:5156). Was
+    # regressing the May 2026 Hawaii/Alaska fix.
+    if _is_same_day_booking(str(gig.get("date", "")), gig.get("start_time"), venue_id=venue_id) and not _is_preferred_bwc:
         # Route to pending_venue_approval — no contract flow for non-preferred same-day.
         # Audit fix (May 2026 part 5): atomic claim guard. Without `AND status='open'`
         # two concurrent same-day requests on the same slot would both pass the
@@ -2538,6 +2788,22 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
                 {"aid": artist_id}
             ).mappings().first()
             venue_data = db.execute(text("SELECT * FROM venues WHERE id = :vid"), {"vid": venue_id}).mappings().first()
+            # Jul 2026 bug fix: for multi-slot gigs, the venue's custom
+            # contract template's {{gig_start_time}}/{{gig_end_time}} used
+            # to render the gig UMBRELLA window (e.g. 7-11pm) instead of
+            # the artist's specific slot (e.g. 8-10pm). Contracts are legal
+            # documents — the Performance Time must be the artist's actual
+            # set. auto_generated already did this correctly via slot_id;
+            # custom_builder was the laggard. Look up the slot's times when
+            # slot_id is provided, fall back to gig-level (single-slot case).
+            _slot_times = None
+            if slot_id:
+                _slot_times = db.execute(
+                    text("SELECT start_time, end_time FROM gig_slots WHERE id = :sid"),
+                    {"sid": slot_id}
+                ).mappings().first()
+            _c_start = (_slot_times["start_time"] if _slot_times else None) or gig["start_time"]
+            _c_end   = (_slot_times["end_time"]   if _slot_times else None) or gig["end_time"]
             if rendered_body:
                 replacements = {
                     "artist_name": artist_data["name"] if artist_data else "",
@@ -2549,8 +2815,8 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
                     "venue_name": venue_data["venue_name"] if venue_data else "",
                     "venue_address": venue_data["address_line_1"] if venue_data else "",
                     "gig_date": gig["date"] or "",
-                    "gig_start_time": format_time_12hr(gig["start_time"]) if gig["start_time"] else "",
-                    "gig_end_time": format_time_12hr(gig["end_time"]) if gig["end_time"] else "",
+                    "gig_start_time": format_time_12hr(_c_start) if _c_start else "",
+                    "gig_end_time":   format_time_12hr(_c_end)   if _c_end   else "",
                     "gig_pay": _get_effective_pay_str(db, gig, venue_id, artist_id),
                     "gig_title": gig["title"] or "",
                 }
@@ -2571,7 +2837,9 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
         if forwarded:
             client_ip = forwarded.split(",")[0].strip()
         
-        db.execute(
+        # 2026-07-25: RETURNING id inline (was: separate last_insert_rowid,
+        # per-connection so pool swaps could return a stale id).
+        contract_id = db.execute(
             text("""
                 INSERT INTO gig_contracts
                     (gig_id, venue_contract_id, venue_id, artist_id, contract_type,
@@ -2579,7 +2847,7 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
                      artist_signature_name, artist_signature_date, artist_signature_ip, hold_expires_at, created_at)
                 VALUES (:gig_id, :vc_id, :vid, :aid, :type,
                         :body, '{}', 'artist_signed',
-                        :sig_name, :sig_date, :sig_ip, :exp, CURRENT_TIMESTAMP)
+                        :sig_name, :sig_date, :sig_ip, :exp, CURRENT_TIMESTAMP) RETURNING id
             """),
             {
                 "gig_id": gig_id, "vc_id": template["id"], "vid": venue_id, "aid": artist_id,
@@ -2587,8 +2855,7 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
                 "sig_name": signature_name, "sig_date": now.isoformat() + 'Z', "sig_ip": client_ip,
                 "exp": hold_expires.isoformat(),
             }
-        )
-        contract_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        ).scalar()
         # Audit fix (May 2026 part 7): align slot status with contract status.
         # `_apply_slot_booking` set the slot to 'pending_contract', but for the
         # digital path the contract is already 'artist_signed' — the part-5
@@ -2604,10 +2871,20 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
         db.commit()
 
         # Remove artist from waitlist now that they've booked (via contract)
+        # Scope to cancellation-source rows only (Jun 2026 fix). Hold
+        # rows must SURVIVE this step so _hold_cleanup_after_contract_book
+        # (called below before each return) can find the artist's hold
+        # row, mark it consumed, and advance the rotation to the next
+        # artist. Without the source filter, the DELETE wiped the hold
+        # row first → cleanup found nothing → next artist on the queue
+        # never got the offer.
         try:
-            from backend.routes.waitlist import cleanup_gig_waitlist as _cwl_bwc
-            db.execute(text("DELETE FROM gig_waitlist WHERE gig_id = :gid AND artist_id = :aid"),
-                       {"gid": gig_id, "aid": artist_id})
+            db.execute(
+                text("""DELETE FROM gig_waitlist
+                        WHERE gig_id = :gid AND artist_id = :aid
+                          AND (source IS NULL OR source = 'cancellation')"""),
+                {"gid": gig_id, "aid": artist_id}
+            )
             db.commit()
         except Exception as _wle:
             logger.warning(f"Waitlist cleanup on book-with-contract failed: {_wle}")
@@ -2624,7 +2901,11 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
             send_contract_sign_email(db, venue_id, artist_id, gig_id, str(gig.get("date", ""))[:10])
         except Exception as e:
             logger.error(f"Venue contract sign email error: {e}", exc_info=True)
-        
+
+        # Hold cleanup — consume waitlist row + advance rotation if any.
+        # No-op when the gig isn't held.
+        _hold_cleanup_after_contract_book(db, gig_id, artist_id, hold_token)
+
         return {"ok": True, "status": "booked", "contract_id": contract_id, "contract_status": "artist_signed"}
     
     # ---- PDF CONTRACT (per-gig: venue uploads unique PDF per gig) ----
@@ -2640,21 +2921,21 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
             db.execute(text("UPDATE gigs SET status = 'awaiting_venue_contract' WHERE id = :gid AND status = 'pending_contract'"),
                        {"gid": gig_id})
         
-        # Create a placeholder gig_contract (no PDF yet)
-        db.execute(
+        # Create a placeholder gig_contract (no PDF yet). 2026-07-25:
+        # RETURNING id inline for pool-swap safety.
+        contract_id = db.execute(
             text("""
                 INSERT INTO gig_contracts
                     (gig_id, venue_contract_id, venue_id, artist_id, contract_type,
                      rendered_body, filled_fields, status, hold_expires_at, created_at)
                 VALUES (:gig_id, :vc_id, :vid, :aid, 'pdf_upload',
-                        '', '{}', 'awaiting_venue_upload', :exp, CURRENT_TIMESTAMP)
+                        '', '{}', 'awaiting_venue_upload', :exp, CURRENT_TIMESTAMP) RETURNING id
             """),
             {
                 "gig_id": gig_id, "vc_id": template["id"], "vid": venue_id, "aid": artist_id,
                 "exp": hold_expires.isoformat(),
             }
-        )
-        contract_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        ).scalar()
         db.commit()
         
         # Do NOT create payment transaction until venue countersigns
@@ -2668,7 +2949,9 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
             send_contract_sign_email(db, venue_id, artist_id, gig_id, gig["date"])
         except Exception as e:
             logger.error(f"Per-gig PDF email error: {e}")
-        
+
+        _hold_cleanup_after_contract_book(db, gig_id, artist_id, hold_token)
+
         return {"ok": True, "status": "awaiting_venue_contract", "contract_id": contract_id, "hold_expires": hold_expires.isoformat()}
     
     # ---- PDF CONTRACT (standard: same template for all gigs) ----
@@ -2680,21 +2963,21 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
         if slot_id:
             _apply_slot_pay_override(db, int(slot_id), gig["venue_id"], artist_id)
         
-        # Create gig contract with PDF reference
-        db.execute(
+        # Create gig contract with PDF reference. 2026-07-25:
+        # RETURNING id inline for pool-swap safety.
+        contract_id = db.execute(
             text("""
                 INSERT INTO gig_contracts
                     (gig_id, venue_contract_id, venue_id, artist_id, contract_type,
                      pdf_file_path, rendered_body, filled_fields, status, hold_expires_at, created_at)
                 VALUES (:gig_id, :vc_id, :vid, :aid, 'pdf_upload',
-                        :pdf, '', '{}', 'pending', :exp, CURRENT_TIMESTAMP)
+                        :pdf, '', '{}', 'pending', :exp, CURRENT_TIMESTAMP) RETURNING id
             """),
             {
                 "gig_id": gig_id, "vc_id": template["id"], "vid": venue_id, "aid": artist_id,
                 "pdf": template.get("pdf_file_path", ""), "exp": hold_expires.isoformat(),
             }
-        )
-        contract_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        ).scalar()
         db.commit()
         
         # Do NOT create payment transaction until venue countersigns
@@ -2702,7 +2985,9 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
         db.commit()
         # Email sent after artist uploads signed PDF (in upload_signed_pdf endpoint)
         # to avoid sending before venue has anything to countersign
-        
+
+        _hold_cleanup_after_contract_book(db, gig_id, artist_id, hold_token)
+
         return {
             "ok": True, "status": "pending_contract", "contract_id": contract_id,
             "pdf_url": template.get("pdf_file_path", ""),
@@ -3092,14 +3377,25 @@ def _cleanup_expired_holds_impl(db):
     """
     now = utcnow_naive().isoformat()
 
+    # Jul 2026 bug fix: also pull the artist's slot times. For a multi-slot
+    # gig where Artist B held slot 2 (8-10pm within a 7-11pm gig), the
+    # cancellation email that fires on hold expiry needs to show B's
+    # actual slot window, not the gig umbrella. gig_slots.artist_id = gc.artist_id
+    # in the pending states (see _apply_slot_booking at contracts.py:2674).
+    # LEFT JOIN so a hold with no matching slot (edge case) still yields the row.
     expired = db.execute(
         text("""
             SELECT
                 gc.id as contract_id, gc.gig_id, gc.artist_id, gc.status as contract_status,
                 gc.hold_expires_at,
-                g.venue_id, g.date, g.title, g.start_time, g.end_time
+                g.venue_id, g.date, g.title,
+                COALESCE(gs.start_time, g.start_time) as start_time,
+                COALESCE(gs.end_time,   g.end_time)   as end_time
             FROM gig_contracts gc
             JOIN gigs g ON g.id = gc.gig_id
+            LEFT JOIN gig_slots gs ON gs.gig_id = gc.gig_id
+                                   AND gs.artist_id = gc.artist_id
+                                   AND gs.status IN ('pending_contract', 'awaiting_venue_contract')
             WHERE gc.hold_expires_at IS NOT NULL
               AND gc.hold_expires_at < :now
               AND gc.status IN ('pending', 'awaiting_venue_upload', 'artist_signed')

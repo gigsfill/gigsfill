@@ -11,9 +11,26 @@ import base64
 import hashlib
 import os
 from datetime import datetime
-from backend.utils import utcnow_naive
+from backend.utils import utcnow_naive, get_platform_timezone
 
 router = APIRouter()
+
+
+def _current_tax_year(db) -> int:
+    """Return current calendar year in the platform's timezone (default
+    America/Los_Angeles). Jul 2026: replaces the prior `datetime.now().year`
+    calls that ran in server-local (UTC on prod), which flipped `current_year`
+    early at Dec 31 UTC noon Pacific — meaning a W-9 saved on New Year's Eve
+    at 6 PM PDT would land under the WRONG tax_year for a few hours. Cheap
+    fix, real edge case. Falls back to naive datetime.now() if the DB
+    lookup or ZoneInfo import fails so an outage doesn't break W-9 saves.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        tz_str = get_platform_timezone(db)
+        return datetime.now(ZoneInfo(tz_str)).year
+    except Exception:
+        return datetime.now().year
 
 # ==========================================
 # TIN ENCRYPTION
@@ -79,6 +96,86 @@ def _decrypt_tin(encrypted: str) -> str:
     return _legacy_xor_decrypt(encrypted)
 
 
+def build_stripe_individual_from_w9(db, artist_id: int) -> dict | None:
+    """Jul 2026: assemble a Stripe `individual` dict from the artist's saved W-9
+    for use as a PRE-FILL when creating their Stripe Connect Express account.
+
+    Important — this can ONLY be used at Account.create time. Stripe Express
+    locks down `individual.*` on the platform side after account creation —
+    verified empirically: even first_name/address updates return "does not have
+    the required permissions for the parameter 'individual'". Post-creation
+    edits must happen via the artist's own Stripe Express dashboard.
+
+    Returns None when W-9 doesn't exist yet — caller should proceed with
+    Account.create as before (Stripe collects the info during onboarding). The
+    real value is when a venue requires W-9 upfront and the artist fills it
+    BEFORE clicking "Connect to Stripe": we pre-fill so the artist doesn't
+    re-enter the same data during Stripe's onboarding flow.
+
+    Never raises — returns None on any decrypt / lookup failure.
+    """
+    try:
+        row = db.execute(text("""
+            SELECT tax_name, business_name, tin_encrypted, tin_type,
+                   address_line_1, address_line_2, city, state, zip_code
+            FROM w9_forms
+            WHERE entity_type='artist' AND entity_id=:aid
+            ORDER BY tax_year DESC LIMIT 1
+        """), {"aid": artist_id}).mappings().first()
+        if not row:
+            return None
+
+        try:
+            tin = _decrypt_tin(row["tin_encrypted"])
+        except Exception:
+            tin = None
+        if tin and (len(tin) != 9 or not tin.isdigit()):
+            tin = None
+
+        # Parse tax_name → first / last (best-effort). Connect Express US is
+        # individual-only so we use the natural-person split even for LLC/S-Corp
+        # W-9 filings.
+        parts = row["tax_name"].strip().split()
+        first_name = parts[0] if parts else row["tax_name"]
+        last_name  = " ".join(parts[1:]) if len(parts) > 1 else "-"
+
+        individual = {"first_name": first_name, "last_name": last_name}
+        if tin:
+            individual["id_number"] = tin
+        if row.get("address_line_1"):
+            individual["address"] = {
+                "line1":       row["address_line_1"],
+                "line2":       row.get("address_line_2") or "",
+                "city":        row.get("city") or "",
+                "state":       row.get("state") or "",
+                "postal_code": row.get("zip_code") or "",
+                "country":     "US",
+            }
+        return individual
+    except Exception as e:
+        try:
+            import logging
+            logging.getLogger("gigsfill.tax").warning(
+                f"build_stripe_individual_from_w9 artist={artist_id}: {e}"
+            )
+        except Exception:
+            pass
+        return None
+
+
+# Backwards-compat: keep the old name callable but repurpose it as a no-op that
+# reports "pre-fill only" so anywhere still calling it doesn't crash.
+def sync_w9_to_stripe_connect(db, artist_id: int) -> dict:
+    """Deprecated Jul 2026: Express accounts don't accept post-create
+    individual.* updates. Retained as a no-op that logs the intent so the W-9
+    save + recertify flows don't need conditional import handling.
+    """
+    return {"synced": False, "reason": "express_locks_individual_updates",
+            "note": "Stripe Express blocks platform-side individual.* modification "
+                    "after Account.create. Pre-fill happens at Connect account "
+                    "creation via build_stripe_individual_from_w9()."}
+
+
 def _check_artist_access(artist_id, user_id, db):
     return db.execute(
         text("""SELECT 1 FROM artists a WHERE a.id = :aid AND (a.user_id = :uid
@@ -103,7 +200,7 @@ def get_artist_w9(artist_id: int, user=Depends(get_current_user), db=Depends(get
     if not _check_artist_access(artist_id, user.id, db):
         raise HTTPException(403, "Access denied")
     
-    current_year = datetime.now().year
+    current_year = _current_tax_year(db)
     w9 = db.execute(
         text("SELECT * FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :eid ORDER BY tax_year DESC LIMIT 1"),
         {"eid": artist_id}
@@ -152,7 +249,7 @@ def save_artist_w9(artist_id: int, data: dict, user=Depends(get_current_user), d
     if not data.get("certified"):
         raise HTTPException(400, "You must certify the information is correct")
     
-    current_year = datetime.now().year
+    current_year = _current_tax_year(db)
     tin_encrypted = _encrypt_tin(tin)
     tin_last4 = tin[-4:]
     now = utcnow_naive().isoformat()
@@ -192,6 +289,12 @@ def save_artist_w9(artist_id: int, data: dict, user=Depends(get_current_user), d
             :city, :state, :zip_code, :tin_type, :tin_encrypted, :tin_last4, :certified_at, :tax_year, :updated_at)"""), params)
     
     db.commit()
+
+    # Jul 2026: Stripe Express blocks post-create individual.* updates so we
+    # can't push the W-9 onto an existing Connect account. Pre-fill only works
+    # at Account.create time (see build_stripe_individual_from_w9). If the
+    # artist ever needs to update the info in Stripe (address change, name
+    # correction), they do it via the Stripe Express dashboard directly.
     return {"status": "saved", "tax_year": current_year, "tin_last4": tin_last4}
 
 
@@ -203,7 +306,7 @@ def recertify_artist_w9(artist_id: int, user=Depends(get_current_user), db=Depen
     if not _check_artist_access(artist_id, user.id, db):
         raise HTTPException(403, "Access denied")
     
-    current_year = datetime.now().year
+    current_year = _current_tax_year(db)
     latest = db.execute(
         text("SELECT * FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :eid ORDER BY tax_year DESC LIMIT 1"),
         {"eid": artist_id}
@@ -242,7 +345,7 @@ def get_artist_w9_status(artist_id: int, user=Depends(get_current_user), db=Depe
     # whether an artist has filed a W9. Now require authentication; the
     # endpoint is consumed by venue-side W9-required gates and the artist's
     # own profile, both of which are logged-in flows.
-    current_year = datetime.now().year
+    current_year = _current_tax_year(db)
     w9 = db.execute(
         text("SELECT tax_year FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :eid ORDER BY tax_year DESC LIMIT 1"),
         {"eid": artist_id}
@@ -301,7 +404,7 @@ def generate_1099s(venue_id: int, data: dict, user=Depends(get_current_user), db
     if not _check_venue_access(venue_id, user.id, db):
         raise HTTPException(403, "Access denied")
     
-    tax_year = data.get("tax_year", datetime.now().year - 1)
+    tax_year = data.get("tax_year", _current_tax_year(db) - 1)
     
     venue = db.execute(text("SELECT name, city, state FROM venues WHERE id = :vid"), {"vid": venue_id}).mappings().first()
     if not venue:
@@ -394,7 +497,7 @@ def get_venue_1099s(venue_id: int, tax_year: int = None, user=Depends(get_curren
     if not _check_venue_access(venue_id, user.id, db):
         raise HTTPException(403, "Access denied")
     if not tax_year:
-        tax_year = datetime.now().year - 1
+        tax_year = _current_tax_year(db) - 1
     records = db.execute(text("""
         SELECT t.* FROM tax_1099s t WHERE t.venue_id = :vid AND t.tax_year = :year ORDER BY t.artist_name
     """), {"vid": venue_id, "year": tax_year}).mappings().fetchall()
@@ -522,7 +625,7 @@ def send_all_1099s(venue_id: int, data: dict, user=Depends(get_current_user), db
     if not _check_venue_access(venue_id, user.id, db):
         raise HTTPException(403, "Access denied")
     
-    tax_year = data.get("tax_year", datetime.now().year - 1)
+    tax_year = data.get("tax_year", _current_tax_year(db) - 1)
     records = db.execute(
         text("SELECT id FROM tax_1099s WHERE venue_id = :vid AND tax_year = :year AND status != 'sent'"),
         {"vid": venue_id, "year": tax_year}
@@ -561,7 +664,7 @@ def get_user_w9(user_id: int, user=Depends(get_current_user), db=Depends(get_db)
     """Get current user's W9 for affiliate payouts."""
     if user.id != user_id:
         _check_admin(user)
-    year = datetime.now().year
+    year = _current_tax_year(db)
     row = db.execute(text("""
         SELECT * FROM w9_forms WHERE entity_type = 'user' AND entity_id = :uid ORDER BY tax_year DESC LIMIT 1
     """), {"uid": user_id}).mappings().first()
@@ -581,7 +684,7 @@ def save_user_w9(user_id: int, data: dict, user=Depends(get_current_user), db=De
     """Save W9 info for a user (affiliate payouts)."""
     if user.id != user_id:
         _check_admin(user)
-    year = datetime.now().year
+    year = _current_tax_year(db)
     tin_raw = (data.get("tin") or "").replace("-", "").replace(" ", "")
     if not tin_raw:
         raise HTTPException(400, "TIN required")
@@ -645,7 +748,7 @@ async def generate_affiliate_1099s(request: Request, user=Depends(get_current_us
     """
     _check_admin(user)
     data = await request.json()
-    tax_year = int(data.get("tax_year", datetime.now().year))
+    tax_year = int(data.get("tax_year", _current_tax_year(db)))
 
     threshold_cents = int(db.execute(text(
         "SELECT COALESCE(setting_value, '60000') FROM platform_settings WHERE setting_key = 'affiliate_1099_threshold_cents'"

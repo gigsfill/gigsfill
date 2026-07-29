@@ -495,7 +495,9 @@ def audit_all_accounts():
     system alert if the unhealthy-count crosses the threshold.
     """
     from backend.db import DB_PATH
-    conn = sqlite3.connect(str(DB_PATH))
+    from backend.db import get_db_connection
+
+    conn = get_db_connection()
     try:
         # Need the live Stripe key from platform_settings — bail
         # early if not configured (test/dev environments).
@@ -588,8 +590,9 @@ def send_weekly_admin_digest():
     """
     import sqlite3
     from backend.db import DB_PATH
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
+    from backend.db import get_db_connection
+
+    conn = get_db_connection()
     try:
         # Section 1: Connect health summary
         ch = conn.execute("""
@@ -734,7 +737,9 @@ def reconcile_recent_disputes():
     flow the live webhook would have triggered.
     """
     from backend.db import DB_PATH
-    conn = sqlite3.connect(str(DB_PATH))
+    from backend.db import get_db_connection
+
+    conn = get_db_connection()
     try:
         skey = conn.execute(
             "SELECT setting_value FROM platform_settings WHERE setting_key='admin_stripe_secret_key'"

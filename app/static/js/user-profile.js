@@ -125,18 +125,38 @@ async function copyCalendarFeed() {
 }
 
 async function rotateCalendarFeed() {
-  if (!confirm('Generate a fresh URL? Anyone using the current URL will stop receiving updates and will need the new one.')) return;
-  const input = document.getElementById('calendarFeedUrl');
-  try {
-    if (typeof window.apiPostSafe === 'function') {
-      await window.apiPostSafe('/api/me/calendar-feed-url/rotate', {});
-    } else {
-      await fetch('/api/me/calendar-feed-url/rotate', { method: 'POST', credentials: 'include' });
+  // BUG FIX (Jul 2026 audit): switch native confirm() + alert() to the
+  // branded gf-modals dialogs so the destructive "rotate URL" flow matches
+  // the rest of the site's chrome (styled modal, tone/confirmStyle for
+  // destructive intent).
+  const doRotate = async () => {
+    const input = document.getElementById('calendarFeedUrl');
+    try {
+      if (typeof window.apiPostSafe === 'function') {
+        await window.apiPostSafe('/api/me/calendar-feed-url/rotate', {});
+      } else {
+        await fetch('/api/me/calendar-feed-url/rotate', { method: 'POST', credentials: 'include' });
+      }
+      input.dataset.loaded = '0';
+      await loadCalendarFeedUrl();
+    } catch (e) {
+      if (typeof window.showErrorModal === 'function') {
+        window.showErrorModal('Rotate Failed', (e && e.message) || 'Could not rotate calendar URL.');
+      } else {
+        alert((e && e.message) || 'Could not rotate token');
+      }
     }
-    input.dataset.loaded = '0';
-    await loadCalendarFeedUrl();
-  } catch (e) {
-    alert((e && e.message) || 'Could not rotate token');
+  };
+  if (typeof window.showConfirm === 'function') {
+    window.showConfirm(
+      'Rotate calendar URL?',
+      'Anyone using the current URL will stop receiving updates and will need the new one.',
+      doRotate,
+      null,
+      { tone: 'warning', confirmStyle: 'danger', confirmLabel: 'Rotate URL' }
+    );
+  } else if (confirm('Generate a fresh URL? Anyone using the current URL will stop receiving updates and will need the new one.')) {
+    doRotate();
   }
 }
 
@@ -188,7 +208,13 @@ async function loadUserSettings() {
     
     if (firstName) firstName.value = user.first_name || '';
     if (lastName) lastName.value = user.last_name || '';
-    if (userEmail) userEmail.value = user.email || '';
+    if (userEmail) {
+      userEmail.value = user.email || '';
+      // Cache the loaded email so saveUserSettings can detect a change and
+      // prompt for the current password before hitting PUT /api/me — the
+      // backend requires it on email change (May 2026 stolen-session hardening).
+      userEmail.dataset.loadedEmail = user.email || '';
+    }
     if (phone) {
       phone.value = formatPhoneNumber(user.phone || '');
       
@@ -209,32 +235,151 @@ async function loadUserSettings() {
   }
 }
 
-// Save user settings
+// Save user settings.
+//
+// Email changes require re-entering the current password (May 2026 hardening
+// against stolen-session takeover — see routes/me.py:update_current_user).
+// If the email field differs from the loaded value, we prompt for the password
+// via the branded gf-modals dialog and thread it into the PUT body. All error
+// paths surface the backend's actual `detail` string in a branded modal
+// instead of the old browser `alert('Failed to save settings')`.
 async function saveUserSettings(e) {
   e.preventDefault();
-  
-  try {
-    const response = await fetch('/api/me', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        first_name: document.getElementById('firstName').value,
-        last_name: document.getElementById('lastName').value,
-        email: document.getElementById('userEmail').value,
-        phone: document.getElementById('phone').value
-      })
-    });
-    
+  const emailEl = document.getElementById('userEmail');
+  const loadedEmail = ((emailEl && emailEl.dataset.loadedEmail) || '').trim().toLowerCase();
+  const currentEmail = ((emailEl && emailEl.value) || '').trim().toLowerCase();
+  const emailChanged = !!currentEmail && currentEmail !== loadedEmail;
+
+  const doSave = async (currentPassword) => {
+    const body = {
+      first_name: document.getElementById('firstName').value,
+      last_name:  document.getElementById('lastName').value,
+      email:      document.getElementById('userEmail').value,
+      phone:      document.getElementById('phone').value,
+    };
+    if (currentPassword) body.current_password = currentPassword;
+
+    let response;
+    try {
+      response = await fetch('/api/me', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      window.showErrorModal('Save Failed', 'Network error — please check your connection and try again.');
+      return;
+    }
+
     if (response.ok) {
       showSaveIndicator();
-    } else {
-      alert('Failed to save settings');
+      // Jul 22 2026: refresh the upper-right user dropdown so a
+      // first/last-name change appears immediately without a full
+      // page reload. initUserDropdown re-fetches /api/me and rebuilds
+      // the pill in-place.
+      if (typeof window.initUserDropdown === 'function') {
+        try { await window.initUserDropdown(); } catch (_e) {}
+      }
+      if (emailChanged) {
+        emailEl.dataset.loadedEmail = currentEmail;
+        window.showSuccessModal(
+          'Email Update Sent',
+          'Check your new inbox — we just sent a verification link there. Your old address also received a heads-up.'
+        );
+      }
+      return;
     }
-  } catch (error) {
-    console.error('Error saving settings:', error);
-    alert('Failed to save settings');
+
+    // Surface the backend's actual reason. FastAPI returns {"detail": "..."}.
+    let detail = '';
+    try { const j = await response.json(); detail = (j && j.detail) || ''; } catch (_) {}
+
+    if (typeof detail === 'string' && detail.startsWith('INVALID_PASSWORD')) {
+      window.showErrorModal(
+        'Wrong Password',
+        'That password did not match. Try again — or use the "Forgot password?" link on the login page if you need to reset it.'
+      );
+    } else if (typeof detail === 'string' && detail.startsWith('EMAIL_UNAVAILABLE')) {
+      window.showErrorModal(
+        'Email Unavailable',
+        'That email address cannot be used. If it belongs to you, sign in from the other account first.'
+      );
+    } else if (typeof detail === 'string' && detail.startsWith('INVALID_PHONE')) {
+      window.showErrorModal('Phone Invalid', 'Phone must be a 10-digit US number.');
+    } else {
+      window.showErrorModal('Save Failed', detail || `Could not save settings (HTTP ${response.status}).`);
+    }
+  };
+
+  if (!emailChanged) {
+    await doSave(null);
+    return;
   }
+
+  // Email is changing — show a branded prompt for the current password.
+  const pwFieldId = '_userProfilePwField';
+  const bodyHtml =
+    '<p style="margin:0 0 12px;">Changing your email requires confirming your current password.</p>' +
+    '<input id="' + pwFieldId + '" type="password" autocomplete="current-password" ' +
+      'placeholder="Current password" ' +
+      'style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);' +
+      'background:rgba(255,255,255,0.05);color:var(--text);font-size:0.95rem;box-sizing:border-box;">' +
+    '<p style="margin:12px 0 0;font-size:0.8rem;color:var(--text-muted);">' +
+      'We\'ll email a verification link to your new address, and notify your old address as a security heads-up.' +
+    '</p>';
+
+  // Capture the overlay returned by showStyledModal so the button handler
+  // reads its OWN password input reliably (document.getElementById would
+  // work here in practice since ids are unique, but scoping to the overlay
+  // is more defensive if a stale modal is still fading out). Also fires
+  // the save on Enter within the password field.
+  const _pwOverlay = window.showStyledModal(
+    '🔒 Confirm your password',
+    bodyHtml,
+    [
+      { text: 'Cancel', style: 'ghost' },
+      {
+        text: 'Confirm & Save', style: 'primary',
+        onClick: () => {
+          // Handler intentionally NOT async — the async wrapper in gf-modals
+          // returns a Promise and marks the modal to stay open, but if we
+          // await inside and the modal-close/refetch flow ever throws, the
+          // rejection is silent. Instead: synchronously read the password,
+          // close the modal, and fire the fetch in a separate microtask.
+          const pwEl = (_pwOverlay && _pwOverlay.querySelector('#' + pwFieldId))
+                    || document.getElementById(pwFieldId);
+          const pw = (pwEl && pwEl.value) ? pwEl.value : '';
+          if (!pw) {
+            if (pwEl) pwEl.focus();
+            return false; // keep modal open (gf-modals: false → stayOpen)
+          }
+          window.closeAllModals();
+          // Fire and forget — doSave surfaces its own success/error modal.
+          Promise.resolve().then(() => doSave(pw)).catch((err) => {
+            console.error('[user-profile] doSave error:', err);
+            window.showErrorModal('Save Failed', (err && err.message) || 'Unexpected error — please try again.');
+          });
+          // Return nothing — modal is already closed above.
+        }
+      }
+    ],
+    { size: 'sm' }
+  );
+  // Autofocus + Enter-to-submit on the password field.
+  setTimeout(() => {
+    const pwEl = (_pwOverlay && _pwOverlay.querySelector('#' + pwFieldId))
+              || document.getElementById(pwFieldId);
+    if (!pwEl) return;
+    pwEl.focus();
+    pwEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        const confirmBtn = _pwOverlay && _pwOverlay.querySelector('.gfm-modal-footer .btn.primary');
+        if (confirmBtn) confirmBtn.click();
+      }
+    });
+  }, 50);
 }
 
 // Load artists count
@@ -245,6 +390,21 @@ async function loadArtistsCount() {
     const artists = await response.json();
     const countEl = document.getElementById('artistCount');
     if (countEl) countEl.textContent = `(${artists.length})`;
+
+    // Jul 2026: hide the "My Availability" tab entirely for users
+    // with no artist attached — availability windows only affect
+    // artist-side booking, so the tab is meaningless for venue-only
+    // users. Also hide the tab's content panel so a deep-link like
+    // #availability doesn't render a naked empty section.
+    const hasArtists = artists.length > 0;
+    document.querySelectorAll('.tab').forEach(function (btn) {
+      var oc = btn.getAttribute('onclick') || '';
+      if (oc.indexOf("switchTab('availability')") !== -1) {
+        btn.style.display = hasArtists ? '' : 'none';
+      }
+    });
+    var availPanel = document.getElementById('availability-tab');
+    if (availPanel && !hasArtists) availPanel.style.display = 'none';
   } catch (error) {
     console.error('Error loading artists count:', error);
   }
@@ -278,16 +438,26 @@ async function loadArtists() {
       return;
     }
     
+    // Jul 2026: only the ORIGINAL OWNER sees a Delete button. Delegated
+    // team members ('member' role) can't delete the artist — the API would
+    // 403 anyway, so we don't render the button. If they want to leave the
+    // team they can do it from the artist's Team tab (or the Delete Account
+    // flow surfaces their delegated memberships).
     container.innerHTML = artists.map(function(artist, index) {
+      const isOwner = artist.role === 'owner';
+      const nameSafe = artist.name || '';
+      const btnHtml = isOwner
+        ? '<button class="btn" style="background: #dc3545;" onclick="event.stopPropagation(); deleteArtist(' + artist.id + ')">Delete</button>'
+        : '<span style="font-size:0.72rem;color:var(--text-muted);padding:4px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:5px;" title="You have team access but only the original owner can delete this artist">Member access</span>';
       return '<div class="entity-item draggable" draggable="true" data-id="' + artist.id + '" data-type="artist" data-index="' + index + '">' +
         '<span class="drag-handle" title="Drag to reorder">☰</span>' +
         '<div class="entity-item-content" onclick="window.location.href=\'/app/artist-book-gigs.html?artist_id=' + artist.id + '\'">' +
-          '<span style="color: var(--accent-cyan); font-weight: 500;">' + artist.name + '</span>' +
-          '<button class="btn" style="background: #dc3545;" onclick="event.stopPropagation(); deleteArtist(' + artist.id + ')">Delete</button>' +
+          '<span style="color: var(--accent-cyan); font-weight: 500;">' + esc(nameSafe) + '</span>' +
+          btnHtml +
         '</div>' +
       '</div>';
     }).join('');
-    
+
     initDragAndDrop(container, 'artist');
   } catch (error) {
     console.error('Error loading artists:', error);
@@ -309,16 +479,22 @@ async function loadVenues() {
       return;
     }
     
+    // Same owner-only rule as artists — see comment in loadArtists.
     container.innerHTML = venues.map(function(venue, index) {
+      const isOwner = venue.role === 'owner';
+      const nameSafe = venue.name || '';
+      const btnHtml = isOwner
+        ? '<button class="btn" style="background: #dc3545;" onclick="event.stopPropagation(); deleteVenue(' + venue.id + ')">Delete</button>'
+        : '<span style="font-size:0.72rem;color:var(--text-muted);padding:4px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:5px;" title="You have team access but only the original owner can delete this venue">Member access</span>';
       return '<div class="entity-item draggable" draggable="true" data-id="' + venue.id + '" data-type="venue" data-index="' + index + '">' +
         '<span class="drag-handle" title="Drag to reorder">☰</span>' +
         '<div class="entity-item-content" onclick="window.location.href=\'/app/venue-create-gigs.html?venue_id=' + venue.id + '\'">' +
-          '<span style="color: var(--accent-cyan); font-weight: 500;">' + venue.name + '</span>' +
-          '<button class="btn" style="background: #dc3545;" onclick="event.stopPropagation(); deleteVenue(' + venue.id + ')">Delete</button>' +
+          '<span style="color: var(--accent-cyan); font-weight: 500;">' + esc(nameSafe) + '</span>' +
+          btnHtml +
         '</div>' +
       '</div>';
     }).join('');
-    
+
     initDragAndDrop(container, 'venue');
   } catch (error) {
     console.error('Error loading venues:', error);
@@ -350,56 +526,225 @@ function confirmDelete() {
   closeDeleteConfirmModal();
 }
 
-// Delete artist
-async function deleteArtist(artistId) {
-  showDeleteConfirmModal(
-    'Are you sure you want to delete this artist? This cannot be undone.',
-    async () => {
-      try {
-        const response = await fetch(`/api/artists/${artistId}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
-        
-        if (response.ok) {
-          showSaveIndicator();
-          loadArtists();
-          loadArtistsCount();
-        } else {
-          alert('Failed to delete artist');
-        }
-      } catch (error) {
-        console.error('Error deleting artist:', error);
-        alert('Failed to delete artist');
-      }
-    }
-  );
+// Jul 2026 — proper delete flow for standalone artist/venue deletion.
+// Fetches an informed preview from the backend, renders a branded modal
+// that:
+//   1. Grays out the button for delegated (non-owner) users with a clear
+//      explanation that only the original owner can delete.
+//   2. Lists upcoming booked gigs that will be cancelled (with dates and
+//      counterparties), so the user knows what emails will fire.
+//   3. Blocks the button entirely if the backend reports any live/
+//      mid-flight transactions, with a support-contact hint.
+//   4. Requires typing DELETE to confirm — no accidental clicks.
+//   5. Reminds the user that PAST gigs, payments, and reviews stay intact
+//      (tombstone model) so their delete decision is well-informed.
+//   6. Surfaces backend `detail` on errors via a branded modal rather than
+//      a raw browser alert.
+
+function _entDelFmtDate(iso) {
+  if (!iso) return '';
+  try {
+    const [y, m, d] = String(iso).slice(0, 10).split('-').map(n => parseInt(n, 10));
+    return new Date(y, m - 1, d).toLocaleDateString('en-US',
+      { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  } catch (_) { return iso; }
 }
 
-// Delete venue
-async function deleteVenue(venueId) {
-  showDeleteConfirmModal(
-    'Are you sure you want to delete this venue? This cannot be undone.',
-    async () => {
-      try {
-        const response = await fetch(`/api/venues/${venueId}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
-        
-        if (response.ok) {
-          showSaveIndicator();
-          loadVenues();
-          loadVenuesCount();
-        } else {
-          alert('Failed to delete venue');
-        }
-      } catch (error) {
-        console.error('Error deleting venue:', error);
-        alert('Failed to delete venue');
-      }
+function _entDelEsc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+async function _openStandaloneEntityDeleteModal(kind, id) {
+  // kind: 'artist' | 'venue'
+  const label = kind === 'artist' ? 'Artist' : 'Venue';
+  const emoji = kind === 'artist' ? '🎤' : '📍';
+
+  // Fetch informed preview
+  let preview;
+  try {
+    const resp = await fetch(`/api/${kind}s/${id}/delete-preview`, { credentials: 'include' });
+    if (!resp.ok) {
+      const j = await resp.json().catch(() => ({}));
+      window.showErrorModal(`Delete ${label}`, j.detail || `Could not load ${kind} info (HTTP ${resp.status}).`);
+      return;
     }
+    preview = await resp.json();
+  } catch (e) {
+    window.showErrorModal(`Delete ${label}`, `Network error loading ${kind} info. Please try again.`);
+    return;
+  }
+
+  const nameEsc = _entDelEsc(preview.name);
+
+  // Already-deleted rare edge case: modal collapses to a single info message.
+  if (preview.already_deleted) {
+    window.showAlert(`${nameEsc} has already been deleted.`, `${emoji} Already Deleted`);
+    return;
+  }
+
+  // NON-OWNER: greyed-out modal, no Delete button.
+  if (!preview.is_owner) {
+    const bodyHtml =
+      `<div style="padding:4px 0 12px;">` +
+      `<p style="margin:0 0 12px;font-size:0.95rem;">You have delegated access to <strong>${nameEsc}</strong> as a team member, but only the original owner can delete this ${kind}.</p>` +
+      `<p style="margin:0 0 12px;font-size:0.85rem;color:var(--text-muted);">If you no longer want access, ask the owner to remove you from the team — or use the Team tab to leave.</p>` +
+      `</div>`;
+    window.showStyledModal(
+      `${emoji} Cannot Delete ${label}`,
+      bodyHtml,
+      [{ text: 'Got it', style: 'primary' }],
+      { size: 'sm', tone: 'warning' }
+    );
+    return;
+  }
+
+  // OWNER path: build informed modal body.
+  const upcoming = preview.upcoming_gigs || [];
+  const live = preview.live_txns || [];
+  const others = parseInt(preview.other_users_count || 0);
+
+  let body = '<div style="padding:4px 0 4px;">';
+  body += `<p style="margin:0 0 12px;font-size:0.9rem;color:var(--text);">This will permanently delete <strong>${nameEsc}</strong> from active use.</p>`;
+
+  // History-preservation reassurance
+  body += `<div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:0.8rem;color:#93c5fd;line-height:1.55;">` +
+    `<strong style="color:#bfdbfe;">History is preserved.</strong> Past gigs, payments, and reviews stay intact — they'll just render as "[Deleted] ${nameEsc}" going forward.` +
+    `</div>`;
+
+  // Live-txn BLOCKER (this hides the Delete button entirely).
+  if (live.length > 0) {
+    body += `<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.35);border-radius:8px;padding:12px;margin-bottom:14px;">`;
+    body += `<p style="color:#fca5a5;font-size:0.85rem;font-weight:700;margin:0 0 8px;">🚫 Deletion is blocked — ${live.length} in-flight payment${live.length > 1 ? 's' : ''}:</p>`;
+    body += '<ul style="margin:0 0 8px;padding-left:18px;color:#fecaca;font-size:0.78rem;line-height:1.6;">';
+    live.slice(0, 6).forEach(t => {
+      const counterparty = kind === 'artist' ? (t.venue_name || 'a venue') : (t.artist_name || 'an artist');
+      body += `<li>${_entDelFmtDate(t.date)} · ${_entDelEsc(counterparty)} · <em>${_entDelEsc(t.status)}</em></li>`;
+    });
+    if (live.length > 6) body += `<li>…and ${live.length - 6} more</li>`;
+    body += '</ul>';
+    body += `<p style="margin:0;color:#fca5a5;font-size:0.78rem;">These clear on their own once each gig's payout completes — try again once they've all settled.</p>`;
+    body += '</div>';
+  } else if (upcoming.length > 0) {
+    // Upcoming-gig WARNING (informational, not blocking).
+    body += `<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;margin-bottom:14px;">`;
+    body += `<p style="color:#f59e0b;font-size:0.85rem;font-weight:700;margin:0 0 8px;">⚠️ ${upcoming.length} upcoming booked gig${upcoming.length > 1 ? 's' : ''} will be cancelled:</p>`;
+    body += '<ul style="margin:0;padding-left:18px;color:#fcd34d;font-size:0.78rem;line-height:1.6;">';
+    upcoming.slice(0, 6).forEach(g => {
+      const counterparty = kind === 'artist' ? (g.venue_name || 'a venue') : (g.artist_names || 'a booked artist');
+      body += `<li>${_entDelFmtDate(g.date)} · ${_entDelEsc(counterparty)}</li>`;
+    });
+    if (upcoming.length > 6) body += `<li>…and ${upcoming.length - 6} more</li>`;
+    body += '</ul>';
+    body += `<p style="margin:8px 0 0;color:#fcd34d;font-size:0.78rem;">The other party will be notified by email.</p>`;
+    body += '</div>';
+  }
+
+  // Team-member note.
+  if (others > 0) {
+    body += `<p style="margin:0 0 14px;font-size:0.82rem;color:var(--text-muted);">👥 ${others} other team member${others > 1 ? 's' : ''} will lose access.</p>`;
+  }
+
+  // Typed DELETE confirm — only if no blockers.
+  const blocked = live.length > 0;
+  if (!blocked) {
+    body += `<label for="_entDelConfirmInput" style="display:block;font-size:0.82rem;color:var(--text-gray);margin-bottom:6px;">Type <strong style="color:#ef4444;">DELETE</strong> to confirm:</label>`;
+    body += `<input id="_entDelConfirmInput" type="text" autocomplete="off" placeholder="DELETE" style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.9rem;box-sizing:border-box;">`;
+  }
+  body += '</div>';
+
+  const overlay = window.showStyledModal(
+    `⚠️ Delete ${label}`,
+    body,
+    blocked
+      ? [{ text: 'Close', style: 'ghost' }]
+      : [
+          { text: 'Cancel', style: 'ghost' },
+          {
+            text: `Delete ${label}`, style: 'danger',
+            onClick: () => {
+              const input = (overlay && overlay.querySelector('#_entDelConfirmInput'))
+                          || document.getElementById('_entDelConfirmInput');
+              const typed = ((input && input.value) || '').trim();
+              if (typed !== 'DELETE') {
+                if (input) { input.focus(); input.style.borderColor = '#ef4444'; }
+                return false;   // stayOpen
+              }
+              window.closeAllModals();
+              // Pass the RAW name to the submit helper. It will only be used
+              // for showSuccessModal/showAlert, which internally escape.
+              // BUG FIX (Jul 2026 audit): was passing nameEsc → double-escape.
+              Promise.resolve().then(() => _standaloneEntityDeleteSubmit(kind, id, preview.name)).catch(err => {
+                console.error(`[user-profile] delete ${kind} error:`, err);
+                window.showErrorModal(`Delete ${label} Failed`, (err && err.message) || 'Unexpected error.');
+              });
+            }
+          }
+        ],
+    { size: 'md', tone: blocked ? 'warning' : 'error' }
   );
+
+  // Only enable Delete button once DELETE is typed. Uses observer on the
+  // typed input; matches the delete-account modal's behavior.
+  if (!blocked) {
+    setTimeout(() => {
+      const input = (overlay && overlay.querySelector('#_entDelConfirmInput'))
+                  || document.getElementById('_entDelConfirmInput');
+      const btn = overlay && overlay.querySelector('.gfm-modal-footer .btn.danger');
+      if (!input || !btn) return;
+      btn.disabled = true;
+      btn.style.opacity = '0.4';
+      btn.style.cursor = 'not-allowed';
+      input.addEventListener('input', () => {
+        const ok = input.value.trim() === 'DELETE';
+        btn.disabled = !ok;
+        btn.style.opacity = ok ? '1' : '0.4';
+        btn.style.cursor = ok ? 'pointer' : 'not-allowed';
+        input.style.borderColor = ok ? '#22c55e' : 'var(--border)';
+      });
+      input.focus();
+    }, 60);
+  }
+}
+
+async function _standaloneEntityDeleteSubmit(kind, id, rawName) {
+  // rawName: unescaped display name. showSuccessModal/showAlert/
+  // showErrorModal internally escape their message parameter (see
+  // gf-modals.js), so passing pre-escaped text produced &amp;amp;
+  // etc. in the final DOM. Use rawName directly.
+  const label = kind === 'artist' ? 'Artist' : 'Venue';
+  try {
+    const resp = await fetch(`/api/${kind}s/${id}`, { method: 'DELETE', credentials: 'include' });
+    if (resp.ok) {
+      showSaveIndicator();
+      if (typeof loadArtists === 'function' && kind === 'artist') { loadArtists(); loadArtistsCount(); }
+      if (typeof loadVenues  === 'function' && kind === 'venue')  { loadVenues();  loadVenuesCount();  }
+      window.showSuccessModal(`${label} Deleted`, `${rawName} has been deleted. Past gigs, payments, and reviews stay in venue/artist histories under the "[Deleted]" name.`);
+      return;
+    }
+    let detail = '';
+    try { const j = await resp.json(); detail = (j && j.detail) || ''; } catch (_) {}
+    if (detail.startsWith('NOT_YOUR_')) {
+      window.showErrorModal('Not Allowed', 'Only the original owner can delete this profile.');
+    } else if (detail.startsWith('LIVE_TRANSACTION_EXISTS')) {
+      window.showErrorModal('Deletion Blocked', detail.replace(/^LIVE_TRANSACTION_EXISTS:\s*/, ''));
+    } else if (detail.startsWith('ALREADY_DELETED')) {
+      window.showAlert('This profile was already deleted.', 'Already Deleted');
+    } else {
+      window.showErrorModal(`Delete ${label} Failed`, detail || `HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    window.showErrorModal(`Delete ${label} Failed`, (e && e.message) || 'Network error.');
+  }
+}
+
+async function deleteArtist(artistId) {
+  return _openStandaloneEntityDeleteModal('artist', artistId);
+}
+
+async function deleteVenue(venueId) {
+  return _openStandaloneEntityDeleteModal('venue', venueId);
 }
 
 // Load notification preferences (Email + SMS)
@@ -528,7 +873,7 @@ async function loadEmailPreferences() {
     const venueLabels = {
       'venue_gig_booked':              { title: 'Gig Booked',               desc: 'When an Artist books a gig at your Venue' },
       'venue_gig_cancelled':           { title: 'Gig Cancelled',            desc: 'When an Artist cancels a gig at your Venue' },
-      'venue_booking_approval_request':{ title: 'Same-Day Booking Request', desc: 'When an Artist requests same-day booking approval' },
+      'venue_booking_approval_request':{ title: 'Same-Day Booking Approval', desc: 'When ON: same-day bookings by non-preferred artists are held pending your in-app approval, and you get an email. When OFF: same-day bookings auto-confirm with no gatekeeper (no email either).' },
       'venue_contract_sign_needed':    { title: 'Contract Signed',          desc: 'When an Artist signs a contract and needs your countersignature' },
       'venue_payment_charged':         { title: 'Payment Charged',          desc: 'When your card is charged for a gig booking' },
       'transfer_failed_venue':         { title: 'Payment Failed',           desc: 'When a charge to your card fails' },
@@ -540,10 +885,7 @@ async function loadEmailPreferences() {
     
     function buildRow(type, label, emailEnabled, smsEnabled, smsReady) {
       return '<div style="display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border);">' +
-        '<div style="flex: 1; min-width: 0;">' +
-          '<div style="font-size: 0.88rem; font-weight: 600; color: var(--text);">' + label.title + (label.desc ? '<span style="font-weight: 400; font-style: italic; color: var(--text-gray); font-size: 0.8rem; margin-left: 6px;">(' + label.desc + ')</span>' : '') + '</div>' +
-        '</div>' +
-        '<div style="display: flex; align-items: center; gap: 18px; flex-shrink: 0; margin-left: 12px;">' +
+        '<div style="display: flex; align-items: center; gap: 18px; flex-shrink: 0; margin-right: 14px;">' +
           '<div style="text-align: center; min-width: 48px;">' +
             '<label class="toggle-switch" style="margin: 0;">' +
               '<input type="checkbox" ' + (emailEnabled ? 'checked' : '') + ' onchange="toggleEmailPreference(\'' + type + '\', this.checked)">' +
@@ -559,12 +901,20 @@ async function loadEmailPreferences() {
             '<div style="font-size: 0.65rem; color: var(--text-gray); margin-top: 2px;">Text</div>' +
           '</div>' +
         '</div>' +
+        '<div style="flex: 1; min-width: 0;">' +
+          '<div style="font-size: 0.88rem; font-weight: 600; color: var(--text);">' + label.title + (label.desc ? '<span style="font-weight: 400; font-style: italic; color: var(--text-gray); font-size: 0.8rem; margin-left: 6px;">(' + label.desc + ')</span>' : '') + '</div>' +
+        '</div>' +
       '</div>';
     }
     
     // Populate artist notifications
     if (hasArtists) {
-      let html = '';
+      // Jul 2026: mirror the Venue Notifications section header so
+      // both sub-sections read as parallel. Same style + spacing as
+      // the venue heading below (cyan, 0.9rem, uppercase).
+      let html = '<div style="border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">' +
+        '<h3 style="color: var(--cyan); font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">Artist Notifications</h3>' +
+        '</div>';
       Object.keys(artistLabels).forEach(function(type) {
         var ep = emailPrefs.find(function(p) { return p.notification_type === type; });
         var sp = smsPrefs.find(function(p) { return p.notification_type === type; });
@@ -586,8 +936,13 @@ async function loadEmailPreferences() {
       // children, so we hide them entirely to avoid the impression
       // they do anything on their own.
       if (Object.keys(blastLabels).length > 0) {
-        html += '<div style="border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">' +
-          '<h3 style="color: #f59e0b; font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">⚡ Venue Blast Emails</h3>' +
+        // Jul 2026: promoted to match the top-of-page "Notification
+        // Preferences" heading (1rem, gradient title, wider letter-
+        // spacing) so it reads as a real section break, not a
+        // sub-label. Extra top margin gives it breathing room away
+        // from the last artist row above.
+        html += '<div style="border-bottom: 1px solid var(--border); padding-bottom: 8px; margin: 32px 0 8px 0;">' +
+          '<h3 class="gradient-title" style="font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin: 0;">⚡ Venue Blast Emails</h3>' +
           '<p style="font-size: 0.76rem; color: var(--text-gray); margin: 4px 0 0;">Control which automated emails you receive from venues about open gigs.</p>' +
           '</div>';
 
@@ -862,11 +1217,18 @@ async function updateSmsCarrier(carrier) {
   }
 }
 
-// Logout
+// Logout — Jul 2026 audit fix (F-L11): the `session_token` cookie is
+// HttpOnly (auth.py:142); JavaScript CAN'T touch it. The two lines that
+// tried to clear it via `document.cookie =` were cargo-cult and did
+// nothing. Real logout must POST /api/logout so the server clears the
+// signed cookie AND invalidates the session. The `user_id` cookie was
+// never set by the backend either — pure dead code.
 function logout() {
-  document.cookie = "session_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-  document.cookie = "user_id=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-  window.location.href = "/app/index.html";
+  fetch('/api/logout', { method: 'POST', credentials: 'include' })
+    .catch(() => {})
+    .finally(() => {
+      window.location.href = "/app/index.html";
+    });
 }
 
 // v79: US States for modals

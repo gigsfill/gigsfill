@@ -54,3 +54,28 @@ document.addEventListener('DOMContentLoaded', function(){
     renderAvailabilityPanel('availabilityContainer', parseInt(artistId));
   }
 })();
+
+
+// ── MESSAGES HEADER BUTTON (2026-07-26) ─────────────────────────────────────
+// Mirrors the wiring in artist-book-gigs-init.js so the Messages button
+// persists across the Book Gigs → Edit Artist Profile navigation instead
+// of vanishing. Requires messages.js to be loaded above (it exposes
+// window.openInboxModal + startUnreadBadgePolling).
+window.showRecentMessages = function () {
+  const _p = new URLSearchParams(window.location.search);
+  const _aid = _p.get('artist_id');
+  if (typeof window.openInboxModal === 'function') {
+    window.openInboxModal({ side: 'artist', artistId: _aid ? parseInt(_aid) : null });
+  }
+};
+
+(function initArtistMessages() {
+  const _p = new URLSearchParams(window.location.search);
+  const _aid = _p.get('artist_id');
+  if (!_aid) return;  // no artist context → button stays hidden
+  const btn = document.getElementById('headerMsgBtn');
+  if (btn) btn.style.display = '';
+  if (typeof startUnreadBadgePolling === 'function') {
+    startUnreadBadgePolling(30000, { artist_id: parseInt(_aid) });
+  }
+})();

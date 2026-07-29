@@ -113,19 +113,13 @@ def _get_user_role_for_gig(db, gig_id: int, user_id: int):
     if artist_row:
         return "artist", artist_row["id"], artist_row["name"]
 
-    # Fallback: single-artist gig stored directly on gigs.artist_id (any status)
+    # Jul 2026 refactor: legacy gigs.artist_id fallback removed. Every
+    # booking has a `gig_slots` row post-backfill so the slot lookup above
+    # covers every case. Kept as an empty variable for the return-None
+    # branch below without further code changes.
     single_artist_row = db.execute(
         text("""
-            SELECT a.id, a.name FROM artists a
-            JOIN gigs g ON g.artist_id = a.id
-            WHERE g.id = :gid AND (
-                a.user_id = :uid
-                OR EXISTS (
-                    SELECT 1 FROM entity_users eu
-                    WHERE eu.entity_type = 'artist' AND eu.entity_id = a.id AND eu.user_id = :uid
-                )
-            )
-            LIMIT 1
+            SELECT NULL as id, NULL as name WHERE 0=1
         """),
         {"gid": gig_id, "uid": user_id}
     ).mappings().first()
@@ -262,12 +256,20 @@ def get_messages(gig_id: int, artist_id: int = None, user=Depends(get_current_us
         # Venue caller — can scope to any artist on their gig (existing behavior)
         filter_entity_id = artist_id
 
+    # Resolve sender_name LIVE via JOIN so a venue/artist rename
+    # updates the "from" label on every past message in the thread —
+    # the stored m.sender_name is only used as a fallback when the
+    # entity was deleted or the sender_type is something other than
+    # venue/artist. Jul 20 2026 fix.
     messages = db.execute(
         text("""
-            SELECT m.id, m.sender_user_id, m.sender_type, m.sender_name,
+            SELECT m.id, m.sender_user_id, m.sender_type,
+                   COALESCE(v.venue_name, a.name, m.sender_name) AS sender_name,
                    m.body, m.is_read, m.created_at,
                    CASE WHEN m.sender_user_id = :uid THEN 1 ELSE 0 END as is_mine
             FROM gig_messages m
+            LEFT JOIN venues  v ON m.sender_type = 'venue'  AND v.id = m.sender_entity_id
+            LEFT JOIN artists a ON m.sender_type = 'artist' AND a.id = m.sender_entity_id
             WHERE m.gig_id = :gid
               AND (
                 :filter_eid IS NULL
@@ -570,9 +572,15 @@ def mark_read(gig_id: int, last_message_id: int = None, artist_id: int = None,
 
 # ── FULL INBOX (all messages across all gigs) ─────────────────────────────────
 @router.get("/api/me/messages")
-def get_inbox(artist_id: int = None, venue_id: int = None, user=Depends(get_current_user), db=Depends(get_db)):
+def get_inbox(artist_id: int = None, venue_id: int = None,
+              include_hidden: int = 0,
+              user=Depends(get_current_user), db=Depends(get_db)):
     """Returns all messages across all gigs the current user is party to, newest first.
-    If artist_id is provided, only returns messages for gigs that specific artist is party to."""
+    If artist_id is provided, only returns messages for gigs that specific artist is party to.
+
+    Jul 2026: `include_hidden=1` opts out of the hide-for-me filter and
+    additionally returns a boolean `is_hidden` per row so the UI can
+    render a "restore" button on the ones the user previously trashed."""
     # Ensure table exists (graceful handling before db migration runs)
     try:
         db.execute(text("""
@@ -600,6 +608,24 @@ def get_inbox(artist_id: int = None, venue_id: int = None, user=Depends(get_curr
         except Exception:
             pass
 
+    # Jul 21 2026: per-user "hide this thread from my inbox" table.
+    # Stores (user_id, gig_id, artist_id, hidden_at). Threads are only
+    # filtered out of the inbox when hidden_at >= latest_message_time —
+    # a fresh incoming message re-surfaces the thread automatically.
+    try:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS gig_message_hides (
+                user_id INTEGER NOT NULL,
+                gig_id INTEGER NOT NULL,
+                artist_id INTEGER NOT NULL,
+                hidden_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, gig_id, artist_id)
+            )
+        """))
+        db.commit()
+    except Exception:
+        pass
+
     try:
         rows = db.execute(
             text("""
@@ -621,7 +647,15 @@ def get_inbox(artist_id: int = None, venue_id: int = None, user=Depends(get_curr
                     latest.gig_id,
                     latest.body,
                     latest.sender_type,
-                    latest.sender_name,
+                    -- Live sender name via the thread's venue/artist rows
+                    -- (already joined below as v/a). Falls back to the
+                    -- snapshot when sender_type is neither venue nor
+                    -- artist (defensive — shouldn't happen in practice).
+                    CASE
+                      WHEN latest.sender_type = 'venue'  THEN v.venue_name
+                      WHEN latest.sender_type = 'artist' THEN a.name
+                      ELSE latest.sender_name
+                    END as sender_name,
                     latest.is_read,
                     latest.created_at,
                     g.date    as gig_date,
@@ -687,15 +721,112 @@ def get_inbox(artist_id: int = None, venue_id: int = None, user=Depends(get_curr
                 )
                 AND (:artist_id IS NULL OR tp.artist_id = :artist_id)
                 AND (:venue_id IS NULL OR g.venue_id = :venue_id)
+                -- Hide-for-me filter: exclude threads this user has hidden
+                -- IF no newer message has arrived since they hid it.
+                -- Bypassed when `include_hidden=1` (called by the inbox
+                -- "Show hidden" toggle so the user can restore rows).
+                AND (:include_hidden = 1 OR NOT EXISTS (
+                    SELECT 1 FROM gig_message_hides h
+                     WHERE h.user_id = :uid
+                       AND h.gig_id = tp.gig_id
+                       AND h.artist_id = tp.artist_id
+                       AND h.hidden_at >= latest.created_at
+                ))
                 ORDER BY latest.created_at DESC
                 LIMIT 200
             """),
-            {"uid": user.id, "artist_id": artist_id, "venue_id": venue_id}
+            {"uid": user.id, "artist_id": artist_id, "venue_id": venue_id,
+             "include_hidden": 1 if include_hidden else 0}
         ).mappings().all()
-        return [dict(r) for r in rows]
+        results = [dict(r) for r in rows]
+
+        # When include_hidden=1 the frontend also needs to know WHICH
+        # rows are hidden so it can render a "restore" button instead
+        # of the trash. Cheap lookup — one query for the user's hide
+        # records, then flag each result row in a single pass.
+        if include_hidden and results:
+            try:
+                hidden_rows = db.execute(text("""
+                    SELECT gig_id, artist_id, hidden_at
+                      FROM gig_message_hides
+                     WHERE user_id = :uid
+                """), {"uid": user.id}).mappings().all()
+                hide_map = {(int(h["gig_id"]), int(h["artist_id"])): h["hidden_at"]
+                            for h in hidden_rows}
+                for r in results:
+                    h_at = hide_map.get((int(r.get("gig_id") or 0),
+                                          int(r.get("artist_id") or 0)))
+                    # A row is only "still hidden" if the latest message
+                    # is not newer than hidden_at — otherwise a new
+                    # message re-surfaced it and the flag is stale.
+                    r["is_hidden"] = bool(
+                        h_at and str(h_at) >= str(r.get("created_at") or '')
+                    )
+            except Exception as _he:
+                logger.warning(f"is_hidden flag lookup failed: {_he}")
+
+        return results
     except Exception as e:
         logger.error(f"get_inbox error: {e}")
         return []
+
+
+# ── HIDE-FOR-ME THREAD DELETE ────────────────────────────────────────────────
+# Jul 21 2026: per-user "delete this thread from my inbox" action. Does
+# NOT hard-delete the messages (the counterparty still sees them) —
+# instead upserts a row in gig_message_hides so this user's inbox query
+# filters the thread out until a new message arrives.
+
+@router.delete("/api/me/messages/threads/{gig_id}/{artist_id}")
+def hide_thread(gig_id: int, artist_id: int,
+                user=Depends(get_current_user), db=Depends(get_db)):
+    """Hide a gig-thread row from this user's inbox. Idempotent —
+    re-hiding an already-hidden thread just refreshes hidden_at so a
+    thread that had re-surfaced after a new message can be hidden again."""
+    _ensure_gig_messages_table(db)
+    try:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS gig_message_hides (
+                user_id INTEGER NOT NULL,
+                gig_id INTEGER NOT NULL,
+                artist_id INTEGER NOT NULL,
+                hidden_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, gig_id, artist_id)
+            )
+        """))
+        db.commit()
+    except Exception:
+        pass
+    # Upsert: refresh hidden_at whether or not a row already exists.
+    # DELETE-then-INSERT keeps the SQL portable across sqlite + postgres
+    # (avoids ON CONFLICT dialect differences).
+    db.execute(text("""
+        DELETE FROM gig_message_hides
+         WHERE user_id = :uid AND gig_id = :gid AND artist_id = :aid
+    """), {"uid": user.id, "gid": gig_id, "aid": artist_id})
+    db.execute(text("""
+        INSERT INTO gig_message_hides (user_id, gig_id, artist_id, hidden_at)
+        VALUES (:uid, :gid, :aid, CURRENT_TIMESTAMP)
+    """), {"uid": user.id, "gid": gig_id, "aid": artist_id})
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/api/me/messages/threads/{gig_id}/{artist_id}/restore")
+def restore_thread(gig_id: int, artist_id: int,
+                   user=Depends(get_current_user), db=Depends(get_db)):
+    """Un-hide a previously hidden thread from this user's inbox.
+    Deletes the row in `gig_message_hides` so the inbox query stops
+    filtering it. Idempotent — a no-op if the thread was never hidden."""
+    try:
+        db.execute(text("""
+            DELETE FROM gig_message_hides
+             WHERE user_id = :uid AND gig_id = :gid AND artist_id = :aid
+        """), {"uid": user.id, "gid": gig_id, "aid": artist_id})
+        db.commit()
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 # ── UNREAD COUNT (for nav badge) ─────────────────────────────────────────────

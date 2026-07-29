@@ -6,7 +6,8 @@
   <title>Artist Profile – GigsFill</title>
   <meta name="description" content="View this artist's profile, upcoming gigs, videos, and booking info on GigsFill.">
   <meta name="robots" content="index, follow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -18,24 +19,41 @@
   <meta name="twitter:title" content="Artist Profile – GigsFill">
   <meta name="twitter:description" content="View this artist's profile on GigsFill.">
   <link href="/app/static/css/gigsfill.css" rel="stylesheet">
-  <link href="/app/static/css/gig-hover-card.css?v=7" rel="stylesheet">
+  <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
     :root { --card-padding: 16px 20px; --card-gap: 10px; --section-title-size: 0.7rem; }
-    .profile-container { max-width: 1100px; margin: 0 auto; padding: 0 20px 20px; }
+    .profile-container { max-width: var(--container-max); margin: 0 auto; padding: 0 20px 20px; }
 
-    /* LOGO HERO — always visible */
+    /* LOGO HERO — always visible.
+       Logo slot behavior: shows the uploaded logo image when has-logo is
+       set on the hero container; otherwise the image is hidden and the
+       gradient artist name renders CENTERED inside the same-sized frame
+       so the box never sits empty. Handled by has-logo class toggle
+       driven by loadMedia in the script below. */
     .logo-hero { text-align: center; padding: 20px 20px 16px; }
-    .profile-pic {
-      width: 100%; max-width: 500px; height: 140px; object-fit: contain; background: var(--card, #111);
-      border-radius: 8px; margin: 0 auto 12px; display: block; border: 2px solid var(--border);
+    .logo-slot {
+      position: relative; width: 100%; max-width: 500px; height: 140px;
+      margin: 0 auto 12px; background: var(--card, #111); border: 2px solid var(--border);
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
     }
-    .artist-name {
-      font-size: 1.75rem; font-weight: 700; margin: 0 0 4px;
+    .profile-pic {
+      max-width: 100%; max-height: 100%; object-fit: contain;
+      display: none; /* revealed via .has-logo below */
+    }
+    .logo-slot-name {
+      display: block; font-size: 2rem; font-weight: 700; margin: 0; padding: 0 16px;
       background: linear-gradient(135deg, var(--purple), var(--cyan));
       background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      text-align: center; line-height: 1.15; word-break: break-word;
     }
+    .logo-hero.has-logo .profile-pic { display: block; }
+    .logo-hero.has-logo .logo-slot-name { display: none; }
+    /* When there's no logo, the whole slot IS the name — no separate
+       border card behind the image; keep the frame subtle. */
+    .logo-hero:not(.has-logo) .logo-slot { border-color: rgba(255,255,255,0.06); background: rgba(255,255,255,0.02); }
     .artist-location { font-size: 0.85rem; color: var(--text-gray); margin: 0; }
 
     /* TABS */
@@ -109,7 +127,19 @@
     }
     .cal-day:hover { background: rgba(18, 22, 38, 0.98); border-color: rgba(124, 107, 255, 0.45); }
     .cal-day.empty { background: rgba(14, 17, 28, 0.6); border-color: rgba(255,255,255,0.04); cursor: default; }
-    .cal-day .day-num { position: absolute; top: 8px; right: 10px; font-size: 0.75rem; color: rgba(255,255,255,0.55); font-weight: 500; margin-bottom: 0; }
+    /* Out-of-month days — only the day-num is muted (Jul 2026).
+       Past-vs-future is the only axis that blackens (.past). */
+    /* Three-tier hierarchy matching every other calendar on the site.
+       Spillover cells get a darker bg + heavily muted numbers; current-
+       month bumps brighter so it clearly dominates. Month-boundary
+       label ("Aug 1", "Jul 26" top-left) uses solid cyan bold. */
+    .cal-day.other-month { background: rgba(0,0,0,0.22); }
+    .cal-day.other-month:hover { background: rgba(0,0,0,0.08); }
+    .cal-day.other-month .day-num { color: rgba(255,255,255,0.18); }
+    .cal-day .day-num { position: absolute; top: 8px; right: 10px; font-size: 0.75rem; color: rgba(255,255,255,0.88); font-weight: 500; margin-bottom: 0; }
+    .cal-day .day-num.month-boundary { font-weight: 700; letter-spacing: 0.01em; color: #06b6d4; }
+    /* Uniform dimness — boundary matches plain spillover numbers. */
+    .cal-day.other-month .day-num.month-boundary { color: rgba(255, 255, 255, 0.18); }
     .cal-day.today { border-color: var(--cyan); }
     .cal-day.past { opacity: 0.5; background: rgba(0,0,0,0.2); cursor: default; }
     .cal-day.past:hover { background: rgba(0,0,0,0.2); border-color: rgba(255,255,255,0.08); }
@@ -275,7 +305,9 @@
     #videos .media-caption-label,
     #pictures .media-caption-label {
       font-size: 0.72rem; padding: 0 10px 10px;
-      text-align: left;
+      /* 2026-07-26: center caption text under pictures/videos so it
+         aligns with the centered title above. Previously left-aligned. */
+      text-align: center;
       -webkit-line-clamp: 5;       /* 5 lines now that the card is wider */
       background: transparent;
       color: var(--text-gray);
@@ -321,7 +353,8 @@
     #mediaModalContent iframe { border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
 
     @media (max-width: 600px) {
-      .profile-pic { height: 100px; }
+      .logo-slot { height: 110px; }
+      .logo-slot-name { font-size: 1.5rem; }
       .artist-name { font-size: 1.4rem; }
       .media-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
       .audio-row { flex-wrap: wrap; }
@@ -346,29 +379,27 @@
   </header>
 
   <main class="profile-container">
-    <div class="logo-hero">
-      <img id="artistLogo" class="profile-pic" src="/app/static/img/profile-placeholder.svg" alt="Artist photo"
-        onerror="this.onerror=null;this.src='/app/static/img/profile-placeholder.svg';">
-      <h1 class="artist-name" id="artistName">Artist</h1>
+    <div class="logo-hero" id="logoHero">
+      <div class="logo-slot" id="logoSlot">
+        <img id="artistLogo" class="profile-pic" src="/app/static/img/profile-placeholder.svg" alt="Artist photo"
+          onerror="this.onerror=null;this.src='/app/static/img/profile-placeholder.svg';">
+        <h1 class="artist-name logo-slot-name" id="artistName">Artist</h1>
+      </div>
+      <!-- Info moved out of its own tab (2026-07-25) — mirrors venue-profile
+           pattern where About lives directly under the hero. -->
       <div class="artist-location" id="artistLocation"></div>
+      <div class="artist-type-badge" id="artistType" style="margin-top:8px;"></div>
+      <div class="artist-bio" id="artistBio" style="max-width:640px;margin-left:auto;margin-right:auto;text-align:center;"></div>
+      <div class="booking-contact" id="artistBooking" style="margin-top:12px;"></div>
     </div>
 
     <div class="profile-tabs" id="profileTabs">
-      <button onclick="switchTab('info')">Artist Info</button>
       <button class="active" onclick="switchTab('calendar')">Calendar</button>
       <button onclick="switchTab('pictures')">Pictures</button>
       <button onclick="switchTab('videos')">Videos</button>
       <button onclick="switchTab('audio')">Audio</button>
       <button onclick="switchTab('social')">Social Media</button>
       <button onclick="switchTab('reviews')">Reviews <span id="reviewsBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
-    </div>
-
-    <div class="tab-panel" id="tab-info">
-      <div class="content-card" style="text-align:center;">
-        <div class="artist-type-badge" id="artistType"></div>
-        <div class="artist-bio" id="artistBio"></div>
-        <div class="booking-contact" id="artistBooking"></div>
-      </div>
     </div>
 
     <div class="tab-panel active" id="tab-calendar">
@@ -412,9 +443,16 @@
     </div>
   </div>
 
-<!-- Lightbox modal (required by openModal/closeModal JS) -->
+<!-- Lightbox modal (required by openModal/closeModal JS).
+     2026-07-26: prev/next arrows + keyboard + touch-swipe navigation
+     between pictures (and inline-embeddable videos). Arrows are siblings
+     of #lightboxContent so they persist when the content re-renders on
+     navigation. Hidden when the current list has <2 items. -->
 <div id="lightboxOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);z-index:9999;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
-  <button onclick="closeModal()" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:1.8rem;cursor:pointer;line-height:1;">✕</button>
+  <button onclick="closeModal()" aria-label="Close" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:1.8rem;cursor:pointer;line-height:1;z-index:2;">✕</button>
+  <button id="lbPrevBtn" onclick="_lbPrev()" aria-label="Previous" style="display:none;position:absolute;top:50%;left:12px;transform:translateY(-50%);background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;cursor:pointer;width:44px;height:44px;border-radius:50%;padding:0;z-index:2;transition:background 0.15s,border-color 0.15s;align-items:center;justify-content:center;" onmouseover="this.style.background='rgba(0,0,0,0.75)';this.style.borderColor='rgba(255,255,255,0.35)';" onmouseout="this.style.background='rgba(0,0,0,0.55)';this.style.borderColor='rgba(255,255,255,0.18)';"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
+  <button id="lbNextBtn" onclick="_lbNext()" aria-label="Next"     style="display:none;position:absolute;top:50%;right:12px;transform:translateY(-50%);background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;cursor:pointer;width:44px;height:44px;border-radius:50%;padding:0;z-index:2;transition:background 0.15s,border-color 0.15s;align-items:center;justify-content:center;" onmouseover="this.style.background='rgba(0,0,0,0.75)';this.style.borderColor='rgba(255,255,255,0.35)';" onmouseout="this.style.background='rgba(0,0,0,0.55)';this.style.borderColor='rgba(255,255,255,0.18)';"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;"><polyline points="9 18 15 12 9 6"></polyline></svg></button>
+  <div id="lbCounter" style="display:none;position:absolute;bottom:16px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.65);font-size:0.75rem;letter-spacing:0.05em;z-index:2;"></div>
   <div id="lightboxContent"></div>
 </div>
   <script>
@@ -549,7 +587,13 @@
           const color = BRAND_COLORS[l.brand] || '#9ca3af';
           return `<a href="${escAttr(safeUrl)}" target="_blank" rel="noopener noreferrer" class="social-link" style="--brand:${color}" title="${esc(l.label)}">${brandIcon(l.brand)}<span>${esc(l.label)}</span></a>`;
         }).join('');
-      } else { document.getElementById("socialEmpty").style.display = "block"; }
+      } else {
+        document.getElementById("socialEmpty").style.display = "block";
+        // Hide the Social Media tab when there are no links — see rationale
+        // on _hideEmptyTab. Defined later in the same script block; guard
+        // with typeof in case load order shifts.
+        if (typeof _hideEmptyTab === 'function') _hideEmptyTab('social', true);
+      }
 
       document.getElementById("artistLogo").src = "/app/static/img/profile-placeholder.svg";
       loadMedia();
@@ -571,26 +615,14 @@
     // ========== CALENDAR ==========
     async function loadGigs() {
       try { const r = await fetch(`/api/artists/${artistId}/gigs/public`); if (r.ok) artistGigs = await r.json(); } catch(e) {}
-      // For multi-slot gigs the /artists/:id/gigs/public endpoint
-      // returns the artist's slot times but NOT the full slot list.
-      // The hover card's per-slot breakdown only renders when
-      // g.slots is an array (length>=2), so fetch slots here and
-      // attach them. Mirrors what public-gigs.js already does.
-      try {
-        await Promise.all(
-          (artistGigs || [])
-            .filter(g => g.is_multi_slot)
-            .map(async g => {
-              try {
-                const r = await fetch(`/api/gigs/${g.id}/slots/public`);
-                if (r.ok) {
-                  g.slots = (await r.json())
-                    .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
-                }
-              } catch (_) {}
-            })
-        );
-      } catch (_) {}
+      // /api/artists/:id/gigs/public now embeds `slots` for multi-slot
+      // gigs in a single batched query (Jun 30 2026 fix) — no per-gig
+      // fan-out needed. Just ensure they're sorted by start_time.
+      (artistGigs || []).forEach(g => {
+        if (g.slots && g.slots.length) {
+          g.slots.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+        }
+      });
       const now = new Date(); calYear = now.getFullYear(); calMonth = now.getMonth();
       renderCalendar();
     }
@@ -602,16 +634,44 @@
       const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
       const _now = new Date();
       const todayStr = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
-      const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠' };
+      const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
+
+      // Outlook-style month boundary label — matches every other
+      // calendar on the site. Prefixes month abbreviation on:
+      //   • day 1 of every visible month (target + spillover), AND
+      //   • the very first grid cell so a top-left spillover reads
+      //     its month (e.g. "Jul 26" when viewing August).
+      let _firstCellRendered = false;
+      function _renderDayNum(d, monthIndex) {
+        const isFirst = !_firstCellRendered;
+        _firstCellRendered = true;
+        if (d === 1 || isFirst) {
+          const monAbbr = new Date(2000, monthIndex).toLocaleString("default", { month: "short" });
+          return `<div class="day-num month-boundary">${monAbbr} ${d}</div>`;
+        }
+        return `<div class="day-num">${d}</div>`;
+      }
+
       let html = '';
-      for (let i = 0; i < firstDay; i++) html += '<div class="cal-day empty"></div>';
+      // Leading days from previous month — render real day numbers,
+      // tagged as `other-month` (muted) and `past` only when actually
+      // past (Jul 2026 fix — match FindMusic, no blank squares).
+      const prevMonthLast = new Date(calYear, calMonth, 0).getDate();
+      const _prevM = calMonth === 0 ? 11 : calMonth - 1;
+      for (let i = firstDay - 1; i >= 0; i--) {
+        const d = prevMonthLast - i;
+        const prevY = calMonth === 0 ? calYear - 1 : calYear;
+        const ds = `${prevY}-${String(_prevM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const isPast = ds < todayStr;
+        html += `<div class="cal-day other-month${isPast ? ' past' : ''}">${_renderDayNum(d, _prevM)}</div>`;
+      }
       for (let d = 1; d <= daysInMonth; d++) {
         const ds = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
         const isToday = ds === todayStr;
         const isPast = ds < todayStr;
         const dayGigs = artistGigs.filter(g => g.date === ds);
         const dayClickAttr = (!isPast && dayGigs.length > 0) ? ` onclick="openDayGigsModal(event,'${ds}')"` : '';
-        html += `<div class="cal-day${isToday ? ' today' : ''}${isPast ? ' past' : ''}"${dayClickAttr}><div class="day-num">${d}</div>`;
+        html += `<div class="cal-day${isToday ? ' today' : ''}${isPast ? ' past' : ''}"${dayClickAttr}>${_renderDayNum(d, calMonth)}`;
         if (dayGigs.length > 0) {
           html += '<div class="cal-gigs-container">';
           dayGigs.forEach((g, idx) => {
@@ -638,6 +698,16 @@
           html += '</div>';
         }
         html += '</div>';
+      }
+      // Trailing days into next month — fill grid to end of week (Jul 2026).
+      const totalSoFar = firstDay + daysInMonth;
+      const trailing = (7 - (totalSoFar % 7)) % 7;
+      const nextM = calMonth === 11 ? 0 : calMonth + 1;
+      const nextY = calMonth === 11 ? calYear + 1 : calYear;
+      for (let d = 1; d <= trailing; d++) {
+        const ds = `${nextY}-${String(nextM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const isPast = ds < todayStr;
+        html += `<div class="cal-day other-month${isPast ? ' past' : ''}">${_renderDayNum(d, nextM)}</div>`;
       }
       document.getElementById('calGrid').innerHTML = html;
 
@@ -675,6 +745,7 @@
       if (g.city || g.state) locHtml += esc([g.city, g.state].filter(Boolean).join(', '));
 
       let rows = '';
+      if (g.title && String(g.title).trim()) rows += modalRow('Event', String(g.title).trim());
       rows += modalRow('Date', fmtDate(g.date));
       if (!isMultiSlot) rows += modalRow('Time', timeStr || 'TBD');
       const venueLink = g.venue_id ? `<a href="/app/venue-profile.html?venue_id=${g.venue_id}" target="_blank">${esc(g.venue_name || '')}</a>` : esc(g.venue_name || '');
@@ -1007,7 +1078,7 @@
 
       const [y, mo, d] = ds.split('-').map(Number);
       const dateStr = new Date(y, mo-1, d).toLocaleDateString('en-US', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
-      const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'};
+      const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
 
       let rows = dayGigs.map(g => {
         const isBooked = g.status === 'booked' || (g.is_multi_slot && g.booked_slots_count > 0);
@@ -1051,7 +1122,7 @@
       modal.querySelector('.gig-modal').classList.add('day-modal');
       modal.querySelector('h3').textContent = dateStr;
       document.getElementById('gigModalBody').innerHTML =
-        `<div style="display:grid;grid-auto-rows:auto;row-gap:10px;width:100%;min-width:820px;font-size:0.7rem;">${rows}</div>`;
+        `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;"><div style="display:grid;grid-auto-rows:auto;row-gap:10px;width:100%;min-width:820px;font-size:0.7rem;">${rows}</div></div>`;
       modal.classList.remove('hidden');
     }
 
@@ -1070,8 +1141,19 @@
       const res = await fetch(`/api/artists/${artistId}/media`, { credentials: "include" }); if (!res.ok) return;
       const media = await res.json();
       const pics = document.getElementById("pictures"), audio = document.getElementById("audio"), videos = document.getElementById("videos");
+      // Reset navigable-media lists (populated below). 2026-07-26:
+      // lightbox prev/next arrows and swipe navigate within these lists.
+      // Videos exclude Instagram / TikTok / Facebook because those platforms
+      // open in a new tab from openModal — they're not inline-navigable.
+      _lbPics = [];
+      _lbVids = [];
       media.forEach(m => {
-        if (m.media_type === "logo" || m.media_type === "profile") document.getElementById("artistLogo").src = m.file_path;
+        if (m.media_type === "logo" || m.media_type === "profile") {
+          document.getElementById("artistLogo").src = m.file_path;
+          // Reveal the image + hide the big gradient text name — the two
+          // are mutually exclusive in the logo slot (2026-07-25).
+          document.getElementById("logoHero").classList.add("has-logo");
+        }
         if (m.media_type === "picture") {
           const cap = (m.caption || "").trim();
           // Caption row only renders when non-empty — plain pictures keep
@@ -1082,6 +1164,7 @@
           d.innerHTML = `<img src="${escAttr(m.file_path)}"><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
           d.onclick = () => openModal(m.file_path, "image");
           pics.appendChild(d);
+          _lbPics.push(m.file_path);
         }
         if (m.media_type === "audio") {
           const cap = (m.caption || "").trim();
@@ -1124,24 +1207,212 @@
           d.innerHTML = `<img src="${escAttr(ytThumb(m.video_url))}"><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
           d.onclick = () => openModal(m.video_url, "video");
           videos.appendChild(d);
+          // Only inline-embeddable videos join the navigable list —
+          // Instagram / TikTok / Facebook click straight to a new tab.
+          if (!/instagram\.com|tiktok\.com|facebook\.com|fb\.watch/.test(m.video_url || '')) {
+            _lbVids.push(m.video_url);
+          }
         }
       });
       if (!pics.children.length) document.getElementById('picturesEmpty').style.display = 'block';
       if (!audio.children.length) document.getElementById('audioEmpty').style.display = 'block';
       if (!videos.children.length) document.getElementById('videosEmpty').style.display = 'block';
+
+      // Hide empty tabs entirely from the public profile — visitors
+      // shouldn't see a "Pictures" tab that just says "No pictures
+      // uploaded yet." (Info, Calendar, Reviews always show — they're
+      // structural tabs; Social handled below when it renders.)
+      _hideEmptyTab('pictures', !pics.children.length);
+      _hideEmptyTab('audio',    !audio.children.length);
+      _hideEmptyTab('videos',   !videos.children.length);
+    }
+
+    // Hide the tab button for `name` when `isEmpty` is true. If the
+    // currently-active tab is being hidden, fall back to the Calendar
+    // tab so the user sees a valid section instead of a blank panel.
+    // Added 2026-07-25 as part of the public-profile clean-up.
+    function _hideEmptyTab(name, isEmpty) {
+      if (!isEmpty) return;
+      const btn = document.querySelector('.profile-tabs button[onclick*="switchTab(\'' + name + '\')"]');
+      if (btn) btn.style.display = 'none';
+      const panel = document.getElementById('tab-' + name);
+      // If the hidden tab was somehow the active one, activate Calendar.
+      if (panel && panel.classList.contains('active')) {
+        if (typeof switchTab === 'function') switchTab('calendar');
+      }
     }
     let lightboxSrc = '', lightboxType = '';
-    function openModal(src, type) { lightboxSrc = src; lightboxType = type; const overlay = document.getElementById('lightboxOverlay'); const content = document.getElementById('lightboxContent'); if (type === 'image') { content.innerHTML = `<img src="${escAttr(src)}" style="max-width:90vw;max-height:90vh;border-radius:12px;">`; } else { const yt = src.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&]+)/); content.innerHTML = yt ? `<iframe width="800" height="450" src="https://www.youtube.com/embed/${escAttr(yt[1])}" frameborder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen style="border-radius:12px;"></iframe>` : `<video controls src="${escAttr(src)}" style="max-width:90vw;max-height:90vh;border-radius:12px;"></video>`; } overlay.style.display='flex'; }
-    function closeModal() { document.getElementById('lightboxOverlay').style.display='none'; document.getElementById('lightboxContent').innerHTML = ''; }
-    const _lbo = document.getElementById('lightboxOverlay'); if (_lbo) _lbo.addEventListener('click', function(e) { if (e.target === this) closeModal(); });
+    // Navigable-media lists (2026-07-26). Populated by loadMedia; read
+    // by openModal to seed _lbList for prev/next navigation.
+    let _lbPics = [];
+    let _lbVids = [];
+    // Builds a per-platform embed URL for the lightbox iframe. Falls
+    // through to a raw <video src> for direct media files (mp4/webm/etc).
+    // Extended 2026-07-25 to cover Instagram / TikTok / Vimeo / Facebook —
+    // previously the fallback was `<video src="{page-url}">` which just
+    // fetched HTML and threw "video can't be played" for any social link.
+    function _buildVideoEmbed(src) {
+      const s = String(src || '').trim();
+      // YouTube (standard + short + shorts)
+      let m = s.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([\w-]+)/);
+      if (m) return { type: 'iframe', url: `https://www.youtube.com/embed/${m[1]}` };
+      // Vimeo
+      m = s.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+      if (m) return { type: 'iframe', url: `https://player.vimeo.com/video/${m[1]}` };
+      // Instagram — /p/{shortcode}/, /reel/{shortcode}/, /tv/{shortcode}/,
+      // or /{username}/(p|reel|tv)/{shortcode}/ (Instagram share links from a
+      // profile include the username segment — matched here as an optional
+      // prefix so both forms embed correctly). Fixed 2026-07-25 after
+      // /username/reel/ URLs were falling through to a raw <video> and
+      // throwing "No video with supported format" in the lightbox.
+      // Instagram — preserve the ORIGINAL /p/, /reel/, or /tv/ path type
+      // and drop the optional /{username}/ prefix. Instagram's /embed/
+      // endpoint doesn't set X-Frame-Options, so a plain iframe works.
+      // Fixed 2026-07-25: an earlier revision rewrote /reel/ → /p/ which
+      // rendered a "post not available" placeholder for reels.
+      m = s.match(/instagram\.com\/(?:[\w.-]+\/)?(p|reel|tv)\/([\w-]+)/);
+      if (m) return { type: 'iframe', url: `https://www.instagram.com/${m[1]}/${m[2]}/embed/captioned/` };
+      // TikTok — /@user/video/{id} → oEmbed via tiktok's embed URL
+      m = s.match(/tiktok\.com\/(?:@[^/]+\/video\/|v\/)(\d+)/);
+      if (m) return { type: 'iframe', url: `https://www.tiktok.com/embed/v2/${m[1]}` };
+      // Facebook video (watch or /videos/{id}) — needs plugin URL wrapper
+      if (/facebook\.com\/.+\/(videos|watch)/.test(s) || /fb\.watch/.test(s)) {
+        return { type: 'iframe', url: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(s)}&show_text=0` };
+      }
+      // Direct media file (mp4, webm, mov, ogv)
+      return { type: 'video', url: s };
+    }
+    // ── Lightbox navigation state (2026-07-26) ───────────────────────
+    // _lbPics / _lbVids populated by loadMedia. When openModal fires
+    // for a picture/video it sets _lbList to the matching list and
+    // _lbIdx to the current position. Arrow buttons + arrow keys +
+    // swipe cycle through the list. Content re-renders in place;
+    // arrows and overlay persist.
+    let _lbList = [];
+    let _lbIdx = 0;
+    let _lbType = 'image';
+
+    function _renderLightboxContent() {
+      const content = document.getElementById('lightboxContent');
+      const src = _lbList[_lbIdx];
+      if (_lbType === 'image') {
+        content.innerHTML = `<img src="${escAttr(src)}" style="max-width:90vw;max-height:90vh;border-radius:12px;">`;
+      } else {
+        const emb = _buildVideoEmbed(src);
+        const _plat = (u => (/instagram\.com/.test(u)?'Instagram':/tiktok\.com/.test(u)?'TikTok':/vimeo\.com/.test(u)?'Vimeo':/facebook\.com|fb\.watch/.test(u)?'Facebook':/youtube\.com|youtu\.be/.test(u)?'YouTube':'the site'))(src);
+        const fallback = `<div style="margin-top:12px;text-align:center;"><a href="${escAttr(src)}" target="_blank" rel="noopener" style="color:#7dd3fc;text-decoration:none;font-size:0.85rem;border-bottom:1px dashed rgba(125,211,252,0.4);">Trouble loading? Open on ${_plat} ↗</a></div>`;
+        if (emb.type === 'iframe') {
+          const vert = /instagram\.com\/(?:[\w.-]+\/)?(?:reel|p|tv)|tiktok\.com/.test(src);
+          const w = vert ? 400 : 800;
+          const h = vert ? 700 : 450;
+          content.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;"><iframe width="${w}" height="${h}" src="${escAttr(emb.url)}" frameborder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen style="max-width:90vw;max-height:78vh;border-radius:12px;background:#000;"></iframe>${fallback}</div>`;
+        } else {
+          content.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;"><video controls src="${escAttr(emb.url)}" style="max-width:90vw;max-height:78vh;border-radius:12px;"></video>${fallback}</div>`;
+        }
+      }
+      // Show / hide nav chrome based on list length.
+      const showNav = _lbList.length > 1;
+      const prev = document.getElementById('lbPrevBtn');
+      const next = document.getElementById('lbNextBtn');
+      const cnt  = document.getElementById('lbCounter');
+      if (prev) prev.style.display = showNav ? 'flex' : 'none';
+      if (next) next.style.display = showNav ? 'flex' : 'none';
+      if (cnt) {
+        cnt.style.display = showNav ? 'block' : 'none';
+        cnt.textContent = showNav ? `${_lbIdx + 1} / ${_lbList.length}` : '';
+      }
+    }
+
+    function _lbPrev() {
+      if (_lbList.length < 2) return;
+      _lbIdx = (_lbIdx - 1 + _lbList.length) % _lbList.length;
+      _renderLightboxContent();
+    }
+    function _lbNext() {
+      if (_lbList.length < 2) return;
+      _lbIdx = (_lbIdx + 1) % _lbList.length;
+      _renderLightboxContent();
+    }
+
+    function openModal(src, type) {
+      // Instagram / TikTok / Facebook: skip the lightbox entirely and
+      // open in a new tab. All three platforms serve a "Content Unavailable"
+      // state (or block iframing outright) for logged-out visitors, so an
+      // embedded iframe renders as a black box for most viewers. YouTube /
+      // Vimeo / Soundcloud still embed cleanly and keep the lightbox
+      // behavior (with arrow navigation added 2026-07-26).
+      if (type === 'video' &&
+          /instagram\.com|tiktok\.com|facebook\.com|fb\.watch/.test(String(src || ''))) {
+        window.open(src, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      _lbType = type;
+      _lbList = type === 'image' ? _lbPics.slice() : _lbVids.slice();
+      _lbIdx = _lbList.indexOf(src);
+      if (_lbIdx < 0) {
+        // Item not in list (shouldn't happen after loadMedia populates
+        // both, but defensive) — fall back to a single-item view.
+        _lbList = [src];
+        _lbIdx = 0;
+      }
+      _renderLightboxContent();
+      document.getElementById('lightboxOverlay').style.display = 'flex';
+    }
+    function closeModal() {
+      document.getElementById('lightboxOverlay').style.display = 'none';
+      document.getElementById('lightboxContent').innerHTML = '';
+      // Also hide nav chrome so it doesn't briefly flash on the next open.
+      const prev = document.getElementById('lbPrevBtn');
+      const next = document.getElementById('lbNextBtn');
+      const cnt  = document.getElementById('lbCounter');
+      if (prev) prev.style.display = 'none';
+      if (next) next.style.display = 'none';
+      if (cnt)  cnt.style.display  = 'none';
+    }
+
+    // Backdrop click closes; arrow-button clicks are stopped from bubbling
+    // to backdrop by their own onclick handlers implicitly (button element).
+    const _lbo = document.getElementById('lightboxOverlay');
+    if (_lbo) _lbo.addEventListener('click', function(e) { if (e.target === this) closeModal(); });
+
+    // Keyboard: Escape closes, ← / → navigate when the lightbox is open.
+    document.addEventListener('keydown', function(e) {
+      var _o = document.getElementById('lightboxOverlay');
+      if (!_o || _o.style.display === 'none') return;
+      if (e.key === 'Escape')     { closeModal(); return; }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); _lbPrev(); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); _lbNext(); return; }
+    });
+
+    // Touch swipe on mobile — >50px horizontal, dominant over vertical.
+    // Attached to the overlay so it captures swipes on both the backdrop
+    // and the content area.
+    (function () {
+      const el = document.getElementById('lightboxOverlay');
+      if (!el) return;
+      let sx = 0, sy = 0, active = false;
+      el.addEventListener('touchstart', function (e) {
+        if (e.touches.length !== 1) { active = false; return; }
+        sx = e.touches[0].screenX; sy = e.touches[0].screenY; active = true;
+      }, { passive: true });
+      el.addEventListener('touchend', function (e) {
+        if (!active) return;
+        active = false;
+        if (e.changedTouches.length !== 1) return;
+        const dx = e.changedTouches[0].screenX - sx;
+        const dy = e.changedTouches[0].screenY - sy;
+        if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+        if (dx > 0) _lbPrev(); else _lbNext();
+      }, { passive: true });
+    })();
     function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function escAttr(s) { return String(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   </script>
-<script src="/app/static/js/artist-reviews.js"></script>
-<script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/gig-hover-card.js?v=18"></script>
+<script src="/app/static/js/artist-reviews.js?v=2"></script>
+<script src="/app/static/js/gf-modals.js?v=8"></script>
+<script src="/app/static/js/gig-hover-card.js?v=21"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
-<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 </body>
 </html>

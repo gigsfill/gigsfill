@@ -4,10 +4,12 @@
 <head>
 <script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
 <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Create &amp; Manage Gigs – GigsFill</title>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -15,7 +17,21 @@
     body {
       overflow-x: hidden;
     }
-    
+
+    /* Section header gradient (matches artist-book-gigs.html — Jul 2026).
+       Applied to every h2.section-header so all tab titles render with
+       the same purple→cyan gradient. inline-block + fit-content shrink
+       the element to text width, so the gradient spans exactly the text
+       instead of the full container. */
+    .gradient-title {
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      width: fit-content;
+    }
+
     /* Calendar styling */
     .calendar-wrapper {
       width: 100%;
@@ -105,19 +121,44 @@
       color: rgba(255, 255, 255, 0.3);
     }
     
-    /* Days from other months */
+    /* Days from other months (Jul 2026):
+       Muted cell background + faded day-number so July / August / Sep
+       are visually distinct at a glance without breaking the past-vs-
+       future signal. Three tiers now:
+         - Current month, future/today  → full brightness
+         - Other month (spillover)      → subtle dim background
+         - Past date                    → full darken (.past-date wins)
+       Hover on other-month restores near-full brightness to signal it's
+       still interactive (venue can click into next-month days to create). */
     .day.other-month {
-      opacity: 0.3;
-      cursor: default;
+      background: rgba(0, 0, 0, 0.22);
     }
-    
     .day.other-month:hover {
-      background: rgba(8, 11, 22, 0.97);
-      border-color: rgba(255,255,255,0.08);
+      background: rgba(0, 0, 0, 0.08);
     }
-    
+    /* Meaningfully faded so other-month numbers clearly recede. The
+       `!important` beats the `.calendar .day-number { color:...
+       !important }` catch-all a few hundred lines below — without it
+       our rule silently loses the specificity fight. */
     .day.other-month .day-number {
-      color: rgba(255, 255, 255, 0.2);
+      color: rgba(255, 255, 255, 0.18) !important;
+    }
+    /* Month-boundary label ("Aug 1") — solid cyan + bold so it reads
+       as a divider. Was a gradient with background-clip:text, but the
+       `.calendar > * * { background: transparent !important }` rule
+       elsewhere nukes the gradient background → invisible text.
+       Solid color is more robust. */
+    .day-number.month-boundary {
+      font-weight: 700 !important;
+      letter-spacing: 0.01em !important;
+      color: #06b6d4 !important;
+    }
+    /* Spillover boundary matches the plain spillover-day-number color
+       exactly — the venue asked for uniform dimness across all spillover
+       cells. The "Jul" prefix + bold weight is what still signals the
+       boundary; color no longer competes with brightness. */
+    .day.other-month .day-number.month-boundary {
+      color: rgba(255, 255, 255, 0.18) !important;
     }
 
     .day-number {
@@ -453,9 +494,10 @@
       border-color: rgba(124, 107, 255, 0.45) !important;
     }
 
-    /* Day number */
+    /* Day number — brighter (was 0.55) so current-month numbers pop
+       against the darker other-month cells below. */
     .calendar .day-number {
-      color: rgba(255,255,255,0.55) !important;
+      color: rgba(255,255,255,0.88) !important;
     }
 
     /* Kill ALL white defaults inside cells */
@@ -608,7 +650,7 @@
 
     /* Force vertical stacking */
     .venue-create-gigs-page .admin-container {
-      max-width: 1400px;
+      max-width: var(--container-max);
       margin: 0 auto;
       padding: 2rem;
       overflow-x: hidden;
@@ -649,7 +691,7 @@
 
     .venue-create-gigs-page .preferred-requests-wrapper > section {
       width: 100%;
-      max-width: 1250px; /* SAME as calendar */
+      max-width: var(--container-max); /* SAME as calendar */
     }
 
     /* REMOVE extra gap between preferred requests and calendar */
@@ -1340,6 +1382,59 @@
     flex-wrap: wrap;
     gap: 5px;
   }
+  /* Jul 1 2026: MC-type equipment gate sits at the SAME LEVEL as the
+     type select (sibling flex item in .slot-meta-row). Force inline
+     alignment against the dropdown so checkbox + label text stay on
+     one line — width is content-based, not stretched. Wraps live in
+     the DOM immediately AFTER `.slot-artist-type`, hidden for non-MC
+     types via inline style set by the JS renderer. */
+  #slotList .slot-meta-row > .slot-equipment-row {
+    display: none;
+  }
+  /* When MC type is selected, the label is inline-flex row+nowrap so
+     checkbox and text always stay on the same horizontal line. */
+  #slotList .slot-meta-row > .slot-equipment-row.mc-visible {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 6px !important;
+    flex: 0 0 auto !important;
+    margin: 0 !important;
+    padding: 0 6px !important;
+    /* Font matches the rest of the create-gig form — inherit family +
+       color so it looks like every other label on the page. Size is
+       held at 0.78rem so the text fits in the 28px row height alongside
+       the dropdown. */
+    font-family: inherit !important;
+    font-size: 0.78rem !important;
+    font-weight: 400 !important;
+    color: inherit !important;
+    white-space: nowrap !important;
+    line-height: 28px !important;
+    height: 28px !important;
+    width: auto !important;
+    max-width: none !important;
+    cursor: pointer;
+  }
+  #slotList .slot-meta-row > .slot-equipment-row.mc-visible > input[type="checkbox"] {
+    display: inline-block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    flex: 0 0 auto !important;
+    width: 14px !important;
+    height: 14px !important;
+    vertical-align: middle !important;
+    cursor: pointer;
+  }
+  #slotList .slot-meta-row > .slot-equipment-row.mc-visible > span {
+    display: inline !important;
+    flex: 0 0 auto !important;
+    white-space: nowrap !important;
+    line-height: 28px !important;
+    vertical-align: middle !important;
+  }
   /* Per-slot error message displayed under the lineup/styles pills when
      the user clicks away from a Live Band slot without making at least
      one selection in each row. Lives inside the slot card so it points
@@ -1545,6 +1640,16 @@
   .recurring-master-pill,
   .hold-master-pill {
     min-width: 170px;
+  }
+  /* On phones the three master pills lined up at 170px each = 510px min,
+     which blows past 375px viewport width and forces horizontal overflow.
+     Let them shrink and wrap. Added 2026-07-24 mobile sweep. */
+  @media (max-width: 640px) {
+    .recurring-master-pill,
+    .hold-master-pill {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
   }
   .hold-master-pill {
     border-color: rgba(245, 158, 11, 0.30);
@@ -1914,7 +2019,7 @@
 }
 
 .tab-content section.panel {
-  max-width: 1250px;
+  max-width: var(--container-max);
   margin: 0 auto;
   background: var(--card);
   border: 1px solid var(--border);
@@ -2113,7 +2218,7 @@
 <script src="/app/static/js/auth.guard.js?v=3"></script>
 <script src="/app/static/js/time-format.js"></script>
 <link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
-<link href="/app/static/css/gig-hover-card.css?v=7" rel="stylesheet"/>
+<link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet"/>
   <link href="/app/static/css/mobile.css?v=5" rel="stylesheet"/>
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
   <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet"/>
@@ -2134,9 +2239,9 @@
 </div>
 </div>
 </header>
-<script src="/app/static/js/user-dropdown.js?v=9"></script>
+<script src="/app/static/js/user-dropdown.js?v=11"></script>
 
-<div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
+<div class="book-gigs-container" style="max-width: var(--container-max); margin: 0 auto; padding: 40px 20px;">
 
 <!-- Tabs -->
 <div class="tabs">
@@ -2191,6 +2296,9 @@
       z-index: 1000;
       display: none;
       margin-top: 4px;
+      font-size: 0.8rem;
+      font-family: var(--font-primary);
+      color: var(--text);
     "></div>
   </div>
   <div style="position: relative; display: flex; align-items: center; gap: 8px;">
@@ -2209,6 +2317,9 @@
       z-index: 1000;
       display: none;
       margin-top: 4px;
+      font-size: 0.8rem;
+      font-family: var(--font-primary);
+      color: var(--text);
     "></div>
   </div>
   <div style="display: flex; align-items: center; gap: 8px;">
@@ -2265,6 +2376,28 @@
       font-size: 0.75rem;
       font-weight: 500;
     ">Trivia Host</button>
+    <button class="artist-type-toggle" data-active="false" data-type="Open Mic MC" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Open Mic MC</button>
+    <button class="artist-type-toggle" data-active="false" data-type="Karaoke MC" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Karaoke MC</button>
   </div>
 </div>
 
@@ -2321,8 +2454,17 @@
   </div>
 </div>
 
+<!-- Style Bubbles (shown when Live Band is active) - Inline Label -->
+<div id="styleBubbles" style="margin-bottom: 8px; display: none;">
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 100px;">Styles</label>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;" id="styleBubblesList">
+      <!-- Populated at runtime -->
+    </div>
+  </div>
+</div>
+
 <div style="display: flex; gap: 12px;">
-<button class="btn primary" id="applyArtistFilters">Apply Filters</button>
 <button class="btn ghost" id="clearArtistFilters">Clear Filters</button>
 </div>
 <div id="artistSearchResults" style="margin-top: 4px; padding-top: 4px; padding-bottom: 0px; font-size: 0.85rem; color: var(--text-muted); font-style: italic;"></div>
@@ -2330,6 +2472,12 @@
 <div id="artistResultsList" style="margin-top: 8px;"></div>
   </div>
 </section>
+
+<!-- Venue-side Pending Hold Offers banner — populated by
+     venue-hold-offers-banner.js polling /api/me/venue-hold-offers.
+     Sits above the calendar so the venue user sees the live state
+     of every active hold + can act on exhausted ones. -->
+<div id="venueHoldOffersBanner"></div>
 
 <!-- CALENDAR -->
 <section class="panel calendar-wrapper">
@@ -2378,7 +2526,7 @@
   <div class="ec-subtab-content active" id="ec-notifications">
     <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px;">
       <div style="margin-bottom: 16px;">
-        <span style="font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Automated Gig Emails</span>
+        <span class="section-header gradient-title" style="font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Automated Gig Emails</span>
         <span style="font-size: 0.8rem; color: var(--text-gray); font-style: italic; margin-left: 10px;">(Configure automatic emails sent to artists about upcoming gigs at this venue.)</span>
       </div>
 
@@ -2386,7 +2534,7 @@
       <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">🎵 Gig Confirmation Reminder</div>
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_gig_confirmation" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_gig_confirmation_val" min="1" max="52" value="1" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_gig_confirmation_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks">Week(s) Before</option><option value="days">Day(s) Before</option></select>
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_gig_confirmation" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 1 week before gig date</span><input type="hidden" id="notif_gig_confirmation_val" value="1"><input type="hidden" id="notif_gig_confirmation_unit" value="weeks">
         
           
         </div>
@@ -2395,65 +2543,137 @@
 
       <!-- ─── Open Gig Notifications ──────────────────────────────────── -->
       <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">📢 Open Gig Notifications</div>
-      <div style="font-size: 0.7rem; color: var(--text-gray); margin-bottom: 8px; padding: 0 14px; line-height: 1.3;">Email all Preferred Artists about unbooked gigs and lift frequency limitations so any Preferred Artist can book.</div>
+      <div style="font-size: 0.7rem; color: var(--text-gray); margin-bottom: 8px; padding: 0 14px; line-height: 1.3;">Email Artists about open or cancelled gigs and lift frequency limitations if desired.</div>
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_4w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_4w_val" min="1" max="52" value="4" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_4w_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks" selected>Week(s) Before</option><option value="days">Day(s) Before</option><option value="hours">Hour(s) Before</option></select>
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_4w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 4 weeks before gig date</span><input type="hidden" id="notif_open_gig_4w_val" value="4"><input type="hidden" id="notif_open_gig_4w_unit" value="weeks">
         
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_4w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_4w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_4w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_4w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">First notice to all Preferred Artists — open gig available, frequency limitation lifted.</div>
-
-            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
-        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_2w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_2w_val" min="1" max="52" value="2" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_2w_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks" selected>Week(s) Before</option><option value="days">Day(s) Before</option><option value="hours">Hour(s) Before</option></select>
-        
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_2w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_2w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
-        </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Reminder that a gig is still open and can be booked — sent 4 weeks before the gig date.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_waive_freq" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Second reminder — still-open gig, any Preferred Artist can book.</div>
-
-            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
-        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_1w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_1w_val" min="1" max="52" value="1" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_1w_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="weeks" selected>Week(s) Before</option><option value="days">Day(s) Before</option><option value="hours">Hour(s) Before</option></select>
-        
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_1w_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_1w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
-        </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
+        <input type="number" id="notif_open_gig_4w_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Third notice — final reminder before close-in blast window.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_cancel_pref" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+      </div>
             <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+        <input type="number" id="notif_open_gig_4w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
+      </div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_2w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 2 weeks before gig date</span><input type="hidden" id="notif_open_gig_2w_val" value="2"><input type="hidden" id="notif_open_gig_2w_unit" value="weeks">
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_2w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_2w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Second reminder that the gig is still open — sent 2 weeks before the gig date.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_waive_freq" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
+        <input type="number" id="notif_open_gig_2w_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_cancel_pref" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+        <input type="number" id="notif_open_gig_2w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
+      </div>
+
+            <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_1w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 1 week before gig date</span><input type="hidden" id="notif_open_gig_1w_val" value="1"><input type="hidden" id="notif_open_gig_1w_unit" value="weeks">
+        
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_1w_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_1w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+        </div>
+      </div>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Third reminder that the gig is still open — sent 1 week before the gig date.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_waive_freq" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
         <input type="number" id="notif_open_gig_1w_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;">miles <em style="color: var(--cyan);">(Preferred Status &amp; Frequency Limits waived)</em></span>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_cancel_pref" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+        <input type="number" id="notif_open_gig_1w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
       </div>
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_36h" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_open_gig_36h_val" min="1" max="168" value="36" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_open_gig_36h_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="hours" selected>Hour(s) Before</option><option value="days">Day(s) Before</option><option value="weeks">Week(s) Before</option></select>
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_36h" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 36 hours before gig start</span><input type="hidden" id="notif_open_gig_36h_val" value="36"><input type="hidden" id="notif_open_gig_36h_unit" value="hours">
         
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_36h_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_36h_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_36h_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_36h_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Last-chance notice — still-open gig is approaching. Preferred Artists only unless blast-all is enabled below.</div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_blast_all" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Last-chance reminder that the gig is still open — sent 36 hours before the gig start.</div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_waive_freq" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
         <input type="number" id="notif_open_gig_36h_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;">miles <em style="color: var(--cyan);">(Preferred Status &amp; Frequency Limits waived)</em></span>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_cancel_pref" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+      </div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_cancel_all" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+        <input type="number" id="notif_open_gig_36h_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
+        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
       </div>
 
+      <!-- Jul 2026: Cancelled Gig Blast + Radius Blast sections folded into the
+           4 open-gig rows (per-window cancel_notify_preferred + cancel_notify_all).
+           Kept hidden here so JS save/load remains harmless; DB rows stay dormant. -->
+      <div style="display:none;">
       <!-- ─── Cancelled Gig Blast ──────────────────────────────────────── -->
       <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">⚡ Cancelled Gig Blast</div>
       <div style="font-size: 0.7rem; color: var(--text-gray); margin-bottom: 8px; padding: 0 14px; line-height: 1.3;">When a booked gig is cancelled and re-listed as open, automatically notify artists. (Artist-cancelled gigs always re-list; Venue-cancelled gigs only if "Keep Open" was selected.)</div>
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_cancelled_blast" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem; white-space: nowrap;">Send</span> <input type="number" id="notif_cancelled_blast_val" min="1" max="52" value="1" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_cancelled_blast_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="days">Day(s) Before</option><option value="weeks" selected>Week(s) Before</option><option value="hours">Hour(s) Before</option></select>
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_cancelled_blast" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem; white-space: nowrap;">Fires immediately when a cancelled gig re-opens within 1 week of gig date</span><input type="hidden" id="notif_cancelled_blast_val" value="1"><input type="hidden" id="notif_cancelled_blast_unit" value="weeks">
         
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_cancelled_blast_blink" checked onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_cancelled_blast_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_cancelled_blast_blink" checked onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_cancelled_blast_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
             <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Sends immediately to all Preferred Artists when a cancellation re-opens the gig — only if gig start is within the time window above.</div>
@@ -2466,9 +2686,9 @@
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_radius_blast" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Send</span> <input type="number" id="notif_radius_blast_val" min="1" max="168" value="36" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 4px 6px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem; text-align: center;"> <select id="notif_radius_blast_unit" onchange="saveVenueEmailNotifications()" style="padding: 4px 8px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.8rem;"><option value="hours" selected>Hour(s) Before</option><option value="days">Day(s) Before</option><option value="weeks">Week(s) Before</option></select>
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_radius_blast" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 36 hours before gig start</span><input type="hidden" id="notif_radius_blast_val" value="36"><input type="hidden" id="notif_radius_blast_unit" value="hours">
         
-          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:10px;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_radius_blast_blink" checked onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_radius_blast_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
+          <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_radius_blast_blink" checked onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_radius_blast_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
             <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Sends immediately to all Preferred Artists when a cancellation re-opens the gig — only if gig start is within the time window above.</div>
@@ -2478,6 +2698,8 @@
         <input type="number" id="notif_radius_blast_miles" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
         <span style="color: var(--text-gray); font-size: 0.75rem;">miles <em style="color: var(--cyan);">(Preferred Status &amp; Frequency Limits waived)</em></span>
       </div>
+      </div>
+      <!-- End Jul 2026 hidden legacy sections -->
 
       <!-- Save indicator -->
       <div style="text-align: center; margin-top: 8px; color: var(--cyan); font-weight: 600; opacity: 0; transition: opacity 0.3s; font-size: 0.8rem;" id="emailNotifSaveIndicator">✓ Settings Saved</div>
@@ -2493,7 +2715,7 @@
 
     <!-- Compose Email -->
     <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
-      <h2 style="font-size: 1rem; font-weight: 700; color: var(--cyan); margin: 0 0 20px 0; text-transform: uppercase; letter-spacing: 0.08em;">Compose Email</h2>
+      <h2 class="section-header gradient-title" style="font-size: 1rem; font-weight: 700; margin: 0 0 20px 0; text-transform: uppercase; letter-spacing: 0.08em;">Compose Email</h2>
       
       <div id="venueSelectorContainer" class="venue-selector" style="display: none;">
         <label for="venueSelect">Send from Venue</label>
@@ -2536,7 +2758,7 @@
     <!-- Email History -->
     <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <h2 style="font-size: 1rem; font-weight: 700; color: var(--cyan); margin: 0; text-transform: uppercase; letter-spacing: 0.08em;">Recent Emails</h2>
+        <h2 class="section-header gradient-title" style="font-size: 1rem; font-weight: 700; margin: 0; text-transform: uppercase; letter-spacing: 0.08em;">Recent Emails</h2>
         <div style="display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: var(--text-gray);">
           <button class="pagination-btn" id="prevPageBtn" onclick="prevPage()" disabled style="width: 24px; height: 24px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center;">‹</button>
           <span id="pageInfo">1 / 1</span>
@@ -2562,7 +2784,7 @@
   <div class="ec-subtab-content" id="ec-inviteartists">
     <div class="content-card" id="invitedArtistsSection" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-        <h2 style="font-size:1rem;font-weight:700;color:var(--cyan);margin:0;text-transform:uppercase;letter-spacing:0.08em;">Invited Artists</h2>
+        <h2 class="section-header gradient-title" style="font-size:1rem;font-weight:700;margin:0;text-transform:uppercase;letter-spacing:0.08em;">Invited Artists</h2>
         <button onclick="openInviteArtistsModal(event)" style="display:inline-flex;align-items:center;gap:6px;background:var(--cyan);color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:0.8rem;font-weight:600;cursor:pointer;">+ Invite Artists</button>
       </div>
       
@@ -2621,7 +2843,7 @@
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 8px;">
       <div style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
-        <h2 class="section-header" style="margin: 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Users</h2>
+        <h2 class="section-header gradient-title" style="margin: 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Users</h2>
         <span style="font-size: 0.75rem; font-style: italic; color: var(--text-gray); font-weight: 400;">(The following users have full access to this account)</span>
       </div>
       <button class="btn primary" onclick="entityUsersManager?.openInviteModal()">+ Invite User</button>
@@ -2641,9 +2863,20 @@
     <strong style="color: #635bff;">💳 How Payments Work:</strong> The artist is paid automatically the day after the gig is completed. The payment includes the Gig Pay plus a GigsFill service fee of <span id="venueFeePercent">…</span>%.
   </div>
 
+  <!-- Jul 2026: TPSO / 1099-NEC exception callout — venues are NOT required
+       to file 1099-NECs for payments processed through GigsFill/Stripe. -->
+  <div style="margin-bottom: 16px; padding: 12px 18px; border-radius: 8px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.78rem; line-height: 1.55; color: var(--text-gray); text-align: left;">
+    <strong style="color: #10b981;">🧾 Year-End Tax Reporting — Good news:</strong>
+    Because GigsFill processes artist payments through Stripe (a Third-Party Settlement Organization),
+    <b>you do not need to file 1099-NEC forms</b> for artists paid via GigsFill. Stripe issues a
+    <b>Form 1099-K</b> directly to each artist and files it with the IRS. Save the receipts we send you and
+    you're done. <em>(Payments made outside GigsFill — e.g. cash for a walk-in — are still your
+    responsibility to report normally.)</em>
+  </div>
+
   <!-- Payment Card Setup -->
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
-    <h2 class="section-header" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Payment Method</h2>
+    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Payment Method</h2>
     
     <!-- Current Card Display -->
     <div id="venueCurrentCard" style="display: none; margin-bottom: 20px;">
@@ -2656,8 +2889,8 @@
           <div style="font-size: 0.8rem; color: var(--text-gray); margin-top: 2px;">Expires <span id="venueCardExp"></span></div>
         </div>
         <div style="display: flex; gap: 8px;">
-          <button onclick="venueUpdateCard()" class="btn ghost" style="font-size: 0.75rem;">Update</button>
-          <button onclick="venueRemoveCard()" class="btn danger" style="font-size: 0.75rem;">Remove</button>
+          <button onclick="venueUpdateCard()" class="btn primary" style="font-size: 0.75rem;">Update</button>
+          <button onclick="venueRemoveCard()" style="font-size: 0.75rem;padding:8px 16px;background:#ef4444;border:1px solid #ef4444;color:#fff;border-radius:6px;cursor:pointer;font-weight:600;" onmouseover="this.style.background='#dc2626';this.style.borderColor='#dc2626';" onmouseout="this.style.background='#ef4444';this.style.borderColor='#ef4444';">Remove</button>
         </div>
       </div>
       <p style="color: var(--text-gray); font-size: 0.7rem; margin-top: 8px; margin-bottom: 0;">🔒 Card stored securely by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>. GigsFill never sees or stores your full card number.</p>
@@ -2685,7 +2918,10 @@
   <!-- Billing History -->
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:0 0 20px 0;">
-      <h2 class="section-header" style="margin:0;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;text-align:left;">BILLING HISTORY  <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);font-size:0.9rem;">(Artist payouts are released at 5:00 PM the day after the gig.)</span></h2>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+        <h2 class="section-header gradient-title" style="margin:0;font-size:1rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">Billing History</h2>
+        <span style="font-size: 0.75rem; font-style: italic; color: var(--text-gray); font-weight: 400;">(Artist payouts are released at 5:00 PM the day after the gig.)</span>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="position:relative;">
           <button onclick="var dd=document.getElementById('venueBillExportDD');dd.style.display=dd.style.display==='block'?'none':'block';" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:var(--text-muted);padding:5px 14px;border-radius:6px;font-size:0.78rem;cursor:pointer;font-weight:500;">Export ▾</button>
@@ -2704,7 +2940,10 @@
         </label>
       </div>
     </div>
-    <div id="venueBillingHistory" style="text-align: left;">
+    <!-- overflow-x:auto contains the 7-column billing table's horizontal
+         scroll INSIDE this panel on portrait phones instead of forcing
+         the whole page to scroll sideways. Added 2026-07-25. -->
+    <div id="venueBillingHistory" style="text-align: left; overflow-x: auto; -webkit-overflow-scrolling: touch;">
       <p style="color: var(--text-muted); font-size: 0.875rem;">No billing history yet</p>
     </div>
   </div>
@@ -2715,7 +2954,7 @@
 <div class="tab-content" id="analytics-tab">
 <section class="panel">
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
-    <h2 class="section-header" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Venue Analytics</h2>
+    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Venue Analytics</h2>
     
     <!-- Stats Overview - Clickable Bubbles -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px;">
@@ -2783,7 +3022,7 @@
 <div class="legal-subtab-content active" id="contractSettings-subtab">
 <section class="panel">
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
-    <h2 class="section-header" style="margin: 0 0 6px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Contracts</h2>
+    <h2 class="section-header gradient-title" style="margin: 0 0 6px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Contracts</h2>
     <p style="font-size:0.8rem; color:var(--text-gray); margin:0 0 16px 0;">(Contracts are Optional when using GigsFill. This section is meant to help you stay organized if you do use Contracts.)</p>
 
     <!-- Require checkbox — always visible at top -->
@@ -2897,7 +3136,7 @@
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
       <div style="flex:1;">
-        <h2 class="section-header" style="margin: 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Executed Contracts</h2>
+        <h2 class="section-header gradient-title" style="margin: 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Executed Contracts</h2>
       </div>
       <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; color:var(--text-gray);">
         <span>Show:</span>
@@ -2922,7 +3161,7 @@
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
     
     <!-- W9 Requirement Toggle -->
-    <h2 class="section-header" style="margin: 0 0 16px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">Tax Settings</h2>
+    <h2 class="section-header gradient-title" style="margin: 0 0 16px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Tax Settings</h2>
     <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
       <label style="display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 0.95rem; color: var(--text);">
         <input type="checkbox" id="requireW9Toggle" onchange="saveVenueTaxSettings()" style="width: 20px; height: 20px; accent-color: #8b5cf6;">
@@ -2933,25 +3172,15 @@
       </label>
       <div id="taxSettingsSaveStatus" style="font-size: 0.8rem; margin-top: 8px; opacity: 0; transition: opacity 0.3s;"></div>
     </div>
-    
-    <!-- 1099 Section -->
-    <h2 class="section-header" style="margin: 0 0 16px 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em;">1099-NEC Forms</h2>
-    
-    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
-      <label style="font-size: 0.875rem; font-weight: 500; color: var(--text-gray);">Tax Year:</label>
-      <select id="taxYear1099" onchange="load1099s()" style="padding: 8px 12px; background: #151b28; border: 1px solid #333; border-radius: 8px; color: var(--text); font-size: 0.9rem; min-width: 100px;"></select>
-      <button class="btn primary" onclick="generate1099s()" id="generate1099Btn" style="padding: 6px 14px; font-size: 0.85rem;">Generate 1099s</button>
-      <button class="btn ghost" onclick="sendAll1099s()" id="sendAll1099Btn" style="padding: 6px 14px; font-size: 0.85rem; display: none;">Send All Unsent</button>
-    </div>
-    
-    <p style="font-size: 0.8rem; color: var(--text-gray); font-style: italic; margin-bottom: 16px; line-height: 1.5;">
-      1099-NEC forms are generated for artists who earned $600 or more from booked gigs at your venue during the selected tax year.
-    </p>
-    
-    <div id="tax1099Status" style="margin-bottom: 12px;"></div>
-    <div id="tax1099List">
-      <p style="color: var(--text-muted); font-size: 0.85rem;">Select a tax year and click Generate to create 1099 forms.</p>
-    </div>
+
+    <!-- 1099-NEC generation section removed 2026-07-21. Stripe (a TPSO)
+         issues 1099-Ks directly to artists paid via GigsFill, so venues
+         don't file 1099-NECs for those payments — the Payments-tab
+         banner explains this. For per-artist annual totals venues can
+         export the Billing History table on the Payments tab. The
+         `POST /api/venues/{id}/generate-1099s` + related endpoints in
+         backend/routes/tax.py are left in place (auth-gated, no UI
+         entry point) for legacy record recovery if ever needed. -->
   </div>
 </section>
 </div>
@@ -3007,33 +3236,35 @@
 
 </div> <!-- Close book-gigs-container -->
 
-<!-- Invite User Modal -->
+<!-- Invite User Modal (2026-07-25 multi-invite rewrite — matches artist page) -->
 <div class="modal-overlay hidden" id="inviteUserModal">
-<div class="modal" style="max-width: 450px;">
-  <h2 id="inviteModalTitle" style="font-size: 1.125rem; margin-bottom: 24px; color: var(--text);">Invite a User</h2>
+<div class="modal" style="max-width: 560px;">
+  <h2 id="inviteModalTitle" style="font-size: 1.125rem; margin-bottom: 8px; color: var(--text);">Invite Users</h2>
+  <p style="color: var(--text-gray); font-size: 0.82rem; margin: 0 0 16px; line-height: 1.5;">
+    Invite one or more people to help manage this account. Everyone gets the same personal note below and appears on the Users list as soon as they're invited.
+  </p>
+
   <div class="field">
-    <label style="color: var(--cyan); font-weight: 600;">Email Address</label>
-    <input type="email" id="inviteEmail" placeholder="user@email.com" />
-    <div id="inviteEmailLookupStatus" style="font-size:0.78rem; margin-top:4px; min-height:16px; color:var(--text-muted);"></div>
+    <label for="inviteEmails" style="color: var(--cyan); font-weight: 600;">Email Addresses</label>
+    <textarea id="inviteEmails" rows="4"
+      placeholder="Enter email addresses separated by commas, spaces, or one per line&#10;&#10;jane@email.com, mike@venue.com&#10;booker@email.com"
+      style="width: 100%; font-size: 0.85rem;"></textarea>
+    <div id="inviteEmailCount" style="color: var(--text-gray); font-size: 0.72rem; margin-top: 4px;">0 emails entered</div>
   </div>
-  <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
-    <div class="field" style="margin:0;">
-      <label style="font-weight:600; font-size:0.875rem;">First Name</label>
-      <input type="text" id="inviteFirstName" placeholder="First name" />
-    </div>
-    <div class="field" style="margin:0;">
-      <label style="font-weight:600; font-size:0.875rem;">Last Name</label>
-      <input type="text" id="inviteLastName" placeholder="Last name" />
-    </div>
+
+  <div class="field" style="margin-top: 12px;">
+    <label for="inviteMessage" style="color: var(--cyan); font-weight: 600;">
+      Personal Message <span style="font-weight: 400; text-transform: none; color: var(--text-gray);">(optional)</span>
+    </label>
+    <textarea id="inviteMessage" rows="3" maxlength="1000"
+      placeholder="Hey, join me on GigsFill so we can co-manage the venue calendar together."
+      style="width: 100%; font-size: 0.85rem;"></textarea>
   </div>
-  <div class="field" style="margin-top:12px;">
-    <label style="font-weight:600; font-size:0.875rem;">Phone <span style="color:var(--text-muted); font-weight:400;">(optional)</span></label>
-    <input type="tel" id="invitePhone" placeholder="Phone number" />
-  </div>
-  <div id="inviteStatus" class="invite-status"></div>
-  <div class="modal-actions" style="margin-top: 24px;">
+
+  <div id="inviteStatus" class="invite-status" style="margin-top: 12px;"></div>
+  <div class="modal-actions" style="margin-top: 20px;">
     <button class="btn ghost" onclick="entityUsersManager?.closeInviteModal()">Cancel</button>
-    <button class="btn primary" id="sendInviteBtn" onclick="entityUsersManager?.sendInvitation()">Invite User</button>
+    <button class="btn primary" id="sendInviteBtn" onclick="entityUsersManager?.sendInvitation()">Send Invitations</button>
   </div>
 </div>
 </div>
@@ -3311,7 +3542,8 @@
            grid below + ships them as `hold_artist_ids` in the POST body.
       ──────────────────────────────────────────────────────────────────── -->
       <div class="recurring-toggle-row" id="holdGigToggleRow">
-        <label class="recurring-master-pill hold-master-pill">
+        <label class="recurring-master-pill hold-master-pill"
+          data-tooltip="This allows you to hold a gig for certain artists first. If they don't respond or are unavailable to perform, you can then decide to open the gig to everyone or cancel it.">
           <input type="checkbox" id="holdGigCheckbox" hidden>
           <span>🔒 Hold Gig</span>
         </label>
@@ -3319,6 +3551,9 @@
       <div id="holdGigPanel" class="recur-panel" style="display:none;border-color:rgba(245,158,11,0.25);">
         <p style="font-size:0.78rem;color:var(--text-gray);margin:6px 0 12px;">
           Offer this gig privately to your preferred artists first. Top of list goes first; each gets <b>24h</b> to accept before the next is offered. While the hold is active the gig is hidden from other artists.
+        </p>
+        <p id="holdSeriesHint" style="display:none;font-size:0.74rem;color:#fcd34d;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:8px 10px;margin:6px 0 12px;line-height:1.45;">
+          <b>Series mode:</b> the same hold list is applied to <i>every</i> gig in this recurring series. Each artist gets <b>one bundled email</b> listing every date — they pick which dates they can play, sign once, done. Frequency rules apply automatically as they pick.
         </p>
 
         <!-- Email-artists toggle styled as a header-pill: black (off) /
@@ -3328,6 +3563,7 @@
           <button type="button" id="holdEmailArtistsBtn"
             class="header-pill"
             data-on="true"
+            data-tooltip="This will alert each artist, one by one, in the order that you select below."
             style="background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.40);color:#86efac;">
             ✉ Email artist(s) immediately
           </button>
@@ -3351,7 +3587,7 @@
           <!-- Right: all preferred artists as click-to-toggle buttons -->
           <div style="display:flex;flex-direction:column;">
             <div style="font-size:0.66rem;color:var(--text-muted, #94a3b8);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em;font-weight:700;">Your preferred artists <span style="opacity:0.7;font-weight:600;">(Override Pay)</span></div>
-            <p style="font-size:0.66rem;color:var(--text-gray);margin:0 0 6px 0;font-style:italic;line-height:1.3;">Only artists matching at least one slot's type are listed. On accept, each artist sees only the slots they qualify for.</p>
+            <p style="font-size:0.66rem;color:var(--text-gray);margin:0 0 6px 0;font-style:italic;line-height:1.3;">Only artists matching at least one slot artist type above are listed. Artists are invited one by one, in the order on the left.</p>
             <div id="holdArtistPickerList" style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px;display:flex;flex-direction:column;gap:4px;">
               <div style="padding:14px;text-align:center;color:var(--text-gray);font-size:0.78rem;">Loading…</div>
             </div>
@@ -3363,7 +3599,8 @@
            recurring panel on/off. The hidden checkbox keeps its id so the
            existing JS (recurringCheckbox.checked / change event) still works. -->
       <div class="recurring-toggle-row">
-        <label class="recurring-master-pill">
+        <label class="recurring-master-pill"
+          data-tooltip="This allows you to create multiple gigs at one time using the parameters above.">
           <input type="checkbox" id="recurringGig" hidden>
           <span>🔁 Recurring Gig</span>
         </label>
@@ -3430,42 +3667,71 @@
   </div>
 </div>
 
-<!-- SERIES EDIT/DELETE MODAL -->
+<!-- SERIES EDIT/DELETE MODAL — tightened Jul 2026: 20px padding + smaller
+     h2 so it doesn't feel over-scaled next to the compact selector modal. -->
 <div class="modal-overlay hidden" id="seriesModal">
-  <div class="modal-content" style="max-width: 480px;">
-    <h2 id="seriesModalTitle">Edit Recurring Gig</h2>
-    <p style="margin: 16px 0; line-height: 1.6; color: var(--text-muted);">
-      This gig is part of a recurring series. Would you like to apply changes to:
+  <div class="modal-content" style="max-width:420px;padding:20px;">
+    <h2 id="seriesModalTitle" style="font-size:1rem;margin:0 0 4px;">Edit Recurring Gig</h2>
+    <p style="margin:8px 0 14px;line-height:1.4;color:var(--text-muted);font-size:0.85rem;">
+      This gig is part of a recurring series. Apply changes to:
     </p>
-    <div class="modal-actions" style="flex-direction: column; gap: 12px;">
-      <button class="btn primary" id="seriesEditThis" style="width: 100%;">This Gig Only</button>
-      <button class="btn primary" id="seriesSelectGigs" style="width: 100%;">Select Gigs to Save/Delete</button>
-      <button class="btn primary" id="seriesEditAll" style="width: 100%;">All Gigs in Series</button>
-      <button class="btn ghost" id="seriesCancelBtn" style="width: 100%;">Cancel</button>
+    <div class="modal-actions" style="flex-direction:column;gap:6px;">
+      <button class="btn primary" id="seriesEditThis" style="width:100%;font-size:0.85rem;padding:8px 12px;">This Gig Only</button>
+      <button class="btn primary" id="seriesSelectGigs" style="width:100%;font-size:0.85rem;padding:8px 12px;">Select Gigs to Save/Delete</button>
+      <button class="btn primary" id="seriesEditAll" style="width:100%;font-size:0.85rem;padding:8px 12px;">All Gigs in Series</button>
+      <button class="btn ghost" id="seriesCancelBtn" style="width:100%;font-size:0.85rem;padding:8px 12px;">Cancel</button>
     </div>
   </div>
 </div>
 
-<!-- SELECT GIGS MODAL -->
+<!-- SELECT GIGS MODAL — tightened Jul 2026. Same shell as the new
+     confirmCreateDatesModal below (parallel purposes: pick which
+     instances to save/delete vs pick which to create). -->
 <div class="modal-overlay hidden" id="selectGigsModal">
-  <div class="modal-content" style="max-width: 600px;">
-    <h2 id="selectGigsModalTitle">Select Gigs to Save</h2>
-    <div class="modal-separator"></div>
-    
-    <div style="margin: 16px 0;">
-      <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
-        <input type="checkbox" id="selectAllGigs" style="width: 16px; height: 16px;">
-        <span style="font-weight: 600; color: var(--text);">Select All</span>
-      </label>
-    </div>
-    
-    <div id="gigSelectionList" style="max-height: 400px; overflow-y: auto; margin: 16px 0; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid var(--border);">
+  <div class="modal-content" style="max-width:520px;padding:20px;">
+    <h2 id="selectGigsModalTitle" style="font-size:1rem;margin:0 0 12px;">Select Gigs to Save</h2>
+
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:rgba(255,255,255,0.05);border-radius:5px;font-size:0.85rem;">
+      <input type="checkbox" id="selectAllGigs" style="width:14px;height:14px;">
+      <span style="font-weight:600;color:var(--text);">Select All</span>
+    </label>
+
+    <div id="gigSelectionList" style="max-height:320px;overflow-y:auto;margin:10px 0;padding:4px 6px;background:rgba(0,0,0,0.2);border-radius:6px;border:1px solid var(--border);">
       <!-- Gig checkboxes will be populated here by JavaScript -->
     </div>
-    
-    <div class="modal-actions" style="gap: 12px;">
-      <button class="btn primary" id="confirmSelectedGigs" style="flex: 1;">Save Gig(s)</button>
-      <button class="btn ghost" id="closeSelectGigs" style="flex: 1;">Close</button>
+
+    <div class="modal-actions" style="gap:8px;">
+      <button class="btn primary" id="confirmSelectedGigs" style="flex:1;font-size:0.85rem;padding:8px 12px;">Save Gig(s)</button>
+      <button class="btn ghost" id="closeSelectGigs" style="flex:1;font-size:0.85rem;padding:8px 12px;">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM CREATE DATES MODAL — Jul 2026 addition. When venue clicks
+     Create on a recurring gig, this pops up with the full date list
+     (all defaulted to checked) so they can uncheck any dates they
+     don't want before the POST loop runs. Mirrors selectGigsModal's
+     styling for consistency. -->
+<div class="modal-overlay hidden" id="confirmCreateDatesModal">
+  <div class="modal-content" style="max-width:520px;padding:20px;">
+    <h2 style="font-size:1rem;margin:0 0 4px;">Confirm dates to create</h2>
+    <p style="margin:0 0 12px;font-size:0.78rem;color:var(--text-muted);line-height:1.5;">
+      All dates are checked by default. Uncheck any you'd like to skip — only the checked ones will be created.
+    </p>
+
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:rgba(255,255,255,0.05);border-radius:5px;font-size:0.85rem;">
+      <input type="checkbox" id="selectAllCreateDates" checked style="width:14px;height:14px;">
+      <span style="font-weight:600;color:var(--text);">Select All</span>
+      <span id="createDatesCount" style="margin-left:auto;font-size:0.72rem;color:var(--text-muted);font-weight:400;"></span>
+    </label>
+
+    <div id="createDatesList" style="max-height:320px;overflow-y:auto;margin:10px 0;padding:4px 6px;background:rgba(0,0,0,0.2);border-radius:6px;border:1px solid var(--border);">
+      <!-- Date checkboxes populated by JavaScript -->
+    </div>
+
+    <div class="modal-actions" style="gap:8px;">
+      <button class="btn primary" id="confirmCreateDates" style="flex:1;font-size:0.85rem;padding:8px 12px;">Create Gig(s)</button>
+      <button class="btn ghost" id="cancelCreateDates" style="flex:1;font-size:0.85rem;padding:8px 12px;">Cancel</button>
     </div>
   </div>
 </div>
@@ -3475,34 +3741,35 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=12" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=17" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=2" defer></script>
-<script src="/app/static/js/messages.js?v=5"></script>
+<script src="/app/static/js/messages.js?v=7"></script>
 <script src="/app/static/js/review-modal.js?v=3"></script>
-<script src="/app/static/js/artist-reviews.js"></script>
-<script src="/app/static/js/gig-modal.js?v=22"></script>
-<script src="/app/static/js/gf-modals.js?v=7"></script>
-<script src="/app/static/js/hold-mgmt.js?v=7"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=202"></script>
+<script src="/app/static/js/artist-reviews.js?v=2"></script>
+<script src="/app/static/js/gig-modal.js?v=28"></script>
+<script src="/app/static/js/gf-modals.js?v=8"></script>
+<script src="/app/static/js/hold-mgmt.js?v=12"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=241"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
-<script src="/app/static/js/venue.contracts.js?v=3" defer></script>
+<script src="/app/static/js/venue.contracts.js?v=4" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
 
 <script src="/app/static/js/activity-center.js?v=4"></script>
 
-<script src="/app/static/js/my-artists.js?v=2"></script>
-<script src="/app/static/js/entity-users.js?v=3"></script>
-<script src="/app/static/js/venue-email-center.js?v=6"></script>
+<script src="/app/static/js/my-artists.js?v=5"></script>
+<script src="/app/static/js/entity-users.js?v=6"></script>
+<script src="/app/static/js/venue-email-center.js?v=10"></script>
 
 <footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
-<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
-<script src="/app/static/js/venue-create-gigs-init.js?v=6"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
+<script src="/app/static/js/venue-create-gigs-init.js?v=11"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
-<script src="/app/static/js/gig-hover-card.js?v=18"></script>
+<script src="/app/static/js/gig-hover-card.js?v=21"></script>
+<script src="/app/static/js/venue-hold-offers-banner.js?v=13" defer></script>
 <script src="/app/static/js/sw-register.js"></script>
 </body>
 </html>

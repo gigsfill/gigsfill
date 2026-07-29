@@ -241,13 +241,18 @@ def get_my_artists(user=Depends(get_current_user), db=Depends(get_db)):
     conn = _me_conn()
     cursor = conn.cursor()
 
+    # Jul 2026: exclude tombstoned artists (deleted_at IS NOT NULL). The row
+    # sticks around so historical joins render "[Deleted] X" correctly in
+    # payment history / past-gig lists, but the owner's account picker and
+    # entity switcher only show live entities.
     cursor.execute("""
         SELECT DISTINCT a.id, a.name, a.bio,
                CASE WHEN a.user_id = ? THEN 'owner' ELSE 'member' END as role,
                COALESCE(a.display_order, 999) as display_order
         FROM artists a
         LEFT JOIN entity_users eu ON eu.entity_type = 'artist' AND eu.entity_id = a.id AND eu.user_id = ?
-        WHERE a.user_id = ? OR eu.user_id = ?
+        WHERE (a.user_id = ? OR eu.user_id = ?)
+          AND a.deleted_at IS NULL
         ORDER BY display_order ASC, a.id ASC
     """, (user.id, user.id, user.id, user.id))
     
@@ -274,13 +279,15 @@ def get_my_venues(user=Depends(get_current_user), db=Depends(get_db)):
     conn = _me_conn2()
     cursor = conn.cursor()
 
+    # Jul 2026: exclude tombstoned venues — see get_my_artists rationale.
     cursor.execute("""
         SELECT DISTINCT v.id, v.venue_name, v.city, v.state,
                CASE WHEN v.user_id = ? THEN 'owner' ELSE 'member' END as role,
                COALESCE(v.display_order, 999) as display_order
         FROM venues v
         LEFT JOIN entity_users eu ON eu.entity_type = 'venue' AND eu.entity_id = v.id AND eu.user_id = ?
-        WHERE v.user_id = ? OR eu.user_id = ?
+        WHERE (v.user_id = ? OR eu.user_id = ?)
+          AND v.deleted_at IS NULL
         ORDER BY display_order ASC, v.id ASC
     """, (user.id, user.id, user.id, user.id))
     
@@ -399,16 +406,19 @@ def delete_preview(user=Depends(get_current_user), db=Depends(get_db)):
     # multi-slot bookings — they could delete their account thinking nothing
     # will be cancelled, then the venue is left waiting for a ghost.
     # COUNT(DISTINCT g.id) so a gig where the artist took two slots counts once.
+    # Jul 2026 refactor: dropped `g.artist_id = a.id` OR-leg. Post-backfill
+    # (db.setup_database), every gig has a `gig_slots` row so slot-only
+    # covers both shapes. Slot-side status IN filter keeps the "in-flight"
+    # bookings that were previously the point of the OR.
     artists = db.execute(text("""
         SELECT a.id, a.name,
             (SELECT COUNT(DISTINCT g.id)
              FROM gigs g
-             LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = a.id
-                                  AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-             WHERE (g.artist_id = a.id OR gs.id IS NOT NULL)
-               AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-               AND g.date >= :today) as booked_gigs
-        FROM artists a WHERE a.user_id = :uid
+             JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = a.id
+                              AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
+             WHERE g.date >= :today) as booked_gigs
+        FROM artists a
+        WHERE a.user_id = :uid AND a.deleted_at IS NULL
     """), {"uid": user_id, "today": utcnow_naive().date().isoformat()}).mappings().fetchall()
 
     # Get owned venues with booked gig counts.
@@ -422,306 +432,173 @@ def delete_preview(user=Depends(get_current_user), db=Depends(get_db)):
             (SELECT COUNT(*) FROM gigs g WHERE g.venue_id = v.id
                                           AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
                                           AND g.date >= :today) as booked_gigs
-        FROM venues v WHERE v.user_id = :uid
+        FROM venues v
+        WHERE v.user_id = :uid AND v.deleted_at IS NULL
     """), {"uid": user_id, "today": utcnow_naive().date().isoformat()}).mappings().fetchall()
     
-    return {
-        "artists": [dict(a) for a in artists],
-        "venues": [dict(v) for v in venues]
-    }
+    # Jul 2026: also return `other_users_count` per entity so the modal
+    # can distinguish solo-owned entities (auto-deleted regardless of the
+    # checkbox — see delete_account) from team-shared entities (checkbox
+    # is a real choice; unchecked keeps the entity alive under the remaining
+    # team). Team members live in `entity_users`; the owner is on the entity
+    # row itself, so this count is "additional humans besides me".
+    from backend.services.entity_delete import (
+        count_other_team_members as _count_others,
+        list_live_transactions as _list_live_txns,
+    )
+    a_out = []
+    for a in artists:
+        d = dict(a)
+        d["other_users_count"] = _count_others(db, "artist", d["id"], user_id)
+        # Jul 2026: return live-txn blockers per entity so the delete-account
+        # modal can show them upfront instead of firing DELETE and eating a
+        # 409. Empty list means "no blockers, safe to tombstone."
+        d["live_txns"] = _list_live_txns(db, "artist", d["id"])
+        a_out.append(d)
+    v_out = []
+    for v in venues:
+        d = dict(v)
+        d["other_users_count"] = _count_others(db, "venue", d["id"], user_id)
+        d["live_txns"] = _list_live_txns(db, "venue", d["id"])
+        v_out.append(d)
+
+    # Delegated memberships: entities where this user is on `entity_users`
+    # (team member) but NOT the owner on the entity row itself. These will
+    # NOT be deleted — they stay alive under the remaining owner/team. We
+    # surface them in the modal so the user knows what teams they're
+    # leaving behind (transparency + preventing surprise for the entity
+    # owner who'd otherwise silently lose a team member).
+    delegated = []
+    for row in db.execute(text("""
+        SELECT eu.entity_type, eu.entity_id, eu.role,
+               CASE WHEN eu.entity_type = 'artist'
+                    THEN (SELECT name       FROM artists WHERE id = eu.entity_id)
+                    ELSE (SELECT venue_name FROM venues  WHERE id = eu.entity_id)
+               END as name
+        FROM entity_users eu
+        WHERE eu.user_id = :uid
+          AND NOT EXISTS (
+              SELECT 1 FROM artists a WHERE a.id = eu.entity_id AND eu.entity_type = 'artist' AND a.user_id = :uid
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM venues  v WHERE v.id = eu.entity_id AND eu.entity_type = 'venue'  AND v.user_id = :uid
+          )
+    """), {"uid": user_id}).mappings().all():
+        d = dict(row)
+        if d.get("name"):
+            delegated.append(d)
+
+    return {"artists": a_out, "venues": v_out, "delegated_memberships": delegated}
 
 @router.delete("/api/me/delete")
 @limiter.limit("3/hour")
 def delete_account(request: Request, data: dict = Body(default={}), user=Depends(get_current_user), db=Depends(get_db)):
     """Delete user account with optional artist/venue deletion and gig cancellation.
 
+    Owner-only for entities. Solo-owned entities (no other team members) are
+    auto-added to the delete list so they don't limbo — see below. Standalone
+    entity deletion (without deleting the user) is available at
+    DELETE /api/artists/{id} and DELETE /api/venues/{id}.
+
     Audit fix (May 2026 part 7): rate-limited 3/hour so a double-clicked Delete
-    button (or a malicious script) can't fire concurrent cascades. Two
-    in-flight deletes would both pass `get_current_user`, both run the full
-    cascade, and the second would hit half-deleted rows and 500 with a
-    misleading error.
+    button (or a malicious script) can't fire concurrent cascades.
+
+    Jul 2026 (this refactor):
+      1. Per-entity ownership guard BEFORE any cleanup runs — fixes the
+         pre-existing hole where a client could POST arbitrary entity ids and
+         wipe their child data before the guarded final DELETE no-op'd.
+      2. Auto-augment `delete_entities` with any owned entity that has NO
+         other team members (via entity_users). Rationale: if the only human
+         who could use the entity is going away, keeping the row alive
+         orphans it forever — nobody can log in to it, no re-owner exists.
+      3. Per-entity cascade extracted to services.entity_delete so the
+         standalone DELETE endpoints share the exact pipeline.
     """
     import shutil
     from pathlib import Path
-    from datetime import datetime
-    
+    from backend.services.entity_delete import (
+        assert_owner as _assert_owner,
+        assert_no_charged_transactions as _assert_no_charged,
+        count_other_team_members as _count_others,
+        delete_artist as _delete_artist,
+        delete_venue as _delete_venue,
+    )
+
     try:
         user_id = user.id
-        delete_entity_ids = data.get("delete_entities", [])  # [{ type: "artist"|"venue", id: 123 }, ...]
+        requested = data.get("delete_entities", [])  # [{ type: "artist"|"venue", id: 123 }, ...]
 
-        # ---- Step 0: refuse self-delete if charged transactions still exist ----
-        # Audit fix (May 2026 part 5): without this guard, a venue with an
-        # unrefunded charge or an artist with a pending payout could delete
-        # their account and the audit trail vanished. Force them through the
-        # explicit refund / reversal flow in Admin → Payments first.
-        # We check ALL charged statuses (charged/paid/transferred/pending_transfer/
-        # transfer_failed). The existing per-entity update at Step 2 already
-        # marks scheduled/test/charge_retry as 'account_deleted'.
-        # Audit fix (May 2026 part 5): include dispute + processing statuses
-        # to match services/gig_cleanup.CHARGED_TRANSACTION_STATUSES.
-        _CHARGED = ('charged', 'paid', 'transferred', 'transfer_failed', 'pending_transfer',
-                    'disputed', 'dispute_won', 'dispute_lost', 'processing')
-        _placeholders = ", ".join(f"'{s}'" for s in _CHARGED)
-        for _ent in delete_entity_ids:
-            _etype = _ent.get("type")
-            _eid = _ent.get("id")
-            if not _etype or not _eid:
+        # ---- Step 0a: normalize + de-duplicate requested list ----
+        # Frontend could double-list an entity if the checklist state got weird.
+        seen = set()
+        norm_requested = []
+        for ent in requested:
+            etype = ent.get("type")
+            eid = ent.get("id")
+            if not etype or not eid or etype not in ("artist", "venue"):
                 continue
-            if _etype == "venue":
-                _stuck = db.execute(text(f"""
-                    SELECT t.id, t.status
-                    FROM transactions t
-                    JOIN gigs g ON g.id = t.gig_id
-                    WHERE g.venue_id = :eid AND t.status IN ({_placeholders})
-                    LIMIT 1
-                """), {"eid": _eid}).mappings().first()
-            else:  # artist
-                _stuck = db.execute(text(f"""
-                    SELECT id, status FROM transactions
-                    WHERE artist_id = :eid AND status IN ({_placeholders})
-                    LIMIT 1
-                """), {"eid": _eid}).mappings().first()
-            if _stuck:
-                raise HTTPException(
-                    409,
-                    f"CHARGED_TRANSACTION_EXISTS: This {_etype} has a transaction "
-                    f"in status '{_stuck['status']}'. Refund or reverse it from "
-                    f"Admin → Payments before deleting the account."
-                )
+            key = (etype, int(eid))
+            if key in seen:
+                continue
+            seen.add(key)
+            norm_requested.append({"type": etype, "id": int(eid)})
 
-        # ---- Step 1: Cancel booked gigs and send emails for entities being deleted ----
-        for entity in delete_entity_ids:
-            etype = entity.get("type")
-            eid = entity.get("id")
-            if not etype or not eid:
+        # ---- Step 0b: per-entity ownership guard ----
+        # Refuse the whole request if the user isn't the owner of any listed
+        # entity. This fires BEFORE any DB mutation so a malicious payload
+        # can't wipe a venue's gigs and land on a no-op DELETE FROM venues.
+        for ent in norm_requested:
+            _assert_owner(db, ent["type"], ent["id"], user_id)
+
+        # ---- Step 0c: auto-augment with solo-owned entities ----
+        # Any entity the user owns that has ZERO other team members would
+        # limbo after account delete. Fold them into the delete list so the
+        # frontend can't accidentally leave a ghost by un-checking the box.
+        owned_artists = db.execute(
+            text("SELECT id FROM artists WHERE user_id = :uid AND deleted_at IS NULL"),
+            {"uid": user_id}
+        ).fetchall()
+        owned_venues = db.execute(
+            text("SELECT id FROM venues WHERE user_id = :uid AND deleted_at IS NULL"),
+            {"uid": user_id}
+        ).fetchall()
+        for (aid,) in owned_artists:
+            if ("artist", aid) in seen:
                 continue
-            
-            # Find booked gigs
-            if etype == "artist":
-                # Must catch multi-slot bookings (gig_slots.artist_id), not just
-                # legacy single-slot (gigs.artist_id). Without the slot leg,
-                # deleting an artist account leaves multi-slot bookings live —
-                # the venue keeps waiting for an artist that no longer exists,
-                # no cancellation email fires, transactions don't get cleaned.
-                # DISTINCT so a gig where the artist took two slots is processed once.
-                booked = db.execute(text("""
-                    SELECT DISTINCT g.id, g.date, g.venue_id, v.venue_name, v.user_id as venue_user_id,
-                           :aname as artist_name, u_venue.email as venue_email
-                    FROM gigs g
-                    LEFT JOIN venues v ON g.venue_id = v.id
-                    LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :eid AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-                    LEFT JOIN users u_venue ON v.user_id = u_venue.id
-                    WHERE (g.artist_id = :eid OR gs.id IS NOT NULL)
-                      AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-                """), {"eid": eid, "aname": (db.execute(text(
-                    "SELECT name FROM artists WHERE id = :aid"
-                ), {"aid": eid}).scalar() or "")}).mappings().fetchall()
-            else:  # venue
-                # Audit fix (May 2026 part 7): include awaiting_venue_contract +
-                # pending_contract so an account with a gig mid-contract-flow is
-                # cleanly cancelled instead of leaving the gig stuck in the new
-                # part-5/6 state with the now-deleted entity still referenced.
-                booked = db.execute(text("""
-                    SELECT g.id, g.date, g.artist_id, g.venue_id, v.venue_name,
-                           a.name as artist_name, a.user_id as artist_user_id, u_artist.email as artist_email
-                    FROM gigs g
-                    LEFT JOIN venues v ON g.venue_id = v.id
-                    LEFT JOIN artists a ON g.artist_id = a.id
-                    LEFT JOIN users u_artist ON a.user_id = u_artist.id
-                    WHERE g.venue_id = :eid AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-                """), {"eid": eid}).mappings().fetchall()
-            
-            # Send cancellation emails for each booked gig
-            try:
-                from backend.email_service import EmailService
-                email_service = EmailService(db)
-                
-                for gig in booked:
-                    if etype == "artist" and gig.get("venue_email"):
-                        # Notify venue that artist is leaving
-                        email_service.send_notification_email(
-                            user_email=gig["venue_email"],
-                            user_id=gig["venue_user_id"],
-                            notification_type='venue_gig_cancelled',
-                            variables={
-                                'user_name': gig['venue_name'],
-                                'venue_name': gig['venue_name'],
-                                'artist_name': gig.get('artist_name', 'An artist'),
-                                'artist_id': str(eid),
-                                'venue_id': str(gig['venue_id']),
-                                'date': format_email_date(gig['date']),
-                                'cancellation_reason': 'Artist account has been deleted'
-                            }
-                        )
-                        # Create notification for venue owner
-                        db.execute(text("""
-                            INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at, cancellation_reason)
-                            VALUES (:uid, 'gig_cancelled', 'Gig Cancelled', :msg, :gid, :vid, :aid, FALSE, :now, :reason)
-                        """), {
-                            "uid": gig["venue_user_id"], "msg": f"Your gig on {gig['date']} with {gig.get('artist_name', 'an artist')} has been cancelled (artist account deleted).",
-                            "gid": gig["id"], "vid": gig["venue_id"], "aid": eid, "now": utcnow_naive(), "reason": "Artist account deleted"
-                        })
-                    elif etype == "venue" and gig.get("artist_email"):
-                        # Notify artist that venue is leaving
-                        email_service.send_notification_email(
-                            user_email=gig["artist_email"],
-                            user_id=gig["artist_user_id"],
-                            notification_type='artist_gig_cancelled',
-                            variables={
-                                'user_name': gig.get('artist_name', 'Artist'),
-                                'venue_name': gig['venue_name'],
-                                'artist_name': gig.get('artist_name', 'Artist'),
-                                'artist_id': str(gig.get('artist_id', '')),
-                                'venue_id': str(eid),
-                                'date': format_email_date(gig['date']),
-                                'cancellation_reason': 'Venue account has been deleted'
-                            }
-                        )
-                        db.execute(text("""
-                            INSERT INTO notifications (user_id, notification_type, title, message, gig_id, venue_id, artist_id, is_read, created_at, cancellation_reason)
-                            VALUES (:uid, 'gig_cancelled', 'Gig Cancelled', :msg, :gid, :vid, :aid, FALSE, :now, :reason)
-                        """), {
-                            "uid": gig["artist_user_id"], "msg": f"Your gig on {gig['date']} at {gig['venue_name']} has been cancelled (venue account deleted).",
-                            "gid": gig["id"], "vid": eid, "aid": gig.get("artist_id"), "now": utcnow_naive(), "reason": "Venue account deleted"
-                        })
-            except Exception as e:
-                pass  # Emails non-critical
-            
-            # ---- Step 2: Delete entity data ----
-            if etype == "artist":
-                # FIX (May 2026): cancel any in-flight transactions for this artist before
-                # deleting. Otherwise the payout scheduler would try to process them and
-                # transfer money to a Stripe Connect account whose underlying GigsFill
-                # user is gone. Set status to 'account_deleted' rather than DELETE so
-                # the audit trail is preserved.
-                db.execute(text("""
-                    UPDATE transactions SET status = 'account_deleted',
-                        notes = COALESCE(notes, '') || ' [Artist account deleted]'
-                    WHERE artist_id = :eid
-                      AND status IN ('scheduled', 'test', 'charge_retry',
-                                     'pending_transfer', 'transfer_failed')
-                """), {"eid": eid})
-                # Reset booked / in-flight gigs to open so venue can rebook.
-                # Audit fix (May 2026 part 7): include awaiting_venue_contract +
-                # pending_contract so the part-5/6 contract-flow states get
-                # cleanly released instead of leaving the gig stuck.
-                db.execute(text("UPDATE gigs SET status = 'open', artist_id = NULL, contract_hold_artist_id = NULL, contract_hold_expires_at = NULL WHERE artist_id = :eid AND status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')"), {"eid": eid})
-                # Remove artist from any other gig references
-                db.execute(text("UPDATE gigs SET artist_id = NULL WHERE artist_id = :eid"), {"eid": eid})
-                # Same for slot-based bookings
-                db.execute(text("UPDATE gig_slots SET status = 'open', artist_id = NULL WHERE artist_id = :eid AND status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')"), {"eid": eid})
-                db.execute(text("UPDATE gig_slots SET artist_id = NULL WHERE artist_id = :eid"), {"eid": eid})
-                # Mark any in-flight contracts as cancelled.
-                try:
-                    db.execute(text("UPDATE gig_contracts SET status = 'cancelled' WHERE artist_id = :eid AND status IN ('pending','awaiting_venue_upload','artist_signed')"), {"eid": eid})
-                except Exception:
-                    pass
-                db.execute(text("DELETE FROM preferred_artists WHERE artist_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM artist_media WHERE artist_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM entity_users WHERE entity_type = 'artist' AND entity_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM entity_invitations WHERE entity_type = 'artist' AND entity_id = :eid"), {"eid": eid})
-                # FIX (May 2026): missing in original — clean up artist's Stripe Connect settings + reviews + targeted messages
-                db.execute(text("DELETE FROM entity_payment_settings WHERE entity_type = 'artist' AND entity_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM artist_reviews WHERE artist_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM venue_reviews WHERE artist_id = :eid"), {"eid": eid})
-                # Audit fix (May 2026): also clean waitlist rows so future
-                # waitlist offers don't FK-reference a deleted artist.
-                db.execute(text("DELETE FROM gig_waitlist WHERE artist_id = :eid"), {"eid": eid})
-                try:
-                    db.execute(text("DELETE FROM waitlist_offered WHERE artist_id = :eid"), {"eid": eid})
-                except Exception:
-                    pass  # table may not exist on older deployments
-                # gig_messages: delete messages targeting this artist
-                try:
-                    db.execute(text("DELETE FROM gig_messages WHERE target_artist_id = :eid"), {"eid": eid})
-                except Exception:
-                    pass  # column may not exist on older deployments — gig_messages migration is recent
-                db.execute(text("DELETE FROM notifications WHERE artist_id = :eid"), {"eid": eid})
-                # Audit fix (May 2026 part 5): drop vanity_urls so a deleted
-                # artist's slug stops resolving (would otherwise render an
-                # empty profile page on a 200 response, and if the entity id
-                # is later reallocated the slug would point at the wrong row).
-                try:
-                    db.execute(text("DELETE FROM vanity_urls WHERE entity_type='artist' AND entity_id=:eid"), {"eid": eid})
-                except Exception: pass
-                db.execute(text("DELETE FROM artists WHERE id = :eid AND user_id = :uid"), {"eid": eid, "uid": user_id})
-                
-                # Delete media folder
-                media_path = Path(f"media/artists/{eid}")
-                if media_path.exists():
-                    shutil.rmtree(media_path)
-                    
-            elif etype == "venue":
-                # FIX (May 2026): cancel any in-flight transactions for this venue's gigs before
-                # deleting. Set status to 'account_deleted' for audit trail.
-                db.execute(text("""
-                    UPDATE transactions SET status = 'account_deleted',
-                        notes = COALESCE(notes, '') || ' [Venue account deleted]'
-                    WHERE gig_id IN (SELECT id FROM gigs WHERE venue_id = :eid)
-                      AND status IN ('scheduled', 'test', 'charge_retry',
-                                     'pending_transfer', 'transfer_failed')
-                """), {"eid": eid})
-                # First reset booked gigs to open (don't delete venue's gig slots)
-                # Actually delete all gigs for this venue since venue is going away.
-                # Audit fix (May 2026 part 10): cascade gig-bound child tables
-                # BEFORE deleting the gig rows themselves. Previously
-                # gig_messages, gig_slots, gig_contracts, gig_waitlist,
-                # gig_email_log, etc. were left orphaned referencing now-
-                # missing gig rows; inbox/badge queries silently hid them
-                # but they lived forever in the DB. The per-gig cleanup helper
-                # at services/gig_cleanup.py covers single-gig deletion; this
-                # is the venue-wide wipe.
-                db.execute(text("""
-                    DELETE FROM gig_messages
-                    WHERE gig_id IN (SELECT id FROM gigs WHERE venue_id = :eid)
-                """), {"eid": eid})
-                db.execute(text("""
-                    DELETE FROM gig_slots
-                    WHERE gig_id IN (SELECT id FROM gigs WHERE venue_id = :eid)
-                """), {"eid": eid})
-                db.execute(text("""
-                    DELETE FROM gig_contracts
-                    WHERE gig_id IN (SELECT id FROM gigs WHERE venue_id = :eid)
-                """), {"eid": eid})
-                db.execute(text("""
-                    DELETE FROM gig_waitlist
-                    WHERE gig_id IN (SELECT id FROM gigs WHERE venue_id = :eid)
-                """), {"eid": eid})
-                db.execute(text("""
-                    DELETE FROM gig_email_log
-                    WHERE gig_id IN (SELECT id FROM gigs WHERE venue_id = :eid)
-                """), {"eid": eid})
-                db.execute(text("""
-                    DELETE FROM gig_cancelled_artists
-                    WHERE gig_id IN (SELECT id FROM gigs WHERE venue_id = :eid)
-                """), {"eid": eid})
-                db.execute(text("DELETE FROM gigs WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM preferred_artists WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM venue_media WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM entity_users WHERE entity_type = 'venue' AND entity_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM entity_invitations WHERE entity_type = 'venue' AND entity_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM venue_email_notifications WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM venue_email_history WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM artist_invitations WHERE venue_id = :eid"), {"eid": eid})
-                # FIX (May 2026): missing in original — affiliate referrals + reviews
-                db.execute(text("DELETE FROM affiliate_referrals WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM affiliate_earnings WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM venue_reviews WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM artist_reviews WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM notifications WHERE venue_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM entity_payment_settings WHERE entity_type = 'venue' AND entity_id = :eid"), {"eid": eid})
-                db.execute(text("DELETE FROM venue_payment_overrides WHERE venue_id = :eid"), {"eid": eid})
-                # Audit fix (May 2026 part 5): drop vanity_urls so a deleted
-                # venue's slug stops resolving.
-                try:
-                    db.execute(text("DELETE FROM vanity_urls WHERE entity_type='venue' AND entity_id=:eid"), {"eid": eid})
-                except Exception: pass
-                db.execute(text("DELETE FROM venues WHERE id = :eid AND user_id = :uid"), {"eid": eid, "uid": user_id})
-                
-                media_path = Path(f"media/venues/{eid}")
-                if media_path.exists():
-                    shutil.rmtree(media_path)
-        
+            if _count_others(db, "artist", aid, user_id) == 0:
+                norm_requested.append({"type": "artist", "id": aid})
+                seen.add(("artist", aid))
+        for (vid,) in owned_venues:
+            if ("venue", vid) in seen:
+                continue
+            if _count_others(db, "venue", vid, user_id) == 0:
+                norm_requested.append({"type": "venue", "id": vid})
+                seen.add(("venue", vid))
+
+        # ---- Step 0d: refuse if any charged transactions still exist ----
+        # Same as before — force refund flow first to preserve audit trail.
+        for ent in norm_requested:
+            _assert_no_charged(db, ent["type"], ent["id"])
+
+        # ---- Step 1: per-entity cascade (notify counterparties + wipe data) ----
+        # services.entity_delete handles: cancel-notify booked-gig
+        # counterparties, mark in-flight transactions as `account_deleted`,
+        # release the entity's grip on gigs/slots/contracts, wipe every
+        # child table, delete the entity row.
+        #
+        # Audit fix (Jul 2026): each per-entity delete now returns the
+        # list of filesystem paths to clean up AFTER the whole delete-
+        # account transaction commits. Doing rmtree before commit meant
+        # any commit-fail = permanent media loss with entities still
+        # live.
+        _rm_paths_pending: list[str] = []
+        for ent in norm_requested:
+            if ent["type"] == "artist":
+                _paths = _delete_artist(db, ent["id"], user_id) or []
+            else:
+                _paths = _delete_venue(db, ent["id"], user_id) or []
+            _rm_paths_pending.extend(_paths)
+
         # ---- Step 3: Delete user-level data ----
         db.execute(text("DELETE FROM email_preferences WHERE user_id = :uid"), {"uid": user_id})
         db.execute(text("DELETE FROM support_tickets WHERE user_id = :uid"), {"uid": user_id})
@@ -747,30 +624,105 @@ def delete_account(request: Request, data: dict = Body(default={}), user=Depends
         except Exception:
             pass  # table may not exist on older DB
         db.execute(text("DELETE FROM affiliate_recommend_emails WHERE sender_user_id = :uid"), {"uid": user_id})
-        # Affiliate-as-user: if this user was an affiliate, drop their referrals/earnings/payouts.
-        # We've already deleted affiliate_referrals.venue_id rows above (during venue deletion);
-        # this catches cases where user was an affiliate for OTHER people's venues.
+        # Affiliate-as-user: if this user was an affiliate, drop their
+        # referrals/earnings/payouts. Note (Jul 2026 audit): the previous
+        # comment claimed venue-side affiliate_referrals rows are removed
+        # during venue deletion above, but entity_delete.delete_venue does
+        # NOT touch affiliate_referrals — that's intentional per the
+        # tombstone history-preservation policy, so this catches rows for
+        # any venue (still-live or tombstoned) that this affiliate
+        # referred.
         db.execute(text("DELETE FROM affiliate_referrals WHERE affiliate_user_id = :uid"), {"uid": user_id})
         db.execute(text("DELETE FROM affiliate_earnings WHERE affiliate_user_id = :uid"), {"uid": user_id})
         db.execute(text("DELETE FROM affiliate_payouts WHERE affiliate_user_id = :uid"), {"uid": user_id})
-        # Reviews authored by this user (across both directions)
-        db.execute(text("DELETE FROM artist_reviews WHERE reviewer_user_id = :uid"), {"uid": user_id})
-        db.execute(text("DELETE FROM venue_reviews WHERE reviewer_user_id = :uid"), {"uid": user_id})
+        # Reviews authored by this user — PRESERVE the row and NULL out
+        # reviewer_user_id (see reviews table schema; the column is nullable).
+        # BUG FIX (Jul 2026 audit): the previous DELETE damaged OTHER users'
+        # entities. A venue with 20 five-star reviews would lose the ones
+        # written by any deleting user, dropping the venue's public rating
+        # even though the venue owner did nothing. Now the review's text +
+        # rating survive (aggregated into avg_rating/review_count as normal)
+        # and only the author link is cleared for privacy. Same policy as
+        # entity_delete for tombstoned entities — reviews are historical.
+        try:
+            db.execute(text("UPDATE artist_reviews SET reviewer_user_id = NULL WHERE reviewer_user_id = :uid"), {"uid": user_id})
+            db.execute(text("UPDATE venue_reviews  SET reviewer_user_id = NULL WHERE reviewer_user_id = :uid"), {"uid": user_id})
+        except Exception:
+            # Column may be NOT NULL on older deployments — fall back to the
+            # historical DELETE so account-delete still succeeds. Log so the
+            # schema drift is visible.
+            import logging as _logging
+            _logging.getLogger("gigsfill.me").warning(
+                f"delete_account: could not NULL reviewer_user_id (schema may be NOT NULL); falling back to hard delete for user {user_id}"
+            )
+            db.execute(text("DELETE FROM artist_reviews WHERE reviewer_user_id = :uid"), {"uid": user_id})
+            db.execute(text("DELETE FROM venue_reviews WHERE reviewer_user_id = :uid"), {"uid": user_id})
+        # BUG FIX (Jul 2026 audit): also wipe user-level W-9 (encrypted TIN +
+        # legal name + mailing address for affiliate 1099s). Was left behind
+        # after user delete — GDPR/PII data-retention leak.
+        try:
+            db.execute(text("DELETE FROM w9_forms WHERE entity_type = 'user' AND entity_id = :uid"), {"uid": user_id})
+        except Exception:
+            pass
         # gig_messages sent by this user
         try:
             db.execute(text("DELETE FROM gig_messages WHERE sender_user_id = :uid"), {"uid": user_id})
         except Exception:
             pass
-        
+        # BUG FIX (Jul 2026 audit): user-scoped rows the previous cascade missed.
+        # user_settings + user_availability are per-user preference tables that
+        # dangle indefinitely after account delete. artist_email_digest_queue
+        # holds pending open-gig-digest rows keyed by user_id that would try to
+        # send to a nonexistent recipient on the next digest tick.
+        for _stmt in (
+            "DELETE FROM user_settings WHERE user_id = :uid",
+            "DELETE FROM user_availability WHERE user_id = :uid",
+            "DELETE FROM artist_email_digest_queue WHERE user_id = :uid",
+        ):
+            try:
+                db.execute(text(_stmt), {"uid": user_id})
+            except Exception:
+                pass
+
+        # ---- Step 3b: Belt-and-suspenders — release ownership on any
+        # pre-existing tombstoned artist/venue this user still owns.
+        # 2026-07-26 fix. Before the entity_delete.py tombstone was updated
+        # to NULL user_id in the same step, tombstoning left dangling FKs
+        # that blocked DELETE FROM users. Rows created before that fix
+        # still exist in production; this catches them at delete-account
+        # time so no user is stuck in the FK-constraint-fail loop.
+        db.execute(text("""
+            UPDATE artists SET user_id = NULL
+             WHERE user_id = :uid AND deleted_at IS NOT NULL
+        """), {"uid": user_id})
+        db.execute(text("""
+            UPDATE venues  SET user_id = NULL
+             WHERE user_id = :uid AND deleted_at IS NOT NULL
+        """), {"uid": user_id})
+
         # ---- Step 4: Delete user ----
         db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
-        
-        # Delete user media folder
-        media_path = Path(f"media/user_{user_id}")
-        if media_path.exists():
-            shutil.rmtree(media_path)
-        
+
         db.commit()
+
+        # ---- Step 5: filesystem cleanup — deferred until AFTER the
+        # commit succeeded (Jul 2026 audit fix). If any of these rmtree
+        # calls fails, the DB state is already durable so the account is
+        # deleted for real; a leaked upload directory is much better
+        # than a partial rollback with media gone.
+        from backend.services.entity_delete import _rm_tree
+        for _p in _rm_paths_pending:
+            try:
+                _rm_tree(_p)
+            except Exception:
+                pass
+        try:
+            media_path = Path(f"media/user_{user_id}")
+            if media_path.exists():
+                shutil.rmtree(media_path)
+        except Exception:
+            pass
+
         # Audit fix (May 2026): explicitly clear the session cookie on
         # successful deletion. Subsequent requests would 401 anyway (the
         # user row is gone), but the cookie should be cleared properly so
@@ -782,9 +734,21 @@ def delete_account(request: Request, data: dict = Body(default={}), user=Depends
             clear_session_cookie(resp)
         except Exception:
             # Fallback: delete cookie directly if helper isn't importable.
-            resp.delete_cookie("session", path="/")
+            # Jul 2026 audit fix: cookie name is `session_token`, not `session`
+            # (see backend/routes/auth.py:68). Previous fallback would leave
+            # the browser with a valid cookie for 7 days if clear_session_cookie
+            # failed to import.
+            resp.delete_cookie("session_token", path="/")
         return resp
+    except HTTPException:
+        # Owner-guard (403), refund-guard (409), and any other structured
+        # rejections need to reach the client with their real status. The
+        # blanket 500 below used to hide these.
+        db.rollback()
+        raise
     except Exception as e:
+        import logging as _log
+        _log.getLogger("gigsfill.me").exception(f"delete_account failed for user {user.id}: {e}")
         db.rollback()
         raise HTTPException(500, "Failed to delete account. Please try again.")
 
@@ -1111,13 +1075,19 @@ def get_artist_invitation_by_token(token: str, db=Depends(get_db)):
     if not token or len(token) < 16:
         raise HTTPException(404, "Invitation not found")
 
+    # JOIN venues live for the current venue_name — the stored
+    # `ai.venue_name` snapshot goes stale if the venue renames after
+    # inviting the artist but before the artist accepts.
     rows = db.execute(text("""
-        SELECT id, venue_id, venue_name, invited_email, invited_by_user_id,
-               inviter_name, message, status, token_expires_at, invite_group_id,
-               signed_up_user_id, preferred_requested_at
-        FROM artist_invitations
-        WHERE token = :t
-        ORDER BY id ASC
+        SELECT ai.id, ai.venue_id,
+               COALESCE(v.venue_name, ai.venue_name) AS venue_name,
+               ai.invited_email, ai.invited_by_user_id,
+               ai.inviter_name, ai.message, ai.status, ai.token_expires_at, ai.invite_group_id,
+               ai.signed_up_user_id, ai.preferred_requested_at
+        FROM artist_invitations ai
+        LEFT JOIN venues v ON v.id = ai.venue_id
+        WHERE ai.token = :t
+        ORDER BY ai.id ASC
     """), {"t": token}).mappings().all()
     rows = [dict(r) for r in rows]
     if not rows:
@@ -1204,10 +1174,16 @@ def accept_preferred_via_token(token: str, data: dict = Body(default={}), user=D
     """
     from backend.services.notification_service import create_notification
 
+    # JOIN venues live so stale ai.venue_name after a rename doesn't
+    # leak into notifications/emails sent from this endpoint.
     rows = db.execute(text("""
-        SELECT id, venue_id, venue_name, invited_email, signed_up_user_id, invite_group_id,
-               preferred_requested_at, status, token_expires_at
-        FROM artist_invitations WHERE token = :t
+        SELECT ai.id, ai.venue_id,
+               COALESCE(v.venue_name, ai.venue_name) AS venue_name,
+               ai.invited_email, ai.signed_up_user_id, ai.invite_group_id,
+               ai.preferred_requested_at, ai.status, ai.token_expires_at
+        FROM artist_invitations ai
+        LEFT JOIN venues v ON v.id = ai.venue_id
+        WHERE ai.token = :t
     """), {"t": token}).mappings().all()
     rows = [dict(r) for r in rows]
     if not rows:
@@ -1414,25 +1390,80 @@ function doDecline() {{
 
 @router.post("/api/invitations/{token}/decline")
 def decline_artist_invitation(token: str, db=Depends(get_db)):
-    """Public — actually marks the invitation declined. Reached only via the
-    confirmation button on the GET landing page; cannot be triggered by email
-    link prefetchers. Idempotent on repeat POSTs."""
-    valid = False
-    if token and len(token) >= 16:
-        rows = db.execute(text(
-            "SELECT id, status FROM artist_invitations WHERE token = :t"
-        ), {"t": token}).mappings().all()
-        if rows:
-            valid = True
+    """Public decline endpoint. Serves TWO flows because of a route
+    collision (2026-07-26 fix) — FastAPI matches whichever router is
+    included first, and this one wins over entity_users.py's identical
+    path. We dispatch:
+
+    1. entity_invitations (team-member invite) — mark declined + wipe
+       any pending in-app notifications for that user, then return the
+       inviter/entity data the invited_user_declined.html frontend needs
+       to render the confirmation card.
+    2. artist_invitations (preferred-artist invite) — original behavior.
+
+    Both flows return `ok:true` on success; the entity flow also returns
+    inviter_first_name / inviter_last_name / entity_name so the
+    frontend's showDeclineCard() renders the person's real name instead
+    of falling back to "the inviter" / "Unknown".
+    """
+    if not token or len(token) < 16:
+        return {"ok": True, "valid": False}
+
+    # ── Entity invitation (team-member) path ─────────────────────────
+    ent = db.execute(text("""
+        SELECT id, entity_type, entity_id, entity_name, invited_email,
+               inviter_first_name, inviter_last_name, status
+          FROM entity_invitations WHERE token = :t
+    """), {"t": token}).mappings().first()
+    if ent:
+        if ent['status'] == 'pending':
             db.execute(text("""
-                UPDATE artist_invitations
-                SET status = 'declined',
-                    declined_at = CURRENT_TIMESTAMP
-                WHERE token = :t
-                  AND status NOT IN ('signed_up','preferred_requested','preferred_approved','preferred_denied','declined','bounced','expired')
-            """), {"t": token})
+                UPDATE entity_invitations
+                   SET status = 'declined', responded_at = :now
+                 WHERE token = :t
+            """), {"t": token, "now": utcnow_naive()})
+            # Clear any lingering in-app notification for this user
+            try:
+                uid = db.execute(text(
+                    "SELECT id FROM users WHERE LOWER(email) = LOWER(:e)"
+                ), {"e": ent['invited_email']}).scalar()
+                if uid:
+                    db.execute(text("""
+                        DELETE FROM notifications
+                         WHERE user_id = :uid
+                           AND notification_type = 'entity_invite'
+                           AND entity_type = :etype
+                           AND entity_id = :eid
+                    """), {"uid": uid, "etype": ent['entity_type'],
+                            "eid": ent['entity_id']})
+            except Exception:
+                pass
             db.commit()
-    return {"ok": True, "valid": valid}
+        return {
+            "ok": True,
+            "valid": True,
+            "inviter_first_name": ent['inviter_first_name'],
+            "inviter_last_name": ent['inviter_last_name'],
+            "entity_name": ent['entity_name'],
+            "entity_type": ent['entity_type'],
+            "entity_id": ent['entity_id'],
+        }
+
+    # ── Artist invitation (preferred-artist) path — original logic ───
+    rows = db.execute(text(
+        "SELECT id, status FROM artist_invitations WHERE token = :t"
+    ), {"t": token}).mappings().all()
+    if rows:
+        db.execute(text("""
+            UPDATE artist_invitations
+            SET status = 'declined',
+                declined_at = CURRENT_TIMESTAMP
+            WHERE token = :t
+              AND status NOT IN ('signed_up','preferred_requested','preferred_approved','preferred_denied','declined','bounced','expired')
+        """), {"t": token})
+        db.commit()
+        return {"ok": True, "valid": True}
+    return {"ok": True, "valid": False}
 
 
 
@@ -1447,11 +1478,14 @@ def get_my_invitations(user=Depends(get_current_user), db=Depends(get_db)):
     card with per-venue status pills.
     """
     rows = db.execute(text("""
-        SELECT ai.id, ai.venue_id, ai.venue_name, ai.invited_email, ai.inviter_name,
+        SELECT ai.id, ai.venue_id,
+               COALESCE(v.venue_name, ai.venue_name) AS venue_name,
+               ai.invited_email, ai.inviter_name,
                ai.message, ai.status, ai.sent_at, ai.signed_up_at,
                ai.token, ai.invite_group_id, ai.bounce_reason, ai.declined_at,
                ai.preferred_requested_at, ai.last_resent_at, ai.resent_count
         FROM artist_invitations ai
+        LEFT JOIN venues v ON v.id = ai.venue_id
         WHERE ai.invited_by_user_id = :uid
         ORDER BY ai.sent_at DESC, ai.id DESC
     """), {"uid": user.id}).mappings().all()
@@ -1471,9 +1505,14 @@ def resend_invitation(token: str, user=Depends(get_current_user), db=Depends(get
     import smtplib as _smtp
 
     rows = db.execute(text("""
-        SELECT id, venue_id, venue_name, invited_email, invited_by_user_id, inviter_name,
-               message, status, sent_at, token_expires_at, last_resent_at, resent_count, signed_up_user_id
-        FROM artist_invitations WHERE token = :t
+        SELECT ai.id, ai.venue_id,
+               COALESCE(v.venue_name, ai.venue_name) AS venue_name,
+               ai.invited_email, ai.invited_by_user_id, ai.inviter_name,
+               ai.message, ai.status, ai.sent_at, ai.token_expires_at,
+               ai.last_resent_at, ai.resent_count, ai.signed_up_user_id
+        FROM artist_invitations ai
+        LEFT JOIN venues v ON v.id = ai.venue_id
+        WHERE ai.token = :t
     """), {"t": token}).mappings().all()
     rows = [dict(r) for r in rows]
     if not rows:

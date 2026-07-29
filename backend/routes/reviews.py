@@ -402,14 +402,15 @@ def submit_venue_review_for_gig(artist_id: int, gig_id: int, data: dict,
         raise HTTPException(400, "Rating must be between 1 and 5")
 
     # Verify gig exists and this artist was booked on it.
+    # Jul 2026: post-backfill, gig_slots.artist_id covers both single-slot
+    # (invariant: 1 slot per gig with artist_id mirrored) and multi-slot.
     gig = db.execute(
         text("""
             SELECT g.id, g.venue_id
             FROM gigs g
             WHERE g.id = :gid
-              AND (g.artist_id = :aid
-                   OR EXISTS (SELECT 1 FROM gig_slots gs
-                              WHERE gs.gig_id = g.id AND gs.artist_id = :aid))
+              AND EXISTS (SELECT 1 FROM gig_slots gs
+                          WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
         """),
         {"gid": gig_id, "aid": artist_id}
     ).mappings().first()
@@ -569,11 +570,8 @@ def get_pending_venue_reviews(artist_id: int,
                    v.id as venue_id, v.venue_name
             FROM gigs g
             JOIN venues v ON v.id = g.venue_id
-            WHERE (
-                g.artist_id = :aid
-                OR EXISTS (SELECT 1 FROM gig_slots gs
-                           WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
-              )
+            WHERE EXISTS (SELECT 1 FROM gig_slots gs
+                          WHERE gs.gig_id = g.id AND gs.artist_id = :aid)
               AND g.status IN ('completed', 'closed')
               AND NOT EXISTS (
                 SELECT 1 FROM venue_reviews r
@@ -674,21 +672,15 @@ def delete_review_by_id(review_id: int, user=Depends(get_current_user), db=Depen
     return {"ok": True, "message": "Review deleted"}
 
 
-@router.delete("/api/artists/{artist_id}/venues/{venue_id}/review")
-def delete_venue_review(artist_id: int, venue_id: int,
-                        user=Depends(get_current_user), db=Depends(get_db)):
-    """Artist deletes their general review of a venue."""
-    _ensure_venue_reviews_table(db)
-    check_artist_access(db, artist_id, user.id)
-    result = db.execute(
-        text("DELETE FROM venue_reviews WHERE artist_id=:aid AND venue_id=:vid"),
-        {"aid": artist_id, "vid": venue_id}
-    )
-    db.commit()
-    if result.rowcount == 0:
-        raise HTTPException(404, "Review not found")
-    _refresh_venue_stats(db, venue_id)
-    return {"ok": True, "message": "Review deleted"}
+# Audit fix (Jul 2026): removed duplicate `DELETE /api/artists/{artist_id}/
+# venues/{venue_id}/review` handler that used to live here. Same path as
+# `delete_my_general_venue_review` above (line 547) — FastAPI kept only the
+# first-registered, so this variant never fired. Worse, this version had no
+# `gig_id IS NULL` filter and would have nuked gig-specific reviews too,
+# which is not the behavior the frontend expects. Delete confirmed safe:
+# the alive endpoint scopes to general reviews only and calls
+# `_recompute_venue_rating`, which matches the DB refresh path the rest of
+# the module uses.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -760,10 +752,8 @@ def submit_venue_review(artist_id: int, gig_id: int, data: dict,
     # Derive venue_id from the gig for context, but review is per artist+venue (not per gig)
     gig = db.execute(
         text("""SELECT g.id, g.venue_id FROM gigs g
-                WHERE g.id = :gid AND (
-                    g.artist_id = :aid
-                    OR EXISTS (SELECT 1 FROM gig_slots s WHERE s.gig_id=g.id AND s.artist_id=:aid)
-                )"""),
+                WHERE g.id = :gid
+                  AND EXISTS (SELECT 1 FROM gig_slots s WHERE s.gig_id=g.id AND s.artist_id=:aid)"""),
         {"gid": gig_id, "aid": artist_id}
     ).mappings().first()
 

@@ -5,7 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -31,7 +32,7 @@
        PROFILE CONTAINER
        ======================================== */
     .profile-container {
-      max-width: 1100px;
+      max-width: 880px;
       margin: 0 auto;
       padding: 16px 16px;
     }
@@ -70,7 +71,12 @@
     .section-header-row h2 {
       font-size: 0.8rem;
       font-weight: 700;
-      color: var(--cyan);
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      width: fit-content;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       margin: 0;
@@ -86,7 +92,12 @@
     .content-card > h2 {
       font-size: 0.8rem;
       font-weight: 700;
-      color: var(--cyan);
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      width: fit-content;
       margin-bottom: 8px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -359,6 +370,12 @@
       font-family: inherit;
       box-sizing: border-box;
     }
+    /* 2026-07-26: center caption text on picture/video cards so it
+       matches the centered .media-title above. Audio-caption stays
+       left-aligned — it's a full-width row-above-audio-player where
+       longer notes read more naturally left-aligned. */
+    .video-caption,
+    .picture-caption { text-align: center; }
     .audio-caption::placeholder,
     .video-caption::placeholder,
     .picture-caption::placeholder { color: var(--text-gray); font-style: italic; }
@@ -569,10 +586,10 @@
 <script src="/app/static/js/event-delegate.js"></script>
   <script src="/app/static/js/auth.guard.js?v=3"></script>
   <script src="/app/static/js/api-globals.js?v=11"></script>
-  <script src="/app/static/js/gf-modals.js?v=7"></script>
+  <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=15"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=22"></script>
   
 </head>
 
@@ -584,12 +601,20 @@
       <div class="header-actions">
         <a class="btn ghost" id="bookGigsBtn" href="/app/artist-book-gigs.html">Book Gigs</a>
         <a class="btn ghost" id="artistProfileBtn" href="/app/artist-profile.html" target="_blank">Artist Profile</a>
+        <!-- 2026-07-26: Messages button + unread badge, matching artist-book-gigs.
+             init in artist-edit-init.js reveals it when ?artist_id= is present.
+             User-dropdown.js appends its .user-dropdown after these, so Messages
+             lands to the left of the user-name dropdown. -->
+        <button class="btn ghost" id="headerMsgBtn" onclick="showRecentMessages()" style="position:relative;display:none;">
+          Messages
+          <span class="msg-unread-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:9999px;font-size:0.6rem;font-weight:700;padding:2px 5px;min-width:16px;text-align:center;"></span>
+        </button>
         <a class="btn ghost" href="/app/user-profile.html">User Profile</a>
         <button class="btn ghost" onclick="logout()">Logout</button>
       </div>
     </div>
   </header>
-  <script src="/app/static/js/user-dropdown.js?v=9"></script>
+  <script src="/app/static/js/user-dropdown.js?v=11"></script>
 
   <main class="profile-container">
 
@@ -661,6 +686,18 @@
       <h2>Artist Type</h2>
       <select id="artist_type" style="width: 200px;"></select>
       <div id="bandFormatsBlock" class="band-formats hidden"></div>
+      <!-- Jul 1 2026: MC-type equipment opt-in. Hidden by default; the
+           artist.edit.js type-change handler reveals it when artist_type
+           is Open Mic MC or Karaoke MC. Persisted as artists.has_own_equipment. -->
+      <div id="mcEquipmentBlock" class="mc-equipment" style="display:none; margin-top:12px;">
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.9rem; color:var(--text-primary,#e2e8f0); cursor:pointer;">
+          <input type="checkbox" id="has_own_equipment" style="cursor:pointer;">
+          <span>I bring my own equipment (PA, mic, speakers, cables)</span>
+        </label>
+        <p style="margin:6px 0 0 26px; color:var(--text-gray,#94a3b8); font-size:0.75rem;">
+          Venues can require this. When they do, you'll only be matched with the gig if this box is checked.
+        </p>
+      </div>
     </div>
 
     <!-- SECTION 4: BIO -->
@@ -766,9 +803,16 @@
   <!-- SECTION 7: AVAILABILITY / BLACKOUT DATES -->
   <div class="content-card" id="availabilitySection" style="display:none;">
     <h2>Artist Availability</h2>
-    <p style="color:var(--text-gray);font-size:0.85rem;margin:-4px 0 14px;">
-      Dates this artist can't perform. These <strong>hard-block</strong> bookings —
-      no one can book this artist on these days.
+    <p style="color:var(--text-gray);font-size:0.85rem;margin:-4px 0 6px;">
+      Dates this <strong style="color:var(--text);">whole artist</strong> is unavailable — e.g. band on hiatus,
+      touring elsewhere, drummer's wedding, holiday break.
+    </p>
+    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 14px;">
+      🚫 <strong style="color:#ef4444;">Hard block</strong> — no warning, no override; the dates
+      are simply not offered as bookable. For a single member being unavailable
+      (rest of the band still plays), use
+      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Availability</a>
+      on that member's profile instead.
     </p>
     <div id="availabilityContainer"></div>
   </div>
@@ -777,10 +821,12 @@
   <div class="content-card" id="memberAvailabilitySection" style="display:none;">
     <h2>Member Availability</h2>
     <p style="color:var(--text-gray);font-size:0.85rem;margin:-4px 0 14px;">
-      Personal blackout dates each member has set in their profile.
-      These are <strong>soft warnings</strong> — booking attempts will alert the artist
-      but won't block. Members edit their own dates from
-      <a href="/app/user-profile.html" style="color:var(--cyan);">My Profile → Availability</a>.
+      Read-only view of the personal blackout dates each band member has
+      added on their own profile. These are <strong style="color:#f59e0b;">soft warnings</strong> —
+      bookings on these dates still go through, but the artist gets an
+      alert like "Jim is unavailable that night — play as a duo?" so the
+      band can decide. Members edit their own dates from
+      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Profile → My Availability</a>.
     </p>
     <div id="memberAvailabilityContainer">
       <p style="color:var(--text-gray);">Loading…</p>
@@ -797,10 +843,11 @@
 
 <!-- Vanity URL editor: must load BEFORE the init scripts that want
      to use window.applyVanityToLinks for the header profile button. -->
-<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/artist-availability.js?v=5"></script>
-<script src="/app/static/js/artist-member-availability.js?v=3"></script>
-<script src="/app/static/js/artist-edit-init.js"></script>
+<script src="/app/static/js/artist-member-availability.js?v=4"></script>
+<script src="/app/static/js/messages.js?v=7"></script>
+<script src="/app/static/js/artist-edit-init.js?v=2"></script>
 <script src="/app/static/js/onboarding-checklist.js" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>

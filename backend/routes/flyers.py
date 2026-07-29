@@ -275,19 +275,19 @@ async def get_gig_info_for_flyer(venue_id: int, gig_id: int, user=Depends(get_cu
     if not row:
         raise HTTPException(status_code=404, detail="Gig not found")
     result = dict(row._mapping)
-    if result.get("is_multi_slot"):
-        slots = db.execute(text("""
-            SELECT gs.slot_number, gs.start_time, gs.end_time, gs.pay,
-                   gs.artist_id, a.name as artist_name,
-                   (SELECT am.file_path FROM artist_media am 
-                    WHERE am.artist_id = gs.artist_id AND am.media_type IN ('profile', 'logo')
-                    ORDER BY CASE am.media_type WHEN 'profile' THEN 0 ELSE 1 END LIMIT 1) as artist_picture_url
-            FROM gig_slots gs LEFT JOIN artists a ON gs.artist_id = a.id
-            WHERE gs.gig_id = :gid ORDER BY gs.slot_number
-        """), {"gid": gig_id}).fetchall()
-        result["slots"] = [dict(s._mapping) for s in slots]
-    else:
-        result["slots"] = []
+    # Jul 2026 refactor: dropped `if is_multi_slot: ... else: slots = []`
+    # branch. Every gig has ≥1 gig_slots row post-backfill so the else
+    # branch was unreachable dead code. Always fetch slots.
+    slots = db.execute(text("""
+        SELECT gs.slot_number, gs.start_time, gs.end_time, gs.pay,
+               gs.artist_id, a.name as artist_name,
+               (SELECT am.file_path FROM artist_media am
+                WHERE am.artist_id = gs.artist_id AND am.media_type IN ('profile', 'logo')
+                ORDER BY CASE am.media_type WHEN 'profile' THEN 0 ELSE 1 END LIMIT 1) as artist_picture_url
+        FROM gig_slots gs LEFT JOIN artists a ON gs.artist_id = a.id
+        WHERE gs.gig_id = :gid ORDER BY gs.slot_number
+    """), {"gid": gig_id}).fetchall()
+    result["slots"] = [dict(s._mapping) for s in slots]
     return result
 
 # --- UPLOAD IMAGE ---

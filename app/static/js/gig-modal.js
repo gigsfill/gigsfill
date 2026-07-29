@@ -92,8 +92,10 @@ async function renderGigModal(data, callbacks = {}) {
     if (mySlot) {
       displayStart = mySlot.start_time_fmt;
       displayEnd   = mySlot.end_time_fmt;
-    } else if (data.is_multi_slot) {
-      // No slot yet — show nothing; slot times shown in the slot rows below
+    } else if ((data.slots || []).length > 1) {
+      // Truly multi-slot with no artist slot found — omit the umbrella
+      // time; each slot row below shows its own time. (Was gated on the
+      // deprecated is_multi_slot flag pre-Jul-2026 unification.)
       displayStart = '';
       displayEnd   = '';
     }
@@ -243,6 +245,48 @@ async function renderGigModal(data, callbacks = {}) {
       return _commit(html, actionsHtml);
     }
 
+    // Freq-waiver banner (Jun 2026): render BEFORE the Hold-feature
+    // panel so artists with an active hold offer (or queued / declined
+    // state) still see the "Frequency Rule Lifted" notice. The same
+    // banner block lower in this file is unreachable when a hold panel
+    // takes the early-return path.
+    if (vType === 'artist' && data.freq_waiver) {
+      const fw = data.freq_waiver;
+      // daysBetween = current_gig_date - last_gig_date. Positive means
+      // current gig is AFTER last gig → last gig was BEFORE this one.
+      const dir = (fw.daysBetween > 0) ? 'before' : 'after';
+      // Jul 2026: rewrote the "window" branch to be unambiguous. The prior
+      // copy said "inside the venue's open-window for last-minute bookings"
+      // which conflated (a) how far apart the two gigs are with (b) how
+      // close today is to the gig date. Venues + artists were misreading it
+      // as "1 week gap between gigs" when the actual math is "today is
+      // inside the 1-week-before-gig-date reminder window".
+      let _waiverNote;
+      if (fw.reason === 'exempt') {
+        _waiverNote = 'the venue marked this specific gig frequency-exempt';
+      } else if (fw.reason === 'blast') {
+        _waiverNote = 'this gig is currently open-blasted to all artists in the area';
+      } else {
+        // reason === 'window' — cite the specific window + days-until so
+        // the artist sees exactly which policy the venue set is now active.
+        const dU = fw.daysUntilGig;
+        let _windowLabel;
+        if (fw.activeWindow === 'open_gig_36h') {
+          _windowLabel = "the venue's 36-hour last-minute reminder is active";
+        } else if (fw.activeWindow === 'open_gig_1w') {
+          _windowLabel = "the venue's 1-week reminder is active";
+        } else {
+          _windowLabel = "the venue's reminder window is active";
+        }
+        const _dUphrase = (dU != null)
+          ? `the gig is ${dU} day${dU !== 1 ? 's' : ''} away, so `
+          : '';
+        _waiverNote = `${_dUphrase}${_windowLabel} — the venue has chosen to lift frequency limits during this window so any Preferred Artist can fill the slot`;
+      }
+      html += _banner('yellow', 'Frequency Rule Lifted',
+        `Your last gig here was ${fw.absDaysBetween} day${fw.absDaysBetween!==1?'s':''} ${dir} this one (venue normally requires ${fw.daysRequired} days between bookings), but ${_waiverNote}. You can book this one.`);
+    }
+
     // ── Hold-feature panel (Jun 2026) ────────────────────────────────
     // For held gigs, render the appropriate state inline in the modal
     // so the calendar bubble click experience mirrors the Pending
@@ -250,6 +294,22 @@ async function renderGigModal(data, callbacks = {}) {
     // waitlist UI for held gigs.
     if (data.hold_info && data.hold_info.is_held) {
       const hi = data.hold_info;
+      // Series-hold safety net: if for some reason a series-hold gig
+      // modal was rendered here (e.g. opened from a path that didn't
+      // intercept), surface a clear CTA to open the bundled picker
+      // instead of the per-gig book/decline UI. The PRIMARY redirect
+      // happens in artist.book-gigs.js openGigModal before this code
+      // runs — this is a fallback for the inline modal-data path.
+      if (hi.my_state === 'current_offer' && hi.is_series && hi.series_offer_token) {
+        html += `<div style="margin-bottom:14px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.40);border-radius:10px;padding:14px 18px;">
+          <div style="font-size:0.85rem;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">📅 Series Offer</div>
+          <p style="margin:0 0 12px 0;font-size:0.86rem;color:var(--text);">This date is part of a recurring series offered to you. Pick this and other dates together — frequency rules apply automatically as you select.</p>
+          <button type="button" onclick="window.openSeriesHoldModal && window.openSeriesHoldModal('${hi.series_offer_token}')"
+            style="padding:8px 18px;background:#7c6bff;border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:0.84rem;font-weight:600;">Pick Your Dates →</button>
+        </div>`;
+        actionsHtml = `<div class="_gig-btn-row" style="justify-content:flex-end;">${_closeBtn(close)}</div>`;
+        return _commit(html, actionsHtml);
+      }
       if (hi.my_state === 'current_offer') {
         // Same vocabulary as the Pending Offers banner: time-left,
         // per-slot Book/Decline. Click flows through to the same
@@ -270,13 +330,18 @@ async function renderGigModal(data, callbacks = {}) {
         // mid-cycle. '$10 + 50% door' instead of just '$10'.
         const _payStr = (s) => {
           if (s && typeof s === 'object') {
-            if (s.deal_type === 'door') {
-              const gua = (Number(s.guarantee_cents) || 0) / 100;
-              const guaFmt = gua % 1 === 0 ? `$${Math.round(gua)}` : `$${gua.toFixed(2)}`;
-              return `${guaFmt} + ${parseInt(s.door_pct, 10) || 0}% door`;
-            }
+            // Backend's /api/gigs/{id}/modal-data.hold_info.my_matching_slots
+            // already applies the per-artist pay override per the
+            // unified rule (flat → always; door → only when slot.apply_override=1).
+            // For door slots opted-in, s.pay = effective guarantee; for
+            // door slots NOT opted-in, s.pay still reflects the published
+            // guarantee value. Either way, s.pay is the right dollar amount.
             const p = Number(s.pay) || 0;
-            return p % 1 === 0 ? `$${Math.round(p)}` : `$${p.toFixed(2)}`;
+            const pFmt = p % 1 === 0 ? `$${Math.round(p)}` : `$${p.toFixed(2)}`;
+            if (s.deal_type === 'door') {
+              return `${pFmt} + ${parseInt(s.door_pct, 10) || 0}% door`;
+            }
+            return pFmt;
           }
           // Backward compat: scalar pay
           const p = Number(s) || 0;
@@ -298,26 +363,46 @@ async function renderGigModal(data, callbacks = {}) {
           // without bleeding into the pay column. Pay is centered
           // between time and buttons via flex distribution + auto
           // margin on both sides.
+          // Render EVERY open slot. Slots the viewing artist can fill
+          // (bookable_by_me=true) get the existing purple Book + red
+          // Decline buttons. Slots the artist can't fill (e.g. a DJ
+          // slot offered to a Live Band artist) are dimmed to 50%,
+          // get a dark slate background instead of purple, and show
+          // a "<Type> only" hint in place of the buttons. This way
+          // the artist sees the full shape of the gig instead of
+          // wondering why "the 3rd slot disappeared."
           slotsHtml = '<div style="display:flex;flex-direction:column;gap:6px;">'
             + slots.map(s => {
               const slotLabel = slots.length > 1 ? `Slot ${s.slot_number}` : '';
-              return `<div style="display:flex;align-items:center;gap:14px;background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);border-radius:8px;padding:8px 14px;">
+              const bookable = s.bookable_by_me !== false;  // default true for backwards-compat
+              const containerBg = bookable
+                ? 'background:rgba(124,107,255,0.10);border:1px solid rgba(124,107,255,0.35);'
+                : 'background:rgba(0,0,0,0.30);border:1px solid rgba(148,163,184,0.18);';
+              const opacity = bookable ? '1' : '0.45';
+              const textColor = bookable ? 'var(--text)' : '#94a3b8';
+              const payColor = bookable ? '#22c55e' : '#94a3b8';
+              const actionsHtml = bookable
+                ? `<button type="button" data-token="${hi.offer_token}" data-slot="${s.id}"
+                      data-gig="${data.id || ''}" data-vid="${data.venue_id || ''}" data-aid="${data.viewer_id || ''}"
+                      data-venue="${(data.venue_name||'').replace(/"/g,'&quot;')}" data-date="${data.date||''}"
+                      data-slot-num="${s.slot_number}" data-time="${s.time}" data-pay="${_payStr(s)}"
+                      onclick="window.gmHoldBook && window.gmHoldBook(this)"
+                      title="Book this slot now."
+                      style="padding:5px 18px;background:#7c6bff;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:72px;">Book</button>
+                    <button type="button" data-token="${hi.offer_token}"
+                      onclick="window.gmHoldDecline && window.gmHoldDecline(this)"
+                      title="Decline if you are unable to perform on this day."
+                      style="padding:5px 14px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:78px;">Decline</button>`
+                : `<span title="This slot is for ${_esc(s.artist_type || 'a different artist type')}, so it isn't bookable by you."
+                       style="padding:4px 12px;font-size:0.72rem;color:#94a3b8;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.25);border-radius:4px;font-weight:600;white-space:nowrap;min-width:152px;text-align:center;">
+                       ${_esc(s.artist_type || 'Other type')} only
+                     </span>`;
+              return `<div style="display:flex;align-items:center;gap:14px;${containerBg}border-radius:8px;padding:8px 14px;opacity:${opacity};">
                 <span style="display:inline-block;width:18px;text-align:center;flex:0 0 18px;font-size:0.95rem;">${_typeIcon(s.artist_type)}</span>
-                ${slotLabel ? `<span style="display:inline-block;width:60px;flex:0 0 60px;font-size:0.84rem;color:var(--text);font-weight:600;white-space:nowrap;">${slotLabel}</span>` : ''}
-                <span style="display:inline-block;width:18ch;flex:0 0 18ch;font-size:0.84rem;color:var(--text);white-space:nowrap;font-variant-numeric:tabular-nums;">${s.time}</span>
-                <span style="display:inline-block;flex:1;text-align:center;font-size:0.86rem;color:#22c55e;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;">${_payStr(s)}</span>
-                <span style="display:inline-flex;gap:6px;flex:0 0 auto;">
-                  <button type="button" data-token="${hi.offer_token}" data-slot="${s.id}"
-                    data-venue="${(data.venue_name||'').replace(/"/g,'&quot;')}" data-date="${data.date||''}"
-                    data-slot-num="${s.slot_number}" data-time="${s.time}" data-pay="${_payStr(s)}"
-                    onclick="window.gmHoldBook && window.gmHoldBook(this)"
-                    title="Book this slot now."
-                    style="padding:5px 18px;background:#7c6bff;border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:72px;">Book</button>
-                  <button type="button" data-token="${hi.offer_token}"
-                    onclick="window.gmHoldDecline && window.gmHoldDecline(this)"
-                    title="Decline if you are unable to perform on this day."
-                    style="padding:5px 14px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:78px;">Decline</button>
-                </span>
+                ${slotLabel ? `<span style="display:inline-block;width:60px;flex:0 0 60px;font-size:0.84rem;color:${textColor};font-weight:600;white-space:nowrap;">${slotLabel}</span>` : ''}
+                <span style="display:inline-block;width:18ch;flex:0 0 18ch;font-size:0.84rem;color:${textColor};white-space:nowrap;font-variant-numeric:tabular-nums;">${s.time}</span>
+                <span style="display:inline-block;flex:1;text-align:center;font-size:0.86rem;color:${payColor};font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;">${_payStr(s)}</span>
+                <span style="display:inline-flex;gap:6px;flex:0 0 auto;">${actionsHtml}</span>
               </div>`;
             }).join('') + '</div>';
         }
@@ -355,7 +440,14 @@ async function renderGigModal(data, callbacks = {}) {
 
     // Waitlist LOCKED banner — only show if there are still open bookable slots
     const _hasBookableSlots = (data.slots || []).some(s => s.relationship === 'open_bookable');
-    const _allSlotsTaken = (data.slots || []).every(s => s.status !== 'open' || s.relationship === 'freq_blocked');
+    // "all taken" = no open slot this artist could book — wrong-type
+    // slots count as effectively taken from THIS artist's POV, same
+    // as freq_blocked. Without this the "Waitlist? Not Available?"
+    // CTA would show on a 3-slot mixed gig where the only open slot
+    // left was a DJ slot the Live Band artist can't book.
+    const _allSlotsTaken = (data.slots || []).every(s =>
+      s.status !== 'open' || s.relationship === 'freq_blocked' || s.relationship === 'wrong_type'
+    );
     if (data.has_active_waitlist && !data.waitlist_status?.has_offer && _hasBookableSlots && !_allSlotsTaken) {
       const wls = data.waitlist_status || {};
       const amOnWl = wls.on_waitlist;
@@ -434,6 +526,9 @@ async function renderGigModal(data, callbacks = {}) {
         `This gig is within the venue's usual ${fc.daysRequired}-day window between your bookings, but you booked it during an open-blast / waiver — your spot is locked in.`);
     }
   }
+  // (Freq-waiver banner moved up — now rendered before the Hold-feature
+  // panel so the Pending-Offer / queued / declined early-return paths
+  // still surface it. Was unreachable here for those states.)
 
   /* ── Slots section ────────────────────────────────────────────────────── */
   html += _slotsSection(data, vType, {isPast: false, isInProgress: false, close, callbacks});
@@ -462,7 +557,14 @@ async function renderGigModal(data, callbacks = {}) {
         actionsHtml = `<div class="_gig-btn-row">${msgBtn}${_closeBtn(close)}</div>`;
       }
     } else if (myPending) {
-      if (mySlot.contract_status !== 'artist_signed' && onCancelGig) {
+      // Show the Cancel button in BOTH pending states (Jun 2026):
+      //   - pending_contract            (artist hasn't signed yet)
+      //   - awaiting_venue_contract     (artist signed, venue hasn't countersigned)
+      // Previously the button was hidden once contract_status='artist_signed',
+      // which left the artist with no way to back out before the venue
+      // countersigns. cancel_gig handles both states server-side and clears
+      // the slot + contract record so the gig becomes available again.
+      if (onCancelGig) {
         actionsHtml = `<div class="_gig-btn-row">
           <button id="cancelGig" class="_gig-btn _gig-btn-primary">Cancel</button>
           ${_closeBtn(close)}
@@ -580,8 +682,14 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
   } else if (isBooked || isPending) {
     borderColor = 'rgba(34,197,94,0.3)';
     bgColor     = 'rgba(34,197,94,0.07)';
-  } else if (rel === 'freq_blocked' || rel === 'no_access' || rel === 'banned') {
+  } else if (rel === 'freq_blocked' || rel === 'no_access' || rel === 'banned' || rel === 'wrong_type') {
+    // wrong_type (Jun 2026): same blacked-out treatment as the other
+    // hard-no relationships so a Live Band artist looking at a 3-slot
+    // mixed gig sees the DJ slot greyed instead of styled like an
+    // open bookable slot.
     opacity = '0.4';
+    borderColor = 'rgba(148,163,184,0.18)';
+    bgColor     = 'rgba(0,0,0,0.30)';
   }
 
   // Pay display — rendered as a green pill matching the venue-side modal so
@@ -709,7 +817,7 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
       case 'mine_awaiting_venue':
         rightHtml = `<span style="color:#eab308;font-size:0.8rem;font-weight:600;">⏳ Awaiting Venue Contract</span>`;
         extraHtml += _banner('yellow', '⏳ Awaiting Contract From Venue',
-          'The venue is preparing a contract. You\'ll be notified when it\'s ready.');
+          'The venue is preparing a contract. You\'ll be notified when it\'s ready. If you need to back out, hit Cancel below before the venue countersigns.');
         break;
 
       case 'mine_pending_approval':
@@ -903,6 +1011,20 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
           style="font-size:0.8rem;padding:4px 12px;opacity:0.4;cursor:not-allowed;background:#333;"
           title="Preferred status required">Book</button>`;
         break;
+
+      case 'wrong_type': {
+        // The artist viewing this gig has a different artist_type (or
+        // missing lineup/styles overlap) than what THIS slot requires.
+        // They can see the gig because another slot DOES match — but
+        // this row is not bookable by them. Render a clear "<Type>
+        // only" chip in place of the Book button.
+        const _slotType = slot.artist_type || data.artist_type || 'Other';
+        rightHtml = `<span title="This slot is for ${_esc(_slotType)}, so it isn't bookable by you."
+          style="padding:4px 12px;font-size:0.72rem;color:#94a3b8;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.25);border-radius:4px;font-weight:600;white-space:nowrap;">
+          ${_esc(_slotType)} only
+        </span>`;
+        break;
+      }
 
       case 'open': {
         // Venue viewer on an unbooked slot — show Open pill + ✕ Cancel

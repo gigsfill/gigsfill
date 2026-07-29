@@ -3,12 +3,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Find Live Music – GigsFill</title>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <meta name="description" content="Browse upcoming live music events near you. Find booked gigs at local venues with dates, times, and artist details on GigsFill.">
 <meta name="robots" content="index, follow">
 <link rel="canonical" href="https://gigsfill.com/app/public-gigs.html">
-<link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+<link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
 <meta name="theme-color" content="#0f1419">
@@ -21,7 +23,7 @@
 <meta name="twitter:title" content="Find Live Music Near You – GigsFill">
 <meta name="twitter:description" content="Browse upcoming live music events at local venues.">
 <link href="/app/static/css/gigsfill.css" rel="stylesheet">
-<link href="/app/static/css/gig-hover-card.css?v=7" rel="stylesheet">
+<link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet">
@@ -167,19 +169,30 @@
       color: rgba(255, 255, 255, 0.3);
     }
     
-    /* Days from other months */
+    /* Days from other months (Jul 2026):
+       Three-tier visual hierarchy matching venue + artist calendars —
+       darker cell background + heavily faded day-numbers so July/Aug/
+       Sep are clearly distinct at a glance. */
     .day.other-month {
-      opacity: 0.3;
-      cursor: default;
+      background: rgba(0, 0, 0, 0.22);
     }
-    
     .day.other-month:hover {
-      background: rgba(8, 11, 22, 0.97);
-      border-color: rgba(255,255,255,0.08);
+      background: rgba(0, 0, 0, 0.08);
     }
-    
     .day.other-month .day-number {
-      color: rgba(255, 255, 255, 0.2);
+      color: rgba(255, 255, 255, 0.18);
+    }
+    /* Month-boundary label ("Aug 1", "Jul 26" top-left) — solid cyan
+       bold so month edges pop as visual dividers. */
+    .day-number.month-boundary {
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      color: #06b6d4;
+    }
+    /* Uniform dimness on spillover — boundary label matches plain
+       spillover numbers so nothing pops brighter than the rest. */
+    .day.other-month .day-number.month-boundary {
+      color: rgba(255, 255, 255, 0.18);
     }
 
     .day-number {
@@ -187,7 +200,7 @@
       top: 8px;
       right: 10px;
       font-size: 0.75rem;
-      color: var(--text-muted);
+      color: rgba(255, 255, 255, 0.88);
       font-weight: 500;
     }
 
@@ -468,7 +481,7 @@
 
     /* PANEL STYLING - section backgrounds */
     section.panel {
-      max-width: 1250px;
+      max-width: var(--container-max);
       margin: 0 auto;
       background: var(--card);
       border: 1px solid var(--border);
@@ -547,7 +560,7 @@
 <script src="/app/static/js/event-delegate.js"></script>
 
 
-<div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
+<div class="book-gigs-container" style="max-width: var(--container-max); margin: 0 auto; padding: 40px 20px;">
 
 <!-- SEARCH GIGS SECTION WITH PANEL BACKGROUND -->
 <section class="panel" style="margin-bottom: 16px;">
@@ -669,6 +682,28 @@
       font-size: 0.75rem;
       font-weight: 500;
     ">Trivia Host</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Open Mic MC" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Open Mic</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Karaoke MC" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Karaoke</button>
   </div>
 </div>
 
@@ -767,13 +802,13 @@
 </div>
 
 <script src="/app/static/js/city-autocomplete.js"></script>
-<script src="/app/static/js/public-gigs.js?v=8"></script>
+<script src="/app/static/js/public-gigs.js?v=12"></script>
 
-<script src="/app/static/js/gf-modals.js?v=7"></script>
+<script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
-<script src="/app/static/js/gig-hover-card.js?v=18"></script>
+<script src="/app/static/js/gig-hover-card.js?v=21"></script>
 <script src="/app/static/js/sw-register.js"></script>
-<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 </body>
 </html>

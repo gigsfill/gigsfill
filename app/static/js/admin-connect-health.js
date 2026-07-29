@@ -275,4 +275,68 @@
   }
 
   window.loadConnectHealth = loadConnectHealth;
+
+  // ─── Recent Alerts history (2026-07-25) ─────────────────────────────
+  // Renders dismissed (last 30d) + auto-resolved (last 7d) system alerts
+  // beneath the Connect Health list. Answers "if I dismiss an alert,
+  // where does it go?" — here.
+  async function loadAlertsHistory() {
+    const el = document.getElementById('alertsHistoryList');
+    if (!el) return;
+    el.textContent = 'Loading…';
+    let data;
+    try {
+      const r = await fetch('/api/admin/system-alerts', { credentials: 'include' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      data = await r.json();
+    } catch (e) {
+      el.innerHTML = '<div style="color:#ef4444;">Failed to load alerts history: ' + _esc(e.message) + '</div>';
+      return;
+    }
+    const dismissed = data.recent_dismissed || [];
+    const resolved  = data.recent_resolved  || [];
+    if (!dismissed.length && !resolved.length) {
+      el.innerHTML = '<div style="color:var(--text-gray);font-style:italic;">No dismissed or resolved alerts in the recent window. 🟢</div>';
+      return;
+    }
+    const sevColor = s => s === 'critical' ? '#ef4444' : (s === 'warning' ? '#f59e0b' : '#94a3b8');
+    const row = (a, kind) => {
+      const c = sevColor(a.severity);
+      const stamp = kind === 'dismissed'
+        ? ('dismissed ' + _fmtAgo(a.acknowledged_at) + (a.acknowledged_by ? ' by ' + _esc(a.acknowledged_by) : ''))
+        : ('auto-resolved ' + _fmtAgo(a.resolved_at) + (a.resolved_by ? ' · ' + _esc(a.resolved_by) : ''));
+      return (
+        '<div style="padding:8px 12px;background:rgba(255,255,255,0.02);border-left:3px solid ' + c + ';border:1px solid rgba(255,255,255,0.05);border-radius:5px;margin-bottom:6px;">' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+            '<span style="font-size:0.6rem;font-weight:800;color:' + c + ';text-transform:uppercase;letter-spacing:0.06em;">' + _esc((a.severity || 'info').toUpperCase()) + '</span>' +
+            '<span style="font-size:0.7rem;color:var(--text-gray);font-family:monospace;">' + _esc(a.alert_type) + '</span>' +
+            '<span style="font-size:0.68rem;color:var(--text-gray);">· fired ' + (a.count || 1) + '×</span>' +
+            '<span style="font-size:0.68rem;color:var(--text-gray);margin-left:auto;">' + stamp + '</span>' +
+          '</div>' +
+          '<div style="font-size:0.78rem;color:var(--text);margin-top:4px;">' + _esc(a.message || '') + '</div>' +
+        '</div>'
+      );
+    };
+    let html = '';
+    if (dismissed.length) {
+      html += '<div style="font-size:0.65rem;font-weight:700;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;margin:0 0 6px;">Dismissed (still active — may re-appear in banner if condition trips again)</div>';
+      html += dismissed.map(a => row(a, 'dismissed')).join('');
+    }
+    if (resolved.length) {
+      html += '<div style="font-size:0.65rem;font-weight:700;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.05em;margin:' + (dismissed.length ? '12px' : '0') + ' 0 6px;">Auto-resolved (condition cleared)</div>';
+      html += resolved.map(a => row(a, 'resolved')).join('');
+    }
+    el.innerHTML = html;
+  }
+  window.loadAlertsHistory = loadAlertsHistory;
+
+  // Auto-load when the Connect Health subtab activates. The existing
+  // `switchPsTab` in admin.html re-shows this panel — piggyback on the
+  // health-list load so both fetch together.
+  const _origLoad = loadConnectHealth;
+  loadConnectHealth = async function () {
+    await _origLoad();
+    try { await loadAlertsHistory(); } catch (_) {}
+  };
+  window.loadConnectHealth = loadConnectHealth;
 })();

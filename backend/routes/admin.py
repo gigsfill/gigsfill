@@ -5,11 +5,85 @@ import logging
 from sqlalchemy import text
 from datetime import date
 from backend.utils import utcnow_naive
-from backend.db import get_db
+from backend.db import get_db, _IS_POSTGRES
 from backend.routes.auth import get_current_user
 from backend.rate_limiter import limiter
 
 router = APIRouter()
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Schema-introspection helpers — cross-engine (SQLite + PostgreSQL).
+# ────────────────────────────────────────────────────────────────────────
+# Audit fix Auth-R1 (Jul 1 2026): admin.py had 19 raw `PRAGMA table_info`
+# / `sqlite_master` calls scattered across endpoints. On PostgreSQL these
+# throw `function pragma_table_info does not exist` / `relation
+# sqlite_master does not exist`, 500-ing the entire admin dashboard the
+# moment DATABASE_URL is flipped. These helpers centralize the branching
+# so every caller gets the right dialect automatically.
+
+def _list_tables(db) -> list:
+    """Return list of user-defined table names in the current DB. Works
+    on both engines."""
+    if _IS_POSTGRES:
+        rows = db.execute(text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' ORDER BY table_name"
+        )).fetchall()
+    else:
+        rows = db.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        )).fetchall()
+    return [r[0] for r in rows]
+
+
+def _table_exists(db, table_name: str) -> bool:
+    """True if `table_name` exists. Works on both engines."""
+    if _IS_POSTGRES:
+        return bool(db.execute(text(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_name = :t LIMIT 1"
+        ), {"t": table_name}).first())
+    return bool(db.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = :t LIMIT 1"
+    ), {"t": table_name}).first())
+
+
+def _column_info(db, table_name: str) -> list:
+    """Return column metadata for `table_name` in a shape close to
+    SQLite's PRAGMA table_info output: list of tuples
+    (cid, name, type, notnull, dflt_value, pk).
+
+    Callers that only need column NAMES should use `_column_names`.
+    """
+    if _IS_POSTGRES:
+        rows = db.execute(text(
+            "SELECT ordinal_position, column_name, data_type, is_nullable, "
+            "       column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name = :t "
+            "ORDER BY ordinal_position"
+        ), {"t": table_name}).fetchall()
+        # Postgres primary-key detection is a separate query — cheap to
+        # fold in for accuracy.
+        pk_rows = db.execute(text(
+            "SELECT a.attname FROM pg_index i "
+            "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+            "WHERE i.indrelid = (SELECT oid FROM pg_class WHERE relname = :t) "
+            "AND i.indisprimary"
+        ), {"t": table_name}).fetchall()
+        pk_names = {r[0] for r in pk_rows}
+        return [
+            (r[0], r[1], r[2], 1 if r[3] == 'NO' else 0,
+             r[4], 1 if r[1] in pk_names else 0)
+            for r in rows
+        ]
+    return db.execute(text(f'PRAGMA table_info("{table_name}")')).fetchall()
+
+
+def _column_names(db, table_name: str) -> list:
+    """Convenience: names only. Works on both engines."""
+    return [c[1] for c in _column_info(db, table_name)]
 
 def check_admin(user=Depends(get_current_user), db=Depends(get_db)):
     """Verify user is admin.
@@ -225,7 +299,7 @@ def get_system_health(admin=Depends(check_admin), db=Depends(get_db)):
 def get_users(admin=Depends(check_admin), db=Depends(get_db)):
     """Get all users"""
     # Check if last_login column exists
-    cols = db.execute(text("PRAGMA table_info(users)")).fetchall()
+    cols = _column_info(db, "users")
     has_last_login = any(c[1] == 'last_login' for c in cols)
     
     if has_last_login:
@@ -283,7 +357,7 @@ def get_users(admin=Depends(check_admin), db=Depends(get_db)):
 def get_artists(admin=Depends(check_admin), db=Depends(get_db)):
     """Get all artists"""
     # Check if last_login column exists
-    cols = db.execute(text("PRAGMA table_info(users)")).fetchall()
+    cols = _column_info(db, "users")
     has_last_login = any(c[1] == 'last_login' for c in cols)
     
     login_col = "u.last_login" if has_last_login else "NULL as last_login"
@@ -321,7 +395,7 @@ def get_artists(admin=Depends(check_admin), db=Depends(get_db)):
 def get_venues(admin=Depends(check_admin), db=Depends(get_db)):
     """Get all venues"""
     # Check if last_login column exists
-    cols = db.execute(text("PRAGMA table_info(users)")).fetchall()
+    cols = _column_info(db, "users")
     has_last_login = any(c[1] == 'last_login' for c in cols)
     
     login_col = "u.last_login" if has_last_login else "NULL as last_login"
@@ -357,7 +431,7 @@ def get_venues(admin=Depends(check_admin), db=Depends(get_db)):
 def get_gigs(admin=Depends(check_admin), db=Depends(get_db)):
     """Get all gigs in the system with effective pay (venue override applied)"""
     # Check if pay_dollars column exists
-    columns = db.execute(text("PRAGMA table_info(gigs)")).fetchall()
+    columns = _column_info(db, "gigs")
     has_split_pay = any(col[1] == 'pay_dollars' for col in columns)
     
     # Multi-slot gigs have gigs.artist_id=NULL, so the LEFT JOIN to artists
@@ -547,6 +621,12 @@ def get_settings(admin=Depends(check_admin), db=Depends(get_db)):
         # SMS provider (Twilio etc.) is wired up. While false, all
         # user-facing SMS UI is hidden site-wide and dispatch is no-op'd.
         'texting_enabled':            str(settings.get('texting_enabled', False)).lower() in ('true', '1', 'yes'),
+        # Demo pipeline — email address that receives new demo request
+        # notifications, and the default video-call URL (Teams / Zoom /
+        # Meet) embedded into confirmation + reminder emails when a demo
+        # is scheduled and no per-row override is set.
+        'demo_request_admin_email':   settings.get('demo_request_admin_email', ''),
+        'demo_meeting_url':           settings.get('demo_meeting_url', ''),
     }
 
 @router.put("/api/admin/settings")
@@ -592,6 +672,9 @@ async def update_settings(request: Request, admin=Depends(check_admin), db=Depen
         'bounce_check_source':        'bounce_check_source',
         # Texting (SMS) global on/off — see GET handler for docstring.
         'texting_enabled':            'texting_enabled',
+        # Demo pipeline settings — admin notify address + default video URL.
+        'demo_request_admin_email':   'demo_request_admin_email',
+        'demo_meeting_url':           'demo_meeting_url',
     }
     _RATE_KEYS = {'rate_login','rate_signup','rate_password_reset','rate_support','rate_email_send','rate_aff_track'}
 
@@ -1293,16 +1376,9 @@ async def toggle_venue_payment_override(request: Request, admin=Depends(check_ad
     # When ending free trial: restore any 'suspended' transactions to 'scheduled'/'test'
     # so the payout scheduler picks them up for real charging
     if not suspend:
-        from backend.db import get_db
         from sqlalchemy import text as _text
-        settings_row = db.execute(_text(
-            "SELECT setting_value FROM platform_settings WHERE setting_key = 'payments_enabled'"
-        )).scalar()
-        # Audit fix (May 2026): tolerant comparison. JSON `true` writes the
-        # string 'True' (capital), failing the literal `in ('1','true')`
-        # check and silently demoting restored transactions to 'test' so the
-        # scheduler skips charging them.
-        restore_status = 'scheduled' if str(settings_row or '').strip().lower() in ('1', 'true') else 'test'
+        # Test Mode removed (Jul 1 2026): restore always goes to 'scheduled'.
+        restore_status = 'scheduled'
         db.execute(_text("""
             UPDATE transactions SET
                 status = :rs,
@@ -1470,7 +1546,7 @@ def _recalculate_venue_pending_transactions(db, venue_id, is_free_trial):
             JOIN gigs g ON t.gig_id = g.id
             WHERE g.venue_id = :vid
               AND t.transaction_type = 'venue_charge'
-              AND t.status IN ('scheduled', 'test')
+              AND t.status = 'scheduled'
         """), {"vid": venue_id}).fetchall()
         for row in gig_ids:
             try:
@@ -1605,6 +1681,36 @@ async def update_support_ticket(ticket_id: int, request: Request, admin=Depends(
             target_table="support_tickets", target_id=ticket_id,
             before=(dict(before) if before else None),
             after={"status": status},
+            request=request,
+        )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@router.delete("/api/admin/support-tickets/{ticket_id}")
+def admin_delete_support_ticket(ticket_id: int, request: Request,
+                                admin=Depends(check_admin), db=Depends(get_db)):
+    """Hard delete a support ticket + all its replies. For spam / test rows
+    that shouldn't clutter the queue — normal resolved tickets should be
+    marked 'closed' via PUT so the audit trail stays intact."""
+    _ensure_support_replies_table(db)
+    row = db.execute(
+        text("SELECT id, subject, user_email, status FROM support_tickets WHERE id = :tid"),
+        {"tid": ticket_id}
+    ).mappings().first()
+    if not row:
+        raise HTTPException(404, "Ticket not found")
+    row = dict(row)
+    db.execute(text("DELETE FROM support_ticket_replies WHERE ticket_id = :tid"), {"tid": ticket_id})
+    db.execute(text("DELETE FROM support_tickets WHERE id = :tid"), {"tid": ticket_id})
+    db.commit()
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, admin, "delete_support_ticket",
+            target_table="support_tickets", target_id=ticket_id,
+            before=row,
             request=request,
         )
     except Exception:
@@ -1828,8 +1934,15 @@ def ensure_last_login_column():
         from backend.db import get_db_connection as _admin_raw_conn2
         conn = _admin_raw_conn2()
         cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(users)")
-        columns = [col[1] for col in cursor.fetchall()]
+        if _IS_POSTGRES:
+            cursor.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name='users'"
+            )
+            columns = [row[0] for row in cursor.fetchall()]
+        else:
+            cursor.execute("PRAGMA table_info(users)")
+            columns = [col[1] for col in cursor.fetchall()]
         if 'last_login' not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN last_login TIMESTAMP")
             conn.commit()
@@ -2314,11 +2427,8 @@ def clear_log_buffer(request: Request, admin=Depends(check_admin), db=Depends(ge
 @router.get("/api/admin/db/tables")
 def list_tables(admin=Depends(check_admin), db=Depends(get_db)):
     """Return all table names and their row counts."""
-    rows = db.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-    ).fetchall()
     result = []
-    for (name,) in rows:
+    for name in _list_tables(db):
         try:
             cnt = db.execute(text(f"SELECT COUNT(*) FROM \"{name}\"")).scalar()
         except Exception:
@@ -2331,12 +2441,10 @@ def list_tables(admin=Depends(check_admin), db=Depends(get_db)):
 def table_schema(table: str, admin=Depends(check_admin), db=Depends(get_db)):
     """Return column definitions for a table."""
     # Whitelist: only allow real table names that exist
-    valid = {r[0] for r in db.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table'")
-    ).fetchall()}
+    valid = set(_list_tables(db))
     if table not in valid:
         raise HTTPException(404, "Table not found")
-    cols = db.execute(text(f"PRAGMA table_info(\"{table}\")")).fetchall()
+    cols = _column_info(db, table)
     return [
         {"cid": c[0], "name": c[1], "type": c[2], "notnull": c[3], "pk": c[5]}
         for c in cols
@@ -2356,13 +2464,11 @@ def table_rows(
 ):
     """Return paginated rows from any table with optional search and sort."""
     # Validate table name
-    valid = {r[0] for r in db.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table'")
-    ).fetchall()}
+    valid = set(_list_tables(db))
     if table not in valid:
         raise HTTPException(404, "Table not found")
 
-    cols_raw = db.execute(text(f"PRAGMA table_info(\"{table}\")")).fetchall()
+    cols_raw = _column_info(db, table)
     col_names = [c[1] for c in cols_raw]
 
     # Validate sort column
@@ -2490,6 +2596,18 @@ _PROTECTED_TABLES = {
     # Idempotency tables — admin writes here could silently drop dedup state
     # and let a duplicate webhook or approval link replay.
     "stripe_webhook_events", "pending_approval_tokens",
+    # Audit fix (Jul 2026 delete-audit): raw DELETE of an artist/venue row
+    # via this tool bypasses services.entity_delete — no tombstone, no
+    # in-flight gig cancellation, no notification fan-out, no file
+    # cleanup, and preferred_artists/entity_users rows for other entities
+    # get orphaned. Force use of the dedicated DELETE endpoints. Also
+    # protect the historical review / notification / venue-contract
+    # tables since raw DELETE would leave stale aggregate ratings and
+    # dangling FK references from gig_contracts.
+    "artists", "venues", "venue_contracts",
+    "artist_reviews", "venue_reviews", "notifications",
+    "preferred_artists", "venue_artist_bans",
+    "connect_account_health",
 }
 
 
@@ -2508,13 +2626,11 @@ def update_row(
     # Use the dedicated admin endpoints / user-facing flows instead.
     if table in _PROTECTED_TABLES:
         raise HTTPException(403, f"Direct update of '{table}' is not allowed through this tool.")
-    valid = {r[0] for r in db.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table'")
-    ).fetchall()}
+    valid = set(_list_tables(db))
     if table not in valid:
         raise HTTPException(404, "Table not found")
 
-    cols_raw = db.execute(text(f"PRAGMA table_info(\"{table}\")")).fetchall()
+    cols_raw = _column_info(db, table)
     col_names = {c[1] for c in cols_raw}
 
     # Only update columns that actually exist
@@ -2556,9 +2672,7 @@ def delete_row(
     if table in _PROTECTED_TABLES:
         raise HTTPException(403, f"Direct deletion from '{table}' is not allowed through this tool. Use the dedicated admin UI.")
 
-    valid = {r[0] for r in db.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table'")
-    ).fetchall()}
+    valid = set(_list_tables(db))
     if table not in valid:
         raise HTTPException(404, "Table not found")
 
@@ -2591,13 +2705,11 @@ def insert_row(
     if table in _PROTECTED_TABLES:
         raise HTTPException(403, f"Direct insertion into '{table}' is not allowed through this tool.")
 
-    valid = {r[0] for r in db.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table'")
-    ).fetchall()}
+    valid = set(_list_tables(db))
     if table not in valid:
         raise HTTPException(404, "Table not found")
 
-    cols_raw = db.execute(text(f"PRAGMA table_info(\"{table}\")")).fetchall()
+    cols_raw = _column_info(db, table)
     col_names = {c[1] for c in cols_raw}
 
     inserts = {k: v for k, v in data.items() if k in col_names and k != "id"}
@@ -2608,9 +2720,15 @@ def insert_row(
     vals_sql = ", ".join(f':col_{k}' for k in inserts)
     params = {f"col_{k}": v for k, v in inserts.items()}
 
-    result = db.execute(text(f'INSERT INTO "{table}" ({cols_sql}) VALUES ({vals_sql})'), params)
+    # 2026-07-25 bug fix: RETURNING id inline instead of a separate
+    # last_insert_rowid() after commit — that pattern is per-connection
+    # and can return the wrong id when the pool swaps connections.
+    # See demo_requests.py:1191 for the incident that surfaced this class.
+    new_id = db.execute(
+        text(f'INSERT INTO "{table}" ({cols_sql}) VALUES ({vals_sql}) RETURNING id'),
+        params
+    ).scalar()
     db.commit()
-    new_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
 
     from backend.utils import log_admin_action
     log_admin_action(db, admin, "db_tools_insert", target_table=table, target_id=new_id,
@@ -2628,13 +2746,11 @@ def export_table_csv(
     import csv, io
     from fastapi.responses import StreamingResponse
 
-    valid = {r[0] for r in db.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table'")
-    ).fetchall()}
+    valid = set(_list_tables(db))
     if table not in valid:
         raise HTTPException(404, "Table not found")
 
-    cols_raw = db.execute(text(f"PRAGMA table_info(\"{table}\")")).fetchall()
+    cols_raw = _column_info(db, table)
     col_names = [c[1] for c in cols_raw]
     rows = db.execute(text(f'SELECT * FROM "{table}"')).fetchall()
 
@@ -2832,7 +2948,7 @@ def get_digest_stats(admin=Depends(check_admin), db=Depends(get_db)):
     ).scalar() or "true").lower() in ("true", "1")
     out["digest_hour"] = int((db.execute(
         text("SELECT setting_value FROM platform_settings WHERE setting_key='open_gig_daily_digest_hour'")
-    ).scalar() or "9"))
+    ).scalar() or "6"))
     out["pending_count"] = db.execute(
         text("SELECT COUNT(*) FROM artist_email_digest_queue WHERE sent_at IS NULL")
     ).scalar() or 0
@@ -2909,8 +3025,10 @@ def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_d
     if not user_id or not minute:
         raise HTTPException(400, "user_id and sent_at_minute required")
 
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
+    from backend.db import get_db_connection
+
+
+    conn = get_db_connection()
     c = conn.cursor()
     try:
         # Pull queue rows that share user_id + sent_at minute. These ARE
@@ -2978,54 +3096,41 @@ def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_d
 @router.post("/api/admin/digest-force-send/{user_id}")
 def admin_force_send_digest(user_id: int, admin=Depends(check_admin), db=Depends(get_db)):
     """Force a digest send for one user, bypassing the local-hour gate.
-    Useful for testing — admin can target a user, see if the queue
-    has data, render + send the email immediately.
-    Returns the count of rows sent.
+    Uses the SAME live-render pathway as the scheduler tick (Jul 2026)
+    so what the admin sees in their inbox is identical to what real
+    users receive at 6 AM local — including the new per-slot per-artist
+    variant format for multi-artist users. Returns a summary of what
+    got sent (open/booked/nearby counts).
     """
-    from backend.services.open_gig_digest import (
-        _fetch_user_queue, _mark_queue_rows_sent, _render_digest_email,
-    )
+    from backend.services.open_gig_digest import build_digest_for_user
     from backend.scheduler import get_smtp_settings, send_email
-    import sqlite3
-    from backend.db import DB_PATH
+    from backend.db import get_db_connection
 
-    # Raw connection — the digest helpers use sqlite3 Row cursors
-    # (consistent with how the scheduler invokes them).
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     c = conn.cursor()
     try:
-        rows = _fetch_user_queue(c, user_id)
-        live_rows = [r for r in rows if r["status"] == "open"]
-        if not live_rows:
-            return {"ok": True, "user_id": user_id, "sent": 0, "reason": "no live queued rows"}
-        meta = c.execute(
-            "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
-            (user_id,)
-        ).fetchone()
-        if not meta or not meta[0]:
-            return {"ok": False, "user_id": user_id, "error": "user has no email"}
-        subj, body = _render_digest_email(
-            artist_name=meta[1] or "there", rows=live_rows,
-            artist_lat=meta[2], artist_lon=meta[3],
-        )
+        result = build_digest_for_user(c, user_id)
+        if not result["ok"]:
+            return {"ok": False, "user_id": user_id, "sent": 0,
+                    "reason": result["reason"]}
         smtp = get_smtp_settings(c)
-        ok = send_email(smtp, meta[0], "[ADMIN-FORCE] " + subj, body)
+        ok = send_email(smtp, result["email"],
+                        "[ADMIN-FORCE] " + result["subject"], result["body"])
         if ok:
-            _mark_queue_rows_sent(c, [r["queue_id"] for r in live_rows])
-            conn.commit()
             try:
                 from backend.utils import log_admin_action
                 log_admin_action(
                     db, admin, "digest_force_send",
-                    target_table="artist_email_digest_queue",
+                    target_table="users",
                     target_id=user_id,
-                    metadata={"sent": len(live_rows), "email": meta[0]},
+                    metadata={"counts": result["counts"], "email": result["email"]},
                 )
             except Exception:
                 pass
-            return {"ok": True, "user_id": user_id, "sent": len(live_rows), "email": meta[0]}
-        return {"ok": False, "user_id": user_id, "error": "send_email returned False — check journalctl"}
+            return {"ok": True, "user_id": user_id,
+                    "counts": result["counts"], "email": result["email"]}
+        return {"ok": False, "user_id": user_id,
+                "error": "send_email returned False — check journalctl"}
     finally:
         conn.close()
 
@@ -3062,9 +3167,25 @@ def admin_system_alerts(admin=Depends(check_admin), db=Depends(get_db)):
                 ORDER BY resolved_at DESC
                 LIMIT 20""")
     ).mappings().all()
+    # 2026-07-25: recently-dismissed (still-active) alerts — the ones
+    # admin hid from the banner but the underlying condition may or
+    # may not have cleared. Surfaced in the Account Health history
+    # panel so dismissed alerts aren't invisible.
+    recent_dismissed = db.execute(
+        text("""SELECT id, alert_type, severity, message, details,
+                       first_seen_at, last_seen_at, count,
+                       acknowledged_at, acknowledged_by
+                FROM system_alerts
+                WHERE resolved_at IS NULL
+                  AND acknowledged_at IS NOT NULL
+                  AND acknowledged_at >= datetime('now', '-30 days')
+                ORDER BY acknowledged_at DESC
+                LIMIT 20""")
+    ).mappings().all()
     return {
         "active": [dict(r) for r in active],
         "recent_resolved": [dict(r) for r in recent_resolved],
+        "recent_dismissed": [dict(r) for r in recent_dismissed],
     }
 
 
@@ -3232,3 +3353,412 @@ def admin_email_onboarding_link(artist_id: int, admin=Depends(check_admin), db=D
         return {"ok": bool(sent), "artist_id": artist_id}
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin: force-transfer ownership of any venue/artist to any user
+# (Jul 22 2026). Wraps the same helper used by the owner self-serve
+# endpoint in entity_users.py, but bypasses the "must be current owner"
+# guard and the "target must be a team member" guard. Logs to
+# admin_audit_log so every override is traceable.
+@router.post("/api/admin/artist/{artist_id}/transfer-owner")
+def admin_transfer_artist_owner(artist_id: int, data: dict, request: Request,
+                                 admin=Depends(check_admin), db=Depends(get_db)):
+    return _admin_transfer_owner('artist', artist_id, data, admin, request, db)
+
+@router.post("/api/admin/venue/{venue_id}/transfer-owner")
+def admin_transfer_venue_owner(venue_id: int, data: dict, request: Request,
+                                admin=Depends(check_admin), db=Depends(get_db)):
+    return _admin_transfer_owner('venue', venue_id, data, admin, request, db)
+
+def _admin_transfer_owner(entity_type: str, entity_id: int, data: dict,
+                          admin, request, db):
+    from backend.routes.entity_users import _do_transfer_owner
+    new_owner_id = int(data.get("new_owner_user_id") or 0)
+    if not new_owner_id:
+        raise HTTPException(400, "new_owner_user_id required")
+    # Capture the pre-transfer owner id for the audit log.
+    if entity_type == 'artist':
+        prior_owner = db.execute(
+            text("SELECT user_id FROM artists WHERE id = :i"), {"i": entity_id}
+        ).scalar()
+    else:
+        prior_owner = db.execute(
+            text("SELECT user_id FROM venues  WHERE id = :i"), {"i": entity_id}
+        ).scalar()
+    result = _do_transfer_owner(db, entity_type, entity_id, new_owner_id, admin.id)
+    try:
+        log_admin_action(
+            db, admin, f"transfer_{entity_type}_owner",
+            target_table=(entity_type + 's'), target_id=entity_id,
+            before={"user_id": prior_owner},
+            after={"user_id": new_owner_id},
+            request=request,
+        )
+    except Exception:
+        pass
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin Directory endpoints (Jul 21 2026)
+# ─────────────────────────────────────────────────────────────────────────────
+# Richer-column payloads for the new top-level "Directory" tab. Separate from
+# the existing /api/admin/users|artists|venues so the Platform Settings
+# drill-downs stay unchanged. Aggregations (gig counts, lifetime totals,
+# ratings) are computed via correlated subqueries — fine for the low-thousand
+# row counts we're dealing with; would move to materialized views if data
+# grew past ~50k entities per type.
+
+@router.get("/api/admin/directory/users")
+def directory_users(admin=Depends(check_admin), db=Depends(get_db)):
+    """All users with rich activity + revenue columns."""
+    from backend.utils import to_admin_bool
+    cols = _column_info(db, "users")
+    has_last_login = any(c[1] == 'last_login' for c in cols)
+    login_col = "u.last_login" if has_last_login else "NULL as last_login"
+    rows = db.execute(text(f"""
+        SELECT
+            u.id, u.first_name, u.last_name, u.email, u.phone, u.is_admin,
+            u.created_at, {login_col},
+            (SELECT COUNT(*) FROM artists WHERE user_id = u.id AND deleted_at IS NULL) as artist_count,
+            (SELECT COUNT(*) FROM venues  WHERE user_id = u.id AND deleted_at IS NULL) as venue_count,
+            -- Total gigs where this user's artists were booked
+            (SELECT COUNT(*)
+               FROM gigs g
+               JOIN artists a ON a.id = g.artist_id
+              WHERE a.user_id = u.id AND g.status = 'booked') as gigs_booked_as_artist,
+            -- Total gigs this user's venues posted
+            (SELECT COUNT(*)
+               FROM gigs g
+               JOIN venues v ON v.id = g.venue_id
+              WHERE v.user_id = u.id) as gigs_posted_as_venue,
+            -- Lifetime venue charges (sum of venue_charge_cents on cleared parent rows)
+            COALESCE((SELECT SUM(COALESCE(t.venue_charge_cents, 0))
+               FROM transactions t
+               JOIN gigs g  ON g.id = t.gig_id
+               JOIN venues v ON v.id = g.venue_id
+              WHERE v.user_id = u.id
+                AND COALESCE(t.transaction_type, 'single') IN ('venue_charge','single')
+                AND t.status IN ('paid','transferred','charged')), 0) as lifetime_venue_spend_cents,
+            -- Lifetime artist payouts (sum of artist_payout_cents on cleared payout rows)
+            COALESCE((SELECT SUM(COALESCE(t.artist_payout_cents, 0))
+               FROM transactions t
+               JOIN artists a ON a.id = t.artist_id
+              WHERE a.user_id = u.id
+                AND COALESCE(t.transaction_type, 'single') IN ('artist_payout','single')
+                AND t.status IN ('paid','transferred')), 0) as lifetime_artist_earnings_cents
+        FROM users u
+        ORDER BY u.created_at DESC
+    """)).mappings().all()
+    return [
+        {
+            "id": r["id"],
+            "first_name": r["first_name"] or '',
+            "last_name":  r["last_name"] or '',
+            "email":      r["email"] or '',
+            "phone":      r["phone"] or '',
+            "is_admin":   to_admin_bool(r["is_admin"]),
+            "created_at": r["created_at"],
+            "last_login": r["last_login"],
+            "artist_count": r["artist_count"] or 0,
+            "venue_count":  r["venue_count"] or 0,
+            "gigs_booked_as_artist": r["gigs_booked_as_artist"] or 0,
+            "gigs_posted_as_venue":  r["gigs_posted_as_venue"] or 0,
+            "lifetime_venue_spend_cents":    r["lifetime_venue_spend_cents"] or 0,
+            "lifetime_artist_earnings_cents": r["lifetime_artist_earnings_cents"] or 0,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/api/admin/directory/artists")
+def directory_artists(admin=Depends(check_admin), db=Depends(get_db)):
+    """All artists with band setup, ratings, gig totals, lifetime earnings."""
+    rows = db.execute(text("""
+        SELECT
+            a.id, a.name, a.artist_type, a.city, a.state,
+            a.band_formats, a.styles,
+            a.avg_rating, a.review_count, a.created_at,
+            u.id as owner_user_id, u.email as owner_email,
+            u.first_name as owner_first_name, u.last_name as owner_last_name,
+            -- Actual booked gigs (past + future)
+            (SELECT COUNT(*) FROM gigs g
+              WHERE (g.artist_id = a.id AND g.status = 'booked')
+                 OR EXISTS (SELECT 1 FROM gig_slots gs
+                              WHERE gs.gig_id = g.id
+                                AND gs.artist_id = a.id
+                                AND gs.status IN ('booked','pending_contract','awaiting_venue_contract'))) as gigs_booked,
+            -- Lifetime payouts to this artist
+            COALESCE((SELECT SUM(COALESCE(t.artist_payout_cents, 0))
+                        FROM transactions t
+                       WHERE t.artist_id = a.id
+                         AND COALESCE(t.transaction_type, 'single') IN ('artist_payout','single')
+                         AND t.status IN ('paid','transferred')), 0) as lifetime_payouts_cents,
+            -- Stripe Connect onboarding state (via entity_payment_settings)
+            (SELECT COALESCE(eps.stripe_connect_onboarding_complete, 0)
+               FROM entity_payment_settings eps
+              WHERE eps.entity_type = 'artist' AND eps.entity_id = a.id
+              LIMIT 1) as stripe_connect_ok
+        FROM artists a
+        LEFT JOIN users u ON u.id = a.user_id
+        WHERE a.deleted_at IS NULL
+        ORDER BY a.created_at DESC
+    """)).mappings().all()
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"] or '',
+            "artist_type": r["artist_type"] or '',
+            "city": r["city"] or '',
+            "state": r["state"] or '',
+            "band_formats": r["band_formats"] or '',
+            "styles": r["styles"] or '',
+            "avg_rating": float(r["avg_rating"]) if r["avg_rating"] is not None else None,
+            "review_count": int(r["review_count"]) if r["review_count"] is not None else 0,
+            "created_at": r["created_at"],
+            "owner_user_id": r["owner_user_id"],
+            "owner_email": r["owner_email"] or '',
+            "owner_name": (f"{r['owner_first_name'] or ''} {r['owner_last_name'] or ''}").strip(),
+            "gigs_booked": r["gigs_booked"] or 0,
+            "lifetime_payouts_cents": r["lifetime_payouts_cents"] or 0,
+            "stripe_connect_ok": bool(r["stripe_connect_ok"]),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/api/admin/directory/venues")
+def directory_venues(admin=Depends(check_admin), db=Depends(get_db)):
+    """All venues with size, default pay, ratings, gig totals, lifetime spend, flags."""
+    # `zero_pay_booking_count` is added by _add_columns() on startup, but
+    # older dev DBs may not have run that migration yet. Detect at query
+    # time and expression-swap (`... as zero_pay_booking_count` from 0
+    # literal) so this endpoint never 500s on a fresh DB.
+    _vcols = _column_info(db, "venues")
+    _has_zpc = any(c[1] == 'zero_pay_booking_count' for c in _vcols)
+    _zpc_expr = "COALESCE(v.zero_pay_booking_count, 0)" if _has_zpc else "0"
+    rows = db.execute(text(f"""
+        SELECT
+            v.id, v.venue_name, v.city, v.state,
+            v.venue_size, v.default_pay_dollars, v.default_pay_cents,
+            v.avg_rating, v.review_count, v.created_at,
+            {_zpc_expr} as zero_pay_booking_count,
+            v.payment_status,
+            u.id as owner_user_id, u.email as owner_email,
+            u.first_name as owner_first_name, u.last_name as owner_last_name,
+            (SELECT COUNT(*) FROM gigs g WHERE g.venue_id = v.id) as gigs_posted,
+            (SELECT COUNT(*) FROM gigs g WHERE g.venue_id = v.id AND g.status = 'booked') as gigs_booked,
+            COALESCE((SELECT SUM(COALESCE(t.venue_charge_cents, 0))
+                        FROM transactions t
+                        JOIN gigs g ON g.id = t.gig_id
+                       WHERE g.venue_id = v.id
+                         AND COALESCE(t.transaction_type, 'single') IN ('venue_charge','single')
+                         AND t.status IN ('paid','transferred','charged')), 0) as lifetime_spend_cents,
+            -- Does the venue have a saved payment method?
+            (SELECT COUNT(*) FROM entity_payment_settings eps
+              WHERE eps.entity_type = 'venue' AND eps.entity_id = v.id
+                AND eps.stripe_customer_id IS NOT NULL
+                AND eps.stripe_payment_method_id IS NOT NULL) as payment_method_ok
+        FROM venues v
+        LEFT JOIN users u ON u.id = v.user_id
+        WHERE v.deleted_at IS NULL
+        ORDER BY v.created_at DESC
+    """)).mappings().all()
+    return [
+        {
+            "id": r["id"],
+            "venue_name": r["venue_name"] or '',
+            "city": r["city"] or '',
+            "state": r["state"] or '',
+            "venue_size": r["venue_size"],
+            "default_pay_dollars": r["default_pay_dollars"],
+            "default_pay_cents": r["default_pay_cents"],
+            "avg_rating": float(r["avg_rating"]) if r["avg_rating"] is not None else None,
+            "review_count": int(r["review_count"]) if r["review_count"] is not None else 0,
+            "created_at": r["created_at"],
+            "zero_pay_booking_count": r["zero_pay_booking_count"] or 0,
+            "payment_status": r["payment_status"] or 'active',
+            "owner_user_id": r["owner_user_id"],
+            "owner_email": r["owner_email"] or '',
+            "owner_name": (f"{r['owner_first_name'] or ''} {r['owner_last_name'] or ''}").strip(),
+            "gigs_posted": r["gigs_posted"] or 0,
+            "gigs_booked": r["gigs_booked"] or 0,
+            "lifetime_spend_cents": r["lifetime_spend_cents"] or 0,
+            "payment_method_ok": bool(r["payment_method_ok"]),
+        }
+        for r in rows
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin: force-delete a user (Users tab per-row trash — Jul 21 2026)
+# ─────────────────────────────────────────────────────────────────────────────
+# Mirrors the self-delete cascade in routes/me.py delete_account, but auth is
+# admin-only and the target is any user_id (not the authenticated user). The
+# core cascade helpers live in services.entity_delete and are shared with the
+# self-delete flow, so behavior stays identical: per-entity ownership audit,
+# refuse if charged transactions still exist, notify booked-gig counterparties,
+# mark in-flight txns as `account_deleted`, wipe every child table, then delete
+# the user row + filesystem media. Admin cannot delete themselves via this
+# endpoint (use /api/me/delete for that) — protects against self-lockout.
+@router.delete("/api/admin/users/{target_user_id}")
+def admin_delete_user(target_user_id: int, request: Request,
+                      admin=Depends(check_admin), db=Depends(get_db)):
+    if int(target_user_id) == int(admin.id):
+        raise HTTPException(400, "Cannot delete your own admin account via this endpoint. Use /api/me/delete instead.")
+
+    # Snapshot the user for the audit log BEFORE the cascade wipes them.
+    target = db.execute(
+        text("SELECT id, first_name, last_name, email FROM users WHERE id = :uid"),
+        {"uid": target_user_id}
+    ).mappings().first()
+    if not target:
+        raise HTTPException(404, "User not found")
+    target_snapshot = dict(target)
+
+    from backend.services.entity_delete import (
+        assert_no_charged_transactions as _assert_no_charged,
+        delete_artist as _delete_artist,
+        delete_venue as _delete_venue,
+    )
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
+    try:
+        # Gather every LIVE entity the target owns — admin-force-delete
+        # always takes them all (no per-entity opt-in like the self-delete
+        # flow; if admin is wiping the user, orphaned entities can't stay).
+        owned_artists = db.execute(
+            text("SELECT id FROM artists WHERE user_id = :uid AND deleted_at IS NULL"),
+            {"uid": target_user_id}
+        ).fetchall()
+        owned_venues = db.execute(
+            text("SELECT id FROM venues WHERE user_id = :uid AND deleted_at IS NULL"),
+            {"uid": target_user_id}
+        ).fetchall()
+        entity_targets = (
+            [{"type": "artist", "id": aid} for (aid,) in owned_artists]
+          + [{"type": "venue",  "id": vid} for (vid,) in owned_venues]
+        )
+
+        # Jul 22 2026 bug fix: TOMBSTONED entities (deleted_at IS NOT NULL)
+        # still carry the departing user's user_id — the FK to users
+        # blocks the final DELETE FROM users. Reassign those tombstones
+        # to the acting admin so historical audit rows (reviews, past
+        # transactions, invoices) that link to "[Deleted] X" remain
+        # referentially valid. Cannot NULL user_id — column is NOT NULL.
+        try:
+            db.execute(
+                text("""UPDATE venues  SET user_id = :aid
+                        WHERE user_id = :uid AND deleted_at IS NOT NULL"""),
+                {"aid": admin.id, "uid": target_user_id}
+            )
+            db.execute(
+                text("""UPDATE artists SET user_id = :aid
+                        WHERE user_id = :uid AND deleted_at IS NOT NULL"""),
+                {"aid": admin.id, "uid": target_user_id}
+            )
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger("gigsfill.admin").warning(
+                f"tombstone reassignment failed for user {target_user_id}: {_e}"
+            )
+
+        # Refuse if charged/inflight transactions still exist on any owned
+        # entity — matches self-delete guard; admin should refund first.
+        for ent in entity_targets:
+            _assert_no_charged(db, ent["type"], ent["id"])
+
+        # Per-entity cascade. Each call returns filesystem paths to
+        # clean up AFTER the DB commit (same pattern as self-delete).
+        rm_paths_pending: list[str] = []
+        for ent in entity_targets:
+            if ent["type"] == "artist":
+                _paths = _delete_artist(db, ent["id"], target_user_id) or []
+            else:
+                _paths = _delete_venue(db, ent["id"], target_user_id) or []
+            rm_paths_pending.extend(_paths)
+
+        # User-level table wipes — mirror of routes/me.py delete_account
+        # step 3. Keep this list in sync when that flow gets new tables.
+        for _stmt in (
+            "DELETE FROM email_preferences        WHERE user_id = :uid",
+            "DELETE FROM support_tickets          WHERE user_id = :uid",
+            "DELETE FROM recommendations          WHERE user_id = :uid",
+            "DELETE FROM notifications            WHERE user_id = :uid",
+            "DELETE FROM entity_users             WHERE user_id = :uid",
+            "DELETE FROM payment_methods          WHERE user_id = :uid",
+            "DELETE FROM sms_preferences          WHERE user_id = :uid",
+            "DELETE FROM affiliate_recommend_emails WHERE sender_user_id = :uid",
+            "DELETE FROM affiliate_referrals      WHERE affiliate_user_id = :uid",
+            "DELETE FROM affiliate_earnings       WHERE affiliate_user_id = :uid",
+            "DELETE FROM affiliate_payouts        WHERE affiliate_user_id = :uid",
+            "DELETE FROM entity_invitations       WHERE invited_by_user_id = :uid AND status = 'pending'",
+            "DELETE FROM w9_forms                 WHERE entity_type = 'user' AND entity_id = :uid",
+            "DELETE FROM gig_messages             WHERE sender_user_id = :uid",
+            "DELETE FROM gig_message_hides        WHERE user_id = :uid",
+            "DELETE FROM user_settings            WHERE user_id = :uid",
+            "DELETE FROM user_availability        WHERE user_id = :uid",
+            "DELETE FROM artist_email_digest_queue WHERE user_id = :uid",
+        ):
+            try:
+                db.execute(text(_stmt), {"uid": target_user_id})
+            except Exception:
+                pass  # per-statement tolerance for older schemas
+
+        # Reviews authored by this user — PRESERVE with reviewer_user_id
+        # NULLed out, so aggregated ratings on venues/artists survive.
+        try:
+            db.execute(text("UPDATE artist_reviews SET reviewer_user_id = NULL WHERE reviewer_user_id = :uid"), {"uid": target_user_id})
+            db.execute(text("UPDATE venue_reviews  SET reviewer_user_id = NULL WHERE reviewer_user_id = :uid"), {"uid": target_user_id})
+        except Exception:
+            # NOT NULL on older deployments → fall back to delete.
+            try:
+                db.execute(text("DELETE FROM artist_reviews WHERE reviewer_user_id = :uid"), {"uid": target_user_id})
+                db.execute(text("DELETE FROM venue_reviews  WHERE reviewer_user_id = :uid"), {"uid": target_user_id})
+            except Exception:
+                pass
+
+        db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": target_user_id})
+        db.commit()
+
+        # Filesystem cleanup — after the commit so a commit-fail doesn't
+        # leave the entities live with their media already wiped.
+        try:
+            from backend.services.entity_delete import _rm_tree
+            for _p in rm_paths_pending:
+                try: _rm_tree(_p)
+                except Exception: pass
+            _media = _Path(f"media/user_{target_user_id}")
+            if _media.exists():
+                try: _shutil.rmtree(_media)
+                except Exception: pass
+        except Exception:
+            pass
+
+        try:
+            log_admin_action(
+                db, admin, "delete_user",
+                target_table="users", target_id=target_user_id,
+                before=target_snapshot,
+                metadata={
+                    "artists_deleted": len(owned_artists),
+                    "venues_deleted": len(owned_venues),
+                },
+                request=request,
+            )
+        except Exception:
+            pass
+
+        return {"ok": True, "artists_deleted": len(owned_artists), "venues_deleted": len(owned_venues)}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        import logging as _log
+        _log.getLogger("gigsfill.admin").exception(
+            f"admin_delete_user failed for target user {target_user_id} (admin {admin.id}): {e}"
+        )
+        db.rollback()
+        raise HTTPException(500, f"Failed to delete user: {e}")

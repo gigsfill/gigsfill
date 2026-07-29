@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GigsFill — Venue Demo Cheat Sheet</title>
+<style>
+  @page { size: letter landscape; margin: 0.35in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9pt;
+    line-height: 1.25;
+    color: #111;
+  }
+  header {
+    border-bottom: 1.5px solid #7c6bff;
+    padding-bottom: 3px;
+    margin-bottom: 6px;
+    overflow: hidden;
+  }
+  header h1 {
+    font-size: 18pt;
+    background: linear-gradient(90deg, #7c6bff, #06b6d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.3px;
+    line-height: 1;
+    font-weight: 700;
+    float: left;
+  }
+  header .sub {
+    font-size: 8.5pt;
+    color: #666;
+    font-style: italic;
+    float: right;
+    margin-top: 6px;
+  }
+  .cols {
+    column-count: 3;
+    column-gap: 16px;
+    column-fill: balance;
+  }
+  section {
+    break-inside: avoid;
+    -webkit-column-break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 6px;
+  }
+  h2 {
+    font-size: 8.5pt;
+    font-weight: 700;
+    color: #7c6bff;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin: 0 0 2px 0;
+    padding-bottom: 1px;
+    border-bottom: 0.6px solid #ccc;
+  }
+  h2 .num {
+    display: inline-block;
+    background: #7c6bff;
+    color: #fff;
+    font-size: 7pt;
+    padding: 1px 4px;
+    margin-right: 4px;
+    border-radius: 2px;
+    font-weight: 700;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  ul { list-style: none; }
+  li {
+    padding: 0 0 0 12px;
+    position: relative;
+    font-size: 8.5pt;
+    line-height: 1.28;
+    margin-bottom: 1px;
+  }
+  li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 2.5px;
+    width: 8px;
+    height: 8px;
+    border: 0.6px solid #666;
+    border-radius: 1.5px;
+  }
+  li b { color: #222; font-weight: 700; }
+  .artist-side h2 { color: #f59e0b; }
+  .artist-side h2 .num { background: #f59e0b; }
+  .tip {
+    background: #fef9c3;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border-left: 3px solid #f59e0b;
+    padding: 4px 8px;
+    margin-top: 6px;
+    font-size: 8.5pt;
+    line-height: 1.3;
+  }
+  footer {
+    margin-top: 5px;
+    padding-top: 3px;
+    border-top: 0.6px solid #ccc;
+    font-size: 7.5pt;
+    color: #666;
+    overflow: hidden;
+  }
+  footer .l { float: left; }
+  footer .r { float: right; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>GigsFill — Venue Demo Cheat Sheet</h1>
+  <div class="sub">Check off as you go · ~20 min full flow</div>
+</header>
+
+<div class="cols">
+
+<section>
+  <h2><span class="num">1</span>Sign Up &amp; Venue Setup</h2>
+  <ul>
+    <li>Create account (email, name, phone)</li>
+    <li>Add venue — <b>name, address, capacity</b></li>
+    <li>Logo + hero photo + bio</li>
+    <li>Amenities — stage, sound, engineer, lighting</li>
+    <li>Add <b>Stripe card</b> on file</li>
+    <li>Invite <b>secondary users</b> (staff)</li>
+    <li>Set venue <b>timezone</b></li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">2</span>Create a Gig</h2>
+  <ul>
+    <li>Date + times, single or multi-slot</li>
+    <li><b>Artist Type</b> per slot (6 options incl. MC)</li>
+    <li>Live Band → pick <b>Lineup</b> + <b>Styles</b></li>
+    <li>MC types → <b>"requires own equipment"</b> filter</li>
+    <li><b>Flat pay</b> OR <b>Door deal</b> (guarantee + %)</li>
+    <li><b>Flyer</b> canvas editor (layers, text, images)</li>
+    <li><b>Recurring</b> weekly / biweekly / monthly</li>
+    <li><b>Hold gig</b> — offer to preferred first</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">3</span>Find &amp; Manage Artists</h2>
+  <ul>
+    <li><b>Search Artists</b> — name / city / radius / type</li>
+    <li>Type venue/city → pills <b>auto-populate</b></li>
+    <li><b>Preferred Artists</b> — priority + freq limits</li>
+    <li>Per-artist <b>Pay Override</b> (auto-applied)</li>
+    <li>Per-artist <b>Frequency Days</b> gap</li>
+    <li><b>Ban</b> artist — permanent block</li>
+    <li><b>Waitlist</b> — queue for recurring gigs</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">4</span>Email Notifications</h2>
+  <ul>
+    <li>Gig Confirmation reminder (1w before)</li>
+    <li>Open-gig blasts at <b>4w / 2w / 1w / 36h</b></li>
+    <li><b>Waive Frequency</b> per-row toggle</li>
+    <li><b>Send to ALL within X mi</b> — non-preferred blast</li>
+    <li><b>Cancellation blast</b> auto when gig re-opens</li>
+    <li>Smallest-window rule → picks right settings</li>
+    <li>Blink calendar bubble after fire</li>
+    <li>Full template library — editable</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">5</span>Booking &amp; Contracts</h2>
+  <ul>
+    <li>Artist books → auto <b>PDF contract</b></li>
+    <li>Artist <b>signs</b> → venue <b>countersigns</b></li>
+    <li><b>Message Artist</b> from calendar</li>
+    <li>Activity Center — one feed for all events</li>
+    <li>.ics invite for venue's calendar</li>
+    <li>Status: Pending → Countersign → Booked</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">6</span>Payments &amp; Payouts</h2>
+  <ul>
+    <li>Card charged <b>day-after at 5 PM</b> local</li>
+    <li>Artists paid via <b>Stripe Connect Express</b></li>
+    <li>Door deal <b>auto-settles</b> from receipts</li>
+    <li>Door Receipts button closes 5 PM day-after</li>
+    <li>Platform fee <b>50/50</b> venue &amp; artist</li>
+    <li>Payments tab — every txn + status</li>
+    <li>Cancel/reinstate before payout fires</li>
+    <li><b>Free-trial</b> mode (payments suspended)</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">7</span>Calendar &amp; Public Face</h2>
+  <ul>
+    <li>Monthly calendar, color-coded status</li>
+    <li>Hover cards — full details, no click</li>
+    <li><b>Public Gigs</b> browse (non-logged-in)</li>
+    <li><b>Venue Discovery</b> — artists find you</li>
+    <li>Blinking bubble when blast is live</li>
+    <li>Public venue profile — bio + shows</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">8</span>Post-Gig</h2>
+  <ul>
+    <li><b>Rate Artist</b> (1–5 + comments)</li>
+    <li>Reviews on artist's public profile</li>
+    <li>Cancel slot pre-payout → pro-rata refund</li>
+    <li><b>Add Door Receipts</b> → Stripe queue</li>
+    <li>Support ticket → GigsFill mediates disputes</li>
+    <li>Historical reports — earnings, bookings</li>
+  </ul>
+</section>
+
+<section class="artist-side">
+  <h2><span class="num">9</span>Artist Side (impacts you)</h2>
+  <ul>
+    <li>Profile: type, lineup, styles, gear, radius, blackouts</li>
+    <li>Search Gigs auto-defaults to profile; auto-applies filters</li>
+    <li>Books → contract fires → both sign, no phone tag</li>
+    <li>Multi-artist users — one account, 2+ projects</li>
+    <li>Frequency limits enforce your booking cadence</li>
+    <li>Waitlist for recurring/popular gigs</li>
+    <li>Blackout dates auto-excluded from your blasts</li>
+    <li>iCal export + auto reminder emails</li>
+  </ul>
+</section>
+
+</div>
+
+<div class="tip">
+  <b>💡 Talking points:</b> lead with <b>time saved</b> (auto-payout, auto-contracts, auto-blast) and <b>risk reduction</b> (frequency limits, blackouts, contracts, dispute mediation). Free-trial toggle lets them try before adding a card. Show the calendar early — it's the "wow" moment.
+</div>
+
+<footer>
+  <span class="l"><b>GigsFill</b> — live-music marketplace for venues + artists</span>
+  <span class="r">gigsfill.com</span>
+</footer>
+
+</body>
+</html>

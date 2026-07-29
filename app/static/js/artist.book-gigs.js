@@ -110,6 +110,63 @@ document.addEventListener("DOMContentLoaded", async () => {
   let artistData = null; // v94: Store artist's type and formats for gig matching
     window._artistData = artistData;
 
+  // v96: tracks last venue+city key so auto-populate only fires when the
+  // narrowing inputs change — user's subsequent deselections of Type/Lineup/
+  // Style pills are never overwritten.
+  let _lastAutoPopKey = '';
+
+  // Helper: set a filter pill's active/inactive visual state.
+  function _setPillActive(btn, active) {
+    if (!btn) return;
+    if (active) {
+      btn.setAttribute('data-active', 'true');
+      btn.style.background = 'rgba(34, 197, 94, 0.2)';
+      btn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+      btn.style.color = '#22c55e';
+    } else {
+      btn.setAttribute('data-active', 'false');
+      btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.style.borderColor = 'rgba(255,255,255,0.2)';
+      btn.style.color = 'var(--text-muted)';
+    }
+  }
+
+  // v96: Given a narrowed gig set (post venue+city filter), activate the
+  // Type/Lineup/Style pills that appear in ANY of those gigs and deactivate
+  // the rest. Also toggle the Lineup + Styles bubble containers based on
+  // whether Live Band ends up active.
+  function _autoPopulatePillsFromGigs(gigList) {
+    const foundTypes = new Set();
+    const foundLineups = new Set();
+    const foundStyles = new Set();
+    const collect = (row) => {
+      const t = (row.artist_type || '').trim();
+      if (t && t !== 'Any') foundTypes.add(t);
+      if (row.band_formats) row.band_formats.split(',').map(x => x.trim()).forEach(f => f && foundLineups.add(f));
+      if (row.styles) row.styles.split(',').map(x => x.trim()).forEach(s => s && foundStyles.add(s));
+    };
+    gigList.forEach(g => {
+      if (g.slots && g.slots.length > 0) g.slots.forEach(collect);
+      else collect(g);
+    });
+
+    document.querySelectorAll('.artist-type-filter-toggle').forEach(btn => {
+      _setPillActive(btn, foundTypes.has(btn.getAttribute('data-type')));
+    });
+    document.querySelectorAll('.band-format-filter-toggle').forEach(btn => {
+      _setPillActive(btn, foundLineups.has(btn.getAttribute('data-format')));
+    });
+    document.querySelectorAll('.style-filter-toggle').forEach(btn => {
+      _setPillActive(btn, foundStyles.has(btn.getAttribute('data-style')));
+    });
+
+    const lbActive = foundTypes.has('Live Band');
+    const lineupEl = document.getElementById('bandFormatBubblesArtist');
+    const stylesEl = document.getElementById('styleBubblesArtist');
+    if (lineupEl) lineupEl.style.display = lbActive ? 'block' : 'none';
+    if (stylesEl) stylesEl.style.display = lbActive ? 'block' : 'none';
+  }
+
   // Centralized handler when the logged-in user doesn't have access
   // to the artist profile (e.g. URL artist_id was edited).
   function showNoArtistAccessAndStop() {
@@ -398,6 +455,32 @@ document.addEventListener("DOMContentLoaded", async () => {
     // shouldBlinkForArtist Case 0, which paints on top of the
     // black base — purple-blink on black reads as 'live offer'.
     if (gig.hold_status === 'active' || gig.hold_status === 'exhausted') {
+      // EXCEPTION (Jun 2026): if THIS artist already booked a slot on
+      // the held gig (a hold can have one artist accept while other
+      // slots still cycle), paint the bubble to reflect THIS artist's
+      // slot state — booked-mine (blue), pending-contract-mine
+      // (awaiting venue countersign for digital contracts), or
+      // pending-venue-approval (same-day approval). Without this the
+      // bubble looked black/locked even to the artist who just signed
+      // their contract and was actively waiting on the venue.
+      const _aidHeld = parseInt(artistId);
+      const _myHeldEntry = myGigs.find(mg => mg.id === gig.id);
+      const _myHeldSlot = _myHeldEntry && (_myHeldEntry.slots || []).find(
+        s => parseInt(s.artist_id) === _aidHeld &&
+             (s.status === 'booked' || s.status === 'pending_contract' || s.status === 'awaiting_venue_contract')
+      );
+      if (_myHeldSlot) {
+        if (_myHeldSlot.status === 'awaiting_venue_contract' || _myHeldSlot.status === 'pending_contract') {
+          return 'pending-contract-mine';
+        }
+        return 'booked-mine';
+      }
+      if (_myHeldEntry && parseInt(_myHeldEntry.artist_id) === _aidHeld) {
+        if (_myHeldEntry.status === 'awaiting_venue_contract' || _myHeldEntry.status === 'pending_contract') {
+          return 'pending-contract-mine';
+        }
+        if (_myHeldEntry.status === 'booked') return 'booked-mine';
+      }
       return 'started';
     }
 
@@ -704,12 +787,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   
       return `
         <div class="my-gig" style="padding: 12px; margin-bottom: 8px; background: rgba(255,255,255,0.03); border-radius: 8px;">
-          <strong>${g.date}</strong>
-          · ${time}
-          · <a href="/app/venue-profile.html?venue_id=${g.venue_id}" target="_blank">
-              <strong>${g.venue_name}</strong>
+          <strong>${esc(g.date || '')}</strong>
+          · ${esc(time || '')}
+          · <a href="/app/venue-profile.html?venue_id=${parseInt(g.venue_id, 10) || 0}" target="_blank">
+              <strong>${esc(g.venue_name || '')}</strong>
             </a>
-          ${addressParts ? `· ${addressParts}` : ''}
+          ${addressParts ? `· ${esc(addressParts)}` : ''}
         </div>
       `;
     }).join("");
@@ -942,7 +1025,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    getMonthDays(year, month).forEach(day => {
+    getMonthDays(year, month).forEach((day, _dayIdx) => {
       const iso = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
       const cell = document.createElement("div");
       cell.className = "day";
@@ -966,9 +1049,20 @@ document.addEventListener("DOMContentLoaded", async () => {
         cell.classList.add("today");
       }
       
+      // Outlook-style month boundary label — prefix "Aug" (etc.) on:
+      //   • the 1st of every visible month (target + spillover), AND
+      //   • the very first cell in the grid so top-left spillover
+      //     (e.g. "Jul 26" when viewing August) reads its month.
       const dayNumber = document.createElement("div");
       dayNumber.className = "day-number";
-      dayNumber.textContent = day.getDate();
+      const _isFirstCell = _dayIdx === 0;
+      if (day.getDate() === 1 || _isFirstCell) {
+        const monAbbr = day.toLocaleString("default", { month: "short" });
+        dayNumber.textContent = monAbbr + " " + day.getDate();
+        dayNumber.classList.add("month-boundary");
+      } else {
+        dayNumber.textContent = day.getDate();
+      }
       cell.appendChild(dayNumber);
 
       // Get and sort gigs for this day (earliest to latest)
@@ -985,7 +1079,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           const div = document.createElement("div");
           const gigClass = getGigClass(g);
           div.className = `gig ${gigClass}`;
-          const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠' };
+          const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
           const icon = icons[g.artist_type] || '🎵';
           // For booked gigs, show the artist's actual slot time
           let bubbleTime = g.start_time;
@@ -1020,6 +1114,17 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (gigClass === 'waitlist-pending') {
             div.style.cssText = 'background: linear-gradient(135deg, #ef4444, #dc2626) !important; animation: gig-blast-pulse 1.2s ease-in-out infinite !important; color: #fff !important; cursor: pointer;';
             div.title = getGigHoverTitle(g, gigClass);
+            div.onmouseenter = function() { this.style.animationPlayState = 'paused'; };
+            div.onmouseleave = function() { this.style.animationPlayState = 'running'; };
+          }
+          // Held gig where THIS artist is the current offeree: paint a
+          // purple blink overlay on top of the black 'started' base so
+          // it reads as 'live offer waiting on you'. Without this the
+          // bubble looked locked-and-done to the very artist who needs
+          // to act.
+          if (gigClass === 'started' && holdOfferGigIds.has(g.id)) {
+            div.style.cssText = 'background: linear-gradient(135deg, #7c6bff, #6052e0) !important; animation: gig-blast-pulse 1.2s ease-in-out infinite !important; color: #fff !important; cursor: pointer;';
+            div.title = '🎯 You\'re up — open to accept or decline this offer';
             div.onmouseenter = function() { this.style.animationPlayState = 'paused'; };
             div.onmouseleave = function() { this.style.animationPlayState = 'running'; };
           }
@@ -1286,7 +1391,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       // and multi-slot gigs get nested per-slot rows below the header
       // showing each slot's own time + artist + pay + status. Single-
       // slot gigs render one compact details row instead.
-      const _typeIconMap = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'};
+      const _typeIconMap = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
       const _typeIcon = _typeIconMap[g.artist_type] || '🎵';
       const _aid = parseInt(artistId);
       const _slotsList = g.slots || [];
@@ -1460,6 +1565,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     const modalActions = document.getElementById("modalActions");
     if (modalActions) { modalActions.innerHTML = ''; modalActions.style.display = 'none'; }
     modal.classList.remove("day-modal");
+    // BUG FIX (Jul 2026): openDayGigsModal sets inline width/max-width/
+    // min-width on this shared .modal element so the day-view can render
+    // as `max-content`. Those inline styles persist on the element after
+    // the day-modal closes — the next openGigModal call would inherit the
+    // 92vw cap and render the single-gig modal at nearly full viewport
+    // width. Clear them so we fall back to the CSS rule .modal { max-width: 680px }.
+    modal.style.width = '';
+    modal.style.maxWidth = '';
+    modal.style.minWidth = '';
 
     // Show loading state immediately
     overlay.classList.remove("hidden");
@@ -1471,6 +1585,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       data = await window.fetchModalData(gig.id, 'artist', artistId);
     } catch (e) {
       body.innerHTML = `<p style="color:#ef4444;padding:16px;">Failed to load gig details: ${e.message}</p>`;
+      return;
+    }
+
+    // Series-hold redirect (Jul 2026 Phase 5). If THIS gig is part of
+    // a series hold AND the artist has the active offer, close this
+    // gig modal and open the bundled picker modal instead — clicking
+    // any individual series gig should land in the same bundled-pick
+    // UX as the email link / banner CTA. Per-gig accept on a series
+    // token only books ONE slot and leaves the rest orphaned.
+    if (data && data.hold_info && data.hold_info.is_series
+        && data.hold_info.my_state === 'current_offer'
+        && data.hold_info.series_offer_token
+        && typeof window.openSeriesHoldModal === 'function') {
+      overlay.classList.add('hidden');
+      setTimeout(() => window.openSeriesHoldModal(data.hold_info.series_offer_token), 30);
       return;
     }
 
@@ -1569,7 +1698,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         } catch (e) {
           requestBtn.disabled = false;
           requestBtn.textContent = 'Ask Venue for Preferred Status';
-          alert("Request failed: " + e.message);
+          // BUG FIX (Jul 2026 audit): branded modal to match the rest of the
+          // page. The success path uses showSuccessModal; failure was using
+          // native alert().
+          if (typeof window.showErrorModal === 'function') {
+            window.showErrorModal('Request Failed', (e && e.message) || 'Could not send request.');
+          } else {
+            alert("Request failed: " + e.message);
+          }
         }
       };
     }
@@ -1815,8 +1951,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
   }
 
-  // Search/Filter functionality - v73: Only apply on Enter
-  document.getElementById('applyFilters').onclick = applyFilters;
+  // Search/Filter functionality - v96: Apply Filters button removed (auto-apply on every change)
   document.getElementById('clearFilters').onclick = () => {
     document.getElementById('searchVenue').value = '';
     document.getElementById('searchCity').value = '';
@@ -1840,13 +1975,23 @@ document.addEventListener("DOMContentLoaded", async () => {
       btn.style.color = 'var(--text-muted)';
     });
     
-    // Hide and reset band format filters
+    // Hide and reset band format + style filters
     const bandFormatContainer = document.getElementById('bandFormatBubblesArtist');
     if (bandFormatContainer) {
       bandFormatContainer.style.display = 'none';
     }
-    
+    const styleContainer = document.getElementById('styleBubblesArtist');
+    if (styleContainer) {
+      styleContainer.style.display = 'none';
+    }
+
     document.querySelectorAll('.band-format-filter-toggle').forEach(btn => {
+      btn.setAttribute('data-active', 'false');
+      btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.style.borderColor = 'rgba(255,255,255,0.2)';
+      btn.style.color = 'var(--text-muted)';
+    });
+    document.querySelectorAll('.style-filter-toggle').forEach(btn => {
       btn.setAttribute('data-active', 'false');
       btn.style.background = 'rgba(255,255,255,0.05)';
       btn.style.borderColor = 'rgba(255,255,255,0.2)';
@@ -2127,8 +2272,50 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   function applyFilters() {
+    // v96: If Search Gigs section is collapsed, ignore the filter panel and
+    // show gigs that match the artist's own profile type (from artist-edit).
+    // Only when the artist expands Search Gigs do the panel choices take over.
+    const _searchSection = document.getElementById('searchGigsSection');
+    const _searchExpanded = _searchSection && _searchSection.style.display !== 'none';
+    if (!_searchExpanded) {
+      const _profileType = artistData && artistData.artist_type;
+      const _profileFormats = artistData && artistData.band_formats
+        ? artistData.band_formats.split(',').map(f => f.trim()).filter(Boolean)
+        : [];
+      const _slotMatchesProfile = (s) => {
+        const st = (s.artist_type || '').trim();
+        if (!st || st === 'Any') return true;
+        if (!_profileType) return true;
+        if (st !== _profileType) return false;
+        // Live Band → also require slot lineup overlap when artist has lineups set
+        if (_profileType === 'Live Band' && _profileFormats.length > 0 && s.band_formats) {
+          const sf = s.band_formats.split(',').map(f => f.trim()).filter(Boolean);
+          if (sf.length > 0 && !sf.some(f => _profileFormats.includes(f))) return false;
+        }
+        return true;
+      };
+      gigs = _profileType
+        ? allGigs.filter(g => {
+            if (g.slots && g.slots.length > 0) {
+              return g.slots.some(_slotMatchesProfile);
+            }
+            if (!g.artist_type || g.artist_type === 'Any') return true;
+            if (g.artist_type !== _profileType) return false;
+            if (_profileType === 'Live Band' && _profileFormats.length > 0 && g.band_formats) {
+              const gf = g.band_formats.split(',').map(f => f.trim()).filter(Boolean);
+              if (gf.length > 0 && !gf.some(f => _profileFormats.includes(f))) return false;
+            }
+            return true;
+          })
+        : [...allGigs];
+      renderCalendar();
+      const _resEl = document.getElementById('searchResults');
+      if (_resEl) _resEl.textContent = '';
+      return;
+    }
+
     const cityInput = document.getElementById('searchCity').value.trim();
-    
+
     filters = {
       venue: document.getElementById('searchVenue').value.toLowerCase(),
       city: cityInput.toLowerCase(),
@@ -2151,20 +2338,50 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     let filtered = [...allGigs];
 
-    // v94: If venue name is entered, ONLY filter by venue - ignore all other criteria
+    // v96: Venue narrows the set first (was: early return that bypassed all pill
+    // filters). Pill filters still apply afterward so unchecking a Type/Lineup/
+    // Style hides matching gigs at the typed venue too.
     if (filters.venue) {
       filtered = filtered.filter(g => g.venue_name && g.venue_name.toLowerCase().includes(filters.venue));
-      
-      // Update display and return early
-      gigs = filtered;
-      renderCalendar();
-      
-      const resultsEl = document.getElementById('searchResults');
-      resultsEl.textContent = `Found ${filtered.length} gig${filtered.length !== 1 ? 's' : ''} at ${filters.venue}`;
-      return;
     }
 
-    // If no venue name, apply other filters independently
+    // v96: City + radius narrows first as well (moved from later in the pipeline).
+    if (filters.city && filters.cityCoords) {
+      filtered = filtered.filter(g => {
+        if (!g.venue_lat || !g.venue_lon) return true;
+        const distance = calculateDistance(
+          filters.cityCoords.lat, filters.cityCoords.lon,
+          g.venue_lat, g.venue_lon
+        );
+        return distance <= filters.mileRadius;
+      });
+    } else if (filters.city) {
+      filtered = filtered.filter(g => {
+        if (!g.city) return false;
+        const gigCity = g.city.toLowerCase().trim();
+        return gigCity.includes(filters.city) || filters.city.includes(gigCity);
+      });
+    }
+
+    // v96: When venue or city changes, auto-populate the Type/Lineup/Style pills
+    // to whichever values appear in the venue/city-narrowed set. User then
+    // deselects pills to further narrow.
+    const _autoPopKey = `${filters.venue}|${filters.city}`;
+    if (_autoPopKey !== _lastAutoPopKey) {
+      _lastAutoPopKey = _autoPopKey;
+      if (filters.venue || filters.city) {
+        _autoPopulatePillsFromGigs(filtered);
+      }
+    }
+
+    // v96: If no Artist Type selected, calendar is blank (nothing to show)
+    const activeArtistTypes = Array.from(document.querySelectorAll('.artist-type-filter-toggle[data-active="true"]')).map(btn => btn.getAttribute('data-type'));
+    if (activeArtistTypes.length === 0) {
+      gigs = [];
+      renderCalendar();
+      document.getElementById('searchResults').textContent = 'Select an Artist Type to see gigs';
+      return;
+    }
 
     // Filter by minimum pay (uses effective pay including venue overrides)
     if (filters.minPay > 0) {
@@ -2188,72 +2405,52 @@ document.addEventListener("DOMContentLoaded", async () => {
       filtered = filtered.filter(g => g.has_lighting === 1 || g.has_lighting === true);
     }
     
-    // Filter by artist type
-    const activeArtistTypes = Array.from(document.querySelectorAll('.artist-type-filter-toggle[data-active="true"]')).map(btn => btn.getAttribute('data-type'));
-    if (activeArtistTypes.length > 0) {
-      filtered = filtered.filter(g => {
-        // Multi-slot gigs: always show — each slot has its own artist_type
-        if (g.slots && g.slots.length > 0) return true;
-        // Gig must accept one of the active types
-        if (!g.artist_type || g.artist_type === 'Any') {
-          return true; // Gig accepts any type
-        }
-        return activeArtistTypes.includes(g.artist_type);
-      });
-    }
-    
-    // Filter by band format (only if Live Band is active)
+    // v96: Live Band lineup + style rules used by single-slot and multi-slot paths.
     const isLiveBandActive = document.querySelector('.artist-type-filter-toggle[data-type="Live Band"]')?.getAttribute('data-active') === 'true';
-    if (isLiveBandActive) {
-      const activeBandFormats = Array.from(document.querySelectorAll('.band-format-filter-toggle[data-active="true"]')).map(btn => btn.getAttribute('data-format'));
-      if (activeBandFormats.length > 0) {
-        filtered = filtered.filter(g => {
-          // Multi-slot gigs: always show — each slot has its own band_formats
-          if (g.slots && g.slots.length > 0) return true;
-          // Only filter Live Band gigs
-          if (g.artist_type !== 'Live Band') {
-            return true; // Not a Live Band gig, don't filter
-          }
-          if (!g.band_formats) {
-            return true; // Gig accepts any format
-          }
-          // Check if gig accepts at least one of the active formats
-          const gigFormats = g.band_formats.split(',').map(f => f.trim());
-          return gigFormats.some(format => activeBandFormats.includes(format));
-        });
-      }
-    }
+    const activeBandFormats = Array.from(document.querySelectorAll('.band-format-filter-toggle[data-active="true"]')).map(btn => btn.getAttribute('data-format'));
+    const activeStyles = Array.from(document.querySelectorAll('.style-filter-toggle[data-active="true"]')).map(btn => btn.getAttribute('data-style'));
+    // Live Band selected but zero lineups OR zero styles → no Live Band results allowed.
+    const _liveBandBlocked = isLiveBandActive && (activeBandFormats.length === 0 || activeStyles.length === 0);
 
-    // Filter by city and radius
-    if (filters.city && filters.cityCoords) {
-      // We have coordinates - do true radius filtering
-      filtered = filtered.filter(g => {
-        if (!g.venue_lat || !g.venue_lon) {
-          // No coords: can't determine distance — include it so it's not hidden
-          return true;
+    const _slotMatchesActive = (s) => {
+      const st = (s.artist_type || '').trim();
+      const effectiveType = st && st !== 'Any' ? st : null;
+      if (effectiveType && !activeArtistTypes.includes(effectiveType)) return false;
+      if (effectiveType === 'Live Band') {
+        if (_liveBandBlocked) return false;
+        if (activeBandFormats.length > 0 && s.band_formats) {
+          const sf = s.band_formats.split(',').map(f => f.trim()).filter(Boolean);
+          if (sf.length > 0 && !sf.some(f => activeBandFormats.includes(f))) return false;
         }
-        
-        // v94: Log coordinates for debugging
-        
-        // Calculate distance
-        const distance = calculateDistance(
-          filters.cityCoords.lat,
-          filters.cityCoords.lon,
-          g.venue_lat,
-          g.venue_lon
-        );
-        
-        const inRange = distance <= filters.mileRadius;
-        return inRange;
-      });
-    } else if (filters.city) {
-      // No coordinates, just match by city name
-      filtered = filtered.filter(g => {
-        if (!g.city) return false;
-        const gigCity = g.city.toLowerCase().trim();
-        return gigCity.includes(filters.city) || filters.city.includes(gigCity);
-      });
-    }
+        if (activeStyles.length > 0 && s.styles) {
+          const ss = s.styles.split(',').map(x => x.trim()).filter(Boolean);
+          if (ss.length > 0 && !ss.some(x => activeStyles.includes(x))) return false;
+        }
+      }
+      return true;
+    };
+
+    // Filter by artist type + band format + styles (unified for single- and multi-slot).
+    filtered = filtered.filter(g => {
+      if (g.slots && g.slots.length > 0) {
+        return g.slots.some(_slotMatchesActive);
+      }
+      const gt = (g.artist_type || '').trim();
+      const effectiveType = gt && gt !== 'Any' ? gt : null;
+      if (effectiveType && !activeArtistTypes.includes(effectiveType)) return false;
+      if (effectiveType === 'Live Band') {
+        if (_liveBandBlocked) return false;
+        if (activeBandFormats.length > 0 && g.band_formats) {
+          const gf = g.band_formats.split(',').map(f => f.trim()).filter(Boolean);
+          if (gf.length > 0 && !gf.some(f => activeBandFormats.includes(f))) return false;
+        }
+        if (activeStyles.length > 0 && g.styles) {
+          const gs = g.styles.split(',').map(x => x.trim()).filter(Boolean);
+          if (gs.length > 0 && !gs.some(x => activeStyles.includes(x))) return false;
+        }
+      }
+      return true;
+    });
 
     gigs = filtered;
     renderCalendar();
@@ -2426,19 +2623,59 @@ document.addEventListener("DOMContentLoaded", async () => {
         this.style.color = '#22c55e';
       }
       
-      // Show/hide band format bubbles
+      // Show/hide band format + style bubbles
       const bandFormatContainer = document.getElementById('bandFormatBubblesArtist');
+      const styleContainer = document.getElementById('styleBubblesArtist');
       const liveBandBtn = document.querySelector('.artist-type-filter-toggle[data-type="Live Band"]');
       const isLiveBandActive = liveBandBtn && liveBandBtn.getAttribute('data-active') === 'true';
-      
+
       if (bandFormatContainer) {
         bandFormatContainer.style.display = isLiveBandActive ? 'block' : 'none';
       }
-      
+      if (styleContainer) {
+        styleContainer.style.display = isLiveBandActive ? 'block' : 'none';
+      }
+
       applyFilters();
     });
   });
-  
+
+  // v96: Populate + wire Styles pills (parallel to Lineup)
+  const _STYLE_OPTIONS_SG = ['Country','Hip-Hop','Indie','Jazz','Latin','Pop','Reggae','Rock'];
+  const _styleListEl = document.getElementById('styleBubblesArtistList');
+  if (_styleListEl) {
+    _styleListEl.innerHTML = _STYLE_OPTIONS_SG.map(s =>
+      `<button class="style-filter-toggle" data-active="false" data-style="${s}" style="`
+      + `padding: 4px 6px;`
+      + `background: rgba(255,255,255,0.05);`
+      + `border: 1px solid rgba(255,255,255,0.2);`
+      + `color: var(--text-muted);`
+      + `border-radius: 6px;`
+      + `cursor: pointer;`
+      + `transition: all 0.2s;`
+      + `font-size: 0.75rem;`
+      + `font-weight: 500;`
+      + `">${s}</button>`
+    ).join('');
+    _styleListEl.querySelectorAll('.style-filter-toggle').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const isActive = this.getAttribute('data-active') === 'true';
+        if (isActive) {
+          this.setAttribute('data-active', 'false');
+          this.style.background = 'rgba(255,255,255,0.05)';
+          this.style.borderColor = 'rgba(255,255,255,0.2)';
+          this.style.color = 'var(--text-muted)';
+        } else {
+          this.setAttribute('data-active', 'true');
+          this.style.background = 'rgba(34, 197, 94, 0.2)';
+          this.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+          this.style.color = '#22c55e';
+        }
+        applyFilters();
+      });
+    });
+  }
+
   // Band Format Filter Handling (for Search Gigs)
   document.querySelectorAll('.band-format-filter-toggle').forEach(btn => {
     btn.addEventListener('click', function() {
@@ -2463,47 +2700,65 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   
   // Set default artist type filters based on artist's profile
-  if (artistData) {
-    // Activate the artist's type
-    if (artistData.artist_type) {
-      const typeBtn = document.querySelector(`.artist-type-filter-toggle[data-type="${artistData.artist_type}"]`);
-      if (typeBtn) {
-        typeBtn.setAttribute('data-active', 'true');
-        typeBtn.style.background = 'rgba(34, 197, 94, 0.2)';
-        typeBtn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
-        typeBtn.style.color = '#22c55e';
+  // v96: Clear the HTML-preset Live Band+Full Band defaults first, then activate
+  // ONLY the artist's own type — keeps Search Gigs consistent with the artist profile.
+  document.querySelectorAll('.artist-type-filter-toggle').forEach(btn => {
+    btn.setAttribute('data-active', 'false');
+    btn.style.background = 'rgba(255,255,255,0.05)';
+    btn.style.borderColor = 'rgba(255,255,255,0.2)';
+    btn.style.color = 'var(--text-muted)';
+  });
+  document.querySelectorAll('.band-format-filter-toggle').forEach(btn => {
+    btn.setAttribute('data-active', 'false');
+    btn.style.background = 'rgba(255,255,255,0.05)';
+    btn.style.borderColor = 'rgba(255,255,255,0.2)';
+    btn.style.color = 'var(--text-muted)';
+  });
+  document.querySelectorAll('.style-filter-toggle').forEach(btn => {
+    btn.setAttribute('data-active', 'false');
+    btn.style.background = 'rgba(255,255,255,0.05)';
+    btn.style.borderColor = 'rgba(255,255,255,0.2)';
+    btn.style.color = 'var(--text-muted)';
+  });
+  const _bandFormatContainer = document.getElementById('bandFormatBubblesArtist');
+  const _styleContainer = document.getElementById('styleBubblesArtist');
+  if (_bandFormatContainer) _bandFormatContainer.style.display = 'none';
+  if (_styleContainer) _styleContainer.style.display = 'none';
+
+  if (artistData && artistData.artist_type) {
+    const typeBtn = document.querySelector(`.artist-type-filter-toggle[data-type="${artistData.artist_type}"]`);
+    if (typeBtn) {
+      typeBtn.setAttribute('data-active', 'true');
+      typeBtn.style.background = 'rgba(34, 197, 94, 0.2)';
+      typeBtn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+      typeBtn.style.color = '#22c55e';
+    }
+
+    // Show band format + style bubbles, activate artist's lineups/styles if Live Band
+    if (artistData.artist_type === 'Live Band') {
+      if (_bandFormatContainer) _bandFormatContainer.style.display = 'block';
+      if (_styleContainer) _styleContainer.style.display = 'block';
+      if (artistData.band_formats) {
+        artistData.band_formats.split(',').map(f => f.trim()).forEach(format => {
+          const formatBtn = document.querySelector(`.band-format-filter-toggle[data-format="${format}"]`);
+          if (formatBtn) {
+            formatBtn.setAttribute('data-active', 'true');
+            formatBtn.style.background = 'rgba(34, 197, 94, 0.2)';
+            formatBtn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+            formatBtn.style.color = '#22c55e';
+          }
+        });
       }
-      
-      // Show band format bubbles if Live Band
-      if (artistData.artist_type === 'Live Band') {
-        const bandFormatContainer = document.getElementById('bandFormatBubblesArtist');
-        if (bandFormatContainer) {
-          bandFormatContainer.style.display = 'block';
-        }
-        
-        // Set artist's lineup
-        if (artistData.band_formats) {
-          const formats = artistData.band_formats.split(',').map(f => f.trim());
-          
-          // First, turn off all formats
-          document.querySelectorAll('.band-format-filter-toggle').forEach(btn => {
-            btn.setAttribute('data-active', 'false');
-            btn.style.background = 'rgba(255,255,255,0.05)';
-            btn.style.borderColor = 'rgba(255,255,255,0.2)';
-            btn.style.color = 'var(--text-muted)';
-          });
-          
-          // Then activate only the artist's formats
-          formats.forEach(format => {
-            const formatBtn = document.querySelector(`.band-format-filter-toggle[data-format="${format}"]`);
-            if (formatBtn) {
-              formatBtn.setAttribute('data-active', 'true');
-              formatBtn.style.background = 'rgba(34, 197, 94, 0.2)';
-              formatBtn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
-              formatBtn.style.color = '#22c55e';
-            }
-          });
-        }
+      if (artistData.styles) {
+        artistData.styles.split(',').map(s => s.trim()).forEach(style => {
+          const styleBtn = document.querySelector(`.style-filter-toggle[data-style="${style}"]`);
+          if (styleBtn) {
+            styleBtn.setAttribute('data-active', 'true');
+            styleBtn.style.background = 'rgba(34, 197, 94, 0.2)';
+            styleBtn.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+            styleBtn.style.color = '#22c55e';
+          }
+        });
       }
     }
   }
@@ -2539,17 +2794,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (typeof renderCalendar === 'function') renderCalendar();
     } catch (_) {}
   };
+  // Exposed so the contract signing modal (and any other post-action
+  // handler) can refresh the per-artist hold-blink set immediately
+  // after a state change — banner Book / contract sign / decline.
+  // Without this the gig bubble keeps its purple "you're on the
+  // clock" overlay until the 60s poll.
+  window.loadHoldOfferGigIds = loadHoldOfferGigIds;
   // Expose gigs array so waitlist functions (defined on window) can access it
   Object.defineProperty(window, '_abgGigs', { get: () => gigs, configurable: true });
 
   // Auto-refresh gig data every 60s so waitlist changes, cancellations, and new bookings
-  // are reflected without requiring a manual page refresh
+  // are reflected without requiring a manual page refresh.
+  // v96: applyFilters() (not renderCalendar) so the current filter state — including
+  // Search Gigs panel choices when expanded, or the artist's profile-type default when
+  // collapsed — is preserved across auto-refreshes.
   setInterval(async () => {
     try {
       await loadGigs();
       await loadMyGigs();
       await loadVenueBlastSettings();
-      renderCalendar();
+      applyFilters();
     } catch (_e) {}
   }, 60000);
 });
@@ -2611,7 +2875,7 @@ async function runBookingPrecheck(gigId, artistId, slotId) {
       const proceed = await new Promise(resolve => {
         window.showConfirm(
           '⏰ Close to Another Booking',
-          `You're already booked at ${o.venue_name} on ${o.gig_date} (${o.start_time}–${o.end_time}). That gig ${whenPhrase}. Book this gig anyway?`,
+          `You're already booked at ${o.venue_name} on ${o.gig_date} (${formatTime12Hour(o.start_time)}–${formatTime12Hour(o.end_time)}). That gig ${whenPhrase}. Book this gig anyway?`,
           () => resolve(true),
           () => resolve(false),
           { tone: 'warning', confirmLabel: 'Book Anyway', cancelLabel: 'Never Mind', confirmStyle: 'primary' }
@@ -2759,6 +3023,12 @@ function showContractSigningModal(gig, preview, artistId) {
             const bookingPayload = { artist_id: artistId, signature_name: sigName };
             if (window._pendingSlotBooking) {
               bookingPayload.slot_id = window._pendingSlotBooking.slotId;
+              // Hold integration (Jun 2026): thread the hold token
+              // through so book-with-contract can clean up the hold
+              // waitlist row + advance rotation after the booking lands.
+              if (window._pendingSlotBooking.holdToken) {
+                bookingPayload.hold_token = window._pendingSlotBooking.holdToken;
+              }
             }
             const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
               method: 'POST', credentials: 'include',
@@ -2773,15 +3043,39 @@ function showContractSigningModal(gig, preview, artistId) {
             window._pendingContractInfo = null;
             const wasSlotBooking = !!window._pendingSlotBooking;
             window._pendingSlotBooking = null;
+            // Also dismiss the underlying Gig Details modal (#modalOverlay)
+            // — closeAllModals only tracks gfm-modal-* stack, not the
+            // legacy #modalOverlay that the Pending Offer panel lives
+            // in. Without this the Gig Details modal stayed open with
+            // a stale Book/Decline panel even after success. (Jun 2026)
+            try { document.getElementById('modalOverlay')?.classList.add('hidden'); } catch (_) {}
+            // Digital contract flow: artist's signature is recorded but
+            // the slot moves to `awaiting_venue_contract` — the venue
+            // still needs to countersign before the booking is locked
+            // in. The prior copy ("Your slot booking is confirmed")
+            // overstated finality. (Jun 2026 user report.)
             window.showSuccessModal(
-              'Gig Booked & Contract Signed!',
-              wasSlotBooking ? 'Your slot booking is confirmed.' : 'Your booking is confirmed. The venue will be notified.'
+              'Contract Signed — Awaiting Venue',
+              wasSlotBooking
+                ? "You're done on your side. The venue still needs to countersign — you'll get a confirmation email the moment they do, and the slot locks in."
+                : "Your signature is in. The venue still needs to countersign — you'll get a confirmation email the moment they do, and the booking locks in."
             );
             if (typeof window.loadGigs === 'function') await window.loadGigs();
             if (typeof window.loadMyGigs === 'function') await window.loadMyGigs();
             if (window.activityCenter) await window.activityCenter.loadNotifications();
             if (typeof window.renderCalendar === 'function') window.renderCalendar();
             if (typeof window.loadArtistEarningsHistory === 'function') window.loadArtistEarningsHistory();
+            // Auto-refresh the Pending Offers banner + the artist's
+            // blink-set so a held gig the artist JUST accepted via
+            // contract signing disappears from the banner / loses its
+            // purple blink overlay immediately, instead of waiting up
+            // to 60s for the next poll. (Jun 2026 user report.)
+            if (typeof window.loadHoldOffersBanner === 'function') {
+              try { await window.loadHoldOffersBanner(); } catch (_) {}
+            }
+            if (typeof window.loadHoldOfferGigIds === 'function') {
+              try { await window.loadHoldOfferGigIds(); } catch (_) {}
+            }
           } catch (e) {
             signBtn.disabled = false;
             signBtn.textContent = 'Sign & Book This Gig';
@@ -2929,7 +3223,10 @@ function showPdfContractModal(gig, preview, artistId) {
           if (holdBtn) { holdBtn.disabled = true; holdBtn.textContent = 'Booking...'; }
           try {
             const pdfPayload = { artist_id: artistId };
-            if (window._pendingSlotBooking) pdfPayload.slot_id = window._pendingSlotBooking.slotId;
+            if (window._pendingSlotBooking) {
+              pdfPayload.slot_id = window._pendingSlotBooking.slotId;
+              if (window._pendingSlotBooking.holdToken) pdfPayload.hold_token = window._pendingSlotBooking.holdToken;
+            }
             const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
               method: 'POST', credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
@@ -2944,6 +3241,10 @@ function showPdfContractModal(gig, preview, artistId) {
             await _refreshAfterUpload();
             // Swap to state 2 — close current modal and open the next.
             if (window.closeAllModals) window.closeAllModals();
+            // Also dismiss the legacy #modalOverlay (Gig Details modal
+            // with the Pending Offer panel). Mirror of the digital-sign
+            // close fix above.
+            try { document.getElementById('modalOverlay')?.classList.add('hidden'); } catch (_) {}
             showState2(data.contract_id);
           } catch (e) {
             if (holdBtn) { holdBtn.disabled = false; holdBtn.textContent = 'Hold Gig & Download Contract'; }
@@ -2991,7 +3292,10 @@ function showPerGigPdfModal(gig, artistId) {
           if (reqBtn) { reqBtn.disabled = true; reqBtn.textContent = 'Requesting...'; }
           try {
             const pgPayload = { artist_id: artistId };
-            if (window._pendingSlotBooking) pgPayload.slot_id = window._pendingSlotBooking.slotId;
+            if (window._pendingSlotBooking) {
+              pgPayload.slot_id = window._pendingSlotBooking.slotId;
+              if (window._pendingSlotBooking.holdToken) pgPayload.hold_token = window._pendingSlotBooking.holdToken;
+            }
             const res = await fetch(`/api/gigs/${gig.id}/book-with-contract${window._blastToken ? "?blast_token=" + window._blastToken : ""}`, {
               method: 'POST', credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
@@ -3003,6 +3307,10 @@ function showPerGigPdfModal(gig, artistId) {
             }
             window._pendingContractInfo = null;
             if (window.closeAllModals) window.closeAllModals();
+            // Also dismiss the legacy Gig Details modal (Pending Offer
+            // panel) so the artist doesn't see a stale Book/Decline
+            // pair after a successful booking request.
+            try { document.getElementById('modalOverlay')?.classList.add('hidden'); } catch (_) {}
             if (typeof window.showSuccessModal === 'function') {
               window.showSuccessModal('Booking Requested!', 'The venue has been notified to upload your contract.');
             }
@@ -3159,3 +3467,14 @@ window.loadArtistWaitlists = async function() {
     }).join('');
   } catch(e) { console.error('Waitlist load error:', e); }
 };
+
+// ───────────────────────────────────────────────────────────────────
+// Hold integration (Jun 2026) — expose the three contract-signing
+// modals globally so hold-offers-banner.js can route a Hold-accept
+// through the same signing flow as a regular Book click. They all
+// read window._pendingSlotBooking for slot context (and now hold_token
+// — see the modal bodies above) and POST to /book-with-contract.
+// ───────────────────────────────────────────────────────────────────
+window.showContractSigningModal = showContractSigningModal;
+window.showPdfContractModal     = showPdfContractModal;
+window.showPerGigPdfModal       = showPerGigPdfModal;

@@ -21,7 +21,15 @@ class User(Base):
     first_name = Column(String)
     last_name = Column(String)
     phone = Column(String)
-    is_admin = Column(Boolean, default=False)  # Migrated from TEXT 'true'/'false' to INTEGER 0/1 on 2026-05-08; SQLAlchemy Boolean reads existing values correctly via type coercion.
+    # BUG FIX (Jul 2026 audit): the live SQLite DB stores is_admin as VARCHAR
+    # ('0'/'1' — verified via PRAGMA), not INTEGER as the old comment
+    # claimed. Declaring Boolean here caused SQLAlchemy Column definition
+    # to imply schema drift (declared type != actual type). We use String
+    # to match reality; the canonical admin check anywhere in the codebase
+    # is `str(user.is_admin).lower() in ('true', '1')` per CLAUDE.md, which
+    # handles both the current VARCHAR '0'/'1' values AND the legacy
+    # 'true'/'false' shape without change.
+    is_admin = Column(String, default='0')
     affiliate_code = Column(String, unique=True)
     password_changed_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -57,6 +65,8 @@ class Artist(Base):
     social_order = Column(Text)
 
     display_order = Column(Integer, default=0)
+    # Jul 1 2026: MC-type equipment gate (see db.py notes).
+    has_own_equipment = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
@@ -187,6 +197,9 @@ class GigSlot(Base):
     artist_type = Column(String)
     band_formats = Column(String)
     styles = Column(String)
+    # Jul 1 2026: nullable — NULL means the venue didn't specify. Only
+    # matched-against when set. See db.py notes on MC-type flow.
+    requires_equipment = Column(Boolean, nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     gig = relationship("Gig")
@@ -444,6 +457,14 @@ class VenueEmailNotification(Base):
     time_value = Column(Integer, default=1)
     time_unit = Column(Text, default="weeks")
     radius_miles = Column(Integer, nullable=True)
+    blast_all_enabled = Column(Integer, default=0)
+    blast_all_radius = Column(Integer, nullable=True)
+    blink_enabled = Column(Integer, default=0)
+    blink_color = Column(Text, nullable=True)
+    waive_frequency = Column(Integer, default=1)  # Jul 2026: gate frequency_exempt UPDATE
+    cancel_notify_preferred = Column(Integer, default=0)      # Jul 2026: cancellation blast → preferred
+    cancel_notify_all_enabled = Column(Integer, default=0)    # Jul 2026: cancellation blast → non-preferred in radius
+    cancel_notify_all_radius = Column(Integer, default=20)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (UniqueConstraint("venue_id", "notification_key"),)

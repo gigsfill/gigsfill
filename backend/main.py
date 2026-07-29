@@ -151,7 +151,8 @@ from backend.routes import (
     preferred_artists, notifications,
     cities, admin, admin_payments, emails, venue_emails, entity_users,
     analytics, tax, contracts, stripe_connect, flyers, onboarding,
-    reviews, messages, availability, waitlist, affiliate, vanity
+    reviews, messages, availability, waitlist, affiliate, vanity,
+    unsubscribe, demo_requests, contact,
 )
 
 def ensure_database():
@@ -228,7 +229,25 @@ if _SENTRY_DSN:
         logger.warning(f"[SENTRY] init failed: {_se} — continuing without error tracking")
 
 # Create FastAPI app
-app = FastAPI(title="GigsFill API", version="1.0.0")
+app = FastAPI(title="GigsFill API", version="1.0.0", docs_url=None, redoc_url=None, openapi_url=None)
+
+# Stripe SDK global config (Jul 1 2026 audit RED fix). Without a timeout,
+# the Stripe SDK's default is 80s per request with 0 retries — a Stripe
+# outage during checkout, onboarding, or the payout scheduler would hang
+# uvicorn workers for 80s each. With only 2 workers, 4 concurrent hangs
+# = total site outage. 15s per request + 2 retries strikes a balance
+# between "resilient to a Stripe blip" and "don't wedge the worker."
+import logging as _logging_boot
+_logger_boot = _logging_boot.getLogger("gigsfill.boot")
+try:
+    import stripe as _stripe_global
+    # Stripe SDK 14.x moved the http_client module to _http_client.
+    from stripe._http_client import RequestsClient as _StripeRequestsClient
+    _stripe_global.default_http_client = _StripeRequestsClient(timeout=15)
+    _stripe_global.max_network_retries = 2
+    _logger_boot.info("[STRIPE] SDK configured with 15s timeout + 2 retries")
+except Exception as _stripe_cfg_e:
+    _logger_boot.warning(f"[STRIPE] SDK config failed (falling back to defaults): {_stripe_cfg_e}")
 
 # Rate limiting
 from backend.rate_limiter import limiter
@@ -423,12 +442,27 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Phase 6 will migrate inline handlers to event delegation enabling nonce-based CSP.
         csp = "; ".join([
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdnjs.cloudflare.com",
+            "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdnjs.cloudflare.com https://www.instagram.com",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
             "font-src 'self' data: https://fonts.gstatic.com",
             "img-src 'self' data: blob: https:",
-            "connect-src 'self' https://api.stripe.com",
-            "frame-src 'self' https://js.stripe.com https://www.youtube.com https://youtube.com https://w.soundcloud.com https://bandcamp.com https://*.bandcamp.com",
+            # Jul 25 2026: allow oEmbed lookups to fetch video thumbnails
+            # for Vimeo + TikTok links (Instagram/FB oEmbed requires an
+            # app token — not attempted). Client-side thumbnail resolver
+            # lives in artist.edit.js / venue.edit.js getVideoThumbnail.
+            "connect-src 'self' https://api.stripe.com "
+            "https://vimeo.com https://www.tiktok.com",
+            # Jul 25 2026: added Instagram / TikTok / Vimeo / Facebook
+            # so the lightbox video-embed builder can iframe social posts
+            # (reels, shorts, videos). Without these hosts in frame-src
+            # the iframe silently fails to load and the modal shows blank.
+            "frame-src 'self' https://js.stripe.com "
+            "https://www.youtube.com https://youtube.com "
+            "https://w.soundcloud.com https://bandcamp.com https://*.bandcamp.com "
+            "https://www.instagram.com https://instagram.com "
+            "https://www.tiktok.com https://tiktok.com "
+            "https://player.vimeo.com "
+            "https://www.facebook.com https://web.facebook.com",
             # media-src: allow any https source so artist-uploaded audio_link URLs
             # (direct MP3s on artists' own sites, etc.) play in <audio> elements.
             # Without this the player renders but the browser blocks playback.
@@ -527,11 +561,11 @@ def healthz():
     from starlette.responses import JSONResponse
     try:
         import sqlite3
-        from backend.db import DB_PATH
-        # Skip SQLAlchemy entirely — we want the cheapest possible
-        # round-trip so the monitor's 5s timeout never trips during
-        # incidents that block the ORM pool.
-        c = sqlite3.connect(str(DB_PATH), timeout=1.0)
+        # Jul 1 2026 Postgres R1: use get_db_connection so healthz works
+        # on both engines. Still skips SQLAlchemy's connection pool so a
+        # blocked pool doesn't trip the healthz 5s timeout.
+        from backend.db import get_db_connection
+        c = get_db_connection()
         c.execute("SELECT 1").fetchone()
         c.close()
         db_ok = True
@@ -1273,8 +1307,29 @@ def resend_invitation(venue_id: int, invitation_id: int):
 
 @app.delete("/api/venues/{venue_id}/invitations/{invitation_id}")
 def delete_venue_invitation(venue_id: int, invitation_id: int, current_user=Depends(get_current_user)):
-    """Delete (cancel) a pending artist invitation"""
+    """Delete (cancel) a pending artist invitation.
+
+    Audit fix (Jul 2026): endpoint had ZERO authorization check — any
+    authenticated user could cancel any venue's pending invitations
+    just by knowing the ids. Now requires venue access.
+    """
     from backend.db import get_db_connection
+    from backend.utils import check_venue_access
+    from backend.db import get_db
+
+    # Access check uses the SQLAlchemy session (`get_db`) that
+    # check_venue_access expects. We keep the raw sqlite conn below for
+    # the UPDATE so the existing flow is undisturbed.
+    _db_gen = get_db()
+    _db_sess = next(_db_gen)
+    try:
+        check_venue_access(_db_sess, venue_id, current_user.id)
+    finally:
+        try:
+            next(_db_gen, None)
+        except Exception:
+            pass
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -1469,3 +1524,6 @@ def request_access(request: Request, data: dict):
 # denylist is a defense-in-depth backup; this ordering is the primary guard.
 # ────────────────────────────────────────────────────────────────────────────
 app.include_router(vanity.router)
+app.include_router(unsubscribe.router)
+app.include_router(demo_requests.router)
+app.include_router(contact.router)

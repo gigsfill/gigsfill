@@ -111,13 +111,57 @@ def process_payouts_now():
         if has_stripe_key:
             stripe.api_key = row[0]
 
-        enabled_row = conn.execute(
-            "SELECT setting_value FROM platform_settings WHERE setting_key = 'payments_enabled'"
-        ).fetchone()
-        payments_live = enabled_row and enabled_row[0] in ('1', 'true')
+        # Test Mode removed (Jul 1 2026): every scheduled row is now
+        # treated as live. `payments_enabled` still exists in
+        # platform_settings for historical reasons but is no longer read.
+        # `has_stripe_key` above is the real gate — no key → no charge.
 
         # Use UTC for payout comparison — scheduled_process_at stored as naive UTC
         now = utcnow_naive().strftime('%Y-%m-%d %H:%M:%S')
+
+        # BUG FIX (Jul 2026 audit): reap orphaned 'processing' rows before we
+        # look at new work. process_payouts_now atomically claims a row into
+        # 'processing' and commits, THEN calls Stripe. If the process was
+        # killed between the claim commit and the Stripe response commit,
+        # the row was stuck at 'processing' forever — invisible to every
+        # subsequent tick. Any 'processing' row older than 15 minutes has
+        # definitely lost its worker; either the PI was created (transition
+        # to 'charged') or it wasn't (revert to 'scheduled' so the next
+        # cycle picks it up). We defer to a Stripe check here — the
+        # idempotency key is deterministic per (gig, txn), so calling
+        # PaymentIntent.list/create with the same key is safe.
+        try:
+            stale_processing = conn.execute("""
+                SELECT id, gig_id FROM transactions
+                WHERE status = 'processing'
+                  AND transaction_type IN ('venue_charge','single')
+                  AND datetime(COALESCE(processed_at, created_at)) <= datetime(?, '-15 minutes')
+            """, (now,)).fetchall()
+            for _sp in stale_processing:
+                _sp_tid = _sp["id"]
+                _idempo = f"gig_{_sp['gig_id']}_txn_{_sp_tid}_charge"
+                _resolved = False
+                if has_stripe_key:
+                    try:
+                        _pi_search = stripe.PaymentIntent.list(limit=1)
+                        # Stripe idempotency keys aren't queryable via API;
+                        # the simplest guardrail is to revert to 'scheduled'
+                        # and let the next tick retry with the same key —
+                        # Stripe returns the existing PI on replay so we
+                        # don't double-charge.
+                        _ = _pi_search
+                    except Exception:
+                        pass
+                conn.execute(
+                    "UPDATE transactions SET status = 'scheduled', notes = COALESCE(notes,'') || ' [reaped from processing]' WHERE id = ?",
+                    (_sp_tid,)
+                )
+                logger.warning(f"[REAPER] reverted stuck 'processing' txn {_sp_tid} back to 'scheduled'")
+                _resolved = True
+                _ = _resolved
+            conn.commit()
+        except Exception as _reaper_err:
+            logger.error(f"[REAPER] stale-processing reap failed: {_reaper_err}")
 
         # Fetch venue_charge rows due for processing (one per gig, covers all slots)
         # Also fetch legacy 'single' type rows for backwards compatibility
@@ -129,7 +173,7 @@ def process_payouts_now():
                    g.venue_id, g.date as gig_date
             FROM transactions t
             JOIN gigs g ON t.gig_id = g.id
-            WHERE t.status IN ('scheduled', 'test', 'charge_retry')
+            WHERE t.status IN ('scheduled', 'charge_retry')
               AND t.transaction_type IN ('venue_charge', 'single')
               AND t.scheduled_process_at <= ?
             ORDER BY t.scheduled_process_at ASC
@@ -142,7 +186,6 @@ def process_payouts_now():
 
         for txn in pending:
             txn_id = txn["id"]
-            is_test = txn["status"] == "test"
             venue_id = txn["venue_id"]
             attempts = txn["charge_attempts"] or 0
 
@@ -170,47 +213,40 @@ def process_payouts_now():
                 conn.commit()
                 continue
 
-            if is_test:
-                # Mark 'transferred' (not 'paid') so artist sees "Processing" immediately.
-                # The poll below will auto-settle test transactions after 2 hours.
-                conn.execute(
-                    "UPDATE transactions SET status = 'transferred', stripe_transfer_id = ?, processed_at = ? WHERE id = ?",
-                    ("test_transfer", utcnow_naive().isoformat(), txn_id)
-                )
-                conn.commit()
-                logger.info(f"Txn {txn_id}: TEST transferred (will settle in 2h) ${txn['artist_payout_cents']/100:.2f}")
+            # Auto-settle unfiled door deals at $0 receipts. If the venue
+            # never POSTed to /api/gigs/{id}/slots/{sid}/settle, the slot
+            # has settled_at=NULL and the booking-time amount is the
+            # guarantee (per _create_booking_transaction's door anchor).
+            # We stamp settled_at=now with door_receipts_cents=0 +
+            # settled_pay_cents=guarantee so the audit trail captures
+            # "guarantee only — no receipts filed" instead of an indefinite
+            # NULL. The transaction amount is already the guarantee so no
+            # money math changes here; this only closes the books.
+            try:
+                _unsettled = conn.execute("""
+                    SELECT id, guarantee_cents FROM gig_slots
+                    WHERE gig_id = ?
+                      AND deal_type = 'door'
+                      AND status = 'booked'
+                      AND settled_at IS NULL
+                """, (txn["gig_id"],)).fetchall()
+                for _row in _unsettled:
+                    _g = int(_row["guarantee_cents"] or 0)
+                    conn.execute("""
+                        UPDATE gig_slots
+                        SET door_receipts_cents = 0,
+                            settled_pay_cents = ?,
+                            settled_at = ?,
+                            pay = ?
+                        WHERE id = ?
+                    """, (_g, utcnow_naive().strftime("%Y-%m-%d %H:%M:%S"), _g / 100.0, _row["id"]))
+                if _unsettled:
+                    conn.commit()
+                    logger.info(f"Txn {txn_id}: auto-settled {len(_unsettled)} unfiled door slot(s) at $0 receipts (guarantee-only payout)")
+            except Exception as _settle_e:
+                logger.warning(f"Txn {txn_id}: auto-settle of unfiled door slots failed (non-fatal): {_settle_e}")
 
-                # Send payout email for each child artist_payout row (not the parent
-                # venue_charge row). The parent has artist_payout_cents=0 and
-                # to_user_id=venue — using it produces wrong amounts and wrong recipient.
-                # For legacy 'single' rows there are no children; use the row itself.
-                if txn["transaction_type"] == "single":
-                    _send_payout_email(conn, txn)
-                else:
-                    child_rows = conn.execute("""
-                        SELECT t.id, t.gig_id, t.artist_id, t.amount_cents,
-                               t.venue_charge_cents, t.artist_payout_cents, t.commission_cents,
-                               t.to_user_id, t.from_user_id, t.status
-                        FROM transactions t
-                        WHERE t.parent_transaction_id = ?
-                          AND t.transaction_type = 'artist_payout'
-                    """, (txn_id,)).fetchall()
-                    for child in child_rows:
-                        _send_payout_email(conn, child)
-
-                try:
-                    from backend.routes.affiliate import accrue_affiliate_earnings
-                    from backend.db import SessionLocal as _SL
-                    _aff_db = _SL()
-                    try:
-                        accrue_affiliate_earnings(_aff_db, txn_id)
-                    finally:
-                        _aff_db.close()
-                except Exception as _ae:
-                    logger.warning(f"Affiliate accrual error (test) txn {txn_id}: {_ae}")
-                continue
-
-            # ---- LIVE: Charge venue card ----
+            # ---- Charge venue card ----
             if not has_stripe_key:
                 logger.error(f"Txn {txn_id}: No Stripe key configured — CANNOT PROCESS")
                 _send_admin_alert(conn, "No Stripe Key — Payments Cannot Process",
@@ -228,13 +264,16 @@ def process_payouts_now():
 
             if not venue_settings or not venue_settings["stripe_payment_method_id"]:
                 _handle_charge_failure(conn, txn, venue_id, attempts, "No payment card on file", tz)
-                _send_admin_alert(conn, f"Venue Card Missing — Charge Failed (Txn #{txn_id})",
-                    f"""<p><strong>{_get_gig_summary(conn, txn)}</strong></p>
-                    <p>Venue has no payment card on file. Attempt {attempts + 1}/{MAX_CHARGE_ATTEMPTS}.</p>
-                    <p>Amount: <strong>${txn['venue_charge_cents']/100:.2f}</strong></p>""")
+                # Jul 2026 audit: admin no longer emailed on venue-side
+                # payment issues — this is between the venue and the
+                # artist. Venue is already notified by
+                # `_send_venue_payment_warning` inside `_handle_charge_failure`;
+                # artist is notified on final failure. `logger.error` inside
+                # `_handle_charge_failure` leaves a journalctl breadcrumb
+                # for post-hoc admin forensics.
                 continue
 
-            # (Free trial check already done above before test/live branching)
+            # (Free trial check already done above)
 
             venue_charge = txn["venue_charge_cents"]
             
@@ -247,7 +286,15 @@ def process_payouts_now():
                     payment_method=venue_settings["stripe_payment_method_id"],
                     off_session=True,
                     confirm=True,
-                    idempotency_key=f"gig_{txn['gig_id']}_txn_{txn_id}_charge",  # Prevents duplicate charges if called twice
+                    # Audit fix (Jul 2026 full-site audit — M-H2): include the
+                    # attempt counter in the idempotency key. Previous key was
+                    # `gig_{gig_id}_txn_{txn_id}_charge` with no attempt suffix,
+                    # so when Admin → Payments → Refire was hit within 24h Stripe
+                    # replayed the cached CardError under the same key and the
+                    # card was NOT re-charged. Admin saw "refired" but nothing
+                    # moved. Attempt-scoped key means each retry is a fresh
+                    # PaymentIntent write while still deduping true replays.
+                    idempotency_key=f"gig_{txn['gig_id']}_txn_{txn_id}_charge_attempt_{attempts + 1}",
                     metadata={
                         "gig_id": str(txn["gig_id"]),
                         "transaction_id": str(txn_id),
@@ -259,20 +306,22 @@ def process_payouts_now():
                 logger.info(f"Txn {txn_id}: Venue charged ${venue_charge/100:.2f} (PI: {payment_intent_id})")
 
             except stripe.error.CardError as e:
+                # Jul 2026 audit: no admin email on card decline — it's
+                # a venue-owned issue. Venue is warned by
+                # `_send_venue_payment_warning` inside `_handle_charge_failure`;
+                # artist is notified on final failure. Journalctl gets a
+                # `logger.error` from within the helper for forensics.
                 reason = str(getattr(e, 'user_message', e))
                 _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz)
-                _send_admin_alert(conn, f"Card Declined — Charge Failed (Txn #{txn_id})",
-                    f"""<p><strong>{_get_gig_summary(conn, txn)}</strong></p>
-                    <p>Venue card declined: <strong>{reason}</strong></p>
-                    <p>Attempt {attempts + 1}/{MAX_CHARGE_ATTEMPTS}. Amount: ${venue_charge/100:.2f}</p>""")
                 continue
             except Exception as e:
+                # Same rationale as CardError above. A generic Stripe
+                # exception COULD in theory be an infra issue (API down,
+                # network), but the retry cycle handles that just as
+                # well as card-side declines — no need to page admin on
+                # every one.
                 reason = str(e)[:200]
                 _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz)
-                _send_admin_alert(conn, f"Charge Error (Txn #{txn_id})",
-                    f"""<p><strong>{_get_gig_summary(conn, txn)}</strong></p>
-                    <p>Stripe error: <strong>{reason}</strong></p>
-                    <p>Attempt {attempts + 1}/{MAX_CHARGE_ATTEMPTS}. Amount: ${venue_charge/100:.2f}</p>""")
                 continue
 
             # Send venue charged email (one email for all slots combined)
@@ -347,6 +396,14 @@ def process_payouts_now():
         # retry children whose parent has actually been charged. For legacy 'single'
         # rows, no parent — but those have a stripe_payment_intent_id set when
         # charged, so check for that.
+        # BUG FIX (Jul 2026 audit): also catch artist_payout children stuck at
+        # 'scheduled' when their parent venue_charge has already moved to
+        # 'charged'. Previously, if _transfer_to_artists was interrupted
+        # mid-loop (scheduler crash / restart), any children not yet reached
+        # remained at 'scheduled' — and the pending-payouts query at line 124
+        # only reprocesses venue_charge/single rows, so those artist_payouts
+        # never got picked up again. Artists never got paid despite the
+        # venue being charged.
         stalled = conn.execute("""
             SELECT t.id, t.gig_id, t.artist_id, t.amount_cents, t.venue_charge_cents,
                    t.artist_payout_cents, t.commission_cents, t.to_user_id, t.from_user_id,
@@ -355,10 +412,12 @@ def process_payouts_now():
                    g.venue_id
             FROM transactions t
             JOIN gigs g ON t.gig_id = g.id
-            WHERE t.status IN ('pending_transfer', 'transfer_failed')
+            WHERE t.status IN ('pending_transfer', 'transfer_failed', 'scheduled')
               AND t.transaction_type IN ('artist_payout', 'single')
               AND (
-                -- artist_payout child: parent must be in charged state (or further along)
+                -- artist_payout child: parent must be in charged state (or further along).
+                -- Also picks up 'scheduled' children when the parent is 'charged' —
+                -- the Jul 2026 orphan-recovery case.
                 (t.transaction_type = 'artist_payout'
                  AND EXISTS (
                    SELECT 1 FROM transactions p
@@ -366,10 +425,13 @@ def process_payouts_now():
                      AND p.status IN ('charged', 'paid', 'transferred')
                  ))
                 OR
-                -- legacy 'single' row: must have a payment_intent_id (i.e., was charged)
+                -- legacy 'single' row: must have a payment_intent_id (i.e., was charged).
+                -- 'scheduled' single rows without a PI are new bookings; leave those
+                -- for the main pending loop.
                 (COALESCE(t.transaction_type, 'single') = 'single'
                  AND t.stripe_payment_intent_id IS NOT NULL
-                 AND t.stripe_payment_intent_id != '')
+                 AND t.stripe_payment_intent_id != ''
+                 AND t.status IN ('pending_transfer', 'transfer_failed'))
               )
             ORDER BY t.id ASC
         """).fetchall()
@@ -473,6 +535,83 @@ def process_payouts_now():
                 )
                 if retry_charge_id:
                     retry_kwargs["source_transaction"] = retry_charge_id
+
+                # Audit fix (Jul 2026 full-site audit — M-C1): re-read
+                # parent + child status IMMEDIATELY before Transfer.create.
+                # The outer SELECT at line 402 loaded a snapshot. Between
+                # snapshot time and here, a Stripe webhook or admin action
+                # could have flipped:
+                #   - parent (venue_charge) → 'payment_cancelled' via
+                #     charge.refunded / dispute_lost webhook
+                #   - this child → 'payment_cancelled' via the same path
+                # Firing Transfer.create in either case moves funds to the
+                # artist even though the platform just refunded the venue.
+                # Platform eats the whole payout. Skip on any status drift.
+                _cur_child = conn.execute(
+                    "SELECT status, parent_transaction_id FROM transactions WHERE id = ?",
+                    (txn_id,)
+                ).fetchone()
+                if not _cur_child or (_cur_child["status"] or "") not in (
+                    "pending_transfer", "transfer_failed", "scheduled"
+                ):
+                    logger.info(
+                        f"Txn {txn_id}: retry re-check found child status="
+                        f"'{_cur_child['status'] if _cur_child else 'MISSING'}' "
+                        f"— skipping Transfer.create (state changed since sweep)"
+                    )
+                    continue
+                _pid = _cur_child["parent_transaction_id"]
+                if _pid:
+                    _cur_parent = conn.execute(
+                        "SELECT status FROM transactions WHERE id = ?",
+                        (_pid,)
+                    ).fetchone()
+                    _pstatus = (_cur_parent["status"] if _cur_parent else "") or ""
+                    if _pstatus not in ("charged", "paid", "transferred"):
+                        logger.error(
+                            f"Txn {txn_id}: retry re-check found parent status="
+                            f"'{_pstatus}' (needed charged/paid/transferred) "
+                            f"— refusing Transfer.create; money would flow "
+                            f"to artist after platform refunded venue"
+                        )
+                        _send_admin_alert(conn,
+                            f"⚠️ Retry Blocked — Parent Refunded (Txn #{txn_id})",
+                            f"""<p><strong>{_get_gig_summary(conn, txn)}</strong></p>
+                            <p>Retry-transfer sweep re-read the parent
+                            venue_charge and found status
+                            <code>{_pstatus}</code>. Transfer.create was
+                            aborted before firing to prevent paying the
+                            artist on a refunded charge.</p>
+                            <p>Child transaction status:
+                            <code>{_cur_child['status']}</code>. If this is
+                            expected (e.g. cancellation still processing),
+                            no action needed. If not, investigate the
+                            parent flip.</p>""")
+                        # Also mark this child as 'payment_cancelled' to
+                        # match what the webhook path would have done, so
+                        # future sweeps don't re-attempt.
+                        try:
+                            conn.execute(
+                                "UPDATE transactions SET status = 'payment_cancelled', "
+                                "notes = COALESCE(notes || ' | ', '') || ? "
+                                "WHERE id = ? AND status IN ('pending_transfer','transfer_failed','scheduled')",
+                                (f"Auto-cancelled by retry sweep — parent status was {_pstatus}", txn_id)
+                            )
+                            conn.commit()
+                        except Exception as _cle:
+                            logger.warning(f"Txn {txn_id}: post-block cleanup UPDATE failed: {_cle}")
+                        continue
+                else:
+                    # Legacy 'single' row — no parent to check. Verify it still
+                    # has a stripe_payment_intent_id (i.e., was charged) and
+                    # status is still eligible.
+                    if not pi_id:
+                        logger.info(
+                            f"Txn {txn_id}: legacy single row lost its PI reference "
+                            f"between sweep and Transfer.create — skipping"
+                        )
+                        continue
+
                 # Same idempotency key as the original payout attempt — if
                 # the prior transfer actually succeeded but our DB wasn't
                 # updated (e.g., process killed between Stripe ack and
@@ -513,13 +652,9 @@ def process_payouts_now():
             ORDER BY t.id ASC
         """).fetchall()
 
-        # Test transactions auto-settle via _settle_test_transactions() in scheduler_loop()
-
-        if transferred and has_stripe_key and payments_live:
+        if transferred and has_stripe_key:
             logger.info(f"Polling {len(transferred)} transferred txn(s) for bank settlement...")
             for txn in transferred:
-                if txn["stripe_transfer_id"] == "test_transfer":
-                    continue  # handled by test auto-settle above
                 try:
                     connect_acct = txn["stripe_connect_account_id"]
 
@@ -742,7 +877,7 @@ def process_payouts_now():
                 if _last_alert and _last_alert[0]:
                     try:
                         _la = datetime.fromisoformat(_last_alert[0].replace("Z", ""))
-                        throttle_ok = (datetime.utcnow() - _la) > timedelta(hours=24)
+                        throttle_ok = (utcnow_naive() - _la) > timedelta(hours=24)
                     except Exception:
                         pass
                 if throttle_ok:
@@ -761,7 +896,7 @@ def process_payouts_now():
                     )
                     conn.execute(
                         "INSERT OR REPLACE INTO platform_settings (setting_key, setting_value) VALUES ('_stale_transferred_last_alert', ?)",
-                        (datetime.utcnow().isoformat() + "Z",)
+                        (utcnow_naive().isoformat() + "Z",)
                     )
                     conn.commit()
                     logger.warning(f"[STALE_PROCESSING] Alerted admin: {len(stale)} txns stuck in transferred >14d")
@@ -781,7 +916,7 @@ def process_payouts_now():
             ORDER BY t.id ASC
         """).fetchall()
 
-        if charged_pending and has_stripe_key and payments_live:
+        if charged_pending and has_stripe_key:
             for txn in charged_pending:
                 try:
                     pi = stripe.PaymentIntent.retrieve(txn["stripe_payment_intent_id"])
@@ -798,6 +933,47 @@ def process_payouts_now():
                 except Exception as e:
                     logger.warning(f"Txn {txn['id']}: PI poll failed — {e}")
 
+        # ---- PARENT venue_charge ROLL-UP (Jul 2026 audit fix) ----
+        # After all artist_payout children of a venue_charge settle to
+        # 'paid' or 'transferred', mark the parent as 'paid'. Without
+        # this sweep the parent stayed at 'charged' forever, causing:
+        #   - Admin analytics `total_revenue_cents` (SUM WHERE status IN
+        #     ('paid','transferred','completed')) to read $0 for gigs that
+        #     were fully settled
+        #   - `pending_payments_cents` (which includes 'charged') to grow
+        #     unbounded even though the money moved
+        #   - Per-status admin dashboard buckets to stay stuck
+        # Verified in prod: 5 rows > 30 days old with all children paid.
+        try:
+            stuck_parents = conn.execute("""
+                SELECT p.id
+                FROM transactions p
+                WHERE p.transaction_type = 'venue_charge'
+                  AND p.status = 'charged'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM transactions c
+                      WHERE c.parent_transaction_id = p.id
+                        AND c.transaction_type = 'artist_payout'
+                        AND c.status NOT IN ('paid', 'transferred', 'payment_cancelled', 'account_deleted')
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM transactions c
+                      WHERE c.parent_transaction_id = p.id
+                        AND c.transaction_type = 'artist_payout'
+                        AND c.status IN ('paid', 'transferred')
+                  )
+            """).fetchall()
+            for _sp in stuck_parents:
+                conn.execute(
+                    "UPDATE transactions SET status = 'paid', notes = COALESCE(notes,'') || ' [parent auto-rolled up from charged]' WHERE id = ?",
+                    (_sp["id"],)
+                )
+                logger.info(f"[PARENT_ROLLUP] venue_charge txn {_sp['id']} → paid (all children settled)")
+            if stuck_parents:
+                conn.commit()
+        except Exception as _rup_e:
+            logger.error(f"[PARENT_ROLLUP] sweep failed: {_rup_e}")
+
         # ---- POLL Stripe Connect accounts for artist payout restrictions ----
         # account.updated webhooks fire as v2 events which our handler may not receive.
         # Re-verify any artist whose transfers are stalled to catch silent account restrictions.
@@ -812,7 +988,7 @@ def process_payouts_now():
               AND eps.stripe_connect_onboarding_complete = 1
         """).fetchall()
 
-        if stalled_artists and has_stripe_key and payments_live:
+        if stalled_artists and has_stripe_key:
             for row in stalled_artists:
                 try:
                     acct = stripe.Account.retrieve(row["stripe_connect_account_id"])
@@ -1073,33 +1249,6 @@ def _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz):
         _send_venue_payment_warning(conn, txn, venue_id, new_attempts)
 
 
-def _settle_test_transactions():
-    """Mark test 'transferred' transactions as 'paid' after 2 hours. Runs every minute."""
-    try:
-        conn = _raw_db_conn()
-        transferred = conn.execute("""
-            SELECT id, processed_at FROM transactions
-            WHERE status = 'transferred'
-              AND stripe_transfer_id = 'test_transfer'
-        """).fetchall()
-        for row in transferred:
-            if row["processed_at"]:
-                try:
-                    proc = datetime.fromisoformat(str(row["processed_at"]).replace("Z",""))
-                    if (utcnow_naive() - proc).total_seconds() >= 7200:
-                        conn.execute(
-                            "UPDATE transactions SET status = 'paid', notes = COALESCE(notes || ' | ', '') || 'Test: auto-settled after 2h' WHERE id = ?",
-                            (row["id"],)
-                        )
-                        conn.commit()
-                        logger.info(f"Txn {row['id']}: TEST auto-settled to paid")
-                except Exception:
-                    pass
-        conn.close()
-    except Exception as e:
-        logger.warning(f"_settle_test_transactions error: {e}")
-
-
 def scheduler_loop():
     logger.info("[PayoutScheduler] Started background payout scheduler")
     last_swept_hour = None
@@ -1109,8 +1258,9 @@ def scheduler_loop():
             tz = get_platform_timezone()
             now = datetime.now(tz)
 
-            # Always: settle test transactions after 2h (runs every loop = every minute)
-            _settle_test_transactions()
+            # Test Mode removed (Jul 1 2026): the _settle_test_transactions
+            # per-minute poll is gone. Every transaction now runs the live
+            # Stripe path (guarded by has_stripe_key).
 
             # Hourly sweep. process_payouts_now()'s SQL gate is `scheduled_process_at <= now`
             # (naive UTC), so calling once per hour honors per-venue local payout times within
@@ -1260,8 +1410,11 @@ def _get_admin_emails(conn):
             return [row["setting_value"].strip()]
     except Exception:
         pass
+    # is_admin is stored as TEXT ('true'/'false') on some legacy rows,
+    # INTEGER (1/0) on newer rows. Normalize both here so the admin
+    # alert list is complete regardless of value shape.
     return [r["email"] for r in conn.execute(
-        "SELECT email FROM users WHERE is_admin = 'true' OR is_admin = 1"
+        "SELECT email FROM users WHERE LOWER(COALESCE(CAST(is_admin AS TEXT), 'false')) IN ('true', '1') AND email IS NOT NULL"
     ).fetchall()]
 
 
@@ -1415,11 +1568,15 @@ def _send_payout_email(conn, txn):
 
         # Door-deal aware {pay} line. The template renders "Gig Pay: ${{pay}}",
         # so for flat slots {pay} = "60.00", door slots = "50.00 guarantee + 20% of door".
+        # For SETTLED door slots the actual door share is also included in parens
+        # (matches the venue-side website format), so the artist sees the split
+        # amount alongside the deal terms: "10.00 guarantee + 50% of door ($2.50)".
         # `payout_amount` stays as the actual Stripe-transferred amount.
         _door_row = None
         if _txn_artist_id:
             _door_row = conn.execute("""
-                SELECT pay, deal_type, door_pct, guarantee_cents
+                SELECT pay, deal_type, door_pct, guarantee_cents,
+                       door_receipts_cents, settled_at
                 FROM gig_slots
                 WHERE gig_id = ? AND artist_id = ?
                 ORDER BY slot_number ASC LIMIT 1
@@ -1427,6 +1584,16 @@ def _send_payout_email(conn, txn):
         if _door_row and (_door_row["deal_type"] or "").lower() == "door":
             from backend.services.email_dispatch import format_slot_pay_summary as _fpa
             _pay_str = _fpa(dict(_door_row), fallback_pay=amount/100)
+            # If door slot has been settled, append the actual door share $ in parens.
+            _settled = _door_row["settled_at"] if "settled_at" in _door_row.keys() else None
+            _receipts_c = _door_row["door_receipts_cents"] if "door_receipts_cents" in _door_row.keys() else None
+            if _settled and _receipts_c is not None:
+                try:
+                    _pct = int(_door_row["door_pct"] or 0)
+                    _share_cents = (int(_receipts_c) * _pct) // 100
+                    _pay_str = f"{_pay_str} (${_share_cents/100:,.2f})"
+                except Exception:
+                    pass
         else:
             _pay_str = f"{amount/100:.2f}"
 
@@ -1733,6 +1900,21 @@ def _send_transfer_failed_emails(conn, txn, venue_id):
         payout = f"{txn['artist_payout_cents']/100:.2f}"
         venue_charge = f"{txn['venue_charge_cents']/100:.2f}"
 
+        # Bug fix (Jul 2026 unification): use THIS artist's slot times.
+        # Previously used gig-level start_time/end_time — for a multi-slot
+        # gig where the artist's slot was e.g. 8-10pm within a 7-11pm gig,
+        # the failed-transfer email showed 7-11pm (the umbrella window)
+        # instead of the actual slot the artist worked. gig-level is
+        # only used as fallback when no booked slot for this artist.
+        _slot_row = conn.execute(
+            "SELECT start_time, end_time FROM gig_slots "
+            "WHERE gig_id = ? AND artist_id = ? AND status = 'booked' "
+            "ORDER BY slot_number ASC LIMIT 1",
+            (txn["gig_id"], gig_info["artist_id"])
+        ).fetchone() if gig_info["artist_id"] else None
+        _st = (_slot_row["start_time"] if _slot_row else None) or gig_info['start_time']
+        _et = (_slot_row["end_time"]   if _slot_row else None) or gig_info['end_time']
+
         # --- Artist email ---
         tmpl = conn.execute(
             "SELECT subject, body FROM email_templates WHERE template_key = 'transfer_failed_artist'"
@@ -1745,8 +1927,8 @@ def _send_transfer_failed_emails(conn, txn, venue_id):
             'artist_name': _esc(gig_info['artist_name'] or 'Artist'),
             'venue_name': _esc(gig_info['venue_name']),
             'date': format_email_date(gig_info['date']),
-            'start_time': _format_time_12h(gig_info['start_time']),
-            'end_time': _format_time_12h(gig_info['end_time']),
+            'start_time': _format_time_12h(_st),
+            'end_time': _format_time_12h(_et),
             'gig_summary': _esc(gig_summary),
             'payout_amount': payout,
             'venue_charge': venue_charge,

@@ -44,6 +44,18 @@ document.addEventListener('DOMContentLoaded', () => {
   if (icalBtn) {
     icalBtn.href = `/api/artists/${artistId}/calendar.ics`;
   }
+
+  // Wire "Show All Booked Gigs" button — opens the sortable modal next
+  // to the iCal export link. The modal lives in artist-booked-gigs-modal.js
+  // and exposes window.openArtistBookedGigsModal(artistId).
+  const showAllBtn = document.getElementById("artistShowAllBookedBtn");
+  if (showAllBtn) {
+    showAllBtn.addEventListener("click", () => {
+      if (typeof window.openArtistBookedGigsModal === "function") {
+        window.openArtistBookedGigsModal(artistId);
+      }
+    });
+  }
   
   // Fetch and display artist name in header
   fetch(`/api/artists/${artistId}`, { credentials: 'include' })
@@ -278,7 +290,7 @@ let _artistContracts = [];
 let _artistContractsPage = 1;
 const _artistContractsPerPage = 20;
 let _artistContractsFilter = 'all'; // 'all' = show everything, 'pending' = upcoming, 'completed' = past
-let _artistContractsSort = { col: 'gig_date', dir: 1 };
+let _artistContractsSort = { col: 'gig_date', dir: -1 }; // -1 = desc (most recent first)
 function setArtistContractsFilter(value) {
   _artistContractsFilter = value || 'all';
   _artistContractsPage = 1;
@@ -286,7 +298,11 @@ function setArtistContractsFilter(value) {
 }
 function artistContractsSortBy(col) {
   if (_artistContractsSort.col === col) _artistContractsSort.dir *= -1;
-  else { _artistContractsSort.col = col; _artistContractsSort.dir = 1; }
+  else {
+    _artistContractsSort.col = col;
+    // Date defaults to most-recent-first; other text columns default A→Z.
+    _artistContractsSort.dir = col === 'gig_date' ? -1 : 1;
+  }
   _artistContractsPage = 1;
   renderArtistContracts();
 }
@@ -685,6 +701,56 @@ document.getElementById('toggleSearchGigs').addEventListener('click', function(e
 document.addEventListener('DOMContentLoaded', function() {
   setTimeout(loadArtistPaymentSettings, 300);
 });
+
+// ==========================================
+// STRIPE TAX CENTER (1099-K) — Jul 2026
+// Opens the artist's Stripe Express dashboard in a new tab; that's where
+// Stripe stores auto-generated 1099-K forms after year-end.
+// ==========================================
+window.openStripeTaxCenter = async function () {
+  const params = new URLSearchParams(window.location.search);
+  const artistId = params.get("artist_id");
+  const btn = document.getElementById('openStripeTaxCenterBtn');
+  const msg = document.getElementById('stripeTaxCenterMsg');
+  if (!artistId) {
+    if (msg) msg.innerHTML = '<span style="color:#ef4444;">Artist ID missing from URL.</span>';
+    return;
+  }
+  const origLabel = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Opening…'; }
+  if (msg) msg.textContent = '';
+  try {
+    const res = await fetch(`/api/stripe/artist/${artistId}/dashboard-link`, {
+      method: 'POST', credentials: 'include'
+    });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (_) {}
+      if (res.status === 400 && detail.includes('No Stripe Connect')) {
+        if (msg) msg.innerHTML =
+          '<span style="color:#f59e0b;">You need to complete Stripe Connect onboarding first. ' +
+          'Head to the Payments tab and click Connect to Stripe.</span>';
+      } else {
+        if (msg) msg.innerHTML =
+          `<span style="color:#ef4444;">Could not open Stripe Tax Center${detail ? ': ' + detail : '.'}</span>`;
+      }
+      return;
+    }
+    const data = await res.json();
+    if (data.url) {
+      window.open(data.url, '_blank', 'noopener');
+      if (msg) msg.innerHTML =
+        '<span style="color:#10b981;">✓ Opened Stripe Tax Center in a new tab. Look for the ' +
+        '<b>Tax forms</b> section — your 1099-K will appear there after year-end.</span>';
+    } else {
+      if (msg) msg.innerHTML = '<span style="color:#ef4444;">No URL returned from Stripe.</span>';
+    }
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span style="color:#ef4444;">Network error: ${e.message}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = origLabel; }
+  }
+};
 
 // === Additional Block (Phase 5 pass 2) ===
 // ==========================================

@@ -76,20 +76,47 @@ class EntityUsersManager {
         ? `onclick="entityUsersManager.showReinviteModal(${_invId}, ${_jsa(user.email || '')})" style="cursor: pointer; ${rowOpacity}"`
         : `style="${rowOpacity}"`;
 
+      // Jul 22 2026: swap the big red "REMOVE" button for a subtle
+      // trash icon on the far right of every non-owner row. Matches
+      // the trash icons used on Contact Messages, Support Tickets,
+      // Messages Inbox, Admin Users, etc. Owner row shows the "Owner"
+      // badge — no trash there (can't delete the main user of the
+      // entity, only re-transfer ownership through a separate flow).
+      // Pending/declined invitations get a status label + trash so
+      // admin can revoke them too.
       let statusHtml = '';
+      const _trashBtn = (label, actionJs, hoverTitle) => `
+        <button onclick="event.stopPropagation();${actionJs}"
+                title="${hoverTitle}"
+                style="background:transparent;border:0;color:#94a3b8;font-size:1rem;cursor:pointer;padding:4px 8px;border-radius:4px;line-height:1;"
+                onmouseover="this.style.color='#fca5a5';this.style.background='rgba(239,68,68,0.1)';"
+                onmouseout="this.style.color='#94a3b8';this.style.background='transparent';">🗑</button>
+      `;
       if (user.role === 'owner') {
-        statusHtml = `<span style="font-size: 0.7rem; color: var(--cyan); text-transform: uppercase; font-weight: 600;">Owner</span>`;
+        // Jul 22 2026: only the CURRENT owner viewing this page can
+        // initiate a transfer, so only show the "Transfer" link when
+        // the row's user_id matches the viewing user's id. The
+        // dropdown target is restricted to existing team members
+        // (backend enforces this; UI just lists what's already loaded).
+        const _isMe = window._currentUserInfo && window._currentUserInfo.id === _uid;
+        const transferLink = _isMe
+          ? `<a href="javascript:void(0)" onclick="event.stopPropagation();entityUsersManager.openTransferOwnerModal()" style="font-size:0.7rem;color:#a78bfa;text-decoration:none;border-bottom:1px dashed rgba(167,139,250,0.4);margin-left:8px;" title="Hand off ownership of this ${_e(this.entityType)} to a team member">Transfer →</a>`
+          : '';
+        statusHtml = `<span style="font-size: 0.7rem; color: var(--cyan); text-transform: uppercase; font-weight: 600;">Owner</span>${transferLink}`;
       } else if (isPending) {
-        statusHtml = `<span style="font-size: 0.7rem; color: #f59e0b; text-transform: uppercase; font-weight: 600;">Pending</span>`;
+        statusHtml = `<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+          <span style="font-size: 0.7rem; color: #f59e0b; text-transform: uppercase; font-weight: 600;">Pending</span>
+          ${_trashBtn('trash', `entityUsersManager.confirmRevokeInvitation(${_invId}, ${_jsa(user.email || '')})`, 'Revoke this pending invitation')}
+        </div>`;
       } else if (isDeclined) {
-        statusHtml = `<span style="font-size: 0.7rem; color: #ef4444; text-transform: uppercase; font-weight: 600;">Declined</span>`;
+        statusHtml = `<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+          <span style="font-size: 0.7rem; color: #ef4444; text-transform: uppercase; font-weight: 600;">Declined</span>
+          ${_trashBtn('trash', `entityUsersManager.confirmRevokeInvitation(${_invId}, ${_jsa(user.email || '')})`, 'Remove this declined invitation from the list')}
+        </div>`;
       } else {
-        statusHtml = `
-          <button class="btn" style="background: #dc3545; padding: 6px 12px; font-size: 0.75rem; text-transform: uppercase;"
-                  onclick="event.stopPropagation(); entityUsersManager.confirmRemoveUser(${_uid}, ${_jsa(_fullName)})">
-            REMOVE
-          </button>
-        `;
+        statusHtml = _trashBtn('trash',
+          `entityUsersManager.confirmRemoveUser(${_uid}, ${_jsa(_fullName)})`,
+          `Remove ${_e(_fullName || user.email || 'this user')}'s access to this ${this.entityType}`);
       }
 
       return `
@@ -181,7 +208,116 @@ class EntityUsersManager {
       this.showResultModal('error', 'Failed to remove user');
     }
   }
-  
+
+  // Jul 22 2026: revoke a pending or declined invitation from the Users
+  // tab (trash icon on non-accepted rows). Fires a two-step confirm
+  // matching the accepted-user removal flow.
+  confirmRevokeInvitation(invitationId, email) {
+    if (!invitationId) return;
+    const safeEmail = String(email || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      '⚠️ Revoke Invitation',
+      `<p>Remove the pending invitation for <strong style="color:var(--cyan);">${safeEmail}</strong>?</p>` +
+      `<p style="margin-top:8px;font-size:0.82rem;color:var(--text-gray);">Any link they were emailed will stop working. You can invite them again later.</p>`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        { text: 'Revoke', style: 'danger', onClick: () => this.revokeInvitation(invitationId) },
+      ]
+    );
+  }
+
+  // Jul 22 2026: current-owner-only "Transfer ownership" flow.
+  // Shows a dropdown of existing team members (excluding pending/
+  // declined invitations and excluding the current owner themselves).
+  // On confirm, fires POST /api/entity-users/{type}/{id}/transfer-owner.
+  openTransferOwnerModal() {
+    const teamMembers = (this.users || []).filter(u =>
+      u.role !== 'pending' && u.role !== 'declined' && u.role !== 'owner' && u.user_id
+    );
+    if (teamMembers.length === 0) {
+      window.showStyledModal(
+        '⚠️ No team members yet',
+        `<p style="margin:0;">You need at least one team member on this ${this.entityType} before you can transfer ownership.</p>` +
+        `<p style="margin:12px 0 0;font-size:0.82rem;color:var(--text-gray);">Invite someone using the button above, wait for them to accept, then come back here.</p>`,
+        [{ text: 'OK', style: 'primary' }],
+        { tone: 'warning' }
+      );
+      return;
+    }
+    const _esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const options = teamMembers.map(u => {
+      const label = ((u.first_name || '') + ' ' + (u.last_name || '')).trim() || u.email || ('user #' + u.user_id);
+      return `<option value="${u.user_id}">${_esc(label)} — ${_esc(u.email || '')}</option>`;
+    }).join('');
+    const bodyHtml =
+      `<p style="margin:0 0 12px;">Hand off ownership of this ${_esc(this.entityType)} to another team member. You'll keep <strong style="color:var(--cyan);">admin</strong> access afterward — you won't lose your ability to manage.</p>` +
+      `<label style="display:block;font-size:0.8rem;color:var(--text-gray);margin-bottom:6px;">New owner</label>` +
+      `<select id="_transferOwnerSelect" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.05);color:var(--text);font-size:0.95rem;">` +
+        options +
+      `</select>` +
+      `<p style="margin:12px 0 0;font-size:0.78rem;color:var(--text-gray);">The new owner gets full control immediately. This can't be undone by them alone — they'd have to transfer it back to you.</p>`;
+
+    window.showStyledModal(
+      '⚡ Transfer Ownership',
+      bodyHtml,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        {
+          text: 'Transfer', style: 'primary',
+          onClick: () => {
+            const sel = document.getElementById('_transferOwnerSelect');
+            const newOwnerId = sel ? parseInt(sel.value, 10) : 0;
+            if (!newOwnerId) return;
+            this.transferOwner(newOwnerId);
+          }
+        },
+      ],
+      { tone: 'warning' }
+    );
+  }
+
+  async transferOwner(newOwnerUserId) {
+    try {
+      const res = await fetch(`/api/entity-users/${this.entityType}/${this.entityId}/transfer-owner`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ new_owner_user_id: newOwnerUserId })
+      });
+      let body = null;
+      try { body = await res.json(); } catch (_) {}
+      if (!res.ok) {
+        this.showResultModal('error', (body && body.detail) || 'Transfer failed');
+        return;
+      }
+      this.showResultModal('success', (body && body.message) || 'Ownership transferred', () => {
+        window.location.reload();
+      });
+    } catch (e) {
+      this.showResultModal('error', 'Failed to transfer ownership');
+    }
+  }
+
+  async revokeInvitation(invitationId) {
+    this.closeRemoveModal();
+    try {
+      const response = await fetch(`/api/entity-users/${this.entityType}/${this.entityId}/invitations/${invitationId}`,
+        { method: 'DELETE', credentials: 'include' });
+      if (response.ok) {
+        await this.loadUsers();
+        this.renderUsersList('entityUsersList');
+        this.updateBadge('usersBadge');
+      } else {
+        let detail = 'Failed to revoke invitation';
+        try { const j = await response.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+        this.showResultModal('error', detail);
+      }
+    } catch (error) {
+      console.error('Error revoking invitation:', error);
+      this.showResultModal('error', 'Failed to revoke invitation');
+    }
+  }
+
   /**
    * Show branded result modal.
    *
@@ -296,195 +432,172 @@ class EntityUsersManager {
   /**
    * Open invite modal
    */
+  // ─── Multi-invite modal (2026-07-25) ─────────────────────────────────
+  // Replaced the single-email + name/phone form with a bulk pattern:
+  // paste any number of emails, one shared personal message, one row
+  // in the Users list per invitee. Server-side loop lives in
+  // POST /api/entity-users/{type}/{id}/invite-multiple. Old single-invite
+  // endpoint is untouched — other code paths (re-invite, etc.) still use it.
   openInviteModal() {
-    const modal = document.getElementById('inviteUserModal');
-    const titleEl = document.getElementById('inviteModalTitle');
-    const emailInput = document.getElementById('inviteEmail');
+    const modal    = document.getElementById('inviteUserModal');
+    const titleEl  = document.getElementById('inviteModalTitle');
+    const emailsEl = document.getElementById('inviteEmails');
+    const msgEl    = document.getElementById('inviteMessage');
     const statusEl = document.getElementById('inviteStatus');
-    
+    const sendBtn  = document.getElementById('sendInviteBtn');
+
     if (titleEl) {
-      titleEl.innerHTML = `Invite a User to have access to <span style="color: var(--cyan);">${esc(this.entityName)}</span>`;
+      titleEl.innerHTML = `Invite Users to <span style="color: var(--cyan);">${esc(this.entityName)}</span>`;
     }
-    if (emailInput) {
-      emailInput.value = '';
+    if (emailsEl) emailsEl.value = '';
+    if (msgEl)    msgEl.value    = '';
+    if (statusEl) { statusEl.innerHTML = ''; statusEl.className = 'invite-status'; }
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send Invitations';
+      sendBtn.onclick = () => this.sendInvitation();
     }
-    // Clear extra fields
-    ['inviteFirstName', 'inviteLastName', 'invitePhone'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) { el.value = ''; el.readOnly = false; el.style.opacity = ''; }
-    });
-    const lookupStatus = document.getElementById('inviteEmailLookupStatus');
-    if (lookupStatus) lookupStatus.textContent = '';
-    if (statusEl) {
-      statusEl.textContent = '';
-      statusEl.className = 'invite-status';
-    }
-    
+    this._updateInviteEmailCount();
+
     if (modal) {
       modal.classList.remove('hidden');
       setTimeout(() => {
-        if (emailInput) emailInput.focus();
-        this.setupEnterKeyHandler();
-        this._setupEmailLookup();
+        if (emailsEl) {
+          emailsEl.focus();
+          // Live counter — bound once per modal open; oninput assignment
+          // (not addEventListener) makes re-open reset cleanly.
+          emailsEl.oninput = () => this._updateInviteEmailCount();
+        }
       }, 100);
     }
   }
-  
-  /**
-   * Close invite modal
-   */
+
   closeInviteModal() {
     const modal = document.getElementById('inviteUserModal');
-    if (modal) {
-      modal.classList.add('hidden');
-    }
+    if (modal) modal.classList.add('hidden');
   }
-  
-  /**
-   * Wire up email blur to auto-lookup existing user and pre-fill name/phone
-   */
-  _setupEmailLookup() {
-    const emailInput = document.getElementById('inviteEmail');
-    if (!emailInput || emailInput._lookupBound) return;
-    emailInput._lookupBound = true;
 
-    const doLookup = async () => {
-      const email = emailInput.value.trim();
-      const lookupStatus = document.getElementById('inviteEmailLookupStatus');
-      const firstEl = document.getElementById('inviteFirstName');
-      const lastEl  = document.getElementById('inviteLastName');
-      const phoneEl = document.getElementById('invitePhone');
-
-      // Reset
-      [firstEl, lastEl, phoneEl].forEach(el => {
-        if (el) { el.readOnly = false; el.style.opacity = ''; }
-      });
-      if (lookupStatus) lookupStatus.textContent = '';
-
-      if (!email || !email.includes('@') || !email.includes('.')) return;
-
-      try {
-        const res = await fetch(`/api/users/lookup-by-email?email=${encodeURIComponent(email)}`, { credentials: 'include' });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.found) {
-          if (firstEl) { firstEl.value = data.first_name; firstEl.readOnly = true; firstEl.style.opacity = '0.7'; }
-          if (lastEl)  { lastEl.value  = data.last_name;  lastEl.readOnly  = true; lastEl.style.opacity  = '0.7'; }
-          if (phoneEl) { phoneEl.value = data.phone;      phoneEl.readOnly = true; phoneEl.style.opacity = '0.7'; }
-          if (lookupStatus) {
-            lookupStatus.textContent = '✓ Existing GigsFill user — info auto-filled';
-            lookupStatus.style.color = '#10b981';
-          }
-        }
-      } catch(e) { /* silent */ }
-    };
-
-    emailInput.addEventListener('blur', doLookup);
-    // Also trigger on Enter/Tab from email field
-    emailInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Tab') doLookup();
+  _parseInviteEmails() {
+    const raw = (document.getElementById('inviteEmails')?.value || '').trim();
+    if (!raw) return { valid: [], invalid: [] };
+    const tokens = raw.split(/[,;\s\n]+/).map(t => t.trim()).filter(Boolean);
+    const seen = {}, valid = [], invalid = [];
+    tokens.forEach(t => {
+      const lc = t.toLowerCase();
+      if (seen[lc]) return;
+      seen[lc] = true;
+      if (t.includes('@') && t.split('@')[1] && t.split('@')[1].includes('.')) valid.push(t);
+      else invalid.push(t);
     });
+    return { valid, invalid };
   }
 
-  /**
-   * Send invitation
-   */
+  _updateInviteEmailCount() {
+    const el = document.getElementById('inviteEmailCount');
+    if (!el) return;
+    const { valid, invalid } = this._parseInviteEmails();
+    const n = valid.length;
+    let txt = n === 0 ? '0 emails entered' : (n + ' email' + (n === 1 ? '' : 's') + ' entered');
+    if (invalid.length) txt += ' · ' + invalid.length + ' invalid';
+    el.textContent = txt;
+    el.style.color = invalid.length ? '#f59e0b' : (n > 25 ? '#f59e0b' : 'var(--text-gray)');
+  }
+
   async sendInvitation() {
-    const emailInput = document.getElementById('inviteEmail');
     const statusEl = document.getElementById('inviteStatus');
-    const sendBtn = document.getElementById('sendInviteBtn');
-    
-    const email = emailInput?.value?.trim();
-    const firstName = document.getElementById('inviteFirstName')?.value?.trim() || '';
-    const lastName  = document.getElementById('inviteLastName')?.value?.trim()  || '';
-    const phone     = document.getElementById('invitePhone')?.value?.trim()     || '';
-    
-    if (!email) {
+    const sendBtn  = document.getElementById('sendInviteBtn');
+    const { valid: emails, invalid } = this._parseInviteEmails();
+    const message = (document.getElementById('inviteMessage')?.value || '').trim();
+
+    if (emails.length === 0) {
       if (statusEl) {
-        statusEl.textContent = 'Please enter an email address';
+        statusEl.textContent = invalid.length
+          ? 'No valid email addresses. Check the entries and try again.'
+          : 'Please enter at least one email address.';
         statusEl.className = 'invite-status error';
       }
       return;
     }
-    
-    // Validate email format
-    if (!email.includes('@') || !email.includes('.')) {
-      if (statusEl) {
-        statusEl.textContent = 'Please enter a valid email address';
-        statusEl.className = 'invite-status error';
-      }
-      return;
+
+    if (sendBtn) {
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending ' + emails.length + ' invitation' + (emails.length === 1 ? '' : 's') + '…';
     }
-    
-    // Update UI to show sending
-    if (sendBtn) sendBtn.disabled = true;
-    if (statusEl) {
-      statusEl.textContent = 'Sending Email...';
-      statusEl.className = 'invite-status sending';
-    }
-    
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = 'invite-status sending'; }
+
     try {
-      const response = await fetch(`/api/entity-users/${this.entityType}/${this.entityId}/invite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email, first_name: firstName, last_name: lastName, phone })
-      });
-      
+      const response = await fetch(
+        `/api/entity-users/${this.entityType}/${this.entityId}/invite-multiple`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ emails: emails.join(','), personal_message: message })
+        }
+      );
+
       let result;
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        result = await response.json();
-      } else {
-        const text = await response.text();
-        result = { detail: text || 'Server error' };
-      }
-      
-      if (response.ok) {
+      const ct = response.headers.get('content-type') || '';
+      if (ct.includes('application/json')) result = await response.json();
+      else result = { detail: (await response.text()) || 'Server error' };
+
+      if (!response.ok) {
         if (statusEl) {
-          statusEl.textContent = 'Email Sent!';
-          statusEl.className = 'invite-status success';
-        }
-        
-        // Reload users list to show new invitation
-        await this.loadUsers();
-        this.renderUsersList('entityUsersList');
-        this.updateBadge('usersBadge');
-        
-        if (sendBtn) {
-          sendBtn.textContent = 'OK';
-          sendBtn.disabled = false;
-          sendBtn.onclick = () => this.closeInviteModal();
-        }
-      } else {
-        if (statusEl) {
-          statusEl.textContent = result.detail || 'Failed to send invitation';
+          statusEl.textContent = result.detail || 'Failed to send invitations';
           statusEl.className = 'invite-status error';
         }
-        if (sendBtn) sendBtn.disabled = false;
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send Invitations'; }
+        return;
+      }
+
+      // Build human-readable summary from the server's counters.
+      const parts = [];
+      if (result.sent_count > 0)
+        parts.push('✓ ' + result.sent_count + ' invitation' + (result.sent_count === 1 ? '' : 's') + ' sent');
+      if (result.already_member_count > 0)
+        parts.push(result.already_member_count + ' already a member');
+      if (result.already_pending_count > 0)
+        parts.push(result.already_pending_count + ' already had a pending invite');
+      if (result.email_failed_count > 0)
+        parts.push(result.email_failed_count + ' invited but email delivery failed');
+      if (result.invalid_count > 0)
+        parts.push(result.invalid_count + ' invalid email' + (result.invalid_count === 1 ? '' : 's'));
+      if (result.other_errors_count > 0)
+        parts.push(result.other_errors_count + ' other error' + (result.other_errors_count === 1 ? '' : 's'));
+
+      if (statusEl) {
+        statusEl.innerHTML = parts.join('<br>');
+        statusEl.className = result.sent_count > 0 ? 'invite-status success' : 'invite-status error';
+      }
+
+      await this.loadUsers();
+      this.renderUsersList('entityUsersList');
+      this.updateBadge('usersBadge');
+
+      if (sendBtn) {
+        sendBtn.textContent = 'Done';
+        sendBtn.disabled = false;
+        sendBtn.onclick = () => this.closeInviteModal();
+      }
+      // 2026-07-26: auto-close after 5s on any successful send so the
+      // user doesn't have to click Done. Guarded on `sent_count > 0` so
+      // a purely-skipped batch (everyone already a member) stays open
+      // long enough for the user to read the breakdown. Guarded on the
+      // modal still being open so a manual close inside the 5s window
+      // doesn't re-close a modal the user has since re-opened.
+      if (result.sent_count > 0) {
+        const modal = document.getElementById('inviteUserModal');
+        setTimeout(() => {
+          if (modal && !modal.classList.contains('hidden')) this.closeInviteModal();
+        }, 5000);
       }
     } catch (error) {
-      console.error('Error sending invitation:', error);
+      console.error('Error sending invitations:', error);
       if (statusEl) {
-        statusEl.textContent = 'Failed to send invitation';
+        statusEl.textContent = 'Failed to send invitations';
         statusEl.className = 'invite-status error';
       }
-      if (sendBtn) sendBtn.disabled = false;
-    }
-  }
-  
-  /**
-   * Handle Enter key in email input
-   */
-  setupEnterKeyHandler() {
-    const emailInput = document.getElementById('inviteEmail');
-    if (emailInput) {
-      emailInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          this.sendInvitation();
-        }
-      });
+      if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send Invitations'; }
     }
   }
 }

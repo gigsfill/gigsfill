@@ -53,13 +53,21 @@ def record_alert(
         # to match a unique index, and we're using a partial unique
         # index (WHERE resolved_at IS NULL) which not all engines
         # support uniformly. Update-then-insert is portable.
+        # 2026-07-25 bug fix: clear acknowledged_at/by when a re-fire hits
+        # an already-open alert. Prior version left the dismissal in place,
+        # so a dismissed alert never re-surfaced even when the underlying
+        # condition kept tripping — silently defeating the whole point of
+        # dismissal being "hide until it happens again." Matches the intent
+        # documented at admin.py:3176 (the acknowledge endpoint comment).
         c.execute(
             """UPDATE system_alerts
                SET count = count + 1,
                    last_seen_at = CURRENT_TIMESTAMP,
                    message = ?,
                    details = COALESCE(?, details),
-                   severity = ?
+                   severity = ?,
+                   acknowledged_at = NULL,
+                   acknowledged_by = NULL
                WHERE alert_type = ? AND resolved_at IS NULL""",
             (message, details, severity, alert_type),
         )
@@ -89,7 +97,9 @@ def run_periodic_health_checks():
     """
     import sqlite3
     from backend.db import DB_PATH
-    conn = sqlite3.connect(str(DB_PATH))
+    from backend.db import get_db_connection
+
+    conn = get_db_connection()
     try:
         # Heartbeat: tells future /healthz integrations that the
         # scheduler is still ticking. Written every loop iteration —

@@ -4,10 +4,12 @@
 <head>
 <script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
 <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Book Gigs – GigsFill</title>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -89,6 +91,11 @@
       background-clip: text;
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
+      /* Shrink to text width so the gradient spans only the text — not the
+         full container. Without this, block-level h2s stretch to 100% and
+         the text only samples the purple end of the gradient. */
+      display: inline-block;
+      width: fit-content;
     }
 
     /* ORIGINAL STYLES BELOW */
@@ -185,19 +192,43 @@
       color: rgba(255, 255, 255, 0.3);
     }
     
-    /* Days from other months */
+    /* Days from other months (Jul 2026 — match FindMusic):
+       Muted cell background + faded day-number so July / August / Sep
+       are visually distinct at a glance without breaking the past-vs-
+       future signal. Three tiers now:
+         - Current month, future/today  → full brightness
+         - Other month (spillover)      → subtle dim background
+         - Past date                    → full darken (.past-date wins)
+       Hover restores near-full brightness so artist can still see
+       these cells are bookable — no interaction change. */
     .day.other-month {
-      opacity: 0.3;
-      cursor: default;
+      background: rgba(0, 0, 0, 0.22);
     }
-    
     .day.other-month:hover {
-      background: rgba(8, 11, 22, 0.97);
-      border-color: rgba(255,255,255,0.08);
+      background: rgba(0, 0, 0, 0.08);
     }
-    
+    /* Meaningfully faded so other-month numbers clearly recede.
+       `!important` beats the `.calendar .day-number { color:...
+       !important }` catch-all below — without it, our rule silently
+       loses the specificity fight. */
     .day.other-month .day-number {
-      color: rgba(255, 255, 255, 0.2);
+      color: rgba(255, 255, 255, 0.18) !important;
+    }
+    /* Month-boundary label ("Aug 1") — solid cyan + bold so it reads
+       as a divider. Was a gradient with background-clip:text, but the
+       `.calendar > * * { background: transparent !important }` rule
+       further down nukes the gradient background → invisible text.
+       Solid cyan is more robust. */
+    .day-number.month-boundary {
+      font-weight: 700 !important;
+      letter-spacing: 0.01em !important;
+      color: #06b6d4 !important;
+    }
+    /* Spillover boundary matches plain spillover numbers — uniform
+       dimness across every spillover cell. Bold + "Jul" prefix carries
+       the boundary signal; color no longer competes. */
+    .day.other-month .day-number.month-boundary {
+      color: rgba(255, 255, 255, 0.18) !important;
     }
 
     .day-number {
@@ -550,9 +581,10 @@
       border-color: rgba(255,255,255,0.08) !important;
     }
 
-    /* Day number */
+    /* Day number — brighter (was 0.55) so current-month numbers pop
+       against the darker other-month cells. */
     .calendar .day-number {
-      color: rgba(255,255,255,0.55) !important;
+      color: rgba(255,255,255,0.88) !important;
     }
     
     .calendar .past-date .day-number {
@@ -726,15 +758,18 @@
       color: #000000;
     }
 
-    /* BLOCKED — dark gray (denied/revoked venues) */
+    /* BLOCKED — dark (Jul 2026: matches .started so frequency-blocked
+       bubbles read as the same "can't book" state as held / past gigs.
+       The previous lighter gray made same-meaning bubbles look
+       inconsistent. Covers both denied/revoked venues and freq blocks.) */
     .calendar .gig.blocked {
       background: linear-gradient(
         135deg,
-        #4b5563,
-        #374151
+        #1f2937,
+        #111827
       ) !important;
-      box-shadow: 0 4px 12px rgba(75, 85, 99, 0.35) !important;
-      opacity: 0.7;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3) !important;
+      opacity: 0.6;
     }
 
     /* STARTED gigs — dark, gig already underway */
@@ -771,7 +806,7 @@
     /* Control section width */
     .venue-create-gigs-page main.container > section {
       width: 100%;
-      max-width: 1250px; /* SAME as artist book gigs */
+      max-width: var(--container-max); /* SAME as artist book gigs */
     }
 
     /* =========================================
@@ -805,7 +840,7 @@
 
     .venue-create-gigs-page .preferred-requests-wrapper > section {
       width: 100%;
-      max-width: 1250px; /* SAME as calendar */
+      max-width: var(--container-max); /* SAME as calendar */
     }
 
     /* REMOVE extra gap between preferred requests and calendar */
@@ -972,7 +1007,7 @@
    ========================================= */
 
 .artist-book-gigs-page .admin-container {
-  max-width: 1400px;
+  max-width: var(--container-max);
   margin: 0 auto;
   padding: 2rem;
   overflow-x: hidden;
@@ -1013,7 +1048,7 @@
 
 .artist-book-gigs-page .preferred-requests-wrapper > section {
   width: 100%;
-  max-width: 1250px; /* SAME as main sections */
+  max-width: var(--container-max); /* SAME as main sections */
 }
 
 /* REMOVE extra gap between activity center and main content */
@@ -1149,7 +1184,7 @@
 }
 
 .tab-content section.panel {
-  max-width: 1250px;
+  max-width: var(--container-max);
   margin: 0 auto;
   background: var(--card);
   border: 1px solid var(--border);
@@ -1268,7 +1303,7 @@
      causing a brief FOUC on slow connections — especially noticeable on
      gf-modals dialogs that build their DOM before modals.css arrived. -->
 <link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
-<link href="/app/static/css/gig-hover-card.css?v=7" rel="stylesheet"/>
+<link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet"/>
 <link href="/app/static/css/mobile.css" rel="stylesheet"/>
 <link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
 <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet"/>
@@ -1276,11 +1311,12 @@
 <script src="/app/static/js/auth.guard.js?v=3"></script>
 <script src="/app/static/js/api-globals.js?v=11"></script>
 <script src="/app/static/js/time-format.js"></script>
-<script src="/app/static/js/gf-modals.js?v=7"></script>
+<script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/activity-center.js?v=102"></script>
 <script src="https://js.stripe.com/v3/" async></script>
 <script src="/app/static/js/artist-stripe-payment.js?v=15" defer></script>
-<script src="/app/static/js/hold-offers-banner.js?v=9" defer></script>
+<script src="/app/static/js/hold-offers-banner.js?v=19" defer></script>
+<script src="/app/static/js/series-hold-modal.js?v=9" defer></script>
 <script src="/app/static/js/flyer-overlay.js"></script>
 <!-- Block all artist-specific API calls until artist.book-gigs.js confirms access -->
 <script>
@@ -1291,7 +1327,30 @@
     }
   })();
 </script>
-    <script src="/app/static/js/artist.book-gigs.js?v=161" type="module"></script>
+    <script src="/app/static/js/artist.book-gigs.js?v=176" type="module"></script>
+    <style>
+      /* My Venues rows: on portrait phones, collapse the 3-col grid
+         (name | pay-chip | actions) to a stack so the pay chip and
+         status/rate buttons don't overflow off-screen. Added 2026-07-25.
+         Targets the rows built by my-venues-redesign.js:renderVenue. */
+      @media (max-width: 640px) {
+        #myVenuesRedesigned > div > div > div[style*="grid-template-columns"] {
+          grid-template-columns: 1fr !important;
+          gap: 8px !important;
+        }
+        /* Right-hand actions column: right-align becomes left-align + wrap. */
+        #myVenuesRedesigned > div > div > div[style*="grid-template-columns"] > div[style*="justify-content: flex-end"] {
+          justify-content: flex-start !important;
+          flex-wrap: wrap !important;
+        }
+        /* Pay-chip: allow wrap inside so "Pay: $X.XX" and "1 per N days"
+           can stack instead of forcing a wide single line. */
+        #myVenuesRedesigned > div > div > div[style*="grid-template-columns"] > div[style*="rgba(99,91,255,0.08)"] {
+          flex-wrap: wrap !important;
+          white-space: normal !important;
+        }
+      }
+    </style>
 </head>
 <body class="dark-ui artist-book-gigs-page artist-edit-page">
 
@@ -1308,9 +1367,9 @@
 </div>
 </div>
 </header>
-<script src="/app/static/js/user-dropdown.js?v=9"></script>
+<script src="/app/static/js/user-dropdown.js?v=11"></script>
 
-<div class="book-gigs-container" style="max-width: 1100px; margin: 0 auto; padding: 40px 20px;">
+<div class="book-gigs-container" style="max-width: var(--container-max); margin: 0 auto; padding: 40px 20px;">
 
 <!-- Pending hold-gig offers banner (Phase 3, Jun 2026).
      Populated by hold-offers-banner.js polling /api/me/hold-offers.
@@ -1371,6 +1430,9 @@
       z-index: 1000;
       display: none;
       margin-top: 4px;
+      font-size: 0.8rem;
+      font-family: var(--font-primary);
+      color: var(--text);
     "></div>
   </div>
   <div style="position: relative; display: flex; align-items: center; gap: 8px;">
@@ -1389,6 +1451,9 @@
       z-index: 1000;
       display: none;
       margin-top: 4px;
+      font-size: 0.8rem;
+      font-family: var(--font-primary);
+      color: var(--text);
     "></div>
   </div>
   <div style="display: flex; align-items: center; gap: 8px;">
@@ -1492,6 +1557,28 @@
       font-size: 0.75rem;
       font-weight: 500;
     ">Trivia Host</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Open Mic MC" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Open Mic MC</button>
+    <button class="artist-type-filter-toggle" data-active="false" data-type="Karaoke MC" style="
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 500;
+    ">Karaoke MC</button>
   </div>
 </div>
 
@@ -1548,8 +1635,17 @@
   </div>
 </div>
 
+<!-- Style Bubbles (shown when Live Band is active) - Inline Label -->
+<div id="styleBubblesArtist" style="margin-bottom: 8px; display: none;">
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 110px;">Styles</label>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;" id="styleBubblesArtistList">
+      <!-- Populated at runtime from _STYLE_OPTIONS -->
+    </div>
+  </div>
+</div>
+
 <div style="display: flex; gap: 12px;">
-<button class="btn primary" id="applyFilters">Apply Filters</button>
 <button class="btn ghost" id="clearFilters">Clear Filters</button>
 </div>
 <div id="searchResults" style="margin-top: 4px; padding-top: 4px; padding-bottom: 0px; font-size: 0.85rem; color: var(--text-muted); font-style: italic;"></div>
@@ -1563,7 +1659,8 @@
 <h2 id="monthLabel">Month YYYY</h2>
 <button class="btn ghost" id="nextMonth">Next ▶</button>
 </div>
-<div style="text-align:right; padding: 0 0 8px 0;">
+<div style="text-align:right; padding: 0 0 8px 0; display:flex; justify-content:flex-end; gap:8px;">
+  <button id="artistShowAllBookedBtn" type="button" style="font-size:0.75rem; color:var(--text-muted); background:transparent; text-decoration:none; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; transition:all 0.2s; cursor:pointer;" onmouseover="this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#22c55e'" onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📋 Show All Booked Gigs</button>
   <a id="artistIcalBtn" href="#" download style="font-size:0.75rem; color:var(--text-muted); text-decoration:none; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; transition:all 0.2s;" onmouseover="this.style.borderColor='rgba(6,182,212,0.4)';this.style.color='#06b6d4'" onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📅 Export to Calendar (.ics)</a>
 </div>
 <div class="calendar-header">
@@ -1673,13 +1770,13 @@
   
   <!-- My Waitlists -->
   <div class="content-card" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:16px;">
-    <h2 class="section-header" style="margin:0 0 16px;font-size:1rem;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.08em;">⏳ My Waitlists</h2>
+    <h2 class="section-header gradient-title" style="margin:0 0 16px;font-size:1rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;text-align:left;">My Waitlists</h2>
     <div id="artistWaitlistSection"><p style="color:var(--text-gray);font-size:0.85rem;">Loading...</p></div>
   </div>
 
   <!-- Payout Dashboard: KPI Summary -->
   <div class="content-card" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:16px;">
-    <h2 class="section-header" style="margin:0 0 20px;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;">Payout Summary</h2>
+    <h2 class="section-header gradient-title" style="margin:0 0 20px;font-size:1rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;text-align:left;">Payout Summary</h2>
 
     <!-- KPI bubbles -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:24px;">
@@ -1725,7 +1822,10 @@
   <!-- Earnings History -->
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:0 0 20px 0;">
-      <h2 class="section-header" style="margin:0;font-size:1rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:0.08em;text-align:left;">EARNINGS HISTORY  <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-gray);font-size:0.9rem;">(payouts initiate at 5:00 PM the day after the gig; bank deposit typically 5&ndash;7 business days after the gig)</span></h2>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+        <h2 class="section-header gradient-title" style="margin: 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Earnings History</h2>
+        <span style="font-size: 0.75rem; font-style: italic; color: var(--text-gray); font-weight: 400;">(payouts initiate at 5:00 PM the day after the gig; bank deposit typically 5&ndash;7 business days after the gig)</span>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="position:relative;">
           <button onclick="var dd=document.getElementById('artistEarnExportDD');dd.style.display=dd.style.display==='block'?'none':'block';" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:var(--text-muted);padding:5px 14px;border-radius:6px;font-size:0.78rem;cursor:pointer;font-weight:500;">Export ▾</button>
@@ -1755,7 +1855,7 @@
 <div class="tab-content" id="analytics-tab">
 <section class="panel">
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
-    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Artist Analytics</h2>
+    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Artist Analytics</h2>
     
     <!-- Stats Overview - Clickable Bubbles -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px;">
@@ -1824,7 +1924,7 @@
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
       <div style="flex:1;">
-        <h2 class="section-header" style="margin: 0; font-size: 1rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">EXECUTED CONTRACTS</h2>
+        <h2 class="section-header gradient-title" style="margin: 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Executed Contracts</h2>
       </div>
       <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; color:var(--text-gray);">
         <span>Show:</span>
@@ -1847,7 +1947,7 @@
 <div class="artist-legal-subtab-content" id="artistTaxInfo-subtab">
 <section class="panel">
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
-    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">W-9 Tax Information</h2>
+    <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">W-9 Tax Information</h2>
     
     <!-- W9 Status Display -->
     <div id="w9Status" style="margin-bottom: 20px;"></div>
@@ -1968,6 +2068,33 @@
       </div>
     </div>
   </div>
+
+  <!-- Jul 2026: 1099-K Tax Documents section — links to Stripe Express dashboard
+       where Stripe stores auto-generated 1099-K forms for Connect payouts. -->
+  <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 16px;">
+    <h2 class="section-header gradient-title" style="margin: 0 0 12px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">1099-K &amp; Tax Documents</h2>
+
+    <div style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.55; margin-bottom: 14px;">
+      Because GigsFill processes your payments through <b>Stripe Connect</b>, Stripe issues your annual
+      <b>Form 1099-K</b> directly — you don't get a separate 1099-NEC from each venue.
+      Stripe generates it automatically when your yearly Connect payouts cross the IRS threshold
+      (<em>$2,500 for tax year 2026, dropping to $600 for 2027+</em>), files it with the IRS, and
+      posts a copy in your Stripe Tax Center.
+    </div>
+
+    <div style="background: rgba(16, 185, 129, 0.08); border-left: 3px solid #10b981; padding: 10px 14px; margin-bottom: 14px; font-size: 0.82rem; color: var(--text-gray); line-height: 1.5; border-radius: 4px;">
+      💡 <b>Tip:</b> If you fill out the W-9 above <em>before</em> clicking "Connect to Stripe" in the
+      Payments tab, GigsFill pre-fills your legal name, address, and TIN into Stripe's onboarding form
+      so you don't type them again. To edit your info afterward, use the Stripe Tax Center below.
+    </div>
+
+    <button class="btn primary" id="openStripeTaxCenterBtn"
+      onclick="openStripeTaxCenter()"
+      style="display: inline-flex; align-items: center; gap: 6px;">
+      🧾 Open Stripe Tax Center
+    </button>
+    <div id="stripeTaxCenterMsg" style="margin-top: 10px; font-size: 0.8rem; color: var(--text-muted);"></div>
+  </div>
 </section>
 </div>
 <!-- end artistTaxInfo-subtab -->
@@ -2032,18 +2159,35 @@
 </div>
 </div>
 
-<!-- Invite User Modal -->
+<!-- Invite User Modal (2026-07-25 multi-invite rewrite) -->
 <div class="modal-overlay hidden" id="inviteUserModal">
-<div class="modal" style="max-width: 450px;">
-  <h2 id="inviteModalTitle" style="font-size: 1.125rem; margin-bottom: 24px; color: var(--text);">Invite a User</h2>
+<div class="modal" style="max-width: 560px;">
+  <h2 id="inviteModalTitle" style="font-size: 1.125rem; margin-bottom: 8px; color: var(--text);">Invite Users</h2>
+  <p style="color: var(--text-gray); font-size: 0.82rem; margin: 0 0 16px; line-height: 1.5;">
+    Invite one or more people to help manage this account. Everyone gets the same personal note below and appears on the Users list as soon as they're invited.
+  </p>
+
   <div class="field">
-    <label style="color: var(--cyan); font-weight: 600;">Email Address</label>
-    <input type="email" id="inviteEmail" placeholder="user@email.com" />
+    <label for="inviteEmails" style="color: var(--cyan); font-weight: 600;">Email Addresses</label>
+    <textarea id="inviteEmails" rows="4"
+      placeholder="Enter email addresses separated by commas, spaces, or one per line&#10;&#10;jane@email.com, mike@band.com&#10;drummer@email.com"
+      style="width: 100%; font-size: 0.85rem;"></textarea>
+    <div id="inviteEmailCount" style="color: var(--text-gray); font-size: 0.72rem; margin-top: 4px;">0 emails entered</div>
   </div>
-  <div id="inviteStatus" class="invite-status"></div>
-  <div class="modal-actions" style="margin-top: 24px;">
+
+  <div class="field" style="margin-top: 12px;">
+    <label for="inviteMessage" style="color: var(--cyan); font-weight: 600;">
+      Personal Message <span style="font-weight: 400; text-transform: none; color: var(--text-gray);">(optional)</span>
+    </label>
+    <textarea id="inviteMessage" rows="3" maxlength="1000"
+      placeholder="Hey, check out our new band page — create an account and help me manage everything."
+      style="width: 100%; font-size: 0.85rem;"></textarea>
+  </div>
+
+  <div id="inviteStatus" class="invite-status" style="margin-top: 12px;"></div>
+  <div class="modal-actions" style="margin-top: 20px;">
     <button class="btn ghost" onclick="entityUsersManager?.closeInviteModal()">Cancel</button>
-    <button class="btn primary" id="sendInviteBtn" onclick="entityUsersManager?.sendInvitation()">Invite User</button>
+    <button class="btn primary" id="sendInviteBtn" onclick="entityUsersManager?.sendInvitation()">Send Invitations</button>
   </div>
 </div>
 </div>
@@ -2090,21 +2234,22 @@
 </style>
 
 <script src="/app/static/js/us-states.js"></script>
-<script src="/app/static/js/my-venues-redesign.js?v=12"></script>
-<script src="/app/static/js/entity-users.js?v=3"></script>
+<script src="/app/static/js/my-venues-redesign.js?v=15"></script>
+<script src="/app/static/js/entity-users.js?v=7"></script>
 
 <footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
-<script src="/app/static/js/messages.js?v=5"></script>
+<script src="/app/static/js/messages.js?v=7"></script>
 <script src="/app/static/js/review-modal.js?v=3"></script>
-<script src="/app/static/js/gig-modal.js?v=22"></script>
-<script src="/app/static/js/vanity-url-editor.js?v=3"></script>
-<script src="/app/static/js/artist-book-gigs-init.js?v=8"></script>
+<script src="/app/static/js/gig-modal.js?v=28"></script>
+<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
+<script src="/app/static/js/artist-booked-gigs-modal.js?v=2"></script>
+<script src="/app/static/js/artist-book-gigs-init.js?v=11"></script>
 <script src="/app/static/js/onboarding-checklist.js?v=2" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
-<script src="/app/static/js/gig-hover-card.js?v=18"></script>
+<script src="/app/static/js/gig-hover-card.js?v=21"></script>
 <script src="/app/static/js/sw-register.js"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 </body>

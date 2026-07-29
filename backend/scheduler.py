@@ -23,10 +23,11 @@ DB_PATH = Path(__file__).parent.parent / "backend.db"
 
 
 def _raw_db_conn():
-    """Return a raw sqlite3 connection with row_factory set."""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Return a raw DB connection with dict-style rows. Delegates to
+    `backend.db.get_db_connection` so Postgres uses `_PgCompatConn` with
+    a RealDictCursor + `?`→`%s` translation. Jul 1 2026 Postgres R1 fix."""
+    from backend.db import get_db_connection
+    return get_db_connection()
 
 
 def _build_venue_detail_vars(cursor, venue_id, gig_notes=None):
@@ -332,12 +333,16 @@ def compute_target_datetime(time_value, time_unit):
 
 
 def process_gig_confirmation(cursor, smtp_config):
-    """Process gig confirmation reminders for booked gigs"""
-    # Get all active venues — use saved settings if present, otherwise use defaults (enabled=True, 1 week)
+    """Process gig confirmation reminders for booked gigs.
+
+    Jul 2026: timing hard-wired to 1 week (was previously venue-configurable via
+    venue_email_notifications.time_value/time_unit — the columns are now dormant).
+    Rationale: artist-side surfaces standard cadence; venue drift created UX
+    mismatch nobody used. Enable toggle is still honored per venue.
+    """
+    # Get all active venues — read enable flag; timing is hard-coded below.
     cursor.execute("""
-        SELECT v.id as venue_id,
-               COALESCE(ven.time_value, 1) as time_value,
-               COALESCE(ven.time_unit, 'weeks') as time_unit
+        SELECT v.id as venue_id
         FROM venues v
         LEFT JOIN venue_email_notifications ven
             ON ven.venue_id = v.id AND ven.notification_key = 'gig_confirmation'
@@ -350,7 +355,9 @@ def process_gig_confirmation(cursor, smtp_config):
     if not template:
         return
 
-    for venue_id, time_value, time_unit in venue_settings:
+    # Hard-wired: 1 week before the gig.
+    time_value, time_unit = 1, 'weeks'
+    for (venue_id,) in venue_settings:
         target_date = compute_target_date(time_value, time_unit)
         target_date_str = target_date.strftime('%Y-%m-%d')
 
@@ -364,24 +371,18 @@ def process_gig_confirmation(cursor, smtp_config):
         # it is never re-sent — even if the venue changes their lead time.
         # The sent_for_date column is kept in the schema for informational
         # purposes but is no longer part of dedup.
-        # Query covers both single-artist gigs (artist_id on gigs) and
-        # multi-slot gigs (artist_id on gig_slots). Uses UNION to avoid duplicates.
+        # Jul 2026 refactor: dropped the legacy single-slot UNION leg
+        # (`WHERE g.artist_id IS NOT NULL`). Every gig now has a
+        # gig_slots row post-backfill (see db.setup_database), and
+        # `gigs.artist_id` was a duplicate of `gig_slots.artist_id`
+        # for single-slot gigs. Slot-only path handles both shapes.
+        # Jul 2026 bug fix: read start/end from gs (per-artist slot), not g
+        # (gig umbrella). For a multi-slot gig where the artist's actual set
+        # is e.g. 8-10pm within a 7-11pm gig, the confirmation reminder was
+        # showing the umbrella window instead of the artist's slot window.
         cursor.execute("""
-            SELECT g.id, g.date, g.start_time, g.end_time, g.pay, g.notes, g.artist_id,
-                   v.venue_name as venue_name
-            FROM gigs g
-            JOIN venues v ON v.id = g.venue_id
-            WHERE g.venue_id = ?
-              AND g.date = ?
-              AND g.status = 'booked'
-              AND g.artist_id IS NOT NULL
-              AND g.id NOT IN (
-                  SELECT gig_id FROM gig_email_log
-                  WHERE notification_key = 'gig_confirmation'
-              )
-            UNION
-            SELECT g.id, g.date, g.start_time, g.end_time,
-                   COALESCE(gs.pay, g.pay) as pay, g.notes, gs.artist_id,
+            SELECT g.id, g.date, gs.start_time, gs.end_time,
+                   gs.pay as pay, g.notes, gs.artist_id,
                    v.venue_name as venue_name
             FROM gigs g
             JOIN venues v ON v.id = g.venue_id
@@ -394,8 +395,7 @@ def process_gig_confirmation(cursor, smtp_config):
                   SELECT gig_id FROM gig_email_log
                   WHERE notification_key = 'gig_confirmation'
               )
-        """, (venue_id, target_date_str,
-               venue_id, target_date_str))
+        """, (venue_id, target_date_str))
 
         gigs = cursor.fetchall()
 
@@ -425,6 +425,15 @@ def process_gig_confirmation(cursor, smtp_config):
                 continue  # Artist disabled this notification
 
             venue_vars = _build_venue_detail_vars(cursor, venue_id, gig_notes=gig_notes)
+            # BUG FIX (Jul 2026 audit): format pay to two decimals matching
+            # every other pay-rendering site (e.g., f'{float(pay):,.2f}' in
+            # send_booking_emails). Previously rendered as the raw column
+            # value → "$100" for integer rows, "$100.5" for .5 amounts,
+            # "$100.00" only when it happened to have two decimals in DB.
+            try:
+                _pay_str = f"{float(pay or 0):,.2f}"
+            except (TypeError, ValueError):
+                _pay_str = pay or '0.00'
             variables = {
                 'artist_name': artist_name,
                 'venue_name': venue_name,
@@ -433,7 +442,7 @@ def process_gig_confirmation(cursor, smtp_config):
                 'date': format_email_date(date),
                 'start_time': format_time_12hr(start_time),
                 'end_time': format_time_12hr(end_time),
-                'pay': pay or '0',
+                'pay': _pay_str,
                 **venue_vars,
             }
 
@@ -558,23 +567,30 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
         logger.warning(f"[SCHED] No template_key for {notification_key}")
         return
 
-    # Default time values per notification key
-    default_time = {'open_gig_4w': (4, 'weeks'), 'open_gig_2w': (2, 'weeks'), 'open_gig_1w': (1, 'weeks'), 'open_gig_36h': (36, 'hours')}
-    def_val, def_unit = default_time.get(notification_key, (1, 'weeks'))
+    # Jul 2026: intervals hard-wired per key (was venue-configurable, columns
+    # now dormant). Enable toggle + blast_all_* still honored per venue.
+    hard_wired = {'open_gig_4w': (4, 'weeks'), 'open_gig_2w': (2, 'weeks'), 'open_gig_1w': (1, 'weeks'), 'open_gig_36h': (36, 'hours')}
+    time_value, time_unit = hard_wired.get(notification_key, (1, 'weeks'))
 
-    # Get all active venues — use saved settings if present, otherwise use defaults (enabled=True)
+    # Jul 2026: per-key waive_frequency default when the venue has no row —
+    # 4w/2w do NOT waive frequency limits by default; 1w/36h do. This matches
+    # the venue-user spec (early reminders informational, late reminders push
+    # to fill). Venues that touched the setting override the default via
+    # ven.waive_frequency; the COALESCE parameter is the fallback for NULL.
+    waive_freq_default = {'open_gig_4w': 0, 'open_gig_2w': 0, 'open_gig_1w': 1, 'open_gig_36h': 1}.get(notification_key, 1)
+
+    # Get all active venues — read enable flag + blast_all_* + waive_frequency only.
     cursor.execute("""
         SELECT v.id as venue_id,
-               COALESCE(ven.time_value, ?) as time_value,
-               COALESCE(ven.time_unit, ?) as time_unit,
                COALESCE(ven.blast_all_enabled, 0) as blast_all_enabled,
-               COALESCE(ven.blast_all_radius, 20) as blast_all_radius
+               COALESCE(ven.blast_all_radius, 20) as blast_all_radius,
+               COALESCE(ven.waive_frequency, ?) as waive_frequency
         FROM venues v
         LEFT JOIN venue_email_notifications ven
             ON ven.venue_id = v.id AND ven.notification_key = ?
         WHERE COALESCE(ven.enabled, 1) = 1
           AND COALESCE(v.payment_status, 'active') != 'suspended'
-    """, (def_val, def_unit, notification_key))
+    """, (waive_freq_default, notification_key))
     venue_settings = cursor.fetchall()
 
     template = get_template(cursor, template_key)
@@ -587,10 +603,9 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
 
     for venue_row in venue_settings:
         venue_id       = venue_row[0]
-        time_value     = venue_row[1]
-        time_unit      = venue_row[2]
-        blast_all_en   = bool(venue_row[3])
-        blast_all_mi   = int(venue_row[4] or 20)
+        blast_all_en   = bool(venue_row[1])
+        blast_all_mi   = int(venue_row[2] or 20)
+        waive_freq     = bool(venue_row[3])
 
         # Compute target date; for hours compute a time window
         target_date = compute_target_date(time_value, time_unit)
@@ -610,7 +625,14 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
             WHERE g.venue_id = ?
               AND g.date = ?
               AND g.status = 'open'
-              AND (g.artist_id IS NULL OR g.artist_id = '')
+              -- Jul 2026: dropped `AND (g.artist_id IS NULL OR g.artist_id = '')`
+              -- guard. Pre-unification it excluded booked single-slot gigs; post-
+              -- backfill `g.status='open'` already means "at least one slot open"
+              -- (book_gig only flips gig-level status to 'booked' when the LAST
+              -- slot books). Worse, multi-slot gigs can retain a stale gigs.artist_id
+              -- from an older book_gig write while still having open slots — the
+              -- guard was suppressing legitimate blasts on those partially-open
+              -- gigs (verified against gig 539, 2 of 3 slots booked, stale artist_id=3).
               -- Skip held gigs (Hold feature, Jun 2026). The venue is
               -- privately offering to their preferred list; firing the
               -- 36h/1w/2w/4w blasts would defeat the whole point of the
@@ -664,13 +686,17 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                 except Exception as _we:
                     continue
 
-            # Set frequency_exempt so any preferred artist can book regardless of frequency limits.
-            # Do NOT set radius_blast_token here — that field sets is_blast_open on the calendar
-            # and must only be set by the actual radius_blast (cancelled gig blast) process.
-            cursor.execute(
-                "UPDATE gigs SET frequency_exempt = 1 WHERE id = ?",
-                (gig_id,)
-            )
+            # Jul 2026: frequency_exempt is now venue-gated per notification via
+            # waive_frequency. When ON (default), the email lifts frequency limits
+            # so preferred artists can book even inside their frequency window.
+            # When OFF, we still fire the reminder email but limits stay in place.
+            # Do NOT set radius_blast_token here — that field sets is_blast_open on
+            # the calendar and must only be set by radius_blast (cancelled-gig blast).
+            if waive_freq:
+                cursor.execute(
+                    "UPDATE gigs SET frequency_exempt = 1 WHERE id = ?",
+                    (gig_id,)
+                )
             blast_token = ''  # not a radius blast — no token needed
             venue_vars = _build_venue_detail_vars(cursor, venue_id, gig_notes=gig_notes)
             sent_count = 0
@@ -679,8 +705,26 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
             # FIX (May 2026): exclude artists with a blackout date covering the gig date.
             # An artist who blocked May 6 should not get a blast for a May 6 gig.
             # The same filter is applied in the blast-all branch below and in radius_blast.
+            #
+            # FIX (Jul 2026, revised Jul 1 2026): filter by artist_type
+            # correctly on multi-slot mixed-type gigs. The prior version
+            # accepted (gig-level type match) OR (any open-slot type match)
+            # — but the OR let a mixed gig with all Live Band slots BOOKED
+            # and only a Comedian slot OPEN through to Live Band artists,
+            # because gig-level artist_type was still "Live Band".
+            #
+            # Correct rule:
+            #   - If the gig has slot rows AND at least one slot has an
+            #     explicit artist_type set, require an OPEN slot whose
+            #     type matches the artist. Fall back to the gig-level
+            #     type when the slot's type is NULL/empty (inherit).
+            #   - If the gig has no slot rows (or every slot's type is
+            #     NULL/empty), fall back to gig-level type match — this
+            #     is the single-slot / legacy path.
             cursor.execute("""
-                SELECT a.id as artist_id, a.name, u.email, u.id as user_id
+                SELECT a.id as artist_id, a.name, u.email, u.id as user_id,
+                       a.artist_type, a.band_formats, a.styles,
+                       COALESCE(a.has_own_equipment, 0) as has_own_equipment
                 FROM preferred_artists pa
                 JOIN artists a ON a.id = pa.artist_id
                 JOIN users u ON u.id = a.user_id
@@ -694,8 +738,82 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                       WHERE aa.artist_id = a.id
                         AND date(?) BETWEEN date(aa.blackout_start) AND date(aa.blackout_end)
                   )
-            """, (venue_id, venue_id, _last_cancelled, _last_cancelled, str(date)[:10]))
-            preferred = cursor.fetchall()
+                  AND (
+                      -- Case A: at least one OPEN slot matches by type.
+                      EXISTS (
+                          SELECT 1 FROM gig_slots gs
+                          WHERE gs.gig_id = ? AND gs.status = 'open'
+                            AND LOWER(COALESCE(NULLIF(gs.artist_type, ''), ?)) = LOWER(a.artist_type)
+                      )
+                      -- Case B: legacy path — no open slot rows exist.
+                      OR (
+                          NOT EXISTS (
+                              SELECT 1 FROM gig_slots gs2
+                              WHERE gs2.gig_id = ? AND gs2.status = 'open'
+                          )
+                          AND ? IS NOT NULL
+                          AND LOWER(a.artist_type) = LOWER(?)
+                      )
+                  )
+            """, (venue_id, venue_id, _last_cancelled, _last_cancelled, str(date)[:10],
+                  gig_id, artist_type, gig_id, artist_type, artist_type))
+            _preferred_pretype = cursor.fetchall()
+            # Jul 1 2026 fix: band_formats + styles overlap filter in
+            # Python (SQL comma-list intersection is ugly). A Solo/Duo
+            # Live Band artist should not receive blasts for Trio-only
+            # slots. Pulls each open slot's band_formats/styles and
+            # requires at least one open slot on the gig to match.
+            cursor.execute(
+                "SELECT artist_type, band_formats, styles, requires_equipment FROM gig_slots "
+                "WHERE gig_id = ? AND status = 'open'",
+                (gig_id,)
+            )
+            _open_slots_for_filter = [dict(zip(("artist_type","band_formats","styles","requires_equipment"), r))
+                                       for r in cursor.fetchall()]
+
+            _MC_TYPES_LC = {"open mic mc", "karaoke mc"}
+
+            def _pfx_csv_set(s):
+                if not s:
+                    return set()
+                return {t.strip().lower() for t in str(s).replace(";", ",").split(",") if t.strip()}
+
+            def _pfx_slot_matches(a_type, a_formats, a_styles, a_has_equip, slot):
+                _st = (slot.get("artist_type") or "").strip().lower() or (artist_type or "").strip().lower()
+                if a_type and _st and _st != a_type.strip().lower():
+                    return False
+                # MC types skip band_formats + styles entirely.
+                if _st not in _MC_TYPES_LC:
+                    _sf = _pfx_csv_set(slot.get("band_formats")) or _pfx_csv_set(band_formats)
+                    if _sf and not (_sf & _pfx_csv_set(a_formats)):
+                        return False
+                    _ss = _pfx_csv_set(slot.get("styles")) or _pfx_csv_set(styles)
+                    if _ss and not (_ss & _pfx_csv_set(a_styles)):
+                        return False
+                # Equipment gate — venue-required equipment blocks the
+                # artist unless they've opted in.
+                _req = slot.get("requires_equipment")
+                if _req in (1, True, "1", "true", "True"):
+                    if not a_has_equip:
+                        return False
+                return True
+
+            preferred = []
+            for _row in _preferred_pretype:
+                _a_id, _a_name, _a_email, _u_id, _a_type, _a_fmts, _a_styles, _a_equip = _row
+                if _open_slots_for_filter:
+                    if not any(_pfx_slot_matches(_a_type, _a_fmts, _a_styles, bool(_a_equip), s)
+                               for s in _open_slots_for_filter):
+                        continue
+                else:
+                    # Legacy: match against gig-level fields directly.
+                    _sf = _pfx_csv_set(band_formats)
+                    if _sf and not (_sf & _pfx_csv_set(_a_fmts)):
+                        continue
+                    _ss = _pfx_csv_set(styles)
+                    if _ss and not (_ss & _pfx_csv_set(_a_styles)):
+                        continue
+                preferred.append((_a_id, _a_name, _a_email, _u_id))
             # Add ALL preferred artists to notified_user_ids immediately so radius blast
             # never sends them a duplicate email, even if their email pref is disabled
             notified_user_ids = {p[3] for p in preferred}
@@ -766,7 +884,9 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                 _lat_d = blast_all_mi / 69.0
                 _lon_d = blast_all_mi / (69.0 * _math.cos(_math.radians(vlat)))
                 cursor.execute("""
-                    SELECT a.id, a.name, a.artist_type, a.latitude, a.longitude, u.email, u.id as user_id
+                    SELECT a.id, a.name, a.artist_type, a.latitude, a.longitude, u.email, u.id as user_id,
+                           a.band_formats, a.styles,
+                           COALESCE(a.has_own_equipment, 0) as has_own_equipment
                     FROM artists a JOIN users u ON u.id = a.user_id
                     WHERE a.latitude  BETWEEN ? AND ?
                       AND a.longitude BETWEEN ? AND ?
@@ -793,11 +913,90 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                       _last_cancelled, _last_cancelled,
                       str(date)[:10]))
                 all_artists = cursor.fetchall()
-                for a_id, a_name, a_type, alat, alon, a_email, user_id in all_artists:
+                # Jul 1 2026: fetch open-slot band_formats/styles once
+                # so we can format-filter each candidate in Python.
+                cursor.execute(
+                    "SELECT artist_type, band_formats, styles, requires_equipment FROM gig_slots "
+                    "WHERE gig_id = ? AND status = 'open'",
+                    (gig_id,)
+                )
+                _open_slots_fmt = [dict(zip(("artist_type","band_formats","styles","requires_equipment"), r))
+                                    for r in cursor.fetchall()]
+                _BA_MC = {"open mic mc", "karaoke mc"}
+
+                def _ba_csv_set(_s):
+                    if not _s:
+                        return set()
+                    return {t.strip().lower() for t in str(_s).replace(";", ",").split(",") if t.strip()}
+
+                def _ba_slot_matches(_a_type, _a_fmts, _a_styles, _a_has_equip, _slot):
+                    _st = (_slot.get("artist_type") or "").strip().lower() or (artist_type or "").strip().lower()
+                    if _a_type and _st and _st != _a_type.strip().lower():
+                        return False
+                    if _st not in _BA_MC:
+                        _sf = _ba_csv_set(_slot.get("band_formats")) or _ba_csv_set(band_formats)
+                        if _sf and not (_sf & _ba_csv_set(_a_fmts)):
+                            return False
+                        _ss = _ba_csv_set(_slot.get("styles")) or _ba_csv_set(styles)
+                        if _ss and not (_ss & _ba_csv_set(_a_styles)):
+                            return False
+                    _req = _slot.get("requires_equipment")
+                    if _req in (1, True, "1", "true", "True") and not _a_has_equip:
+                        return False
+                    return True
+                # FIX (Jul 2026, revised Jul 1 2026): accepted-types
+                # must reflect what the artist could actually BOOK. If
+                # any open slot has an explicit artist_type, only those
+                # types are accepted (gig-level is ignored — it may
+                # match a BOOKED slot but that's not bookable). If open
+                # slots are all NULL/empty (or the gig has no slot rows),
+                # fall back to the gig-level type. Prevents the class of
+                # bug where a mixed gig with a booked LB slot and open
+                # Comedian slot blasted LB artists.
+                _accepted_types = set()
+                cursor.execute(
+                    "SELECT DISTINCT artist_type FROM gig_slots WHERE gig_id = ? AND status = 'open' AND artist_type IS NOT NULL AND TRIM(artist_type) != ''",
+                    (gig_id,)
+                )
+                _explicit_slot_types = [(_st[0] or "").strip().lower()
+                                        for _st in cursor.fetchall() if _st[0]]
+                if _explicit_slot_types:
+                    _accepted_types.update(_explicit_slot_types)
+                    # Also count open slots whose artist_type is NULL/empty
+                    # (they inherit from gig-level).
+                    cursor.execute(
+                        "SELECT 1 FROM gig_slots WHERE gig_id = ? AND status = 'open' AND (artist_type IS NULL OR TRIM(artist_type) = '') LIMIT 1",
+                        (gig_id,)
+                    )
+                    if cursor.fetchone() and artist_type:
+                        _accepted_types.add(artist_type.strip().lower())
+                else:
+                    # No explicit-type open slots — fall back to gig-level.
+                    if artist_type:
+                        _accepted_types.add(artist_type.strip().lower())
+                for a_id, a_name, a_type, alat, alon, a_email, user_id, a_fmts, a_styles, a_equip in all_artists:
                     if user_id in notified_user_ids:
                         continue
-                    if artist_type and a_type and artist_type.lower() != a_type.lower():
+                    # Type filter — at least one of gig-level / slot-level
+                    # accepted types must match the artist's type.
+                    if not a_type:
                         continue
+                    if _accepted_types and a_type.strip().lower() not in _accepted_types:
+                        continue
+                    # Jul 1 2026: band_formats + styles + equipment filter
+                    # — require at least one OPEN slot the artist matches
+                    # (mirrors _artist_matches_slot in gig_hold.py).
+                    if _open_slots_fmt:
+                        if not any(_ba_slot_matches(a_type, a_fmts, a_styles, bool(a_equip), s)
+                                    for s in _open_slots_fmt):
+                            continue
+                    else:
+                        _sf = _ba_csv_set(band_formats)
+                        if _sf and not (_sf & _ba_csv_set(a_fmts)):
+                            continue
+                        _ss = _ba_csv_set(styles)
+                        if _ss and not (_ss & _ba_csv_set(a_styles)):
+                            continue
                     # Precise haversine on small candidate set
                     R = 3958.8
                     lat1,lon1 = _math.radians(vlat), _math.radians(vlon)
@@ -859,16 +1058,18 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
 
 
 def process_radius_blast(cursor, smtp_config):
-    """36hr before gig start: email all matching artists within radius_miles of venue"""
+    """36hr before gig start: email all matching artists within radius_miles of venue.
+
+    Jul 2026: 36h interval hard-wired (time_value/time_unit columns now dormant).
+    Radius is still venue-configurable via venue_email_notifications.radius_miles.
+    """
     logger.info("[SCHED] process_radius_blast running")
     import math
 
-    # Get all active venues — read time_value/time_unit/radius from saved settings
+    # Get all active venues — read enable flag + radius_miles only.
     cursor.execute("""
         SELECT v.id as venue_id,
-               COALESCE(ven.radius_miles, 20) as radius_miles,
-               COALESCE(ven.time_value, 36) as time_value,
-               COALESCE(ven.time_unit, 'hours') as time_unit
+               COALESCE(ven.radius_miles, 20) as radius_miles
         FROM venues v
         LEFT JOIN venue_email_notifications ven
             ON ven.venue_id = v.id AND ven.notification_key = 'radius_blast'
@@ -893,29 +1094,24 @@ def process_radius_blast(cursor, smtp_config):
     for venue_row in venue_settings:
         venue_id     = venue_row[0]
         radius_miles = venue_row[1] or 20
-        time_value   = int(venue_row[2] or 36)
-        time_unit    = str(venue_row[3] or 'hours')
 
-        # Convert to hours for window calculation
-        if time_unit == 'weeks':
-            hours_before = time_value * 168
-        elif time_unit == 'days':
-            hours_before = time_value * 24
-        else:
-            hours_before = time_value
-
+        # Jul 2026: 36h hard-wired.
+        hours_before = 36
         window_start = now + timedelta(hours=hours_before - 2.0)
         window_end   = now + timedelta(hours=hours_before + 2.0)
 
         cursor.execute("""
             SELECT g.id, g.date, g.start_time, g.end_time, g.pay, g.notes, g.artist_type,
                    v.venue_name, v.city, v.state, v.latitude, v.longitude,
-                   g.last_cancelled_artist_id
+                   g.last_cancelled_artist_id, g.band_formats, g.styles
             FROM gigs g
             JOIN venues v ON v.id = g.venue_id
             WHERE g.venue_id = ?
               AND g.status = 'open'
-              AND (g.artist_id IS NULL OR g.artist_id = '')
+              -- Jul 2026: dropped `AND (g.artist_id IS NULL OR g.artist_id = '')`
+              -- guard (same rationale as process_open_gig_notifications). Multi-
+              -- slot gigs with partial bookings can retain a stale gigs.artist_id;
+              -- their still-open slots need to be radius-blasted.
               -- Skip held gigs — see explanation in process_open_gig_notifications.
               AND (g.hold_status IS NULL OR g.hold_status NOT IN ('active', 'exhausted'))
               AND g.id NOT IN (
@@ -925,7 +1121,7 @@ def process_radius_blast(cursor, smtp_config):
 
         gigs = cursor.fetchall()
         for gig in gigs:
-            gig_id, date, start_time, end_time, pay, gig_notes, artist_type, venue_name, city, state, vlat, vlon, _last_cancelled = gig
+            gig_id, date, start_time, end_time, pay, gig_notes, artist_type, venue_name, city, state, vlat, vlon, _last_cancelled, band_formats, styles = gig
 
             # Parse gig start as platform-local naive datetime, then make it timezone-aware
             # so it can be compared directly with window_start/window_end
@@ -951,7 +1147,9 @@ def process_radius_blast(cursor, smtp_config):
             _lat_d2 = radius_miles / 69.0
             _lon_d2 = radius_miles / (69.0 * math.cos(math.radians(vlat))) if vlat else _lat_d2
             cursor.execute("""
-                SELECT a.id, a.name, a.artist_type, a.latitude, a.longitude, u.email, u.id as user_id
+                SELECT a.id, a.name, a.artist_type, a.latitude, a.longitude, u.email, u.id as user_id,
+                       a.band_formats, a.styles,
+                       COALESCE(a.has_own_equipment, 0) as has_own_equipment
                 FROM artists a
                 JOIN users u ON u.id = a.user_id
                 WHERE a.latitude  BETWEEN ? AND ?
@@ -972,12 +1170,77 @@ def process_radius_blast(cursor, smtp_config):
                   _last_cancelled, _last_cancelled,
                   str(date)[:10]))
             all_artists = cursor.fetchall()
+            # Jul 1 2026: pull open-slot format/style once for filtering.
+            cursor.execute(
+                "SELECT artist_type, band_formats, styles, requires_equipment FROM gig_slots "
+                "WHERE gig_id = ? AND status = 'open'",
+                (gig_id,)
+            )
+            _rb_open_slots = [dict(zip(("artist_type","band_formats","styles","requires_equipment"), r))
+                              for r in cursor.fetchall()]
+            _RB_MC = {"open mic mc", "karaoke mc"}
 
+            def _rb_csv_set(_s):
+                if not _s:
+                    return set()
+                return {t.strip().lower() for t in str(_s).replace(";", ",").split(",") if t.strip()}
+
+            def _rb_slot_matches(_a_type, _a_fmts, _a_styles, _a_has_equip, _slot):
+                _st = (_slot.get("artist_type") or "").strip().lower() or (artist_type or "").strip().lower()
+                if _a_type and _st and _st != _a_type.strip().lower():
+                    return False
+                if _st not in _RB_MC:
+                    _sf = _rb_csv_set(_slot.get("band_formats")) or _rb_csv_set(band_formats)
+                    if _sf and not (_sf & _rb_csv_set(_a_fmts)):
+                        return False
+                    _ss = _rb_csv_set(_slot.get("styles")) or _rb_csv_set(styles)
+                    if _ss and not (_ss & _rb_csv_set(_a_styles)):
+                        return False
+                _req = _slot.get("requires_equipment")
+                if _req in (1, True, "1", "true", "True") and not _a_has_equip:
+                    return False
+                return True
+
+            # FIX (Jul 2026, revised Jul 1 2026): accepted-types must
+            # reflect what the artist could actually BOOK — mirror the
+            # process_open_gig_notifications logic (see the identical
+            # comment in the blast_all branch around line 837).
+            _accepted_types_rb = set()
+            cursor.execute(
+                "SELECT DISTINCT artist_type FROM gig_slots WHERE gig_id = ? AND status = 'open' AND artist_type IS NOT NULL AND TRIM(artist_type) != ''",
+                (gig_id,)
+            )
+            _explicit_rb = [(_st[0] or "").strip().lower() for _st in cursor.fetchall() if _st[0]]
+            if _explicit_rb:
+                _accepted_types_rb.update(_explicit_rb)
+                cursor.execute(
+                    "SELECT 1 FROM gig_slots WHERE gig_id = ? AND status = 'open' AND (artist_type IS NULL OR TRIM(artist_type) = '') LIMIT 1",
+                    (gig_id,)
+                )
+                if cursor.fetchone() and artist_type:
+                    _accepted_types_rb.add(artist_type.strip().lower())
+            else:
+                if artist_type:
+                    _accepted_types_rb.add(artist_type.strip().lower())
             sent_count = 0
-            for a_id, a_name, a_type, alat, alon, a_email, user_id in all_artists:
-                # Match artist type
-                if artist_type and a_type and artist_type.lower() != a_type.lower():
+            for a_id, a_name, a_type, alat, alon, a_email, user_id, a_fmts, a_styles, a_equip in all_artists:
+                # Match artist type — gig-level OR any open slot
+                if not a_type:
                     continue
+                if _accepted_types_rb and a_type.strip().lower() not in _accepted_types_rb:
+                    continue
+                # Jul 1 2026: band_formats + styles + equipment filter.
+                if _rb_open_slots:
+                    if not any(_rb_slot_matches(a_type, a_fmts, a_styles, bool(a_equip), s)
+                                for s in _rb_open_slots):
+                        continue
+                else:
+                    _sf = _rb_csv_set(band_formats)
+                    if _sf and not (_sf & _rb_csv_set(a_fmts)):
+                        continue
+                    _ss = _rb_csv_set(styles)
+                    if _ss and not (_ss & _rb_csv_set(a_styles)):
+                        continue
 
                 # Precise haversine on small candidate set
                 if vlat and vlon:
@@ -1352,6 +1615,65 @@ def run_scheduled_emails():
             send_daily_artist_digest(cursor, smtp_config)
             prune_old_queue_rows(cursor, days=30)
         _run(_send_digest, "send_daily_artist_digest")
+
+        # Morning-of demo reminders. Fires per prospect at 6 AM in their
+        # local timezone on the calendar day of their demo. Idempotent
+        # via demo_requests.reminder_sent_at, so calling every scheduler
+        # tick is safe.
+        def _send_demo_reminders():
+            from backend.routes.demo_requests import send_pending_demo_reminders
+            send_pending_demo_reminders(cursor)
+        _run(_send_demo_reminders, "send_pending_demo_reminders")
+
+        # Daily 6 AM Pacific admin digest — one email listing every
+        # unresponded (status='pending') demo request with per-slot
+        # Accept buttons. Skipped when there are no pending rows.
+        # Idempotent via platform_settings.admin_pending_demo_digest_last_date
+        # (stamped after each send with today's Pacific YYYY-MM-DD).
+        # 2026-07-25.
+        def _send_admin_pending_digest():
+            from datetime import datetime as _dt
+            try:
+                from zoneinfo import ZoneInfo
+                pacific = ZoneInfo("America/Los_Angeles")
+                local = _dt.now(pacific)
+            except Exception as e:
+                logger.warning(f"[SCHED] admin_pending_demo_digest tz load failed: {e}")
+                return
+            if local.hour != 6:
+                return
+            today = local.strftime("%Y-%m-%d")
+            cursor.execute(
+                "SELECT setting_value FROM platform_settings WHERE setting_key = 'admin_pending_demo_digest_last_date'"
+            )
+            r = cursor.fetchone()
+            last_date = (r[0] if r else "") or ""
+            if last_date == today:
+                return  # already sent today
+            from backend.routes.demo_requests import send_admin_pending_demo_digest
+            result = send_admin_pending_demo_digest(cursor)
+            # Stamp on any non-error outcome (including "nothing to send" = 0)
+            # so we don't re-check every tick within the 6 AM hour. -1 = error;
+            # leave the marker so we retry on the next tick.
+            if result >= 0:
+                cursor.execute(
+                    "UPDATE platform_settings SET setting_value = ? WHERE setting_key = 'admin_pending_demo_digest_last_date'",
+                    (today,)
+                )
+                if cursor.rowcount == 0:
+                    cursor.execute(
+                        "INSERT INTO platform_settings (setting_key, setting_value) VALUES (?, ?)",
+                        ('admin_pending_demo_digest_last_date', today)
+                    )
+        _run(_send_admin_pending_digest, "send_admin_pending_demo_digest")
+
+        # Auto-mark scheduled demos as `completed` once their scheduled
+        # time + 60 min has passed. Admin can click the pill in the
+        # panel and switch to `no_show` if the prospect didn't join.
+        def _mark_completed_demos():
+            from backend.routes.demo_requests import mark_completed_demos
+            mark_completed_demos(cursor)
+        _run(_mark_completed_demos, "mark_completed_demos")
 
     except Exception as e:
         logger.error(f"[SCHED] Fatal error in run_scheduled_emails: {e}", exc_info=True)
@@ -1927,14 +2249,29 @@ def process_bounce_inbox(conn=None):
             return summary
 
         logger.info(f"[BOUNCE] Connecting to IMAP {settings['server']}:{settings['port']} as {settings['username']}")
-        # IMAP4_SSL accepts a timeout kwarg on Python 3.9+
+        # 2026-07-26: dual-path IMAP connect. Port 993 uses implicit SSL
+        # (IMAP4_SSL); port 143 uses plain IMAP4 + STARTTLS. DigitalOcean
+        # droplets have outbound 993 firewalled to most mail hosts (including
+        # Bluehost's shared IPs), so 143+STARTTLS is the only reachable
+        # path here — and the Dovecot server on mail.gigsfill.com:143
+        # advertises STARTTLS support in its greeting. Both paths still
+        # negotiate a TLS session before the LOGIN command.
+        _port = int(settings["port"])
         try:
-            M = imaplib.IMAP4_SSL(settings["server"], settings["port"], timeout=15)
+            if _port == 143:
+                M = imaplib.IMAP4(settings["server"], _port, timeout=15)
+                M.starttls()
+            else:
+                M = imaplib.IMAP4_SSL(settings["server"], _port, timeout=15)
         except TypeError:
             # Older Python — no timeout kwarg
             import socket as _sock
             _sock.setdefaulttimeout(15)
-            M = imaplib.IMAP4_SSL(settings["server"], settings["port"])
+            if _port == 143:
+                M = imaplib.IMAP4(settings["server"], _port)
+                M.starttls()
+            else:
+                M = imaplib.IMAP4_SSL(settings["server"], _port)
 
         try:
             M.login(settings["username"], settings["password"])

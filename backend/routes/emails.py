@@ -354,8 +354,10 @@ def my_digest_resend(request: Request, data: dict, user=Depends(get_current_user
     if not minute:
         raise HTTPException(400, "sent_at_minute required")
 
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
+    from backend.db import get_db_connection
+
+
+    conn = get_db_connection()
     c = conn.cursor()
     try:
         rows = c.execute("""

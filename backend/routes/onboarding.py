@@ -10,11 +10,13 @@ router = APIRouter()
 
 
 def _check_entity_access(db, user, entity_type, entity_id):
-    """Verify user owns or has access to this entity"""
+    """Verify user owns or has access to this entity.
+    Jul 2026 audit: added deleted_at IS NULL — a tombstoned entity should
+    never appear in a live onboarding checklist."""
     if entity_type == 'venue':
         row = db.execute(text("""
             SELECT v.id FROM venues v
-            WHERE v.id = :eid AND (
+            WHERE v.id = :eid AND v.deleted_at IS NULL AND (
                 v.user_id = :uid
                 OR EXISTS (SELECT 1 FROM entity_users eu WHERE eu.entity_type = 'venue'
                            AND eu.entity_id = :eid AND eu.user_id = :uid)
@@ -29,7 +31,7 @@ def _check_entity_access(db, user, entity_type, entity_id):
     else:
         row = db.execute(text("""
             SELECT a.id FROM artists a
-            WHERE a.id = :eid AND (
+            WHERE a.id = :eid AND a.deleted_at IS NULL AND (
                 a.user_id = :uid
                 OR EXISTS (SELECT 1 FROM entity_users eu WHERE eu.entity_type = 'artist'
                            AND eu.entity_id = :eid AND eu.user_id = :uid)
@@ -77,16 +79,21 @@ VENUE_TASKS = [
 # ── Artist checklist items ────────────────────────────────────────────
 
 ARTIST_TASKS = [
+    # Jul 2026: Tax Information moved AHEAD of Payments so filling out the W-9
+    # first pre-fills the Stripe Connect onboarding (legal name / address / TIN),
+    # saving the artist from re-typing the same fields. See
+    # backend/routes/tax.py:build_stripe_individual_from_w9 for the pre-fill
+    # helper wired into Account.create.
     {
-        "key": "payments",
-        "title": "Payments",
-        "description": "Enter your Payout Account with Stripe. Your earnings will be paid to this account.",
+        "key": "tax_info",
+        "title": "Tax Information (do this first)",
+        "description": "Complete your W-9. If you fill it out before setting up Payments below, we'll pre-fill your Stripe onboarding with your legal name, address, and TIN so you don't type them twice. Some venues also require an up-to-date W-9 to book you.",
         "mandatory": True,
     },
     {
-        "key": "tax_info",
-        "title": "Tax Information",
-        "description": "Complete a W-9 form (some Venues will require this).",
+        "key": "payments",
+        "title": "Payments",
+        "description": "Enter your Payout Account with Stripe. Your earnings will be paid to this account. If you completed the W-9 above first, Stripe onboarding starts already filled in.",
         "mandatory": True,
     },
     {
@@ -151,7 +158,13 @@ def _check_artist_mandatory(db, entity_id, task_key):
         return row is not None
 
     if task_key == "tax_info":
-        current_year = datetime.now().year
+        # Jul 2026: use tax.py's TZ-aware helper so the "current tax year" flip
+        # happens at midnight in the platform's timezone, not UTC. Otherwise a
+        # west-coast venue whose New Year's Eve W-9 was saved just after 4 PM
+        # PDT would show as "current" ~8 hours before the calendar year actually
+        # changed in their local time.
+        from backend.routes.tax import _current_tax_year
+        current_year = _current_tax_year(db)
         row = db.execute(text("""
             SELECT id FROM w9_forms
             WHERE entity_type = 'artist' AND entity_id = :eid
@@ -179,7 +192,13 @@ def _check_affiliate_mandatory(db, entity_id, task_key):
         return row is not None
 
     if task_key == "w9_filed":
-        current_year = datetime.now().year
+        # Jul 2026: use tax.py's TZ-aware helper so the "current tax year" flip
+        # happens at midnight in the platform's timezone, not UTC. Otherwise a
+        # west-coast venue whose New Year's Eve W-9 was saved just after 4 PM
+        # PDT would show as "current" ~8 hours before the calendar year actually
+        # changed in their local time.
+        from backend.routes.tax import _current_tax_year
+        current_year = _current_tax_year(db)
         # User-level W-9 (entity_type='user') is the canonical record for
         # affiliate payouts — see tax.py:save_user_w9.
         row = db.execute(text("""

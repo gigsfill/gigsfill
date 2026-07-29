@@ -8,7 +8,8 @@
   <meta name="keywords" content="live music, gig booking, find musicians, book venues, live bands, DJs, solo artists, music events">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://gigsfill.com/">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -276,7 +277,21 @@
         <button class="btn link" onclick="showForgotPasswordModal()">Forgot Password?</button>
       </div>
     </div>
-    
+
+    <!-- Request Live Demo — new prospects (venues + artists) submit
+         3 preferred time slots; Jonathan confirms one within 24h. -->
+    <div style="max-width: 420px; margin: 0 auto 20px auto; text-align: center;">
+      <button id="requestDemoBtn" onclick="showDemoRequestModal()"
+        style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:transparent;border:1px solid rgba(139,92,246,0.4);border-radius:8px;color:transparent;background-image:linear-gradient(135deg,#8b5cf6,#06b6d4);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:0.95rem;font-weight:600;cursor:pointer;transition:all 0.2s;letter-spacing:0.01em;"
+        onmouseover="this.style.borderColor='rgba(6,182,212,0.6)';this.style.boxShadow='0 0 0 3px rgba(139,92,246,0.08)';"
+        onmouseout="this.style.borderColor='rgba(139,92,246,0.4)';this.style.boxShadow='none';">
+        📅 Request a Live Demo
+      </button>
+      <div style="margin-top:10px;font-size:0.78rem;color:var(--text-gray);">
+        Not ready for a demo? <a href="#" onclick="event.preventDefault();showContactModal();" style="color:#7dd3fc;text-decoration:none;border-bottom:1px dashed rgba(125,211,252,0.5);">Send us a note</a>
+      </div>
+    </div>
+
     <!-- Search for Live Music Section -->
     <div class="auth-panel" style="max-width: 420px; margin: 0 auto 20px auto;">
       <h3 style="text-align: center; margin-bottom: 12px; color: var(--text);">Search for live music in your town.</h3>
@@ -402,7 +417,7 @@
 </footer>
 
   <script src="/app/static/js/modals.js"></script>
-  <script src="/app/static/js/city-autocomplete.js"></script>
+  <script src="/app/static/js/city-autocomplete.js?v=2"></script>
   
 
 <!-- Feature-list modals opened from the "For Artists" / "For Venues" cards. -->
@@ -485,7 +500,9 @@
   });
 </script>
 
-<script src="/app/static/js/index-init.js?v=8"></script>
+<script src="/app/static/js/index-init.js?v=9"></script>
+<script src="/app/static/js/demo-request-modal.js?v=20"></script>
+<script src="/app/static/js/contact-modal.js?v=2"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
 

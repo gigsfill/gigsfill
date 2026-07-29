@@ -122,6 +122,86 @@ def _make_unique(db, base: str) -> str:
             return f"{base}-{uuid.uuid4().hex[:6]}"
 
 
+def maybe_update_slug_on_rename(db, entity_type: str, entity_id: int,
+                                  old_name: str, new_name: str) -> None:
+    """Auto-regenerate a vanity slug when an entity is renamed, ONLY IF
+    the current stored slug matches the auto-generated slug from the OLD
+    name. If the user customized the slug (e.g. "fridayspast" for a venue
+    named "Fridays Past Bar & Grill"), we leave it — respecting the
+    customization. Otherwise we update the slug to match the new name
+    and register the old slug in `vanity_url_redirects` for 90 days so
+    previously-shared links keep working.
+
+    Called from venues.py `update_venue` and artists.py `update_artist`.
+
+    Best-effort — any failure logs and continues; the rename itself
+    is already committed at call time and shouldn't be rolled back
+    just because vanity juggling failed.
+    """
+    try:
+        if entity_type not in ('artist', 'venue'):
+            return
+        if not old_name or not new_name or old_name == new_name:
+            return
+
+        auto_old = slugify(old_name)
+        auto_new = slugify(new_name)
+        if not auto_new:
+            return  # New name doesn't yield a valid slug; leave old one alone.
+
+        cur = db.execute(
+            text("SELECT slug FROM vanity_urls WHERE entity_type=:t AND entity_id=:i"),
+            {"t": entity_type, "i": entity_id}
+        ).first()
+        if not cur:
+            return  # No slug on record — nothing to migrate.
+        current_slug = cur[0]
+
+        # Only auto-rename if the user never customized. `auto_old` may
+        # differ from `current_slug` if they picked a custom slug earlier.
+        if current_slug != auto_old:
+            return
+
+        # Get a unique new slug (may need a suffix if new-name-derived
+        # slug is already claimed by someone else).
+        new_slug = _make_unique(db, auto_new)
+        if new_slug == current_slug:
+            return  # No change needed.
+
+        db.execute(text("""
+            UPDATE vanity_urls SET slug = :s, updated_at = CURRENT_TIMESTAMP
+            WHERE entity_type = :t AND entity_id = :i
+        """), {"s": new_slug, "t": entity_type, "i": entity_id})
+        # Cleanup stale redirects for the slug we're now claiming as
+        # live. If a user renames foo → bar → foo, the middle rename
+        # parked `foo → bar` in the redirect table; now that `foo` is
+        # live again we must delete that stale row so nothing tries
+        # to point away from it (the resolver skips stale redirects
+        # for live slugs anyway, but leaving them accrues cruft).
+        try:
+            db.execute(
+                text("DELETE FROM vanity_url_redirects WHERE old_slug = :s"),
+                {"s": new_slug}
+            )
+        except Exception:
+            pass
+        # Park the old slug as a 90-day redirect so pre-rename links resolve.
+        try:
+            db.execute(text("""
+                INSERT OR REPLACE INTO vanity_url_redirects
+                    (old_slug, new_slug, entity_type, entity_id, expires_at, reclaim_after)
+                VALUES (:old, :new, :t, :i,
+                        datetime('now', '+90 days'), datetime('now', '+120 days'))
+            """), {"old": current_slug, "new": new_slug,
+                   "t": entity_type, "i": entity_id})
+        except Exception as _re:
+            logger.warning(f"vanity redirect park on rename failed for {current_slug}→{new_slug}: {_re}")
+        db.commit()
+        logger.info(f"[VANITY] Auto-renamed {entity_type} #{entity_id} slug: {current_slug} → {new_slug}")
+    except Exception as e:
+        logger.warning(f"maybe_update_slug_on_rename({entity_type}, {entity_id}, {old_name!r}→{new_name!r}) failed: {e}")
+
+
 def ensure_slug_for(db, entity_type: str, entity_id: int, name_hint: str = '') -> str:
     """Look up the vanity slug for an entity. If none exists, generate one
     from `name_hint` (or "{entity_type}{id}" fallback) and persist it.
@@ -613,28 +693,38 @@ def resolve_vanity(slug: str, request: Request, db=Depends(get_db)):
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?', slug):
         raise HTTPException(404)
 
-    # Audit fix (May 2026 part 10): if the user renamed their vanity URL,
-    # keep the old slug working as a 301 redirect for 90 days. Without this,
-    # every previously-shared link (social-media post, business card, email)
-    # 404s the moment the user picks a new slug.
-    redirect_row = None
-    try:
-        redirect_row = db.execute(
-            text("""SELECT new_slug FROM vanity_url_redirects
-                    WHERE old_slug = :s AND expires_at > datetime('now')
-                    LIMIT 1"""),
-            {"s": slug},
-        ).first()
-    except Exception:
-        pass
-    if redirect_row:
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(f"/{redirect_row[0]}", status_code=301)
-
+    # Jul 22 2026 order fix: check the LIVE vanity_urls table FIRST.
+    # Only fall through to the redirect table if the requested slug
+    # isn't currently active. Otherwise a user who renames back and
+    # forth (foo → bar → foo) leaves a stale `foo → bar` redirect
+    # that the resolver would follow instead of serving the live
+    # `foo` entity. Previously the order was reversed (redirects
+    # first) which caused exactly that bug — the "your public URL
+    # is broken after rename" report.
     row = db.execute(
         text("SELECT entity_type, entity_id FROM vanity_urls WHERE slug = :s"),
         {"s": slug},
     ).first()
+
+    # Audit fix (May 2026 part 10): if the user renamed their vanity URL,
+    # keep the old slug working as a 301 redirect for 90 days. Without this,
+    # every previously-shared link (social-media post, business card, email)
+    # 404s the moment the user picks a new slug. Runs only when the slug
+    # isn't currently live — a live slug always wins over a stale redirect.
+    if not row:
+        redirect_row = None
+        try:
+            redirect_row = db.execute(
+                text("""SELECT new_slug FROM vanity_url_redirects
+                        WHERE old_slug = :s AND expires_at > datetime('now')
+                        LIMIT 1"""),
+                {"s": slug},
+            ).first()
+        except Exception:
+            pass
+        if redirect_row:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(f"/{redirect_row[0]}", status_code=301)
     if row:
         entity_type, entity_id = row[0], row[1]
         # Audit fix (May 2026 part 5): defense-in-depth — confirm the underlying
@@ -643,8 +733,12 @@ def resolve_vanity(slug: str, request: Request, db=Depends(get_db)):
         # exist in production. Fall through to not-found so a deleted artist's
         # old slug doesn't render an empty profile.
         _entity_table = "artists" if entity_type == "artist" else "venues"
+        # BUG FIX (Jul 2026 audit): also require entity NOT tombstoned. Without
+        # this, a race where the vanity_urls DELETE swallowed an error during
+        # entity_delete could leave a resurrected slug pointing at a "[Deleted]
+        # X" profile that renders fully to the public.
         _entity_exists = db.execute(
-            text(f"SELECT 1 FROM {_entity_table} WHERE id = :i"),
+            text(f"SELECT 1 FROM {_entity_table} WHERE id = :i AND deleted_at IS NULL"),
             {"i": entity_id}
         ).first()
         if not _entity_exists:
@@ -820,6 +914,16 @@ def update_vanity_for_entity(entity_type: str, entity_id: int,
                 UPDATE vanity_urls SET slug = :s, updated_at = CURRENT_TIMESTAMP
                 WHERE entity_type = :t AND entity_id = :i
             """), {"s": new_slug, "t": entity_type, "i": entity_id})
+            # Jul 22 2026: clear any stale redirect that points AWAY
+            # from the slug we're now claiming (see the comment on the
+            # matching cleanup in maybe_update_slug_on_rename above).
+            try:
+                db.execute(
+                    text("DELETE FROM vanity_url_redirects WHERE old_slug = :s"),
+                    {"s": new_slug}
+                )
+            except Exception:
+                pass
             # Park the old slug as a redirect
             try:
                 db.execute(text("""
@@ -931,22 +1035,29 @@ def backfill_existing_entities(db) -> dict:
     at startup from main.py. Idempotent — safe to run repeatedly."""
     inserted = {"artists": 0, "venues": 0}
     try:
+        # BUG FIX (Jul 2026 audit): filter out tombstoned rows.
+        # entity_delete DELETEs the vanity_urls row when an entity is
+        # tombstoned, so without this filter every startup would re-slug
+        # every tombstone and resurrect their "[Deleted] X" profile at a
+        # public URL. deleted_at IS NULL keeps the backfill on live rows only.
         artist_rows = db.execute(text("""
             SELECT a.id, a.name FROM artists a
-            WHERE NOT EXISTS (
+            WHERE a.deleted_at IS NULL
+              AND NOT EXISTS (
                 SELECT 1 FROM vanity_urls v
                 WHERE v.entity_type='artist' AND v.entity_id = a.id
-            )
+              )
         """)).fetchall()
         for aid, name in artist_rows:
             ensure_slug_for(db, 'artist', aid, name_hint=name or '')
             inserted["artists"] += 1
         venue_rows = db.execute(text("""
             SELECT v.id, v.venue_name FROM venues v
-            WHERE NOT EXISTS (
+            WHERE v.deleted_at IS NULL
+              AND NOT EXISTS (
                 SELECT 1 FROM vanity_urls vu
                 WHERE vu.entity_type='venue' AND vu.entity_id = v.id
-            )
+              )
         """)).fetchall()
         for vid, name in venue_rows:
             ensure_slug_for(db, 'venue', vid, name_hint=name or '')

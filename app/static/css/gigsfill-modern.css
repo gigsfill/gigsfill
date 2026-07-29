@@ -76,6 +76,13 @@
   --transition-fast: 0ms;
   --transition-base: 0ms;
   --transition-slow: 0ms;
+
+  /* Container widths (Jul 2026 experiment: bump from 1400/1250 → 1600).
+     Wraps min() so the container never overflows small viewports.
+     Header inner content, calendar page containers, and calendar sections
+     all use --container-max. Modals + narrow-form pages keep their own
+     smaller widths (they're readability-optimized). */
+  --container-max: min(1600px, calc(100vw - 32px));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -170,7 +177,12 @@ a:hover {
 
 .app-shell {
   display: flex;
+  /* 100vh includes the space UNDER the iOS Safari address bar even when
+     the bar is showing — makes the shell too tall on mobile and produces
+     a phantom scroll. 100dvh (dynamic viewport height) tracks the
+     visible area. Keep vh as the fallback for browsers without dvh. */
   min-height: 100vh;
+  min-height: 100dvh;
   position: relative;
   z-index: 1;
 }
@@ -205,12 +217,13 @@ a:hover {
   top: 0;
   z-index: 100;
   background: rgba(10, 14, 26, 0.8);
+  -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .header-inner {
-  max-width: 1400px;
+  max-width: var(--container-max);
   margin: 0 auto;
   padding: var(--space-lg) var(--space-xl);
   display: flex;
@@ -765,6 +778,7 @@ input[type="radio"]:active {
   position: fixed;
   inset: 0;
   background: rgba(10, 14, 26, 0.8);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
@@ -849,6 +863,7 @@ input[type="radio"]:active {
   position: absolute;
   inset: 0;
   background: rgba(10, 14, 26, 0.8);
+  -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -1007,6 +1022,7 @@ input[type="radio"]:active {
     position: fixed;
     left: -280px;
     height: 100vh;
+    height: 100dvh;  /* Dynamic viewport for iOS Safari — see comment on .app-shell. */
     z-index: 999;
   }
   

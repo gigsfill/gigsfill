@@ -133,15 +133,43 @@ function renderCalendar() {
   const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
   const _now = new Date();
   const todayStr = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
-  const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠' };
+  const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
+
+  // Outlook-style month boundary label — matches venue/artist book-
+  // gigs calendars. Prefixes month abbreviation on:
+  //   • day 1 of every visible month (including target month), AND
+  //   • the very first grid cell (top-left) so spillover like
+  //     "Jul 26" is unambiguous when viewing August.
+  let _firstCellRendered = false;
+  function _renderDayNum(d, monthIndex) {
+    const isFirst = !_firstCellRendered;
+    _firstCellRendered = true;
+    if (d === 1 || isFirst) {
+      const monAbbr = new Date(2000, monthIndex).toLocaleString("default", { month: "short" });
+      return `<div class="day-num month-boundary">${monAbbr} ${d}</div>`;
+    }
+    return `<div class="day-num">${d}</div>`;
+  }
+
   let html = '';
-  for (let i = 0; i < firstDay; i++) html += '<div class="cal-day empty"></div>';
+  // Leading days from previous month — render the actual day number
+  // tagged as `other-month` (muted), with `past` only when the date
+  // is genuinely past (not just out-of-month). Jul 2026 fix.
+  const prevMonthLast = new Date(calYear, calMonth, 0).getDate();
+  const _prevM = calMonth === 0 ? 11 : calMonth - 1;
+  for (let i = firstDay - 1; i >= 0; i--) {
+    const d = prevMonthLast - i;
+    const prevY = calMonth === 0 ? calYear - 1 : calYear;
+    const ds = `${prevY}-${String(_prevM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isPast = ds < todayStr;
+    html += `<div class="cal-day other-month${isPast ? ' past' : ''}">${_renderDayNum(d, _prevM)}</div>`;
+  }
   for (let d = 1; d <= daysInMonth; d++) {
     const ds = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const isToday = ds === todayStr;
     const isPast = ds < todayStr;
     const dayGigs = venueGigs.filter(g => g.date === ds);
-    html += `<div class="cal-day${isToday ? ' today' : ''}${isPast ? ' past' : ''}"><div class="day-num">${d}</div>`;
+    html += `<div class="cal-day${isToday ? ' today' : ''}${isPast ? ' past' : ''}">${_renderDayNum(d, calMonth)}`;
     if (dayGigs.length > 0) {
       html += '<div class="cal-gigs-container">';
       let gigIdx = 0;
@@ -169,6 +197,16 @@ function renderCalendar() {
       html += '</div>';
     }
     html += '</div>';
+  }
+  // Trailing days into next month — fill to end-of-week (Jul 2026 fix).
+  const totalSoFar = firstDay + daysInMonth;
+  const trailing = (7 - (totalSoFar % 7)) % 7;
+  const nextM = calMonth === 11 ? 0 : calMonth + 1;
+  const nextY = calMonth === 11 ? calYear + 1 : calYear;
+  for (let d = 1; d <= trailing; d++) {
+    const ds = `${nextY}-${String(nextM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isPast = ds < todayStr;
+    html += `<div class="cal-day other-month${isPast ? ' past' : ''}">${_renderDayNum(d, nextM)}</div>`;
   }
   document.getElementById('calGrid').innerHTML = html;
 

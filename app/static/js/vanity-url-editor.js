@@ -398,5 +398,20 @@
     }
 
     load();
+
+    // Jul 2026: expose a keyed reload hook so the venue-edit / artist-edit
+    // rename autosave can re-fetch the vanity URL immediately after the
+    // backend regenerates the slug from the new name.
+    window._vanityReloaders = window._vanityReloaders || {};
+    window._vanityReloaders[entityType + ':' + entityId] = load;
+  };
+
+  // Public helper — called from venue.edit.js / artist.edit.js right
+  // after a name field successfully autosaves, so the URL display
+  // updates without a page reload.
+  window.reloadVanityUrl = function (entityType, entityId) {
+    var key = entityType + ':' + entityId;
+    var fn = (window._vanityReloaders || {})[key];
+    if (typeof fn === 'function') fn();
   };
 })();

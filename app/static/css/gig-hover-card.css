@@ -33,6 +33,15 @@
 .gf-gig-hover-card .gf-ghc-open-header {
   color: #34d399;
 }
+/* Venue-set gig title (e.g. "Acoustic Tuesdays"). Dimmed subhead. */
+.gf-gig-hover-card .gf-ghc-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-style: italic;
+  color: var(--text-gray, #94a3b8);
+  margin: -4px 0 8px;
+  word-break: break-word;
+}
 /* Artist name inside the header — link once the slug is resolved. */
 .gf-gig-hover-card .gf-ghc-artist-anchor {
   color: inherit;
@@ -119,15 +128,13 @@
    the middle (clickable when artist_id is known), small status pill
    on the right. Each line is its own row in a flex column. */
 .gf-gig-hover-card .gf-ghc-slots {
-  /* 3-column grid — time | name | tag. Name column starts at the same
-     x-position across every row because the time column width is the
-     widest time string in the data (max-content). Children of each
-     .gf-ghc-slot-line participate directly thanks to display:contents
-     below. No dot separator any more — vertical alignment does the
-     visual separation. */
+  /* 4-column grid — icon | time | name | tag. Icon column added Jun
+     2026 so a multi-slot gig with mixed types (e.g. 2 Live Band + 1
+     DJ) shows a vertical icon column the artist can scan to see why
+     a given row would/wouldn't be bookable for them. */
   display: grid;
-  grid-template-columns: max-content 1fr max-content;
-  column-gap: 14px;
+  grid-template-columns: max-content max-content 1fr max-content;
+  column-gap: 10px;
   row-gap: 6px;
   align-items: center;
   margin: 8px 0 4px;
@@ -140,6 +147,13 @@
 }
 .gf-gig-hover-card .gf-ghc-slot-line {
   display: contents;
+}
+.gf-gig-hover-card .gf-ghc-slot-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+  min-width: 1em;
+  text-align: center;
+  opacity: 0.9;
 }
 .gf-gig-hover-card .gf-ghc-slot-time {
   font-size: 0.74rem;

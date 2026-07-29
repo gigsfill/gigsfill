@@ -265,36 +265,56 @@ const _NOTIF_ID_MAP = {
     unit:   'notif_gig_confirmation_unit',
   },
   open_gig_4w: {
-    toggle: 'notif_open_gig_4w',
-    val:    'notif_open_gig_4w_val',
-    unit:   'notif_open_gig_4w_unit',
-    blink:  'notif_open_gig_4w_blink',
-    blink_color: 'notif_open_gig_4w_blink_color',
+    toggle:                    'notif_open_gig_4w',
+    val:                       'notif_open_gig_4w_val',
+    unit:                      'notif_open_gig_4w_unit',
+    blast_all:                 'notif_open_gig_4w_blast_all',
+    blast_radius:              'notif_open_gig_4w_blast_radius',
+    waive_frequency:           'notif_open_gig_4w_waive_freq',
+    cancel_notify_preferred:   'notif_open_gig_4w_cancel_pref',
+    cancel_notify_all_enabled: 'notif_open_gig_4w_cancel_all',
+    cancel_notify_all_radius:  'notif_open_gig_4w_cancel_all_radius',
+    blink:                     'notif_open_gig_4w_blink',
+    blink_color:               'notif_open_gig_4w_blink_color',
   },
   open_gig_2w: {
-    toggle: 'notif_open_gig_2w',
-    val:    'notif_open_gig_2w_val',
-    unit:   'notif_open_gig_2w_unit',
-    blink:  'notif_open_gig_2w_blink',
-    blink_color: 'notif_open_gig_2w_blink_color',
+    toggle:                    'notif_open_gig_2w',
+    val:                       'notif_open_gig_2w_val',
+    unit:                      'notif_open_gig_2w_unit',
+    blast_all:                 'notif_open_gig_2w_blast_all',
+    blast_radius:              'notif_open_gig_2w_blast_radius',
+    waive_frequency:           'notif_open_gig_2w_waive_freq',
+    cancel_notify_preferred:   'notif_open_gig_2w_cancel_pref',
+    cancel_notify_all_enabled: 'notif_open_gig_2w_cancel_all',
+    cancel_notify_all_radius:  'notif_open_gig_2w_cancel_all_radius',
+    blink:                     'notif_open_gig_2w_blink',
+    blink_color:               'notif_open_gig_2w_blink_color',
   },
   open_gig_1w: {
-    toggle:        'notif_open_gig_1w',
-    val:           'notif_open_gig_1w_val',
-    unit:          'notif_open_gig_1w_unit',
-    blast_all:     'notif_open_gig_1w_blast_all',
-    blast_radius:  'notif_open_gig_1w_blast_radius',
-    blink:         'notif_open_gig_1w_blink',
-    blink_color:   'notif_open_gig_1w_blink_color',
+    toggle:                    'notif_open_gig_1w',
+    val:                       'notif_open_gig_1w_val',
+    unit:                      'notif_open_gig_1w_unit',
+    blast_all:                 'notif_open_gig_1w_blast_all',
+    blast_radius:              'notif_open_gig_1w_blast_radius',
+    waive_frequency:           'notif_open_gig_1w_waive_freq',
+    cancel_notify_preferred:   'notif_open_gig_1w_cancel_pref',
+    cancel_notify_all_enabled: 'notif_open_gig_1w_cancel_all',
+    cancel_notify_all_radius:  'notif_open_gig_1w_cancel_all_radius',
+    blink:                     'notif_open_gig_1w_blink',
+    blink_color:               'notif_open_gig_1w_blink_color',
   },
   open_gig_36h: {
-    toggle:        'notif_open_gig_36h',
-    val:           'notif_open_gig_36h_val',
-    unit:          'notif_open_gig_36h_unit',
-    blast_all:     'notif_open_gig_36h_blast_all',
-    blast_radius:  'notif_open_gig_36h_blast_radius',
-    blink:         'notif_open_gig_36h_blink',
-    blink_color:   'notif_open_gig_36h_blink_color',
+    toggle:                    'notif_open_gig_36h',
+    val:                       'notif_open_gig_36h_val',
+    unit:                      'notif_open_gig_36h_unit',
+    blast_all:                 'notif_open_gig_36h_blast_all',
+    blast_radius:              'notif_open_gig_36h_blast_radius',
+    waive_frequency:           'notif_open_gig_36h_waive_freq',
+    cancel_notify_preferred:   'notif_open_gig_36h_cancel_pref',
+    cancel_notify_all_enabled: 'notif_open_gig_36h_cancel_all',
+    cancel_notify_all_radius:  'notif_open_gig_36h_cancel_all_radius',
+    blink:                     'notif_open_gig_36h_blink',
+    blink_color:               'notif_open_gig_36h_blink_color',
   },
   cancelled_blast: {
     toggle:        'notif_cancelled_blast',
@@ -355,6 +375,16 @@ async function loadVenueEmailNotifications(venueId) {
 
       const blinkColor = _el(ids.blink_color);
       if (blinkColor && s.blink_color) blinkColor.value = s.blink_color;
+
+      const waiveFreq = _el(ids.waive_frequency);
+      if (waiveFreq) waiveFreq.checked = s.waive_frequency !== false;  // default true
+
+      const cnp = _el(ids.cancel_notify_preferred);
+      if (cnp) cnp.checked = !!s.cancel_notify_preferred;
+      const cnae = _el(ids.cancel_notify_all_enabled);
+      if (cnae) cnae.checked = !!s.cancel_notify_all_enabled;
+      const cnar = _el(ids.cancel_notify_all_radius);
+      if (cnar && s.cancel_notify_all_radius != null) cnar.value = s.cancel_notify_all_radius;
     });
   } catch (e) {
     console.error('Error loading email notification settings:', e);
@@ -383,6 +413,10 @@ async function saveVenueEmailNotifications() {
       const blastRadEl  = _el(ids.blast_radius);
       const blinkEl     = _el(ids.blink);
       const blinkColEl  = _el(ids.blink_color);
+      const waiveFreqEl = _el(ids.waive_frequency);
+      const cnpEl       = _el(ids.cancel_notify_preferred);
+      const cnaeEl      = _el(ids.cancel_notify_all_enabled);
+      const cnarEl      = _el(ids.cancel_notify_all_radius);
 
       data[key] = {
         enabled:          toggle     ? toggle.checked                     : true,
@@ -393,6 +427,10 @@ async function saveVenueEmailNotifications() {
         blast_all_radius: blastRadEl  ? (parseInt(blastRadEl.value) || 20): 20,
         blink_enabled:    blinkEl    ? blinkEl.checked                    : false,
         blink_color:      blinkColEl ? blinkColEl.value                   : null,
+        waive_frequency:  waiveFreqEl ? waiveFreqEl.checked               : true,
+        cancel_notify_preferred:   cnpEl  ? cnpEl.checked                 : false,
+        cancel_notify_all_enabled: cnaeEl ? cnaeEl.checked                : false,
+        cancel_notify_all_radius:  cnarEl ? (parseInt(cnarEl.value) || 20): 20,
       };
     });
 
@@ -690,225 +728,11 @@ function populateTaxYearDropdown() {
   }
 }
 
-async function generate1099s() {
-  const vid = getVenueId();
-  if (!vid) return;
-  const year = document.getElementById('taxYear1099').value;
-  const btn = document.getElementById('generate1099Btn');
-  btn.textContent = 'Generating...';
-  btn.disabled = true;
-  
-  try {
-    const res = await fetch(`/api/venues/${vid}/generate-1099s`, {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tax_year: parseInt(year) })
-    });
-    
-    const data = await res.json();
-    const statusEl = document.getElementById('tax1099Status');
-    
-    if (!res.ok) {
-      // Server error - show styled message
-      statusEl.innerHTML = `<div style="background: rgba(249,115,22,0.1); border: 1px solid rgba(249,115,22,0.3); border-radius: 8px; padding: 12px; color: #f97316; font-size: 0.85rem;">No 1099s needed — there are no qualifying payments in the ${year} tax year.</div>`;
-      await load1099s();
-      return;
-    }
-    
-    if (data.count > 0) {
-      statusEl.innerHTML = `<div style="background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); border-radius: 8px; padding: 12px; color: #22c55e; font-size: 0.85rem;">✓ Generated ${data.count} 1099 form${data.count > 1 ? 's' : ''} for ${year}</div>`;
-    } else {
-      statusEl.innerHTML = `<div style="background: rgba(249,115,22,0.1); border: 1px solid rgba(249,115,22,0.3); border-radius: 8px; padding: 12px; color: #f97316; font-size: 0.85rem;">No 1099s needed — no artists earned $600 or more from booked gigs at your venue in ${year}.</div>`;
-    }
-    
-    await load1099s();
-  } catch (e) {
-    const statusEl = document.getElementById('tax1099Status');
-    statusEl.innerHTML = `<div style="background: rgba(249,115,22,0.1); border: 1px solid rgba(249,115,22,0.3); border-radius: 8px; padding: 12px; color: #f97316; font-size: 0.85rem;">No 1099s needed — there are no qualifying payments in the ${year} tax year.</div>`;
-  } finally {
-    btn.textContent = 'Generate 1099s';
-    btn.disabled = false;
-  }
-}
-
-async function load1099s() {
-  const vid = getVenueId();
-  if (!vid) return;
-  const year = document.getElementById('taxYear1099').value;
-  
-  try {
-    const res = await fetch(`/api/venues/${vid}/1099s?tax_year=${year}`, { credentials: 'include' });
-    if (!res.ok) return;
-    const data = await res.json();
-    
-    const listEl = document.getElementById('tax1099List');
-    const sendAllBtn = document.getElementById('sendAll1099Btn');
-    
-    if (!data.records || data.records.length === 0) {
-      listEl.innerHTML = `<p style="color: var(--text-muted); font-size: 0.85rem;">No 1099 forms generated yet for ${year}.</p>`;
-      sendAllBtn.style.display = 'none';
-      return;
-    }
-    
-    const unsent = data.records.filter(r => r.status !== 'sent');
-    sendAllBtn.style.display = unsent.length > 0 ? 'inline-block' : 'none';
-    
-    // Column headers
-    let html = `<div style="display: grid; grid-template-columns: 60px 2fr 1fr 80px 1fr 100px 100px; gap: 8px; padding: 8px 12px; font-size: 0.75rem; font-weight: 600; color: var(--text-gray); text-transform: uppercase; border-bottom: 1px solid var(--border);">
-      <div>Year</div><div>Artist</div><div>Earnings</div><div>Gigs</div><div>Status</div><div></div><div></div>
-    </div>`;
-    
-    data.records.forEach(r => {
-      const earnings = (r.total_earnings_cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-      const isSent = r.status === 'sent';
-      const sentDate = r.sent_at ? new Date(r.sent_at).toLocaleDateString() : '';
-      
-      let statusBadge = '';
-      if (isSent) {
-        statusBadge = `<span style="background: rgba(34,197,94,0.2); border: 1px solid rgba(34,197,94,0.5); color: #22c55e; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem;">Sent ${sentDate}</span>`;
-      } else {
-        statusBadge = `<span style="background: rgba(249,115,22,0.2); border: 1px solid rgba(249,115,22,0.5); color: #f97316; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem;">Ready</span>`;
-      }
-      
-      html += `<div style="display: grid; grid-template-columns: 60px 2fr 1fr 80px 1fr 100px 100px; gap: 8px; padding: 10px 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.85rem;">
-        <div style="color: var(--text-muted);">${r.tax_year}</div>
-        <div style="color: var(--text); font-weight: 500;">${r.artist_name || 'Unknown'}</div>
-        <div style="color: var(--cyan); font-weight: 600;">${earnings}</div>
-        <div style="color: var(--text-muted); text-align: center;">${r.gig_count}</div>
-        <div>${statusBadge}</div>
-        <div><button class="btn ghost" onclick="view1099(${r.id})" style="padding: 4px 10px; font-size: 0.75rem;">View</button></div>
-        <div><button class="btn primary" onclick="send1099(${r.id}, this)" style="padding: 4px 10px; font-size: 0.75rem;" ${isSent ? 'title="Resend"' : ''}>${isSent ? 'Resend' : 'Send'}</button></div>
-      </div>`;
-    });
-    
-    listEl.innerHTML = html;
-  } catch (e) {}
-}
-
-async function view1099(recordId) {
-  const vid = getVenueId();
-  try {
-    const res = await fetch(`/api/venues/${vid}/1099s/${recordId}`, { credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to load');
-    const r = await res.json();
-    const earnings = (r.total_earnings_cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-    
-    const modalContent = `
-      <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 20px;">
-        <h3 style="margin: 0 0 16px 0; color: var(--cyan); font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em;">Form 1099-NEC — Nonemployee Compensation</h3>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-          <div>
-            <div style="font-size: 0.7rem; color: var(--text-gray); text-transform: uppercase; margin-bottom: 4px;">Payer (Venue)</div>
-            <div style="font-weight: 600; color: var(--text);">${r.venue_name || ''}</div>
-            <div style="font-size: 0.8rem; color: var(--text-muted);">${r.venue_address || 'No address on file'}</div>
-            <div style="font-size: 0.8rem; color: var(--text-muted);">TIN: ***-**-${r.venue_tin_last4 || 'N/A'}</div>
-          </div>
-          <div>
-            <div style="font-size: 0.7rem; color: var(--text-gray); text-transform: uppercase; margin-bottom: 4px;">Recipient (Artist)</div>
-            <div style="font-weight: 600; color: var(--text);">${r.artist_name || ''}</div>
-            <div style="font-size: 0.8rem; color: var(--text-muted);">${r.artist_address || 'No address on file'}</div>
-            <div style="font-size: 0.8rem; color: var(--text-muted);">TIN: ***-**-${r.artist_tin_last4 || 'N/A'}</div>
-          </div>
-        </div>
-        <div style="border-top: 2px solid var(--border); margin-top: 16px; padding-top: 16px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
-          <div>
-            <div style="font-size: 0.7rem; color: var(--text-gray); text-transform: uppercase;">Tax Year</div>
-            <div style="font-size: 1.25rem; font-weight: 700; color: var(--text);">${r.tax_year}</div>
-          </div>
-          <div>
-            <div style="font-size: 0.7rem; color: var(--text-gray); text-transform: uppercase;">Gigs Performed</div>
-            <div style="font-size: 1.25rem; font-weight: 700; color: var(--text);">${r.gig_count}</div>
-          </div>
-          <div>
-            <div style="font-size: 0.7rem; color: var(--text-gray); text-transform: uppercase;">Box 1 — Nonemployee Compensation</div>
-            <div style="font-size: 1.5rem; font-weight: 700; color: var(--cyan);">${earnings}</div>
-          </div>
-        </div>
-      </div>
-    `;
-    
-    // Create dynamic modal overlay
-    const existing = document.getElementById('tax1099Modal');
-    if (existing) existing.remove();
-    
-    const overlay = document.createElement('div');
-    overlay.id = 'tax1099Modal';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10002;';
-    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-    
-    const modal = document.createElement('div');
-    modal.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:650px;width:90%;max-height:90vh;overflow-y:auto;';
-    modal.innerHTML = `
-      <h2 style="margin:0 0 16px 0;font-size:1.125rem;color:var(--text);">1099-NEC Details</h2>
-      ${modalContent}
-      <div style="text-align:right;margin-top:16px;">
-        <button class="btn ghost" onclick="document.getElementById('tax1099Modal').remove()">Close</button>
-      </div>
-    `;
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-  } catch (e) {
-    alert('Error loading 1099: ' + e.message);
-  }
-}
-
-async function send1099(recordId, btn) {
-  const vid = getVenueId();
-  const origText = btn.textContent;
-  btn.textContent = 'Sending...';
-  btn.disabled = true;
-  
-  try {
-    const res = await fetch(`/api/venues/${vid}/1099s/${recordId}/send`, {
-      method: 'POST', credentials: 'include'
-    });
-    if (!res.ok) throw new Error('Failed to send');
-    const data = await res.json();
-    
-    btn.textContent = '✓ Sent';
-    btn.style.background = 'rgba(34,197,94,0.2)';
-    btn.style.borderColor = 'rgba(34,197,94,0.5)';
-    btn.style.color = '#22c55e';
-    
-    // Refresh list after short delay
-    setTimeout(() => load1099s(), 1500);
-  } catch (e) {
-    alert('Error sending 1099: ' + e.message);
-    btn.textContent = origText;
-    btn.disabled = false;
-  }
-}
-
-async function sendAll1099s() {
-  const vid = getVenueId();
-  const year = document.getElementById('taxYear1099').value;
-  const btn = document.getElementById('sendAll1099Btn');
-  
-  if (!confirm(`Send all unsent 1099s for ${year} to artists? This will email each artist and create a notification in their Activity Center.`)) return;
-  
-  btn.textContent = 'Sending All...';
-  btn.disabled = true;
-  
-  try {
-    const res = await fetch(`/api/venues/${vid}/1099s/send-all`, {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tax_year: parseInt(year) })
-    });
-    if (!res.ok) throw new Error('Failed to send');
-    const data = await res.json();
-    
-    const statusEl = document.getElementById('tax1099Status');
-    statusEl.innerHTML = `<div style="background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); border-radius: 8px; padding: 12px; color: #22c55e; font-size: 0.85rem;">✓ Successfully sent ${data.sent_count} of ${data.total} 1099 form${data.total > 1 ? 's' : ''}</div>`;
-    
-    await load1099s();
-  } catch (e) {
-    alert('Error sending 1099s: ' + e.message);
-  } finally {
-    btn.textContent = 'Send All Unsent';
-    btn.disabled = false;
-  }
-}
+// 1099-NEC handlers removed 2026-07-21 along with the Legal/Taxes UI
+// section that called them. Stripe (TPSO) issues 1099-Ks directly to
+// artists, so venues don't file 1099-NECs for GigsFill-processed
+// payments. Backend endpoints in backend/routes/tax.py are still
+// registered (auth-gated, no UI entry) for legacy record recovery.
 
 // ── MESSAGE BADGE + RECENT MESSAGES ────────────────────────────────────────
 (function() {

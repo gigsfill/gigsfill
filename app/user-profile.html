@@ -5,7 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <link rel="icon" type="image/png" href="/app/static/img/gigsfill-logo_square.png">
+  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
@@ -15,11 +16,11 @@
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
     .profile-container {
-      max-width: 1100px;
+      max-width: var(--container-max);
       margin: 0 auto;
       padding: 40px 20px;
     }
-    
+
     .profile-title {
       font-size: 2rem;
       font-weight: 800;
@@ -28,6 +29,39 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       margin-bottom: 32px;
+    }
+
+    .gradient-title {
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      width: fit-content;
+    }
+
+    #user-settings-tab .content-card {
+      padding: 18px 22px;
+      margin-bottom: 14px;
+    }
+    #user-settings-tab .form-grid {
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    #user-settings-tab .field {
+      margin-bottom: 12px;
+    }
+    #user-settings-tab .field label {
+      font-size: 0.7rem;
+      margin-bottom: 4px;
+    }
+    #user-settings-tab input {
+      padding: 7px 10px;
+      font-size: 0.85rem;
+    }
+    #user-settings-tab .btn {
+      padding: 8px 18px;
+      font-size: 0.82rem;
     }
     
     .tabs {
@@ -338,7 +372,7 @@
 <script src="/app/static/js/api-globals.js?v=11"></script>
 <script src="/app/static/js/email-verify-banner.js"></script>
 <script src="/app/static/js/event-delegate.js"></script>
-  <script src="/app/static/js/user-dropdown.js?v=9"></script>
+  <script src="/app/static/js/user-dropdown.js?v=11"></script>
 
   <div class="profile-container">
 
@@ -354,7 +388,7 @@
     <!-- USER SETTINGS TAB -->
     <div class="tab-content active" id="user-settings-tab">
       <div class="content-card">
-        <h2 class="section-header" style="text-align:left;">Account Information</h2>
+        <h2 class="section-header gradient-title" style="margin: 0 0 14px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Account Information</h2>
         <form id="userSettingsForm" onsubmit="saveUserSettings(event)">
           <div class="form-grid">
             <div class="field">
@@ -384,7 +418,7 @@
       </div>
 
       <div class="content-card">
-        <h2 class="section-header" style="text-align:left;">Change Password</h2>
+        <h2 class="section-header gradient-title" style="margin: 0 0 14px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Change Password</h2>
         <form id="passwordForm">
           <div class="form-grid">
             <div class="field">
@@ -406,7 +440,7 @@
 
       <!-- Delete Account -->
       <div class="content-card" style="border: 1px solid rgba(239,68,68,0.3); margin-top: 24px;">
-        <h2 class="section-header" style="text-align:left;color: #ef4444;">Delete Account</h2>
+        <h2 class="section-header" style="margin: 0 0 10px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left; color: #ef4444;">Delete Account</h2>
         <p style="color: var(--text-gray); font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
           Permanently delete your account and all associated data. This action cannot be undone.
         </p>
@@ -418,7 +452,7 @@
     <div class="tab-content" id="my-artists-tab">
       <div class="content-card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-          <h2 class="section-header" style="margin: 0;">My Artist Profiles</h2>
+          <h2 class="section-header gradient-title" style="margin: 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">My Artist Profiles</h2>
           <button class="btn primary" onclick="openAddArtistModal()">+ Add Artist</button>
         </div>
         <div id="artistsList">
@@ -431,7 +465,7 @@
     <div class="tab-content" id="my-venues-tab">
       <div class="content-card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-          <h2 class="section-header" style="margin: 0;">My Venue Profiles</h2>
+          <h2 class="section-header gradient-title" style="margin: 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">My Venue Profiles</h2>
           <button class="btn primary" onclick="openAddVenueModal()">+ Add Venue</button>
         </div>
         <div id="venuesList">
@@ -443,7 +477,7 @@
     <!-- NOTIFICATIONS TAB -->
     <div class="tab-content" id="email-tab">
       <div class="content-card">
-        <h2 class="section-header">Notification Preferences</h2>
+        <h2 class="section-header gradient-title" style="margin: 0 0 16px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Notification Preferences</h2>
         
         <!-- SMS Setup — re-enabled Jun 2026. Backed by carrier email-to-SMS
              gateways (free, no Twilio account required). Deliverability is
@@ -533,8 +567,8 @@
            and pulls new bookings + drops cancelled ones automatically.
            Backend route: GET /api/calendar/{token}.ics (token = auth) -->
       <div class="content-card" style="margin-top:14px;">
-        <h2 class="section-header" style="display:flex;align-items:center;gap:10px;">
-          <span>📅</span> Calendar Sync
+        <h2 class="section-header" style="display:flex;align-items:center;gap:10px;margin: 0 0 12px 0;font-size:1rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;text-align:left;">
+          <span>📅</span><span class="gradient-title">Calendar Sync</span>
         </h2>
         <p style="color:var(--text-gray);font-size:0.82rem;margin:0 0 10px;">
           Subscribe to a live read-only feed of all your booked gigs.
@@ -808,12 +842,22 @@
   <!-- ── MY AVAILABILITY TAB ────────────────────────────────────────────── -->
   <div class="tab-content" id="availability-tab">
     <div class="content-card">
-      <h2 class="section-header">My Availability</h2>
-      <p style="color:var(--text-gray);font-size:0.9rem;margin-bottom:18px;line-height:1.5;">
-        Enter dates here when you personally can't perform. Other members of your shared Artist will
-        see these dates on your shared Artist page, and any Artist booking attempt for those dates
-        will be alerted before confirming. The artist can still book gigs for these dates if they plan
-        to perform without you (e.g. as a duo).
+      <h2 class="section-header gradient-title" style="margin: 0 0 12px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">My Availability</h2>
+      <p style="color:var(--text-gray);font-size:0.9rem;margin-bottom:8px;line-height:1.55;">
+        Dates when <strong style="color:var(--text);">you personally</strong> can't perform
+        (out of town, sick, family commitment, day job conflict, etc.).
+      </p>
+      <p style="color:var(--text-gray);font-size:0.85rem;margin-bottom:8px;line-height:1.55;">
+        ⚠️ <strong style="color:#f59e0b;">Soft warning</strong> — bookings on these dates
+        <em>still go through</em>, but the artist gets an alert like "Jim is unavailable that night —
+        play as a duo?" so the band can decide. Your blackouts also show in read-only form on the
+        <a href="/app/artist-edit.html" style="color:var(--cyan);">Artist Edit page</a>
+        under Member Availability so bandmates can see when you're out.
+      </p>
+      <p style="color:var(--text-gray);font-size:0.82rem;margin-bottom:18px;line-height:1.55;font-style:italic;">
+        Need to block ALL bookings for the whole band on a date (e.g. band on hiatus, drummer's wedding)?
+        Add it under <a href="/app/artist-edit.html" style="color:var(--cyan);font-style:normal;">Artist Edit → Artist Availability</a>
+        instead — that's the hard block.
       </p>
 
       <!-- Add Blackout Form -->
@@ -822,18 +866,35 @@
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
           <label style="display:block;">
             <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">Start date</span>
-            <input type="date" id="uaStartDate" onchange="uaSyncEndDate()" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
+            <!-- color-scheme:dark tells the browser to render the native date-picker
+                 popup in dark mode (Chromium + Safari). Otherwise the popup renders
+                 white and looks off against the rest of the dark UI. Added 2026-07-25. -->
+            <input type="date" id="uaStartDate" onchange="uaSyncEndDate()" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;color-scheme:dark;">
           </label>
           <label style="display:block;">
             <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">End date</span>
-            <input type="date" id="uaEndDate" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
+            <input type="date" id="uaEndDate" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;color-scheme:dark;">
           </label>
         </div>
-        <label style="display:block;margin-bottom:12px;">
-          <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">Reason (optional, visible to other members)</span>
-          <input type="text" id="uaReason" maxlength="300" placeholder="e.g. Out of town, family commitment, sick"
-            style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
-        </label>
+        <!-- Reason picker (2026-07-25): preset dropdown for the common cases +
+             free-text "Other" that reveals a companion input. `uaAddBlackout`
+             in user-availability.js reads uaReasonPreset + uaReasonOther and
+             stores the composed string in the DB reason column. -->
+        <div style="margin-bottom:12px;">
+          <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">Reason <span style="font-weight:400;color:var(--text-muted);">(optional, visible to bandmates)</span></span>
+          <select id="uaReasonPreset" onchange="uaReasonChanged()" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
+            <option value="">— No reason —</option>
+            <option value="Out of Town">Out of Town</option>
+            <option value="Family Commitment">Family Commitment</option>
+            <option value="Sick">Sick</option>
+            <option value="Work Conflict">Work Conflict</option>
+            <option value="Other Gig">Other Gig</option>
+            <option value="Vacation">Vacation</option>
+            <option value="Other">Other (type your own)</option>
+          </select>
+          <input type="text" id="uaReasonOther" maxlength="300" placeholder="What's the reason?"
+            style="display:none;width:100%;padding:8px 10px;margin-top:8px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
+        </div>
         <div style="margin-bottom:14px;">
           <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:6px;font-weight:600;">Applies to</span>
           <label style="display:flex;align-items:center;gap:10px;margin-bottom:6px;cursor:pointer;font-size:0.85rem;color:var(--text);">
@@ -862,8 +923,13 @@
 
       <!-- Artist-level Blackouts (read-only) -->
       <div>
-        <h3 style="font-size:0.9rem;margin:0 0 4px;color:var(--text);">Artist Level Blackout Dates <span style="font-size:0.72rem;color:var(--text-gray);font-weight:400;">(change on Artist's Edit page)</span></h3>
-        <p style="color:var(--text-gray);font-size:0.78rem;margin:0 0 10px;">These dates are applied at the Artist level (Band, DJ, etc.) and do not allow Artist bookings on these dates.</p>
+        <h3 style="font-size:0.9rem;margin:0 0 4px;color:var(--text);">Artist-Level Blackout Dates <span style="font-size:0.72rem;color:var(--text-gray);font-weight:400;">(read-only here — edit on each Artist's page)</span></h3>
+        <p style="color:var(--text-gray);font-size:0.78rem;margin:0 0 10px;line-height:1.5;">
+          🚫 <strong style="color:#ef4444;">Hard-block</strong> dates set at the artist level — the
+          whole band is unavailable and venues can't book on these days. Shown here just so you can
+          see all your unavailable dates in one place; change them from
+          <a href="/app/artist-edit.html" style="color:var(--cyan);">Artist Edit → Artist Availability</a>.
+        </p>
         <div id="uaBandBlackouts" style="font-size:0.85rem;color:var(--text-gray);">Loading…</div>
       </div>
     </div>
@@ -896,6 +962,8 @@
             <option value="DJ">DJ</option>
             <option value="Comedian">Comedian</option>
             <option value="Trivia Host">Trivia Host</option>
+            <option value="Open Mic MC">Open Mic MC</option>
+            <option value="Karaoke MC">Karaoke MC</option>
           </select>
         </div>
         <div id="modal_bandFormatsField" class="field" style="display: none;">
@@ -1174,11 +1242,11 @@
   </div>
 
   <script src="/app/static/js/modals.js"></script>
-  <script src="/app/static/js/gf-modals.js?v=7"></script>
+  <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script src="/app/static/js/user-profile.js?v=8"></script>
+  <script src="/app/static/js/user-profile.js?v=17"></script>
   <script src="/app/static/js/user-affiliate.js?v=6"></script>
-  <script src="/app/static/js/user-availability.js?v=5"></script>
+  <script src="/app/static/js/user-availability.js?v=6"></script>
   
 
   <!-- Delete Account Modal -->
@@ -1204,7 +1272,7 @@
       </div>
 
       <div style="margin-bottom:20px;">
-        <label style="display:block;font-size:0.82rem;color:var(--text-gray);margin-bottom:6px;">Type <strong style="color:#ef4444;">DELETE</strong> to confirm:</label>
+        <label for="deleteConfirmInput" style="display:block;font-size:0.82rem;color:var(--text-gray);margin-bottom:6px;">Type <strong style="color:#ef4444;">DELETE</strong> to confirm:</label>
         <input type="text" id="deleteConfirmInput" placeholder="DELETE" autocomplete="off" style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.9rem;box-sizing:border-box;">
       </div>
 
@@ -1217,7 +1285,7 @@
 
   
 
-<script src="/app/static/js/user-profile-init.js"></script>
+<script src="/app/static/js/user-profile-init.js?v=9"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>

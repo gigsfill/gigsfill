@@ -36,7 +36,8 @@ def _fmt_time(t):
 def _slot_status_for_viewer(slot, viewer_type, viewer_id, contract_rows,
                              preferred_status, is_banned, freq_check,
                              waitlist_status, gig_is_blast_open, gig_freq_exempt,
-                             has_active_waitlist, my_slots):
+                             has_active_waitlist, my_slots,
+                             viewer_artist_row=None):
     """
     Compute the viewer's relationship to a single slot.
     Returns a dict with everything the modal row needs.
@@ -118,10 +119,21 @@ def _slot_status_for_viewer(slot, viewer_type, viewer_id, contract_rows,
         elif freq_check and freq_check.get("blocked") and not gig_is_blast_open and not gig_freq_exempt:
             relationship = "freq_blocked"
         else:
-            # Check slot type match
-            artist_type = slot.get("artist_type") or ""
-            viewer_artist_type = freq_check.get("artist_type", "") if isinstance(freq_check, dict) else ""
-            relationship = "open_bookable"
+            # Type-match gate (Jun 2026): a Live Band artist viewing
+            # a multi-slot gig that happens to contain a DJ slot must
+            # NOT see that DJ slot as bookable. The reason the artist
+            # can SEE the gig at all is that some OTHER slot matches
+            # them — but this specific slot does not. Mirrors
+            # _artist_matches_slot in services/gig_hold.py + the
+            # frontend's _artistMatchesAnySlot. Without this, the
+            # post-Open-to-All path (where the held gig becomes open
+            # to all) would let any preferred Live Band artist click
+            # Book on a DJ slot and only fail at the book endpoint.
+            from backend.services.gig_hold import _artist_matches_slot as _ams
+            if viewer_artist_row and not _ams(viewer_artist_row, slot):
+                relationship = "wrong_type"
+            else:
+                relationship = "open_bookable"
     elif s_status in ("booked", "pending_contract", "awaiting_venue_contract"):
         relationship = "other_booked"
     elif s_status == "pending_venue_approval":
@@ -151,6 +163,7 @@ def _slot_status_for_viewer(slot, viewer_type, viewer_id, contract_rows,
         "deal_type":        slot.get("deal_type"),
         "door_pct":         slot.get("door_pct"),
         "guarantee_cents":  slot.get("guarantee_cents"),
+        "apply_override":   int(slot.get("apply_override") or 0),
         "pay_summary":      format_pay_summary_with_sign(slot),
         "is_door_deal":     slot_has_door_terms(slot),
         "status":           s_status,
@@ -247,6 +260,7 @@ def get_gig_modal_data(
         SELECT gs.id, gs.slot_number, gs.start_time, gs.end_time, gs.pay,
                gs.status, gs.artist_id, gs.artist_type, gs.band_formats, gs.styles,
                gs.deal_type, gs.door_pct, gs.guarantee_cents,
+               COALESCE(gs.apply_override, 0) as apply_override,
                gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at,
                a.name as artist_name
         FROM gig_slots gs
@@ -272,9 +286,24 @@ def get_gig_modal_data(
             if _ov and _ov.get("pay_dollars_override") is not None:
                 _override_pay = float(_ov["pay_dollars_override"]) + float(_ov.get("pay_cents_override") or 0) / 100
                 for _s in slots:
-                    _slot_pay = float(_s.get("pay") or 0)
-                    if _override_pay > _slot_pay:
-                        _s["pay"] = _override_pay
+                    _is_door_slot = (_s.get("deal_type") or "flat").lower() == "door"
+                    if _is_door_slot:
+                        # Door slots only honor override when the venue
+                        # checked 'Apply artist override' on the slot
+                        # config UI (default OFF). When opted in, the
+                        # override raises the guarantee floor; we surface
+                        # it by bumping guarantee_cents in the response
+                        # so formatPaySummary renders "$15 + 50% door".
+                        if not int(_s.get("apply_override") or 0):
+                            continue
+                        _cur_gua_dollars = float(_s.get("guarantee_cents") or 0) / 100.0
+                        if _override_pay > _cur_gua_dollars:
+                            _s["guarantee_cents"] = int(round(_override_pay * 100))
+                            _s["pay"] = _override_pay
+                    else:
+                        _slot_pay = float(_s.get("pay") or 0)
+                        if _override_pay > _slot_pay:
+                            _s["pay"] = _override_pay
         except Exception:
             # Non-fatal — fall back to published pay
             pass
@@ -295,11 +324,32 @@ def get_gig_modal_data(
     preferred_status = None
     is_banned        = False
     freq_check       = None
+    # freq_waiver: populated when the artist WOULD be frequency-blocked
+    # at this venue but the venue's blast window (open_gig_36h /
+    # open_gig_1w / frequency_exempt) is currently lifting that rule.
+    # Surfaced in the artist gig modal as a soft notice so the artist
+    # understands why this gig is bookable when nearby dates aren't.
+    freq_waiver      = None
     waitlist_status  = {"on_waitlist": False, "position": None, "total": 0, "has_offer": False}
     artist_data      = None
     my_slots         = []
     venue_contract_required = False
     venue_contract_type     = None
+    # hold_info defaulted here so the venue-viewer branch (which
+    # never enters the artist block where the original definition
+    # lived) still gets a value in the response. Without this,
+    # rendering the venue's modal for a held gig raises
+    # `UnboundLocalError: cannot access local variable 'hold_info'`
+    # at the response-dict assembly (line ~772) and the modal fails
+    # to load with a 500. Per audit Jun 2026. We also surface the
+    # gig's hold_status to the venue so their modal can branch on
+    # it (the hold-mgmt panel uses a separate endpoint for full
+    # waitlist state, but is_held + hold_status here is enough for
+    # quick frontend conditionals).
+    hold_info = {
+        "is_held": gig.get("hold_status") in ("active", "exhausted"),
+        "hold_status": gig.get("hold_status"),
+    }
 
     if viewer_type == "artist":
         # Artist info
@@ -351,14 +401,30 @@ def get_gig_modal_data(
         if not _blast_waives_freq:
             # Check venue blast notification windows
             try:
+                # Jul 2026 fix: gate on waive_frequency so the modal's "Frequency
+                # Rule Lifted" banner only shows when the venue's chosen setting
+                # actually waives frequency. Without this, the banner said
+                # "lifted" for any enabled window, even when the venue had
+                # turned waive_freq off — misleading the artist about what
+                # would happen at book time (booking would 403). Now matches
+                # book_gig / book_slot / _run_prebooking_checks.
                 _blast_settings = db.execute(text("""
                     SELECT notification_key, time_value, time_unit, enabled, blast_all_enabled
                     FROM venue_email_notifications
                     WHERE venue_id=:vid AND notification_key IN ('open_gig_36h','open_gig_1w')
-                      AND enabled=1
+                      AND enabled=1 AND COALESCE(waive_frequency, 1) = 1
                 """), {"vid": gig["venue_id"]}).mappings().all()
                 _gig_date = datetime.strptime(str(gig["date"])[:10], "%Y-%m-%d").date()
-                _today = utcnow_naive().date()
+                # Jul 2026 fix: use venue-local "today" so days_until matches
+                # the venue's calendar day, not server UTC. Off-by-1 at UTC
+                # midnight would mis-classify blast windows for west-coast
+                # venues (e.g. 6:35 PM PDT Jul 3 = 01:35 UTC Jul 4; gig on
+                # Jul 10 is 7 days away venue-local but only 6 in UTC —
+                # crossing the 7-day boundary of the 1-week window).
+                # Mirrors the fix already applied in book_gig at
+                # routes/gigs.py:2488-2491 and book_slot at :4880-4882.
+                from backend.utils import get_venue_timezone as _gvt
+                _today = datetime.now(_gvt(db, gig["venue_id"])).date()
                 _days_until = (_gig_date - _today).days
                 for _bs in _blast_settings:
                     _tv = _bs["time_value"] or 1
@@ -370,8 +436,10 @@ def get_gig_modal_data(
             except Exception:
                 pass
 
-        if not _blast_waives_freq and freq_days and int(freq_days) > 0:
-            # Find closest booked gig at same venue
+        if freq_days and int(freq_days) > 0:
+            # Find closest booked gig at same venue. Run this even when
+            # the blast window has waived the rule — we want to tell the
+            # artist *why* this gig is bookable when nearby dates aren't.
             booked_at_venue = db.execute(text("""
                 SELECT g2.date FROM gigs g2
                 JOIN gig_slots gs2 ON gs2.gig_id = g2.id
@@ -388,7 +456,8 @@ def get_gig_modal_data(
                     d1 = datetime.strptime(str(gig["date"])[:10], "%Y-%m-%d").date()
                     d2 = datetime.strptime(str(booked_at_venue["date"])[:10], "%Y-%m-%d").date()
                     diff = (d1 - d2).days
-                    if abs(diff) <= int(freq_days):
+                    would_block = abs(diff) <= int(freq_days)
+                    if would_block and not _blast_waives_freq:
                         freq_check = {
                             "blocked": True,
                             "lastGigDate": str(booked_at_venue["date"])[:10],
@@ -397,6 +466,49 @@ def get_gig_modal_data(
                             "daysRequired": int(freq_days),
                             "isBeforeBookedGig": diff < 0,
                             "artist_type": artist_data["artist_type"] if artist_data else "",
+                        }
+                    elif would_block and _blast_waives_freq:
+                        # Frequency rule WOULD apply but is currently
+                        # waived by frequency_exempt / radius_blast_token
+                        # / blast notification window. Surface the
+                        # context so the artist sees the rule + the
+                        # waiver reason. `reason` matches the source so
+                        # the UI can phrase it: 'window' = open_gig_36h
+                        # or open_gig_1w fired; 'exempt' = venue marked
+                        # this specific gig frequency-exempt (often via
+                        # Hold-gig setup with an under-freq artist);
+                        # 'blast' = radius blast email went out.
+                        # Jul 2026: also emit the SPECIFIC window that's
+                        # active (1w vs 36h) + days_until_gig so the
+                        # frontend can phrase the banner unambiguously
+                        # ("6 days from the gig date" vs the previous
+                        # vague "last-minute" wording that conflated
+                        # gap-between-gigs with time-until-this-gig).
+                        _active_window_key = None
+                        try:
+                            for _bs in (_blast_settings or []):
+                                _tv = _bs["time_value"] or 1
+                                _tu = _bs["time_unit"] or "weeks"
+                                _win = _tv / 24 if _tu == "hours" else (_tv if _tu == "days" else _tv * 7)
+                                if 0 <= _days_until <= _win:
+                                    _active_window_key = _bs["notification_key"]
+                                    break
+                        except Exception:
+                            pass
+                        if bool(gig.get("frequency_exempt")):
+                            _waiver_reason = "exempt"
+                        elif bool(gig.get("radius_blast_token")):
+                            _waiver_reason = "blast"
+                        else:
+                            _waiver_reason = "window"
+                        freq_waiver = {
+                            "lastGigDate": str(booked_at_venue["date"])[:10],
+                            "daysBetween": diff,
+                            "absDaysBetween": abs(diff),
+                            "daysRequired": int(freq_days),
+                            "reason": _waiver_reason,
+                            "activeWindow": _active_window_key,   # 'open_gig_1w' | 'open_gig_36h' | None
+                            "daysUntilGig": _days_until if _waiver_reason == "window" else None,
                         }
                 except Exception:
                     pass
@@ -463,6 +575,7 @@ def get_gig_modal_data(
         if gig.get("hold_status") in ("active", "exhausted"):
             from backend.services.gig_hold import (
                 _list_matching_open_slots as _hl, _fmt_time as _hfmt,
+                _effective_pay_for_artist as _heff,
             )
             wl_hold = db.execute(text("""
                 SELECT offer_sent, offer_declined, offer_token,
@@ -473,8 +586,23 @@ def get_gig_modal_data(
             """), {"gid": gig_id, "aid": viewer_id}).mappings().first()
             my_state = None
             if wl_hold:
-                # accepted = booked into a slot already
-                if any(s.get("artist_id") == viewer_id and s.get("status") == "booked" for s in slots):
+                # accepted = artist already claimed a slot. Includes
+                # the contract states (pending_contract awaits the
+                # artist's signature; awaiting_venue_contract sits
+                # between artist-signed and venue-countersigned). The
+                # waitlist row carries offer_declined=1 in all these
+                # cases because we mark the offer consumed at sign /
+                # accept time — so checking offer_declined alone would
+                # mis-label the artist as "declined". Slot status is
+                # the authoritative signal. (Jun 2026 user report —
+                # gig modal said "You previously declined this offer"
+                # to an artist who had just signed the contract and
+                # was waiting on venue countersign.)
+                if any(
+                    s.get("artist_id") == viewer_id
+                    and s.get("status") in ("booked", "pending_contract", "awaiting_venue_contract", "pending_venue_approval")
+                    for s in slots
+                ):
                     my_state = "accepted"
                 elif wl_hold["offer_declined"]:
                     my_state = "declined"
@@ -490,6 +618,22 @@ def get_gig_modal_data(
                 "offer_token": wl_hold["offer_token"] if (wl_hold and my_state == "current_offer") else None,
                 "offer_expires_at": str(wl_hold["offer_expires_at"]) if (wl_hold and my_state == "current_offer") else None,
             }
+            # Series-hold flag (Jul 2026 Phase 5). If THIS gig has a
+            # recurring_group_id AND the artist's offer token is shared
+            # across multiple gigs in the series, this is a series
+            # hold — the artist should see the bundled picker modal
+            # (not the per-gig book/decline panel). Frontend uses
+            # `series_offer_token` to route to openSeriesHoldModal.
+            if my_state == "current_offer" and gig.get("recurring_group_id") and wl_hold and wl_hold.get("offer_token"):
+                _tok = wl_hold["offer_token"]
+                _shared_count = db.execute(text("""
+                    SELECT COUNT(DISTINCT gig_id) FROM gig_waitlist
+                    WHERE offer_token = :tok AND source = 'hold'
+                """), {"tok": _tok}).scalar() or 0
+                if int(_shared_count) > 1:
+                    hold_info["is_series"] = True
+                    hold_info["series_offer_token"] = _tok
+                    hold_info["recurring_group_id"] = gig["recurring_group_id"]
             # Compute hours_remaining for current_offer
             if my_state == "current_offer" and hold_info["offer_expires_at"]:
                 try:
@@ -502,20 +646,40 @@ def get_gig_modal_data(
                     hold_info["hours_remaining"] = _hr
                 except Exception:
                     hold_info["hours_remaining"] = None
-                # Matching open slots for THIS artist
-                _matching = _hl(db, gig_id, viewer_id)
-                hold_info["my_matching_slots"] = [
-                    {
+                # Open slots on the gig — return ALL of them, not just
+                # the artist-type matches, so the modal can show a row
+                # per slot (matching ones with Book + Decline; non-
+                # matching ones greyed out with the slot's type icon
+                # and a "Live Band only" / "DJ only" hint). Per user
+                # request (Jun 2026) — a Live Band artist offered a
+                # 2× Live Band + 1× DJ multi-slot gig should see 3
+                # rows in the Pending Offer panel: 2 actionable and
+                # 1 greyed out — not just 2 rows that imply the gig
+                # only has 2 slots.
+                from backend.services.gig_hold import (
+                    _list_open_hold_slots as _hall,
+                    _artist_matches_slot as _amatch,
+                )
+                _all_open = _hall(db, gig_id)
+                _viewer_artist_row = db.execute(
+                    text("SELECT artist_type, band_formats, styles FROM artists WHERE id = :aid"),
+                    {"aid": viewer_id},
+                ).mappings().first() or {}
+                hold_info["my_matching_slots"] = []
+                for s in _all_open:
+                    is_match = _amatch(_viewer_artist_row, s)
+                    hold_info["my_matching_slots"].append({
                         "id": int(s["id"]),
                         "slot_number": s["slot_number"],
                         "time": f"{_hfmt(s['start_time'])} – {_hfmt(s['end_time'])}",
-                        "pay": s["pay"],
+                        "pay": _heff(db, s, gig["venue_id"], viewer_id),
                         "artist_type": s["artist_type"],
                         "deal_type": s.get("deal_type") or "flat",
                         "door_pct": s.get("door_pct") or 0,
                         "guarantee_cents": s.get("guarantee_cents") or 0,
-                    } for s in _matching
-                ]
+                        "apply_override": int(s.get("apply_override") or 0),
+                        "bookable_by_me": bool(is_match),
+                    })
 
         # Venue contract requirement
         vc = db.execute(text("""
@@ -552,7 +716,8 @@ def get_gig_modal_data(
             slot, viewer_type, viewer_id, contracts,
             preferred_status, is_banned, freq_check,
             waitlist_status, gig_is_blast_open, gig_freq_exempt,
-            has_wl, my_slots
+            has_wl, my_slots,
+            viewer_artist_row=artist_data,
         )
         slot_data.append(sd)
 
@@ -747,6 +912,7 @@ def get_gig_modal_data(
         "preferred_status":   preferred_status,
         "is_banned":          is_banned,
         "freq_check":         freq_check,
+        "freq_waiver":        freq_waiver,
         "waitlist_status":    waitlist_status,
         "hold_info":          hold_info,
         "can_message":        _can_message,

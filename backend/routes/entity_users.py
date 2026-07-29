@@ -302,6 +302,106 @@ async def invite_user_to_venue(
     """Invite a user to have access to this venue. Rate-limited 10/min."""
     return await _invite_user_to_entity('venue', venue_id, data, user, db)
 
+# ─── Multi-invite (2026-07-25) ─────────────────────────────────────────────
+# Sends one invitation email per parsed address, all sharing the same
+# personal message. Emails that hit soft errors (already-member,
+# already-pending, bad format) are counted into the summary but don't
+# abort the batch — the modal shows a per-status breakdown.
+@router.post("/api/entity-users/artist/{artist_id}/invite-multiple")
+@limiter.limit(rate_email_send_limit)
+async def invite_multiple_users_to_artist(
+    request: Request,
+    artist_id: int,
+    data: dict,
+    user=Depends(get_current_user),
+    db=Depends(get_db)
+):
+    return await _invite_multiple_users_to_entity('artist', artist_id, data, user, db)
+
+
+@router.post("/api/entity-users/venue/{venue_id}/invite-multiple")
+@limiter.limit(rate_email_send_limit)
+async def invite_multiple_users_to_venue(
+    request: Request,
+    venue_id: int,
+    data: dict,
+    user=Depends(get_current_user),
+    db=Depends(get_db)
+):
+    return await _invite_multiple_users_to_entity('venue', venue_id, data, user, db)
+
+
+async def _invite_multiple_users_to_entity(entity_type: str, entity_id: int, data: dict, user, db):
+    """Parse emails from a single string (comma / space / newline / semicolon
+    separated), invite each one via the shared single-invite path, and return
+    aggregate counters. Personal message is passed to each recipient's email.
+    """
+    import re
+    raw = str(data.get('emails', '') or '').strip()
+    personal_message = str(data.get('personal_message', '') or '').strip()[:1000]
+    if not raw:
+        raise HTTPException(400, "Enter at least one email address")
+
+    # Split on any run of comma / semicolon / whitespace / newline.
+    # De-dupe case-insensitively while preserving first-seen order.
+    tokens = [t.strip() for t in re.split(r'[,;\s]+', raw) if t.strip()]
+    seen = set()
+    emails = []
+    invalid = []
+    for t in tokens:
+        lc = t.lower()
+        if lc in seen:
+            continue
+        seen.add(lc)
+        if '@' in t and '.' in t.split('@', 1)[-1]:
+            emails.append(t)
+        else:
+            invalid.append(t)
+
+    if not emails:
+        raise HTTPException(400, "No valid email addresses found")
+
+    results = {"sent": [], "already_member": [], "already_pending": [],
+               "email_failed": [], "other_errors": [], "invalid": invalid}
+
+    for email in emails:
+        try:
+            r = await _invite_user_to_entity(
+                entity_type, entity_id,
+                {"email": email, "personal_message": personal_message},
+                user, db
+            )
+            # Single-invite returns either "sent" or "email failed" text —
+            # bucket accordingly so the UI can surface soft failures.
+            msg = str(r.get("message", "")).lower() if isinstance(r, dict) else ""
+            if "email failed" in msg or "email delivery failed" in msg:
+                results["email_failed"].append(email)
+            else:
+                results["sent"].append(email)
+        except HTTPException as he:
+            detail = str(he.detail or "").lower()
+            if "already assigned" in detail or "already the owner" in detail:
+                results["already_member"].append(email)
+            elif "already pending" in detail:
+                results["already_pending"].append(email)
+            else:
+                results["other_errors"].append({"email": email, "error": str(he.detail)})
+        except Exception as e:
+            logger.error(f"Multi-invite failed for {email}: {e}")
+            results["other_errors"].append({"email": email, "error": "server error"})
+
+    return {
+        "ok": True,
+        "sent_count": len(results["sent"]),
+        "already_member_count": len(results["already_member"]),
+        "already_pending_count": len(results["already_pending"]),
+        "email_failed_count": len(results["email_failed"]),
+        "invalid_count": len(results["invalid"]),
+        "other_errors_count": len(results["other_errors"]),
+        "details": results,
+    }
+
+
 @router.post("/api/entity-invitations/{invitation_id}/reinvite")
 @limiter.limit(rate_email_send_limit)
 async def reinvite_user(
@@ -419,8 +519,14 @@ def _site_base_url(db) -> str:
     return "https://gigsfill.com"
 
 
-def _send_invitation_email(email_service, to_email, inviter_name, entity_name, entity_type, token):
-    """Send invitation email using the entity_invitation template"""
+def _send_invitation_email(email_service, to_email, inviter_name, entity_name, entity_type, token, personal_message: str = ""):
+    """Send invitation email using the entity_invitation template.
+
+    personal_message (added 2026-07-25) is an optional free-text note from the
+    inviter — used by the multi-invite flow so the same message goes to every
+    recipient. Rendered inside a callout block if non-empty; the block collapses
+    to nothing when empty because the template uses {{personal_message_block}}.
+    """
     import sys
     if not email_service.enabled:
         logger.info(f"Email service not enabled")
@@ -432,12 +538,30 @@ def _send_invitation_email(email_service, to_email, inviter_name, entity_name, e
         return False
 
     base_url = _site_base_url(email_service.db)
+    msg = (personal_message or "").strip()
+    if msg:
+        # Escape HTML in the user-provided message so pasted <>&" don't break
+        # the template. Newlines → <br> so multi-line messages render.
+        import html as _html
+        safe_msg = _html.escape(msg).replace('\n', '<br>')
+        personal_block = (
+            '<div style="margin:0 0 20px 0;padding:14px 18px;background:#f9fafb;'
+            'border-left:3px solid #7c3aed;border-radius:4px;font-size:14px;'
+            'line-height:1.55;color:#374151;font-style:italic;">'
+            '<div style="font-size:11px;font-weight:600;text-transform:uppercase;'
+            'letter-spacing:0.04em;color:#7c3aed;margin-bottom:6px;font-style:normal;">'
+            'Personal note from ' + _html.escape(inviter_name) + '</div>'
+            + safe_msg + '</div>'
+        )
+    else:
+        personal_block = ''
     variables = {
         'inviter_name': inviter_name,
         'entity_name': entity_name,
         'entity_type': entity_type,
         'accept_url': f"{base_url}/app/invited_user_create_user.html?token={token}",
         'decline_url': f"{base_url}/app/invited_user_declined.html?token={token}",
+        'personal_message_block': personal_block,
     }
 
     subject = email_service.render_template(template['subject'], variables)
@@ -458,9 +582,15 @@ def _send_invitation_email(email_service, to_email, inviter_name, entity_name, e
 
 
 async def _invite_user_to_entity(entity_type: str, entity_id: int, data: dict, user, db):
-    """Common logic for inviting a user to an entity"""
+    """Common logic for inviting a user to an entity.
+
+    Optional data['personal_message'] (2026-07-25) is a free-text note the
+    inviter typed into the multi-invite modal. Threaded through to the
+    email template so every recipient in a batch sees the same note.
+    """
 
     invited_email = data.get('email', '').strip().lower()
+    personal_message = str(data.get('personal_message', '') or '').strip()[:1000]
     
     if not invited_email:
         raise HTTPException(400, "Email address is required")
@@ -617,7 +747,7 @@ async def _invite_user_to_entity(entity_type: str, entity_id: int, data: dict, u
         # Audit fix (May 2026 part 10e): surface the actual send result instead
         # of always claiming "sent via email". The existing user still gets the
         # in-app notification regardless, so the invite is never lost.
-        sent = _send_invitation_email(email_service, invited_email, inviter_name, entity['name'], entity_type, token)
+        sent = _send_invitation_email(email_service, invited_email, inviter_name, entity['name'], entity_type, token, personal_message)
         if sent:
             return {"ok": True, "message": "Invitation sent (user notified in app and via email)"}
         return {"ok": True, "message": "Invitation created and user notified in app; email delivery failed — they can still accept from their notifications."}
@@ -663,8 +793,8 @@ async def _invite_user_to_entity(entity_type: str, entity_id: int, data: dict, u
         
         # Send invitation email
         email_service = EmailService(db)
-        sent = _send_invitation_email(email_service, invited_email, inviter_name, entity['name'], entity_type, token)
-        
+        sent = _send_invitation_email(email_service, invited_email, inviter_name, entity['name'], entity_type, token, personal_message)
+
         if sent:
             return {"ok": True, "message": "Invitation sent successfully"}
         elif not email_service.enabled:
@@ -731,17 +861,26 @@ def _remove_user_from_entity(entity_type: str, entity_id: int, target_user_id: i
         
         return {"ok": True, "message": "You have been removed from this " + entity_type, "removed_self": True}
     
-    # Otherwise, verify current user has access to remove others
+    # Otherwise, verify current user has access to remove others.
+    # Audit fix (Jul 2026): previous check accepted ANY entity_users
+    # row as authorization, which meant a low-tier team member (e.g.
+    # role='staff') could kick out other team members. Now: only the
+    # original owner OR an entity_users row with role='owner'/'admin'
+    # can remove OTHER users.
     access_check = db.execute(
         text("""
-            SELECT role FROM entity_users 
+            SELECT role FROM entity_users
             WHERE entity_type = :etype AND entity_id = :eid AND user_id = :uid
         """),
         {"etype": entity_type, "eid": entity_id, "uid": user.id}
     ).scalar()
-    
-    if not access_check and owner_id != user.id:
-        raise HTTPException(403, f"You don't have access to this {entity_type}")
+
+    _requester_role = (access_check or "").strip().lower()
+    _is_manager_role = _requester_role in ("owner", "admin", "manager")
+    if owner_id != user.id and not _is_manager_role:
+        raise HTTPException(403,
+            f"You don't have permission to remove users from this {entity_type}. "
+            f"Only the original owner or a manager-level team member can remove others.")
     
     # Remove user access
     result = db.execute(
@@ -757,6 +896,208 @@ def _remove_user_from_entity(entity_type: str, entity_id: int, target_user_id: i
         raise HTTPException(404, "User not found in this entity")
     
     return {"ok": True, "message": "User removed successfully"}
+
+
+# ============================================
+# REVOKE PENDING/DECLINED INVITATION
+# ============================================
+# Jul 22 2026: Users tab trash icon on non-accepted rows fires this
+# endpoint. Same auth model as remove_user: original owner OR a
+# manager-level entity_users row can revoke. Deletes the invitation
+# row so any link in the invited email stops resolving (frontend of
+# the invite-accept flow returns 404 for missing tokens).
+@router.delete("/api/entity-users/artist/{artist_id}/invitations/{invitation_id}")
+def revoke_artist_invitation(artist_id: int, invitation_id: int,
+                              user=Depends(get_current_user), db=Depends(get_db)):
+    return _revoke_invitation('artist', artist_id, invitation_id, user, db)
+
+@router.delete("/api/entity-users/venue/{venue_id}/invitations/{invitation_id}")
+def revoke_venue_invitation(venue_id: int, invitation_id: int,
+                             user=Depends(get_current_user), db=Depends(get_db)):
+    return _revoke_invitation('venue', venue_id, invitation_id, user, db)
+
+def _revoke_invitation(entity_type: str, entity_id: int, invitation_id: int, user, db):
+    """Delete a pending or declined invitation row after verifying the
+    requester has manager-level access to the entity."""
+    # Owner check (same pattern as remove_user)
+    if entity_type == 'artist':
+        owner_id = db.execute(
+            text("SELECT user_id FROM artists WHERE id = :eid"),
+            {"eid": entity_id}
+        ).scalar()
+    else:
+        owner_id = db.execute(
+            text("SELECT user_id FROM venues WHERE id = :eid"),
+            {"eid": entity_id}
+        ).scalar()
+    _role = (db.execute(
+        text("""
+            SELECT role FROM entity_users
+            WHERE entity_type = :etype AND entity_id = :eid AND user_id = :uid
+        """),
+        {"etype": entity_type, "eid": entity_id, "uid": user.id}
+    ).scalar() or "").strip().lower()
+    _is_manager = _role in ("owner", "admin", "manager")
+    if owner_id != user.id and not _is_manager:
+        raise HTTPException(403,
+            f"You don't have permission to revoke invitations for this {entity_type}.")
+
+    # Verify the invitation belongs to this entity (defense in depth —
+    # can't revoke invitations from other entities by guessing IDs).
+    inv = db.execute(
+        text("""
+            SELECT id, invited_email FROM entity_invitations
+             WHERE id = :iid AND entity_type = :etype AND entity_id = :eid
+        """),
+        {"iid": invitation_id, "etype": entity_type, "eid": entity_id}
+    ).mappings().first()
+    if not inv:
+        raise HTTPException(404, "Invitation not found for this entity")
+
+    db.execute(text("DELETE FROM entity_invitations WHERE id = :iid"),
+               {"iid": invitation_id})
+    db.commit()
+    return {"ok": True, "message": f"Revoked invitation for {inv['invited_email']}"}
+
+
+# ============================================
+# TRANSFER OWNERSHIP
+# ============================================
+# Jul 22 2026: two paths — owner self-serve (must transfer TO an existing
+# team member) and admin override (can pick ANY user). Both wrap the same
+# helper so behavior stays identical: entity row's user_id flips, old
+# owner keeps access as `admin` team member, new owner shown as `owner`.
+#
+# Historical rows (transactions, reviews, tax_1099s, invoices) are NOT
+# reassigned — they reflect who owned the entity AT THE TIME. Only the
+# live ownership pointer moves.
+
+def _do_transfer_owner(db, entity_type: str, entity_id: int,
+                        new_owner_user_id: int, actor_user_id: int):
+    """Shared transfer logic. Caller must have already auth'd the actor."""
+    if entity_type not in ('artist', 'venue'):
+        raise HTTPException(400, "entity_type must be 'artist' or 'venue'")
+
+    # Fetch current state
+    if entity_type == 'artist':
+        row = db.execute(
+            text("SELECT id, user_id, name FROM artists WHERE id = :i AND deleted_at IS NULL"),
+            {"i": entity_id}
+        ).mappings().first()
+    else:
+        row = db.execute(
+            text("SELECT id, user_id, venue_name AS name FROM venues WHERE id = :i AND deleted_at IS NULL"),
+            {"i": entity_id}
+        ).mappings().first()
+    if not row:
+        raise HTTPException(404, f"{entity_type.title()} not found")
+    old_owner_id = row["user_id"]
+    if old_owner_id == new_owner_user_id:
+        raise HTTPException(400, "That user is already the owner.")
+
+    # Confirm the new owner exists (defense — user may have been deleted
+    # between the picker rendering and the submit).
+    new_owner = db.execute(
+        text("SELECT id, email FROM users WHERE id = :u"),
+        {"u": new_owner_user_id}
+    ).mappings().first()
+    if not new_owner:
+        raise HTTPException(404, "New owner user not found")
+
+    # 1) Move the ownership pointer
+    if entity_type == 'artist':
+        db.execute(text("UPDATE artists SET user_id = :u WHERE id = :i"),
+                   {"u": new_owner_user_id, "i": entity_id})
+    else:
+        db.execute(text("UPDATE venues  SET user_id = :u WHERE id = :i"),
+                   {"u": new_owner_user_id, "i": entity_id})
+
+    # 2) Demote the old owner in entity_users to `admin` (or insert them
+    # as admin if they weren't already listed). Preserves their access
+    # so they don't get locked out of an entity they built.
+    if old_owner_id and old_owner_id != new_owner_user_id:
+        _existing_old = db.execute(text("""
+            SELECT id FROM entity_users
+             WHERE entity_type = :et AND entity_id = :ei AND user_id = :uid
+        """), {"et": entity_type, "ei": entity_id, "uid": old_owner_id}).scalar()
+        if _existing_old:
+            db.execute(text("""
+                UPDATE entity_users SET role = 'admin'
+                 WHERE entity_type = :et AND entity_id = :ei AND user_id = :uid
+            """), {"et": entity_type, "ei": entity_id, "uid": old_owner_id})
+        else:
+            db.execute(text("""
+                INSERT INTO entity_users (entity_type, entity_id, user_id, role, added_by_user_id, created_at)
+                VALUES (:et, :ei, :uid, 'admin', :actor, CURRENT_TIMESTAMP)
+            """), {"et": entity_type, "ei": entity_id, "uid": old_owner_id, "actor": actor_user_id})
+
+    # 3) Promote the new owner to 'owner' in entity_users (upsert). Their
+    # access via venues.user_id is already live from step 1; this is
+    # cosmetic (the "Owner" badge in the Users tab reads from role).
+    _existing_new = db.execute(text("""
+        SELECT id FROM entity_users
+         WHERE entity_type = :et AND entity_id = :ei AND user_id = :uid
+    """), {"et": entity_type, "ei": entity_id, "uid": new_owner_user_id}).scalar()
+    if _existing_new:
+        db.execute(text("""
+            UPDATE entity_users SET role = 'owner'
+             WHERE entity_type = :et AND entity_id = :ei AND user_id = :uid
+        """), {"et": entity_type, "ei": entity_id, "uid": new_owner_user_id})
+    else:
+        db.execute(text("""
+            INSERT INTO entity_users (entity_type, entity_id, user_id, role, added_by_user_id, created_at)
+            VALUES (:et, :ei, :uid, 'owner', :actor, CURRENT_TIMESTAMP)
+        """), {"et": entity_type, "ei": entity_id, "uid": new_owner_user_id, "actor": actor_user_id})
+
+    db.commit()
+    return {
+        "ok": True,
+        "message": f"Ownership of {row['name']} transferred to {new_owner['email']}.",
+        "entity_type": entity_type, "entity_id": entity_id,
+        "old_owner_id": old_owner_id, "new_owner_id": new_owner_user_id,
+    }
+
+
+# Owner-only self-serve. The requester must be the CURRENT owner
+# (venues.user_id / artists.user_id). Target user MUST be an existing
+# entity_users team member — prevents owner from accidentally handing
+# their entity to a random user id.
+@router.post("/api/entity-users/artist/{artist_id}/transfer-owner")
+def transfer_artist_owner_self(artist_id: int, data: dict,
+                                user=Depends(get_current_user), db=Depends(get_db)):
+    return _transfer_owner_self('artist', artist_id, data, user, db)
+
+@router.post("/api/entity-users/venue/{venue_id}/transfer-owner")
+def transfer_venue_owner_self(venue_id: int, data: dict,
+                               user=Depends(get_current_user), db=Depends(get_db)):
+    return _transfer_owner_self('venue', venue_id, data, user, db)
+
+def _transfer_owner_self(entity_type: str, entity_id: int, data: dict, user, db):
+    new_owner_id = int(data.get("new_owner_user_id") or 0)
+    if not new_owner_id:
+        raise HTTPException(400, "new_owner_user_id required")
+    # Requester must be the current owner
+    if entity_type == 'artist':
+        cur_owner = db.execute(
+            text("SELECT user_id FROM artists WHERE id = :i AND deleted_at IS NULL"),
+            {"i": entity_id}).scalar()
+    else:
+        cur_owner = db.execute(
+            text("SELECT user_id FROM venues WHERE id = :i AND deleted_at IS NULL"),
+            {"i": entity_id}).scalar()
+    if cur_owner != user.id:
+        raise HTTPException(403, "Only the current owner can transfer ownership.")
+    # Target must already be a team member (safety guard against typos)
+    is_team = db.execute(text("""
+        SELECT 1 FROM entity_users
+         WHERE entity_type = :et AND entity_id = :ei AND user_id = :uid
+    """), {"et": entity_type, "ei": entity_id, "uid": new_owner_id}).scalar()
+    if not is_team:
+        raise HTTPException(400,
+            f"New owner must already be a team member on this {entity_type}. "
+            f"Invite them first, then transfer.")
+    return _do_transfer_owner(db, entity_type, entity_id, new_owner_id, user.id)
+
 
 # ============================================
 # HANDLE INVITATION RESPONSES

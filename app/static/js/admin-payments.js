@@ -177,27 +177,61 @@
     payment_cancelled: 'Cancelled',
   };
 
-  // ── KPI stats ────────────────────────────────────────────────────────────
+  // Jul 22 2026 rewrite — killed the redundant hero-row + ops-row
+  // split (16 bubbles across two rows, most showing the same
+  // numbers with different labels). One clean row now: 6 essential
+  // money bubbles that follow the flow (Txns → Revenue in → Payouts
+  // out → Commission earned → Stripe cost → Net Profit kept).
+  // Alerts (Needs Attention, Disputed, Free Trial) render as
+  // conditional badges after the main row, ONLY when count > 0,
+  // so a healthy queue reads as an uncluttered dashboard and any
+  // problems immediately draw the eye.
+  function renderHeroStats(stats) {
+    // Legacy hero container from earlier design — clear it so nothing
+    // renders in that slot. Kept as a no-op function so apReload's
+    // call site doesn't have to be edited.
+    const el = $('apHeroStats');
+    if (el) el.innerHTML = '';
+  }
+
   function renderStats(stats) {
     if (!stats) { $('apStats').innerHTML = ''; return; }
-    const card = (label, val, color) =>
-      `<div style="padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;">
-         <div style="font-size:0.62rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">${esc(label)}</div>
-         <div style="font-size:0.95rem;font-weight:700;color:${color};">${esc(val)}</div>
+    // Main bubble (colored to distinguish counts vs money).
+    const bubble = (label, val, color) =>
+      `<div style="padding:12px 16px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;min-width:130px;flex:1;">
+         <div style="font-size:0.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:6px;">${esc(label)}</div>
+         <div style="font-size:1.15rem;font-weight:700;color:${color};">${esc(val)}</div>
        </div>`;
+    // Conditional alert pill — only rendered when count > 0.
+    const alertPill = (label, count, color) => count > 0
+      ? `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:${color}22;border:1px solid ${color}66;border-radius:999px;font-size:0.75rem;font-weight:600;color:${color};">
+           <strong>${count}</strong> ${esc(label)}
+         </span>`
+      : '';
+
     const s = stats.by_status || {};
-    $('apStats').innerHTML = [
-      card('Transactions',   String(stats.count || 0),                  'var(--text)'),
-      card('Revenue (gross)', dollars(stats.revenue_cents || 0),         '#10b981'),
-      card('Commission',     dollars(stats.commission_cents || 0),       '#a78bfa'),
-      card('Payouts sent',   dollars(stats.payouts_cents || 0),          '#06b6d4'),
-      card('Needs attention',String(s.needs_attention || 0),
-           (s.needs_attention || 0) > 0 ? '#ef4444' : 'var(--text-gray)'),
-      card('Disputed',       String(s.disputed || 0),
-           (s.disputed || 0) > 0 ? '#ef4444' : 'var(--text-gray)'),
-      card('Cancelled',      String(s.payment_cancelled || 0),           'var(--text-gray)'),
-      card('Free trial',     String(s.free_trial || 0),                  '#f59e0b'),
+    const money = [
+      bubble('Transactions',  String(stats.count || 0),                'var(--text-white)'),
+      bubble('Revenue',       dollars(stats.revenue_cents || 0),       '#10b981'),
+      bubble('Artist Payouts', dollars(stats.payouts_cents || 0),      '#06b6d4'),
+      bubble('Commission',    dollars(stats.commission_cents || 0),    '#a78bfa'),
+      bubble('Stripe Fees',   dollars(stats.stripe_fees_cents || 0),   '#f59e0b'),
+      bubble('Net Profit',    dollars(stats.net_profit_cents || 0),    '#10b981'),
     ].join('');
+
+    const alerts = [
+      alertPill('Needs attention', s.needs_attention   || 0, '#ef4444'),
+      alertPill('Disputed',        s.disputed           || 0, '#ef4444'),
+      alertPill('Free trial',      s.free_trial         || 0, '#f59e0b'),
+    ].filter(Boolean).join('');
+
+    // Money row + optional alert row. The alert row is fully omitted
+    // (no wrapper, no margin) when everything's zero — a healthy
+    // dashboard shows exactly 6 bubbles and nothing else.
+    $('apStats').innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">${money}</div>
+      ${alerts ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">${alerts}</div>` : ''}
+    `;
   }
 
   // ── Filters → query params ───────────────────────────────────────────────
@@ -280,6 +314,7 @@
       const data  = await searchRes.json();
       const stats = statsRes.ok ? await statsRes.json() : null;
       apTotal = data.total || 0;
+      renderHeroStats(stats);
       renderStats(stats);
       renderTable(data.items || []);
       renderPagination();
@@ -315,10 +350,10 @@
       const _aid_safe = (r.artist_id != null) ? parseInt(r.artist_id, 10) || 0 : 'null';
       const venue  = r.venue_name  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterVenue(${_vid_safe}, '${esc(venueSafe)}')" style="color:var(--cyan);text-decoration:none;">${esc(r.venue_name)}</a>` : '—';
       const artist = r.artist_name ? `<a href="javascript:void(0)" onclick="event.stopPropagation();apFilterArtist(${_aid_safe}, '${esc(artistSafe)}')" style="color:#a78bfa;text-decoration:none;">${esc(r.artist_name)}</a>` : '—';
-      const stripeRef = r.stripe_payment_intent_id || r.stripe_transfer_id || '';
-      const stripeBadge = stripeRef
-        ? `<a href="https://dashboard.stripe.com/${stripeRef.startsWith('pi_') ? 'payments/' : 'connect/transfers/'}${esc(stripeRef)}" target="_blank" onclick="event.stopPropagation()" style="font-family:monospace;font-size:0.65rem;color:#94a3b8;text-decoration:none;border-bottom:1px dashed rgba(148,163,184,0.4);" title="Open in Stripe Dashboard">${esc(stripeRef.slice(0,16))}…</a>`
-        : '<span style="color:var(--text-gray);font-size:0.7rem;">—</span>';
+      // Jul 2026: Stripe column removed (the Stripe ID + Dashboard link
+      // still live in the row-detail modal on click). Gig Date moved to
+      // the far-left data slot to match the new default sort (gig date
+      // DESC — most recent gigs first).
       const isSelected = window._apSelected && window._apSelected.has(r.id);
       return `
         <tr onclick="apShowDetail(${r.id})" style="cursor:pointer;border-bottom:1px solid var(--border);${isSelected ? 'background:rgba(6,182,212,0.06);' : ''}">
@@ -326,14 +361,13 @@
             <input type="checkbox" class="ap-row-cb" data-txn-id="${r.id}" ${isSelected ? 'checked' : ''}
               onchange="apToggleRow(${r.id}, this.checked)" style="cursor:pointer;">
           </td>
+          <td style="padding:6px 8px;font-size:0.72rem;color:var(--text-gray);white-space:nowrap;">${fmtDate(r.gig_date)}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:var(--text-gray);white-space:nowrap;">${indent}#${r.id}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:var(--text);white-space:nowrap;">${esc(TYPE_LABEL[r.transaction_type] || r.transaction_type)}</td>
           <td style="padding:6px 8px;">${statusPill(r)}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${venue}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${artist}</td>
-          <td style="padding:6px 8px;font-size:0.72rem;color:var(--text-gray);white-space:nowrap;">${fmtDate(r.gig_date)}</td>
           <td style="padding:6px 8px;font-size:0.78rem;font-weight:600;color:var(--text);text-align:right;white-space:nowrap;">${dollars(amount)}</td>
-          <td style="padding:6px 8px;">${stripeBadge}</td>
           <td style="padding:6px 8px;font-size:0.7rem;color:var(--text-gray);white-space:nowrap;">${fmtDateTime(r.processed_at || r.scheduled_process_at || r.created_at)}</td>
         </tr>`;
     }).join('');
@@ -344,14 +378,13 @@
             <th style="padding:7px 8px;text-align:left;width:24px;" onclick="event.stopPropagation()">
               <input type="checkbox" onchange="apToggleAllOnPage(this.checked)" title="Select all on this page" style="cursor:pointer;">
             </th>
+            <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Gig Date</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">ID</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Type</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Status</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Venue</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Artist</th>
-            <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Gig date</th>
             <th style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text-gray);">Amount</th>
-            <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Stripe</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Processed</th>
           </tr>
         </thead>
@@ -2372,7 +2405,7 @@
       <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
         <thead><tr style="background:rgba(255,255,255,0.03);">
           ${th('txn_id',           'Txn')}
-          ${th('gig_date',         'Gig date')}
+          ${th('gig_date',         'Gig Date')}
           ${th('venue_name',       'Venue')}
           ${th('artist_name',      'Artist')}
           ${th('transaction_type', 'Type')}

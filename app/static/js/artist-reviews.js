@@ -159,22 +159,17 @@ async function renderReviews(containerId, artistId, page = 1) {
       return;
     }
 
-    // get current venue id fresh
-    let myVenueId = null;
-    try {
-      const meRes = await fetch('/api/me', { credentials: 'include' });
-      if (meRes.ok) { const me = await meRes.json(); myVenueId = me.venue_id || null; }
-    } catch(e) {}
-
+    // Jul 25 2026: removed the per-review Edit/Delete buttons from
+    // this public-facing render. The public artist profile is a
+    // read-only presentation surface — even a viewer who happens
+    // to own the review's authoring venue shouldn't see edit chrome
+    // here (it reads as if random visitors can modify the artist's
+    // page). Review management belongs on the venue-side "My Artists"
+    // tab where the venue owner already has an inline star/comment
+    // control. Mirrors the existing behavior of renderVenueReviews
+    // on venue-profile, which never had these buttons.
     const reviewsHtml = data.reviews.map(r => {
-      const isOwn = myVenueId && r.venue_id === myVenueId;
-      const actionBtns = isOwn ? `
-        <div style="display:flex;gap:6px;margin-top:8px;">
-          <button data-rv="${r.venue_id}" data-ai="${artistId}" data-rt="${r.rating}" data-tx="${(r.review_text||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" data-ci="${containerId}" data-ri="${artistId}" onclick="editReview(this.dataset.rv,this.dataset.ai,this.dataset.rt,this.dataset.tx,this.dataset.ci,this.dataset.ri)"
-            style="font-size:0.7rem;padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;">Edit</button>
-          <button onclick="deleteReview(${r.id},'${containerId}',${artistId})"
-            style="font-size:0.7rem;padding:3px 10px;border-radius:4px;border:1px solid #ef4444;background:transparent;color:#ef4444;cursor:pointer;">Delete</button>
-        </div>` : '';
+      const actionBtns = '';
       return `
       <div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;background:var(--card);">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
@@ -385,14 +380,26 @@ function _closeReviewDeleteModal() {
 }
 
 async function _submitReviewDelete() {
+  // BUG FIX (Jul 2026 audit): state stored { reviewId, containerId,
+  // renderArtistId } — never venueId/artistId. The old URL was always
+  // /api/venues/undefined/artists/undefined/review → 404 → alert fired every
+  // time. Route to DELETE /api/reviews/{reviewId} which already exists and
+  // takes just the review id.
   var state = _reviewDeleteState;
-  var res = await fetch('/api/venues/' + state.venueId + '/artists/' + state.artistId + '/review', {
+  if (!state || state.reviewId == null) { _closeReviewDeleteModal(); return; }
+  var res = await fetch('/api/reviews/' + state.reviewId, {
     method: 'DELETE', credentials: 'include'
   });
-  var data = await res.json();
+  var data = {};
+  try { data = await res.json(); } catch (_) {}
   _closeReviewDeleteModal();
-  if (data.ok) { renderReviews(state.containerId, state.renderArtistId); }
-  else { alert(data.detail || 'Could not delete review'); }
+  if (res.ok && (data.ok || data.success)) {
+    renderReviews(state.containerId, state.renderArtistId);
+  } else if (typeof window.showErrorModal === 'function') {
+    window.showErrorModal('Could not delete review', data.detail || ('HTTP ' + res.status));
+  } else {
+    alert(data.detail || 'Could not delete review');
+  }
 }
 
 

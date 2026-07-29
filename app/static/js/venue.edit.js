@@ -169,18 +169,26 @@ function bindAutosave(el, field, venueId, transform = v => v, headerEl = null, h
         valueToSave = valueToSave.replace(/,/g, '');
       }
       
-      // Normalize URL fields - ensure https://www. prefix
+      // Normalize URL fields — add https:// scheme if missing. ONLY
+      // prepend `www.` when the host is a bare apex domain
+      // (`spotify.com` → `www.spotify.com`); leave subdomains alone
+      // (`open.spotify.com`, `maps.google.com`, `music.apple.com` etc.).
+      // Prepending `www.` in front of an existing subdomain breaks the
+      // URL. Jul 25 2026 bug fix — mirrors artist.edit.js.
       const urlFields = ['website_url','facebook_url','instagram_url','twitter_url','yelp_url','google_maps_url'];
       if (urlFields.includes(field) && valueToSave.trim()) {
         let url = valueToSave.trim();
         if (!/^https?:\/\//i.test(url)) {
-          if (!/^www\./i.test(url)) {
-            url = 'www.' + url;
-          }
           url = 'https://' + url;
-        } else if (/^https?:\/\/(?!www\.)/i.test(url) && !url.includes('://www.')) {
-          url = url.replace(/^(https?:\/\/)/, '$1www.');
         }
+        try {
+          const u = new URL(url);
+          const dotCount = (u.hostname.match(/\./g) || []).length;
+          if (dotCount === 1 && !u.hostname.startsWith('www.')) {
+            u.hostname = 'www.' + u.hostname;
+            url = u.toString();
+          }
+        } catch (_) { /* malformed — leave user's value alone */ }
         valueToSave = url;
         el.value = url;
       }
@@ -191,9 +199,17 @@ function bindAutosave(el, field, venueId, transform = v => v, headerEl = null, h
         credentials: "include",
         body: JSON.stringify({ [field]: transform(valueToSave) })
       });
-      
+
       if (!response.ok) {
         throw new Error(`Failed to save: ${response.statusText}`);
+      }
+
+      // Jul 2026: after a venue_name save, the backend may have auto-
+      // migrated the vanity slug (see maybe_update_slug_on_rename in
+      // vanity.py). Re-fetch the URL section so "gigsfill.com/<slug>"
+      // updates in place without a page reload.
+      if (field === 'venue_name' && typeof window.reloadVanityUrl === 'function') {
+        window.reloadVanityUrl('venue', parseInt(venueId, 10));
       }
     } catch (error) {
       console.error("Error saving field:", field, error);
@@ -712,11 +728,54 @@ async function bindAllFields(venueId) {
 // -----------------------------
 // MEDIA HELPERS
 // -----------------------------
+// Sync return: best-effort immediate thumbnail. YouTube resolves from
+// the URL directly. For Vimeo / TikTok / Instagram / Facebook, return
+// the placeholder first and let _refreshMissingVideoThumbs() below
+// swap it for the real thumbnail via public oEmbed once the media
+// list finishes rendering. Cached to avoid re-hitting APIs per render.
+const _venueThumbCache = new Map();
 function getVideoThumbnail(url) {
-  const yt = url.match(/(?:youtube\.com.*v=|youtu\.be\/)([^&]+)/);
-  return yt
-    ? `https://img.youtube.com/vi/${yt[1]}/hqdefault.jpg`
-    : "/app/static/img/video-placeholder.svg";
+  if (!url) return "/app/static/img/video-placeholder.svg";
+  const yt = url.match(/(?:youtube\.com.*v=|youtu\.be\/|youtube\.com\/shorts\/)([^&?/]+)/);
+  if (yt) return `https://img.youtube.com/vi/${yt[1]}/hqdefault.jpg`;
+  if (_venueThumbCache.has(url)) return _venueThumbCache.get(url);
+  return "/app/static/img/video-placeholder.svg";
+}
+
+async function _refreshMissingVideoThumbs() {
+  const imgs = document.querySelectorAll('#videos .media-card img[src*="video-placeholder"]');
+  const seen = new Set();
+  for (const img of imgs) {
+    const card = img.closest('.media-card');
+    if (!card) continue;
+    const editBtn = card.querySelector('.edit-url-btn');
+    const url = editBtn ? editBtn.dataset.currentUrl : '';
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    _fetchOEmbedThumb(url).then(thumbUrl => {
+      if (!thumbUrl) return;
+      _venueThumbCache.set(url, thumbUrl);
+      document.querySelectorAll('#videos .media-card').forEach(c => {
+        const b = c.querySelector('.edit-url-btn');
+        if (b && b.dataset.currentUrl === url) {
+          const i = c.querySelector('img'); if (i) i.src = thumbUrl;
+        }
+      });
+    }).catch(() => {});
+  }
+}
+async function _fetchOEmbedThumb(url) {
+  try {
+    if (/vimeo\.com\/(?:video\/)?\d+/.test(url)) {
+      const r = await fetch('https://vimeo.com/api/oembed.json?url=' + encodeURIComponent(url));
+      if (r.ok) { const j = await r.json(); return j.thumbnail_url || null; }
+    }
+    if (/tiktok\.com\/@[^/]+\/video\/\d+/.test(url)) {
+      const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(url));
+      if (r.ok) { const j = await r.json(); return j.thumbnail_url || null; }
+    }
+  } catch (_) {}
+  return null;
 }
 
 async function saveVideo() {
@@ -848,6 +907,10 @@ async function loadVenueMedia(venueId) {
 
     if (m.media_type === "video") {
       const caption = m.caption || "";
+      const videoUrl = m.video_url || "";
+      // ✏️ Edit URL button — same pattern as artist.edit.js. Sits next
+      // to Delete so the two "manage" actions are grouped. Added 2026-07-25.
+      const editUrlBtn = `<button class="edit-url-btn" data-id="${m.id}" data-current-url="${escapeHtml(videoUrl)}" title="Edit the video URL" style="background:transparent;border:1px solid rgba(148,163,184,0.3);color:#94a3b8;font-size:0.75rem;cursor:pointer;padding:3px 10px;border-radius:4px;line-height:1;margin-right:6px;" onmouseover="this.style.color='#7dd3fc';this.style.borderColor='rgba(6,182,212,0.5)';" onmouseout="this.style.color='#94a3b8';this.style.borderColor='rgba(148,163,184,0.3)';">✏️ Edit URL</button>`;
       qs("videos").innerHTML += `
         <div class="media-card" data-id="${m.id}" draggable="true" data-kind="video">
           <img src="${getVideoThumbnail(m.video_url)}">
@@ -867,7 +930,10 @@ async function loadVenueMedia(venueId) {
               rows="2"
               data-id="${m.id}"
             >${escapeHtml(caption)}</textarea>
-            <button class="delete-btn" data-id="${m.id}">Delete</button>
+            <div style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;">
+              ${editUrlBtn}
+              <button class="delete-btn" data-id="${m.id}">Delete</button>
+            </div>
           </div>
         </div>
       `;
@@ -876,6 +942,10 @@ async function loadVenueMedia(venueId) {
 
   initMediaDragAndDrop("pictures");
   initMediaDragAndDrop("videos");
+  // Fire async oEmbed lookups for videos that returned the placeholder
+  // synchronously (Vimeo, TikTok). Swaps in real thumbnails when
+  // resolved. Added 2026-07-25.
+  _refreshMissingVideoThumbs();
 }
 
 // -----------------------------
@@ -885,13 +955,18 @@ function initMediaDragAndDrop(containerId) {
   const container = qs(containerId);
   if (!container) return;
   
+  // 2026-07-26: broadened to match ANY input/textarea inside a media
+  // card (was: .media-title only). Card is draggable="true" so a raw
+  // click on the caption textarea would start a drag instead of
+  // positioning the cursor. Disabling drag on mousedown lets the
+  // click focus + place caret normally; blur handler below restores
+  // drag when the user tabs out.
   container.addEventListener("mousedown", e => {
-    const title = e.target.closest(".media-title");
-    if (!title) return;
-  
-    const card = title.closest(".media-card");
+    if (!(e.target instanceof HTMLElement)) return;
+    const editable = e.target.closest("input, textarea");
+    if (!editable) return;
+    const card = editable.closest(".media-card");
     if (!card) return;
-  
     card.setAttribute("draggable", "false");
   });
   if (!container) return;
@@ -1007,6 +1082,77 @@ document.addEventListener("blur", async e => {
   });
 }, true);
 
+// Edit-URL click handler — opens a modal to fix the video URL without
+// deleting + re-adding the entry. Uses the same _openUrlEditModal
+// helper defined below. Added 2026-07-25 (mirrors artist.edit.js).
+document.addEventListener("click", async e => {
+  if (!(e.target instanceof HTMLElement)) return;
+  const btn = e.target.closest ? e.target.closest(".edit-url-btn") : null;
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const currentUrl = btn.dataset.currentUrl || "";
+  const venueId = new URLSearchParams(window.location.search).get("venue_id");
+
+  _openUrlEditModal("Video URL", currentUrl, async (newUrl) => {
+    const trimmed = (newUrl || "").trim();
+    if (!trimmed || trimmed === currentUrl) return;
+    try {
+      const res = await fetch(`/api/venues/media/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ video_url: trimmed })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        if (window.showErrorModal) window.showErrorModal("Save failed", d.detail || `HTTP ${res.status}`);
+        return;
+      }
+      if (venueId && typeof loadMedia === "function") loadMedia(venueId);
+    } catch (_) {
+      if (window.showErrorModal) window.showErrorModal("Network error", "Could not reach the server.");
+    }
+  });
+});
+
+// Same edit-URL modal helper as artist.edit.js. Inline here (rather than
+// a shared file) to keep venue-edit self-contained.
+function _openUrlEditModal(labelText, initialValue, onSave) {
+  const existing = document.getElementById("_urlEditOverlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "_urlEditOverlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10010;display:flex;align-items:center;justify-content:center;padding:16px;";
+  overlay.innerHTML = `
+    <div style="background:var(--card,#151b28);border:1px solid var(--border);border-radius:12px;padding:24px 28px;max-width:520px;width:100%;box-shadow:0 24px 64px rgba(0,0,0,0.6);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px;">
+        <h3 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--text);">Edit ${escapeHtml(labelText)}</h3>
+        <button id="_urlEditCloseX" style="background:transparent;border:1px solid rgba(239,68,68,0.35);color:#ef4444;font-size:1.5rem;line-height:1;cursor:pointer;padding:0;width:32px;height:32px;border-radius:6px;">&times;</button>
+      </div>
+      <label style="display:block;font-size:0.75rem;color:var(--text-gray);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:6px;">${escapeHtml(labelText)}</label>
+      <input id="_urlEditInput" type="text" value="${escapeHtml(initialValue || "")}" placeholder="https://…"
+             style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:0.9rem;box-sizing:border-box;">
+      <p style="margin:8px 0 0;font-size:0.75rem;color:var(--text-muted);font-style:italic;">Press Enter to save.</p>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
+        <button id="_urlEditCancel" style="padding:9px 18px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-gray);font-size:0.82rem;font-weight:600;cursor:pointer;">Cancel</button>
+        <button id="_urlEditSave" style="padding:9px 20px;border-radius:6px;border:none;background:linear-gradient(135deg,var(--purple,#8b5cf6),var(--cyan,#06b6d4));color:#fff;font-size:0.82rem;font-weight:600;cursor:pointer;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = document.getElementById("_urlEditInput");
+  const close = () => { const el = document.getElementById("_urlEditOverlay"); if (el) el.remove(); };
+  const submit = () => { const v = input ? input.value : ""; close(); onSave(v); };
+  document.getElementById("_urlEditCloseX").onclick = close;
+  document.getElementById("_urlEditCancel").onclick = close;
+  document.getElementById("_urlEditSave").onclick   = submit;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  });
+  setTimeout(() => { input.focus(); input.select(); }, 30);
+}
+
 document.addEventListener("click", async e => {
   if (!e.target.classList.contains("delete-btn")) return;
 
@@ -1033,7 +1179,11 @@ document.addEventListener("click", async e => {
     window.showConfirm(
       "Delete this media?",
       "This action can't be undone.",
-      doDelete,
+      // Wrap async doDelete in sync fire-and-forget so gf-modals
+      // auto-closes the confirm on first click — same fix as
+      // artist.edit.js. Async handler otherwise returns a Promise
+      // that signals "keep modal open" to gf-modals. Fixed 2026-07-25.
+      function () { doDelete(); },
       null,
       { tone: 'warning', confirmLabel: 'Delete', cancelLabel: 'Cancel', confirmStyle: 'danger' }
     );

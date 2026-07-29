@@ -94,28 +94,80 @@
         </button>
       </div>`;
     } else {
-      // ── Active state: show current offer + waitlist ──
-      // 'CURRENTLY OFFERED TO: Fridays Past (23 hours remaining)' on
-      // one line. Generic-message style + tabular spacing so multiple
-      // offers/rerenders don't shift the layout. Slot summary
-      // 'X booked · Y still open' was removed per user — the slots
-      // themselves are visible below so the count was redundant.
-      if (data.current_offer) {
-        const co = data.current_offer;
-        let timeStr = '—';
-        if (co.hours_remaining != null) {
-          const h = co.hours_remaining;
-          const totalMins = Math.round(h * 60);
-          if (totalMins <= 0) timeStr = 'expiring now';
-          else if (totalMins < 60) timeStr = `${totalMins} ${totalMins === 1 ? 'minute' : 'minutes'} remaining`;
-          else if (h < 24) { const hh = Math.round(h); timeStr = `${hh} ${hh === 1 ? 'hour' : 'hours'} remaining`; }
-          else { const dd = Math.round(h/24); timeStr = `${dd} ${dd === 1 ? 'day' : 'days'} remaining`; }
-        }
-        html += `<div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:9px 14px;margin-bottom:12px;font-size:0.84rem;color:var(--text);">
-          <span style="font-size:0.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-right:8px;">Currently offered to:</span>
-          <span style="font-weight:700;color:var(--text);">${_esc(co.artist_name || 'Artist #'+co.artist_id)}</span>
-          <span style="color:var(--text-gray);margin-left:6px;">(${timeStr}${co.reminder_sent ? ', reminder sent' : ''})</span>
-        </div>`;
+      // ── Active state: per-bucket rotation status (Jun 2026 Option A) ──
+      // One card per distinct open-slot artist_type. Buckets advance
+      // independently, so the venue sees the live offer for each type
+      // — AND a per-type notice when a bucket is dead (no candidates of
+      // that type queued, or all of them declined). Lets the venue act
+      // on the dead bucket without waiting for the rest of the rotation.
+      const _typeIcon = t => ({'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'❓', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'}[t] || '🎵');
+      const _fmtRemaining = (h, reminder) => {
+        if (h == null) return '—';
+        const totalMins = Math.round(h * 60);
+        let s;
+        if (totalMins <= 0) s = 'expiring now';
+        else if (totalMins < 60) s = `${totalMins} ${totalMins === 1 ? 'minute' : 'minutes'} remaining`;
+        else if (h < 24) { const hh = Math.round(h); s = `${hh} ${hh === 1 ? 'hour' : 'hours'} remaining`; }
+        else { const dd = Math.round(h/24); s = `${dd} ${dd === 1 ? 'day' : 'days'} remaining`; }
+        return reminder ? `${s}, reminder sent` : s;
+      };
+      const buckets = Array.isArray(data.buckets) ? data.buckets : [];
+      if (buckets.length > 0) {
+        html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">';
+        buckets.forEach(b => {
+          const icon = _typeIcon(b.artist_type);
+          const slotCnt = b.slot_count || 0;
+          const slotLbl = `${slotCnt} ${slotCnt === 1 ? 'slot' : 'slots'}`;
+          const headerHtml = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+            <span style="font-size:0.95rem;">${icon}</span>
+            <span style="font-weight:700;color:var(--text);font-size:0.84rem;">${_esc(b.artist_type)}</span>
+            <span style="color:var(--text-gray);font-size:0.75rem;">· ${slotLbl}</span>
+          </div>`;
+          let bodyHtml = '';
+          let cardBg = 'rgba(0,0,0,0.25)';
+          let cardBorder = '1px solid rgba(255,255,255,0.05)';
+          if (b.state === 'active' && b.in_flight) {
+            const inf = b.in_flight;
+            bodyHtml = `<div style="font-size:0.82rem;color:var(--text);">
+              <span style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-right:6px;">Offered to:</span>
+              <span style="font-weight:700;">${_esc(inf.artist_name || 'Artist #'+inf.artist_id)}</span>
+              <span style="color:var(--text-gray);margin-left:6px;">(${_fmtRemaining(inf.hours_remaining, inf.reminder_sent)})</span>
+            </div>`;
+          } else if (b.state === 'active') {
+            // No in-flight but candidates remain. Shouldn't usually
+            // happen — send_next_hold_offer fires immediately — but
+            // surface it as a transient between-offers state.
+            bodyHtml = `<div style="font-size:0.82rem;color:var(--text-gray);">Advancing to next ${_esc(b.artist_type)} artist…</div>`;
+          } else if (b.state === 'no_candidates') {
+            cardBg = 'rgba(239,68,68,0.08)';
+            cardBorder = '1px solid rgba(239,68,68,0.35)';
+            bodyHtml = `<div style="font-size:0.8rem;color:#fca5a5;margin-bottom:8px;line-height:1.45;">
+              <strong>No ${_esc(b.artist_type)} artists on your hold list</strong> — this ${slotLbl === '1 slot' ? 'slot' : 'group of slots'} won't fill through the hold rotation.
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button type="button" class="hold-bucket-add" data-type="${_esc(b.artist_type)}"
+                style="padding:5px 12px;background:rgba(124,107,255,0.15);border:1px solid rgba(124,107,255,0.45);border-radius:4px;color:#c4b5fd;cursor:pointer;font-size:0.74rem;font-weight:600;">+ Add ${_esc(b.artist_type)} artist</button>
+              <button type="button" class="hold-bucket-cancel" data-type="${_esc(b.artist_type)}"
+                style="padding:5px 12px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.45);border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Cancel ${_esc(b.artist_type)} slot${slotCnt === 1 ? '' : 's'}</button>
+            </div>`;
+          } else if (b.state === 'exhausted') {
+            cardBg = 'rgba(239,68,68,0.08)';
+            cardBorder = '1px solid rgba(239,68,68,0.35)';
+            bodyHtml = `<div style="font-size:0.8rem;color:#fca5a5;margin-bottom:8px;line-height:1.45;">
+              <strong>Every ${_esc(b.artist_type)} artist on your list declined or didn't respond in time.</strong>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button type="button" class="hold-bucket-add" data-type="${_esc(b.artist_type)}"
+                style="padding:5px 12px;background:rgba(124,107,255,0.15);border:1px solid rgba(124,107,255,0.45);border-radius:4px;color:#c4b5fd;cursor:pointer;font-size:0.74rem;font-weight:600;">+ Add another ${_esc(b.artist_type)}</button>
+              <button type="button" class="hold-bucket-cancel" data-type="${_esc(b.artist_type)}"
+                style="padding:5px 12px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.45);border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;">Cancel ${_esc(b.artist_type)} slot${slotCnt === 1 ? '' : 's'}</button>
+            </div>`;
+          }
+          html += `<div style="background:${cardBg};border:${cardBorder};border-radius:6px;padding:9px 12px;">
+            ${headerHtml}${bodyHtml}
+          </div>`;
+        });
+        html += '</div>';
       }
       // Waitlist — original artists (added_post_creation=0) are LOCKED:
       // no drag, no × — they keep their position from gig creation.
@@ -128,18 +180,48 @@
         html += '<div id="holdMgmtWaitlist" style="display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">';
         data.waitlist.forEach((w, i) => {
           const state = w.state;
+          const reason = w.state_reason || {};
           const isAdded = !!w.added_post_creation;
           let badge = '';
           let badgeColor = '';
+          // Human-readable badge per state. The state_reason carries the
+          // why (freq conflict / booked elsewhere in series / etc) so the
+          // venue isn't left guessing why an artist couldn't accept.
+          const _fmtDate = (d) => {
+            try {
+              const [y, m, day] = String(d || '').split('-').map(Number);
+              return new Date(y, m-1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            } catch (_) { return d || ''; }
+          };
+          const _fmtHrs = (h) => {
+            if (h == null) return '';
+            const totalMins = Math.round(h * 60);
+            if (totalMins <= 0) return 'expiring now';
+            if (totalMins < 60) return `${totalMins}m left`;
+            if (h < 24) { const hh = Math.round(h); return `${hh}h left`; }
+            const dd = Math.round(h / 24); return `${dd}d left`;
+          };
           if (state === 'current_offer') {
-            badge = '● Offered';
+            const tl = w.hours_remaining != null ? ` · ${_fmtHrs(w.hours_remaining)}` : '';
+            badge = `● Offered${tl}`;
             badgeColor = '#fcd34d';
           } else if (state === 'accepted') {
             badge = '✓ Booked';
             badgeColor = '#86efac';
-          } else if (state === 'declined') {
-            badge = '✗ Declined / expired';
+          } else if (state === 'booked_elsewhere') {
+            // They accepted the series, just not THIS date. Not a real decline.
+            badge = `↻ Booked ${_fmtDate(reason.other_date)} (series)`;
+            badgeColor = '#86efac';
+          } else if (state === 'expired') {
+            badge = '⏱ Time Expired';
             badgeColor = '#f87171';
+          } else if (state === 'declined') {
+            badge = '✗ Declined';
+            badgeColor = '#f87171';
+          } else if (state === 'queued' && reason.kind === 'freq_blocked') {
+            // Queued but freq conflict means they can't accept even when offered.
+            badge = `⚠ Freq conflict · played ${reason.days_apart}d ${reason.direction === 'after' ? 'after' : 'before'}`;
+            badgeColor = '#fbbf24';
           } else {
             badge = 'Queued';
             badgeColor = 'var(--text-gray)';
@@ -194,7 +276,20 @@
     }
 
     panel.innerHTML = html;
-    body.insertBefore(panel, body.firstChild);
+    // Insert the panel as a SIBLING before .modal-section instead of
+    // inside it. The booked-gig view (_showBookedGigModal) hides
+    // modal-section entirely, which used to hide the hold-mgmt panel
+    // too once any slot was booked — so a venue with a held gig
+    // whose Slot 1 was booked-and-countersigned saw no queue state
+    // at all in the gig modal (Jun 2026 user report). Falls back to
+    // insertBefore(body.firstChild) for pages where the parent
+    // doesn't exist (e.g. #modalBody-based pages).
+    const parent = body.parentNode;
+    if (parent && body.parentNode) {
+      parent.insertBefore(panel, body);
+    } else {
+      body.insertBefore(panel, body.firstChild);
+    }
 
     // Wire up the buttons
     _wireButtons(gigId, panel);
@@ -205,22 +300,116 @@
     if (skip) skip.addEventListener('click', () => _action(gigId, 'skip', skip));
     const release = panel.querySelector('#holdReleaseBtn');
     if (release) release.addEventListener('click', async () => {
+      // BUG FIX (Jul 2026 audit): window.showConfirm(title) returns the overlay
+      // DOM node synchronously — NOT a Promise. Awaiting it resolved to a
+      // truthy DOM element and _action fired immediately, releasing the hold
+      // before the user could click Cancel. Wrap it the same way openAll and
+      // cancelEmpty below do (see comment on line 309).
       const ok = window.showConfirm
-        ? await window.showConfirm('Release this hold and open the gig to all artists?')
+        ? await new Promise(res => window.showConfirm(
+            'Release Hold?',
+            'This ends the current hold rotation and re-opens the gig to any preferred artist immediately. The artist currently holding an offer will lose their exclusive window.',
+            () => res(true),
+            () => res(false),
+            { tone: 'warning', confirmStyle: 'danger',
+              confirmLabel: 'Release Hold', cancelLabel: 'Keep Hold Active' }
+          ))
         : confirm('Release this hold and open the gig to all artists?');
       if (!ok) return;
       _action(gigId, 'release', release);
     });
+    // Both actions get explicit confirmation modals (Jun 2026) so the
+    // venue clearly understands which behavior they're triggering.
+    // "Open to all" leaves the open slots BOOKABLE for any artist
+    // (no slot mutation); "Cancel empty slots" marks each open slot
+    // status='cancelled' (the slot rows stay, just non-bookable).
+    // Per a user report where Open-to-All was thought to delete a
+    // slot — neither action deletes from the DB.
     const openAll = panel.querySelector('#holdResolveOpenBtn');
-    if (openAll) openAll.addEventListener('click', () => _action(gigId, 'open_all', openAll));
+    if (openAll) openAll.addEventListener('click', async () => {
+      const ok = window.showConfirm
+        ? await new Promise(res => window.showConfirm(
+            'Open empty slots to all artists?',
+            'Your hold list is done. Clicking confirm will keep every empty slot OPEN for any artist to book — nothing is cancelled or deleted. Booked slots stay booked.',
+            () => res(true),
+            () => res(false),
+            { confirmLabel: 'Open to All', cancelLabel: 'Not Yet', confirmStyle: 'success' }
+          ))
+        : confirm('Open empty slots to all artists? Empty slots stay open; nothing is deleted.');
+      if (!ok) return;
+      _action(gigId, 'open_all', openAll);
+    });
     const cancelEmpty = panel.querySelector('#holdResolveCancelBtn');
     if (cancelEmpty) cancelEmpty.addEventListener('click', async () => {
       const ok = window.showConfirm
-        ? await window.showConfirm('Cancel the empty slots? (Booked slots stay.)')
-        : confirm('Cancel the empty slots? (Booked slots stay.)');
+        ? await new Promise(res => window.showConfirm(
+            'Cancel the empty slots?',
+            'This will mark every empty (unbooked) slot as cancelled, so no artist can book them. Booked slots stay booked. The slot rows themselves stay on the gig — they just become non-bookable.',
+            () => res(true),
+            () => res(false),
+            { tone: 'warning', confirmStyle: 'danger',
+              confirmLabel: 'Cancel Empty Slots', cancelLabel: 'Keep Open' }
+          ))
+        : confirm('Cancel the empty slots? Booked slots stay.');
       if (!ok) return;
       _action(gigId, 'cancel_empty', cancelEmpty);
     });
+
+    // Per-bucket actions (Jun 2026 — parallel-per-type rotation).
+    // "+ Add <Type> artist" opens the existing add-artist picker; the
+    // picker auto-filters by slot type so only matching artists show.
+    panel.querySelectorAll('.hold-bucket-add').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const picker = panel.querySelector('#holdAddArtistPicker');
+        const trigger = panel.querySelector('#holdAddArtistBtn');
+        if (picker && trigger) {
+          if (picker.style.display !== 'block') trigger.click();
+          // Scroll the picker into view so it's not hidden below the fold.
+          setTimeout(() => picker.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+        }
+      });
+    });
+    // "Cancel <Type> slot(s)" cancels every open slot of that type via
+    // /hold/cancel-slots-by-type. Confirmation modal first.
+    panel.querySelectorAll('.hold-bucket-cancel').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const artistType = btn.dataset.type;
+        const ok = window.showConfirm
+          ? await new Promise(res => window.showConfirm(
+              `Cancel the empty ${artistType} slot(s)?`,
+              `This marks every open ${artistType} slot on this gig as cancelled. Booked slots of any type are untouched. The other artist-type rotations keep running.`,
+              () => res(true),
+              () => res(false),
+              { tone: 'warning', confirmStyle: 'danger',
+                confirmLabel: `Cancel ${artistType} Slot(s)`, cancelLabel: 'Keep Open' }
+            ))
+          : confirm(`Cancel the empty ${artistType} slot(s)?`);
+        if (!ok) return;
+        btn.disabled = true;
+        const orig = btn.textContent;
+        btn.textContent = '…';
+        try {
+          const res = await fetch(`/api/gigs/${gigId}/hold/cancel-slots-by-type`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ artist_type: artistType }),
+          });
+          if (!res.ok) throw new Error('Request failed');
+          const data = await res.json();
+          if (window.showSuccessModal && data.message) {
+            window.showSuccessModal('Slots cancelled', data.message);
+          }
+          await renderPanel(gigId);
+          if (typeof window.invalidateGigs === 'function') window.invalidateGigs();
+          if (typeof window.renderCalendar === 'function') window.renderCalendar();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = orig;
+          if (window.showErrorModal) window.showErrorModal('Could not cancel slots', e.message || 'Please try again.');
+        }
+      });
+    });
+
     _wireWaitlistEditing(gigId, panel);
     _wireAddedDragReorder(gigId, panel);
   }
@@ -291,17 +480,36 @@
         if (!ok) return;
         try {
           // Get current added artists (in order), drop the targeted one, POST.
-          const data = await (await fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' })).json();
+          // Audit Y4: check res.ok before .json() so the click doesn't
+          // silently no-op when the GET 4xx/5xx's. Surface the FastAPI
+          // {detail} message to the user via the styled error modal.
+          const statusRes = await fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' });
+          if (!statusRes.ok) {
+            let _detail = `Could not load the hold list (HTTP ${statusRes.status}).`;
+            try { const _j = await statusRes.json(); if (_j && _j.detail) _detail = _j.detail; } catch (_) {}
+            throw new Error(_detail);
+          }
+          const data = await statusRes.json();
           const remaining = (data.waitlist || [])
             .filter(w => w.added_post_creation && w.artist_id !== aid)
             .map(w => w.artist_id);
-          await fetch(`/api/gigs/${gigId}/hold/reorder`, {
+          const reorderRes = await fetch(`/api/gigs/${gigId}/hold/reorder`, {
             method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ queued_ids: remaining })
           });
+          if (!reorderRes.ok) {
+            let _detail = `Could not update the hold list (HTTP ${reorderRes.status}).`;
+            try { const _j = await reorderRes.json(); if (_j && _j.detail) _detail = _j.detail; } catch (_) {}
+            throw new Error(_detail);
+          }
           await renderPanel(gigId);
-        } catch (_) {}
+        } catch (e) {
+          const msg = (e && e.message) || 'Could not remove the artist from the waitlist.';
+          if (typeof window.showErrorModal === 'function') {
+            window.showErrorModal('Remove Failed', msg);
+          }
+        }
       });
     });
 
@@ -319,15 +527,15 @@
         addPicker.innerHTML = '<div style="padding:8px;color:var(--text-gray);font-size:0.74rem;">Loading…</div>';
         try {
           const venueId = await _resolveVenueId(gigId);
-          const [artistsRes, gigRes] = await Promise.all([
-            fetch(`/api/venues/${venueId}/preferred-artists`, { credentials: 'include' }),
-            // Fetch the gig's slots so we can filter artists by type
-            // match — same UX as the Hold Gig create picker.
-            fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' }),
-          ]);
+          // Fetch hold-status first so we know the gig date — needed to
+          // ask the preferred-artists endpoint for per-artist freq status
+          // (Jun 2026 — Hold-Gig add-artist UX).
+          const gigRes = await fetch(`/api/gigs/${gigId}/hold-status`, { credentials: 'include' });
+          const gigData = gigRes.ok ? await gigRes.json() : {};
+          const _qs = gigData.date ? `?for_gig_date=${encodeURIComponent(gigData.date)}` : '';
+          const artistsRes = await fetch(`/api/venues/${venueId}/preferred-artists${_qs}`, { credentials: 'include' });
           if (!artistsRes.ok) throw new Error();
           const data = await artistsRes.json();
-          const gigData = gigRes.ok ? await gigRes.json() : {};
           const approved = (Array.isArray(data) ? data : (data.preferred_artists || []))
             .filter(a => (a.status || 'approved') === 'approved');
           // Already-on-waitlist ids
@@ -362,7 +570,7 @@
           // modal: type icon, name, (Override Pay), click toggles.
           // Per user note: only artists matching a slot are listed +
           // pay override shown.
-          const ICON = { 'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'❓' };
+          const ICON = { 'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'❓', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
           function _payFor(a) {
             const dollars = Number(a.pay_dollars_override) || 0;
             const cents = Number(a.pay_cents_override) || 0;
@@ -372,17 +580,31 @@
             }
             return '$--';
           }
+          // Count under-freq candidates so we can surface the summary
+          // note explaining the auto-waiver (Jun 2026).
+          const _underFreqCount = candidates.filter(a => a.freq_status && a.freq_status.under_limit).length;
+          const _summaryNote = _underFreqCount > 0
+            ? `<div style="font-size:0.64rem;color:#fbbf24;margin:2px 4px 6px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.25);border-radius:4px;padding:5px 7px;line-height:1.35;"><strong>${_underFreqCount} artist${_underFreqCount!==1?'s':''}</strong> ${_underFreqCount===1?'is':'are'} under this venue's frequency policy. Adding them will waive the rule for this gig only.</div>`
+            : '';
+          function _freqChip(a) {
+            const fs = a.freq_status;
+            if (!fs || !fs.under_limit) return '';
+            return `<span title="Last gig here ${fs.abs_days_between} day${fs.abs_days_between!==1?'s':''} ${fs.days_between>0?'before':'after'} this gig (venue requires ${fs.freq_days})" style="flex:0 0 auto;font-size:0.62rem;font-weight:600;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.30);border-radius:3px;padding:1px 5px;">freq ${fs.abs_days_between}d</span>`;
+          }
           addPicker.innerHTML = '<div style="font-size:0.66rem;color:var(--text-gray);margin:2px 4px 6px;font-style:italic;">Click an artist to add them to the waitlist (matched to your open slots).</div>' +
+            _summaryNote +
             candidates.map(a => {
               const aid = parseInt(a.artist_id || a.id, 10);
               const nm = _esc(a.name || ('Artist ' + aid));
               const icon = ICON[a.artist_type] || '🎵';
               const pay = _payFor(a);
+              const chip = _freqChip(a);
               return `<button type="button" class="hold-mgmt-add" data-aid="${aid}"
                 title="${_esc(a.artist_type || 'Artist')}"
                 style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:5px 8px;margin-bottom:3px;background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--text);cursor:pointer;font-size:0.78rem;border-radius:4px;">
                 <span style="flex:0 0 auto;">${icon}</span>
                 <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${nm}</span>
+                ${chip}
                 <span style="flex:0 0 auto;opacity:0.7;font-weight:500;color:var(--text-gray);">(${pay})</span>
               </button>`;
             }).join('');
@@ -449,9 +671,27 @@
       if (res.ok && data.ok) {
         // Re-render the panel with new state (or remove it if hold cleared)
         await renderPanel(gigId);
-        // Also refresh the calendar so the gig's visual state updates
-        if (typeof window.loadGigs === 'function') {
+        // Also refresh the calendar AND the Pending Offers banner so
+        // the gig's visual state updates immediately on both surfaces
+        // (without waiting for the 60s banner poll).
+        try { if (typeof window.invalidateGigs === 'function') window.invalidateGigs(); } catch (_) {}
+        if (typeof window.refreshGigs === 'function') {
+          try { await window.refreshGigs(); } catch (_) {}
+        } else if (typeof window.loadGigs === 'function') {
           try { window.loadGigs(); } catch (_) {}
+        }
+        if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+          try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
+        }
+        // Surface a success message describing what actually happened
+        // — confirms to the venue that nothing was deleted unexpectedly.
+        if (typeof window.showSuccessModal === 'function') {
+          const msg = (kind === 'open_all')
+            ? 'Empty slots are now open for any artist to book. The slot rows are still there — they just left the hold cycle.'
+            : (kind === 'cancel_empty')
+                ? `Cancelled ${data.cancelled_count || 'the'} empty slot${(data.cancelled_count === 1) ? '' : 's'}. The rows stay on the gig in a cancelled state; booked slots are unaffected.`
+                : (data.message || 'Done.');
+          try { window.showSuccessModal('Done', msg); } catch (_) {}
         }
       } else {
         btn.textContent = '✗ ' + (data.message || data.error || 'Failed');

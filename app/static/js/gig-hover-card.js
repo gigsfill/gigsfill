@@ -140,7 +140,7 @@
       'awaiting_venue_contract',  // venue needs to countersign
       'pending_venue_approval',   // same-day approval pending
     ]);
-    if (g.is_multi_slot && Array.isArray(g.slots)) {
+    if (Array.isArray(g.slots) && g.slots.length > 1) {
       totalSlots = g.slots.length;
       const takenSlots = g.slots.filter(s => s.artist_id || s.artist_name);
       const reallyBooked = takenSlots.filter(s => s.status === 'booked');
@@ -164,7 +164,7 @@
         header = parts.join(' · ');
       }
       artistChips = []; // names are in the per-slot breakdown below
-    } else if (g.is_multi_slot) {
+    } else if ((parseInt(g.total_slots_count) || 0) > 1) {
       // Multi-slot gig whose .slots array hasn't been hydrated yet
       // (slot fetch failed, race condition, or an endpoint we missed).
       // Without this branch we'd fall through to the single-slot
@@ -172,6 +172,7 @@
       // parents) and renders "Open" even when the gig is fully booked.
       // booked_slots_count / total_slots_count come from the standard
       // calendar endpoints, so use those to summarize state.
+      // Jul 2026: was gated on the deprecated is_multi_slot flag.
       const _booked = parseInt(g.booked_slots_count) || 0;
       const _total  = parseInt(g.total_slots_count) || 0;
       if (_booked <= 0) {
@@ -231,10 +232,19 @@
       const _sorted = [...g.slots].sort(
         (a, b) => (a.start_time || '').localeCompare(b.start_time || '')
       );
+      // Type icon per slot — falls back to the gig's umbrella
+      // artist_type when the slot doesn't carry its own. Gives the
+      // viewer an at-a-glance signal that a mixed-type multi-slot gig
+      // has e.g. 2 Live Band rows + 1 DJ row, so they know why some
+      // rows would be bookable for a DJ and others wouldn't. (Jun 2026
+      // user request.)
+      const _slotIconMap = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
       slotLines = _sorted.map(s => {
         const tStart = fmtTime(s.start_time);
         const tEnd   = s.end_time ? fmtTime(s.end_time) : '';
         const time   = tEnd ? `${tStart} – ${tEnd}` : tStart;
+        const slotType = (s.artist_type && String(s.artist_type).trim()) || g.artist_type || '';
+        const typeIcon = _slotIconMap[slotType] || '🎵';
         let who = '', tag = '', tagClass = '';
         const st = s.status || '';
         if (st === 'booked') {
@@ -251,7 +261,7 @@
           who = s.artist_name || st || '—';
           tag = st; tagClass = '';
         }
-        return { time, who, tag, tagClass, artistId: s.artist_id || null };
+        return { time, who, tag, tagClass, artistId: s.artist_id || null, typeIcon, slotType };
       });
     }
 
@@ -299,8 +309,14 @@
     const lineupChips = isBooked ? intersect(reqLineup, artistLineup) : reqLineup;
     const styleChips  = isBooked ? intersect(reqStyles, artistStyles) : reqStyles;
 
+    // Optional gig title — venues sometimes set one ("Acoustic Tuesdays",
+    // "Indie Night"). Show it as a small dimmed subhead under the status
+    // row so the viewer knows what the event is called without crowding
+    // the artist/booking line.
+    const titleText = (g.title && String(g.title).trim()) || '';
     return {
       __card: true,
+      title: titleText,
       headerPrefix: header,           // e.g. "Booked — " or "Open"
       artistChips: artistChips,       // [{id, name}] — render as links once resolved
       openSlotsSuffix: openSlots > 0 && artistChips.length > 0 ? ` (+${openSlots} open)` : '',
@@ -353,6 +369,12 @@
       );
     }
 
+    // Optional gig title — shown as a small dimmed subhead between the
+    // status header and the date block.
+    if (p.title) {
+      rows.push(`<div class="gf-ghc-title">${esc(p.title)}</div>`);
+    }
+
     // Date / time block (no clock icon).
     const dt = [];
     if (p.date) dt.push(`<div class="gf-ghc-date">${esc(p.date)}</div>`);
@@ -377,7 +399,14 @@
         const tagHtml = s.tag
           ? `<span class="gf-ghc-slot-tag ${esc(s.tagClass || '')}">${esc(s.tag)}</span>`
           : '<span class="gf-ghc-slot-tag-empty"></span>';
+        // Type icon sits in its own grid cell BEFORE the time so the
+        // viewer can scan a vertical icon column to spot the type
+        // mix of a multi-slot gig.
+        const iconHtml = s.typeIcon
+          ? `<span class="gf-ghc-slot-icon" title="${esc(s.slotType || '')}">${s.typeIcon}</span>`
+          : '<span class="gf-ghc-slot-icon"></span>';
         return `<div class="gf-ghc-slot-line">
+          ${iconHtml}
           <span class="gf-ghc-slot-time">${esc(s.time)}</span>
           ${whoHtml}
           ${tagHtml}
@@ -419,7 +448,7 @@
     // Comedian / etc.) — it's a single value, not a comma-list. Add
     // the matching emoji icon from the site-wide convention.
     if (p.artistType) {
-      const _typeIcons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠'};
+      const _typeIcons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
       const _icon = _typeIcons[p.artistType] || '🎵';
       badges.push(`<span class="gf-ghc-badge gf-ghc-dim">${_icon} ${esc(p.artistType)}</span>`);
     }

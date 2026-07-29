@@ -99,6 +99,15 @@ def get_db_connection():
     else:
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
+        # Audit fix (Jul 2026 full-site audit): SQLite requires
+        # PRAGMA foreign_keys=ON per-connection. Was only set on the
+        # SQLAlchemy engine event, so raw callers (main.py:484,632,658,
+        # messages.py:29, and this helper's own users) skipped FK
+        # enforcement — that's how the venue=3/user=6 orphans got in.
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
         return conn
 
 
@@ -215,6 +224,48 @@ def _sqlite_to_pg(sql: str) -> str:
         r"strftime\(\s*'%Y-%m-%d'\s*,\s*([^)]+)\)",
         r"to_char((\1)::timestamp, 'YYYY-MM-DD')", s, flags=_re.IGNORECASE
     )
+    # Hold-audit Y3 gaps (Jul 1 2026):
+    #   date('now', 'localtime') / time('now', 'localtime')
+    #   date(col, '+N unit')     / time(col, '+N unit')
+    # These forms show up in scheduler.py (gig-start cleanup) and
+    # open_gig_digest.py (queue pruning). SQLite treats 'localtime' as
+    # "apply the server's TZ offset"; Postgres has no equivalent single-
+    # arg form. Rewriting to CURRENT_DATE / CURRENT_TIMESTAMP loses the
+    # localtime nuance, but every caller of these forms already applies
+    # the venue's tz upstream anyway (venue-local `today` string).
+    s = _re.sub(
+        r"date\(\s*'now'\s*,\s*'\s*localtime\s*'\s*\)",
+        'CURRENT_DATE', s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(
+        r"time\(\s*'now'\s*,\s*'\s*localtime\s*'\s*\)",
+        "to_char(CURRENT_TIMESTAMP, 'HH24:MI:SS')", s, flags=_re.IGNORECASE
+    )
+    # time(col, '+N unit') / date(col, '+N unit') where col is not 'now'
+    s = _re.sub(
+        r"time\(\s*([a-zA-Z_][a-zA-Z_0-9\.]*)\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+        lambda m: f"to_char((({m.group(1)})::timestamp {m.group(2)} INTERVAL '{m.group(3)} {m.group(4)}'), 'HH24:MI:SS')",
+        s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(
+        r"date\(\s*([a-zA-Z_][a-zA-Z_0-9\.]*)\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+        lambda m: f"((({m.group(1)})::date {m.group(2)} INTERVAL '{m.group(3)} {m.group(4)}'))",
+        s, flags=_re.IGNORECASE
+    )
+    # GROUP_CONCAT → STRING_AGG (Jul 1 2026 audit R3)
+    s = _re.sub(
+        r"\bGROUP_CONCAT\(\s*([^,)]+)\s*,\s*'([^']*)'\s*\)",
+        r"STRING_AGG((\1)::text, '\2')", s, flags=_re.IGNORECASE
+    )
+    s = _re.sub(
+        r"\bGROUP_CONCAT\(\s*([^,)]+?)\s*\)",
+        r"STRING_AGG((\1)::text, ',')", s, flags=_re.IGNORECASE
+    )
+    # INSTR(a, b) → POSITION(b IN a). Note argument order flip. (Audit R5)
+    s = _re.sub(
+        r"\bINSTR\(\s*([^,)]+?)\s*,\s*([^)]+?)\s*\)",
+        r"POSITION((\2) IN (\1))", s, flags=_re.IGNORECASE
+    )
     return s
 
 
@@ -301,7 +352,13 @@ def _setup_conn():
         conn.autocommit = False
         return conn
     else:
-        return sqlite3.connect(str(DB_PATH))
+        # Jul 2026 full-site audit: enable FK enforcement per-connection.
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
+        return conn
 
 
 def _setup_placeholder(sql):
@@ -364,7 +421,10 @@ def setup_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS artists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            -- Nullable so tombstoned rows can release ownership when the
+            -- owner deletes their account (see entity_delete.py:392, and
+            -- the 2026-07-26 fix for the FK-blocked delete_account bug).
+            user_id INTEGER,
             name VARCHAR,
             city VARCHAR,
             state VARCHAR,
@@ -401,11 +461,25 @@ def setup_database():
         "styles VARCHAR",
         "avg_rating REAL DEFAULT NULL",
         "review_count INTEGER DEFAULT 0",
+        # Jul 1 2026: gates MC-type artists (Open Mic MC / Karaoke MC)
+        # against slots that require the artist to bring PA/mic/speakers.
+        # Extended to any type — venue can require equipment for a Live
+        # Band slot too — but the UI only exposes the checkbox on MC types.
+        "has_own_equipment BOOLEAN DEFAULT FALSE",
         # Comma-separated list of brand keys in the order the user wants them
         # displayed on the public profile's Social Media tab. NULL means use
         # the natural fallback order from artist-profile.html. Example:
         # "instagram,spotify,website,facebook,youtube,twitter,tiktok"
         "social_order TEXT",
+        # Jul 2026: soft-delete tombstone marker. When an artist is deleted,
+        # instead of hard-deleting the row and orphaning every gig/txn/review
+        # that referenced it, we set `deleted_at`, prefix the name with
+        # "[Deleted]", and wipe owner-private data (uploads, W-9, payment
+        # methods, entity_users). Historical joins keep resolving — a venue
+        # browsing their payment history still sees "played [Deleted] Fridays
+        # Past" rather than a NULL row. Active-listing queries filter
+        # `deleted_at IS NULL` so tombstones don't show up in discovery.
+        "deleted_at TIMESTAMP DEFAULT NULL",
     ])
     
     # ==========================================
@@ -414,7 +488,10 @@ def setup_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS venues (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            -- Nullable so tombstoned rows can release ownership when the
+            -- owner deletes their account (see entity_delete.py:591, and
+            -- the 2026-07-26 fix for the FK-blocked delete_account bug).
+            user_id INTEGER,
             venue_name VARCHAR,
             description TEXT,
             address_line_1 VARCHAR,
@@ -425,15 +502,15 @@ def setup_database():
             latitude FLOAT,
             longitude FLOAT,
             venue_size VARCHAR,
-            has_stage BOOLEAN DEFAULT 0,
+            has_stage BOOLEAN DEFAULT FALSE,
             stage_width_ft INTEGER,
             stage_depth_ft INTEGER,
             setup_location_description TEXT,
-            has_sound_equipment BOOLEAN DEFAULT 0,
+            has_sound_equipment BOOLEAN DEFAULT FALSE,
             sound_equipment_description TEXT,
-            has_sound_engineer BOOLEAN DEFAULT 0,
+            has_sound_engineer BOOLEAN DEFAULT FALSE,
             sound_engineer_details TEXT,
-            has_lighting BOOLEAN DEFAULT 0,
+            has_lighting BOOLEAN DEFAULT FALSE,
             lighting_description TEXT,
             load_in_out_details TEXT,
             arrival_time_type VARCHAR,
@@ -468,7 +545,7 @@ def setup_database():
         "stage_depth_ft INTEGER",
         "setup_location_description TEXT",
         "sound_equipment_description TEXT",
-        "has_sound_engineer BOOLEAN DEFAULT 0",
+        "has_sound_engineer BOOLEAN DEFAULT FALSE",
         "sound_engineer_details TEXT",
         "lighting_description TEXT",
         "load_in_out_details TEXT",
@@ -507,7 +584,7 @@ def setup_database():
             artist_type VARCHAR,
             band_formats VARCHAR,
             styles VARCHAR,
-            is_recurring BOOLEAN DEFAULT 0,
+            is_recurring BOOLEAN DEFAULT FALSE,
             recurring_group_id VARCHAR,
             recurrence_pattern TEXT,
             recurring INTEGER,
@@ -524,7 +601,7 @@ def setup_database():
     _add_columns(cursor, "gigs", [
         "title VARCHAR",
         "pay INTEGER",
-        "is_recurring BOOLEAN DEFAULT 0",
+        "is_recurring BOOLEAN DEFAULT FALSE",
         "recurring_group_id VARCHAR",
         "recurrence_pattern TEXT",
         "recurring INTEGER",
@@ -576,6 +653,13 @@ def setup_database():
         # backend.utils.get_venue_timezone_str() if NULL/empty. Used to compute
         # `transactions.scheduled_process_at` in venue-local time → UTC.
         "timezone TEXT",
+        # Jul 2026: soft-delete tombstone marker. See artists.deleted_at for
+        # the full rationale. On venue delete: cancel future in-flight gigs
+        # + notify counterparties + wipe owner-private data, but preserve
+        # completed gigs, past transactions, and reviews so venue user's
+        # history at other venues, artist's payment history, etc. all keep
+        # showing the correct (now "[Deleted] X") name.
+        "deleted_at TIMESTAMP DEFAULT NULL",
     ])
     
     # ==========================================
@@ -610,6 +694,13 @@ def setup_database():
         "artist_type VARCHAR",
         "band_formats VARCHAR",
         "styles VARCHAR",
+        # Jul 1 2026: gates candidates by artist.has_own_equipment. NULL
+        # = venue didn't specify (no filter fires); TRUE = artist must
+        # have equipment; FALSE = venue provides. Exposed on the venue
+        # form only for MC-type slots (Open Mic MC / Karaoke MC), but
+        # the backend honors it for any type so future extensions come
+        # free.
+        "requires_equipment BOOLEAN DEFAULT NULL",
     ])
     # ── Door deal / split-pay (Jun 2026) ─────────────────────────────────
     # `pay` on a slot is the venue-promised guarantee. For door deals,
@@ -632,8 +723,47 @@ def setup_database():
         "door_receipts_cents INTEGER",
         "settled_pay_cents INTEGER",
         "settled_at TIMESTAMP",
+        # apply_override (Jun 2026): per-slot opt-in toggle for whether
+        # this slot honors the per-artist pay override. Default 0 = ignore
+        # (door slots' guarantee is final). When 1, the override raises
+        # the guarantee floor — "$10 + 50% door" becomes "$15 + 50% door"
+        # for an artist with a $15 override. Flat slots ALWAYS honor
+        # overrides regardless of this column.
+        "apply_override INTEGER DEFAULT 0",
     ])
-    
+
+    # Jul 2026 refactor: every gig must have at least one gig_slots row.
+    # For any legacy gig without one (pre-multi-slot data), synthesize a
+    # slot from the gig-level fields. Idempotent — running twice is a
+    # no-op. Runs on every startup so any restored-from-backup or
+    # externally-inserted legacy row gets normalized automatically.
+    try:
+        cursor.execute("""
+            INSERT INTO gig_slots
+                (gig_id, slot_number, start_time, end_time, pay,
+                 artist_id, status, artist_type, band_formats, styles,
+                 deal_type, door_pct, guarantee_cents, apply_override,
+                 created_at)
+            SELECT g.id, 1, g.start_time, g.end_time, COALESCE(g.pay, 0),
+                   g.artist_id,
+                   CASE WHEN g.artist_id IS NOT NULL AND g.status = 'booked' THEN 'booked'
+                        ELSE 'open' END,
+                   g.artist_type, g.band_formats, g.styles,
+                   'flat', 0, 0, 0, CURRENT_TIMESTAMP
+            FROM gigs g
+            WHERE g.id NOT IN (SELECT DISTINCT gig_id FROM gig_slots)
+        """)
+        # Also normalize is_multi_slot=1 across the board — every gig is
+        # slot-shaped now.
+        cursor.execute("UPDATE gigs SET is_multi_slot=1 WHERE COALESCE(is_multi_slot, 0) = 0")
+    except Exception:
+        # Non-fatal — legacy migration; don't block startup if the
+        # backfill fails for exotic reasons.
+        try:
+            cursor.connection.rollback()
+        except Exception:
+            pass
+
     # ==========================================
     # VENUE CONTRACTS (contract templates per venue)
     # ==========================================
@@ -928,6 +1058,29 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_used_reset_tokens_used_at ON used_reset_tokens(used_at)")
 
     # ==========================================
+    # LOGIN ATTEMPTS (per-(email, IP) lockout state) — Jul 1 2026
+    # ==========================================
+    # Audit fix Auth-R3: previously kept in a module-level Python dict, so
+    # under the 2-uvicorn-worker topology attempts on worker A didn't
+    # count on worker B (effective threshold doubled) and every restart
+    # wiped state. DB-backed table is worker-safe + survives restarts.
+    # Composite PK on (email, ip) matches the per-account/per-IP lockout
+    # semantics kept from the May 2026 audit — a per-account-only lockout
+    # would let attackers DoS victims by locking their email from any IP.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            email        TEXT NOT NULL,
+            ip           TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            locked_until DATETIME,
+            updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(email, ip)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_email ON login_attempts(email)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_locked_until ON login_attempts(locked_until)")
+
+    # ==========================================
     # VANITY URLS (slug → entity) — May 2026
     # ==========================================
     # Public profile share URLs: gigsfill.com/fridayspast resolves to either
@@ -1013,7 +1166,7 @@ def setup_database():
             venue_id INTEGER,
             artist_id INTEGER,
             cancellation_reason TEXT,
-            is_read BOOLEAN DEFAULT 0,
+            is_read BOOLEAN DEFAULT FALSE,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (gig_id) REFERENCES gigs(id),
@@ -1061,6 +1214,22 @@ def setup_database():
         "blast_all_enabled INTEGER DEFAULT 0",        # whether radius blast is enabled for this row
         "blink_enabled INTEGER DEFAULT 0",            # whether to blink gig bubble after email fires
         "blink_color TEXT DEFAULT NULL",              # hex color for blink (NULL = use system default)
+        # Jul 2026: per-open-gig-notification override. When a 4w/2w/1w/36h
+        # reminder fires, the scheduler sets gigs.frequency_exempt=1 so
+        # preferred artists can book even if inside their frequency window.
+        # Venues that want the reminder to fire but keep frequency limits
+        # in place set waive_frequency=0. Default 1 = current behavior.
+        "waive_frequency INTEGER DEFAULT 1",
+        # Jul 2026: Cancelled-gig-blast folded into the 4w/2w/1w/36h rows.
+        # fire_cancelled_gig_blast now picks the smallest window that covers
+        # days-until-gig AND has at least one cancel_* flag ON. If
+        # cancel_notify_preferred=1 → email that row's preferred artists.
+        # If cancel_notify_all_enabled=1 → also email non-preferred within
+        # cancel_notify_all_radius. waive_frequency on the same row is
+        # honored (sets gigs.frequency_exempt=1).
+        "cancel_notify_preferred INTEGER DEFAULT 0",
+        "cancel_notify_all_enabled INTEGER DEFAULT 0",
+        "cancel_notify_all_radius INTEGER DEFAULT 20",
     ])
     
     # ==========================================
@@ -1105,7 +1274,7 @@ def setup_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             notification_type TEXT NOT NULL,
-            enabled BOOLEAN DEFAULT 1,
+            enabled BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id),
             UNIQUE(user_id, notification_type)
@@ -1120,7 +1289,7 @@ def setup_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             notification_type TEXT NOT NULL,
-            enabled BOOLEAN DEFAULT 0,
+            enabled BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id),
             UNIQUE(user_id, notification_type)
@@ -1186,8 +1355,8 @@ def setup_database():
             payment_type VARCHAR NOT NULL,
             account_identifier VARCHAR NOT NULL,
             account_display_name VARCHAR,
-            is_preferred BOOLEAN DEFAULT 0,
-            is_verified BOOLEAN DEFAULT 0,
+            is_preferred BOOLEAN DEFAULT FALSE,
+            is_verified BOOLEAN DEFAULT FALSE,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
@@ -1206,7 +1375,7 @@ def setup_database():
             stripe_account_id VARCHAR,
             stripe_publishable_key VARCHAR,
             stripe_secret_key VARCHAR,
-            stripe_onboarding_complete BOOLEAN DEFAULT 0,
+            stripe_onboarding_complete BOOLEAN DEFAULT FALSE,
             paypal_email VARCHAR,
             venmo_username VARCHAR,
             zelle_email VARCHAR,
@@ -1223,7 +1392,7 @@ def setup_database():
         "stripe_customer_id VARCHAR",
         "stripe_payment_method_id VARCHAR",
         "stripe_connect_account_id VARCHAR",
-        "stripe_connect_onboarding_complete BOOLEAN DEFAULT 0",
+        "stripe_connect_onboarding_complete BOOLEAN DEFAULT FALSE",
         # Persistent token embedded in the onboarding email URL. Per
         # entity, unguessable, reusable. The redirect endpoint
         # /api/stripe/onboarding/<token> mints a FRESH Stripe
@@ -1360,7 +1529,7 @@ def setup_database():
         ("platform_fee_percent", "10", "Platform fee percentage charged to venue"),
         ("platform_fee_split", "split", "How fee is split: split, venue_only, artist_only"),
         ("platform_min_fee", "20", "Minimum platform fee in dollars"),
-        ("payments_enabled", "0", "Whether live Stripe payments are active"),
+        ("payments_enabled", "1", "DEPRECATED (Jul 1 2026 — Test Mode removed). Kept for historical rows; code always treats payments as live."),
         ("payout_time", "17:00", "Daily payout time in 24hr format (HH:MM)"),
         ("platform_timezone", "America/Los_Angeles", "Platform timezone for scheduling (IANA format)"),
         ("admin_paypal_email", "", "PayPal business email"),
@@ -1402,7 +1571,7 @@ def setup_database():
         # revert quickly if the digest pipeline has issues — flip to false in
         # admin Platform Settings without a code change.
         ("open_gig_daily_digest_enabled", "true", "Bundle open-gig notifications into one morning email per artist (recommended). Set to false to revert to per-gig per-window send."),
-        ("open_gig_daily_digest_hour",    "9",    "Local-time hour (0-23) to send each artist's daily open-gig digest. Defaults to 9 (9 AM)."),
+        ("open_gig_daily_digest_hour",    "6",    "Local-time hour (0-23) to send each artist's daily open-gig digest. Defaults to 6 (6 AM in the artist's own time zone)."),
     ]
 
     for setting_key, setting_value, description in default_settings:
@@ -1502,7 +1671,7 @@ def setup_database():
         CREATE TABLE IF NOT EXISTS venue_payment_overrides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             venue_id INTEGER NOT NULL UNIQUE,
-            payments_suspended BOOLEAN DEFAULT 1,
+            payments_suspended BOOLEAN DEFAULT TRUE,
             suspended_by INTEGER,
             suspended_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             notes TEXT,
@@ -1547,11 +1716,18 @@ def setup_database():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
-    # Seed autoincrement so ticket IDs start at 100000
-    c2.execute("""
-        INSERT OR IGNORE INTO sqlite_sequence (name, seq)
-        VALUES ('support_tickets', 99999)
-    """)
+    # Seed autoincrement so ticket IDs start at 100000.
+    # Postgres: use ALTER SEQUENCE. SQLite: seed sqlite_sequence.
+    if _IS_POSTGRES:
+        try:
+            c2.execute("SELECT setval(pg_get_serial_sequence('support_tickets','id'), 99999, true)")
+        except Exception:
+            pass  # Table may be freshly created; sequence will start at 1 and skip is cosmetic.
+    else:
+        c2.execute("""
+            INSERT OR IGNORE INTO sqlite_sequence (name, seq)
+            VALUES ('support_tickets', 99999)
+        """)
     
     # COMING SOON EMAIL CAPTURE
     c2.execute("""
@@ -1826,48 +2002,60 @@ def setup_database():
     conn3.close()
     
     # ─── MIGRATION: ensure flyers.venue_id is nullable (for admin site-wide templates) ───
-    try:
-        import sqlite3 as _sqlite3
-        _mc = _sqlite3.connect(str(db_path))
-        _mc.row_factory = _sqlite3.Row
-        _cur = _mc.cursor()
-        # Check if venue_id has a NOT NULL constraint on flyers table
-        _tbl_info = _cur.execute("PRAGMA table_info(flyers)").fetchall()
-        _venue_col = next((r for r in _tbl_info if r['name'] == 'venue_id'), None)
-        if _venue_col and _venue_col['notnull'] == 1:
-            # Recreate table without NOT NULL on venue_id
-            _cur.executescript("""
-                PRAGMA foreign_keys=OFF;
-                BEGIN;
-                CREATE TABLE IF NOT EXISTS flyers_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    venue_id INTEGER,
-                    gig_id INTEGER,
-                    artist_id INTEGER,
-                    name TEXT,
-                    canvas_data TEXT DEFAULT '{}',
-                    thumbnail_data TEXT DEFAULT '',
-                    is_template INTEGER DEFAULT 0,
-                    size_preset TEXT DEFAULT 'instagram_post',
-                    width INTEGER DEFAULT 1080,
-                    height INTEGER DEFAULT 1350,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                );
-                INSERT INTO flyers_new SELECT id, venue_id, gig_id, artist_id, name, canvas_data,
-                    COALESCE(thumbnail_data,''), is_template,
-                    COALESCE(size_preset,'instagram_post'), COALESCE(width,1080), COALESCE(height,1350),
-                    created_at, updated_at FROM flyers;
-                DROP TABLE flyers;
-                ALTER TABLE flyers_new RENAME TO flyers;
-                COMMIT;
-                PRAGMA foreign_keys=ON;
-            """)
-            _mc.commit()
-        _mc.close()
-    except Exception as _e:
-        import logging as _log
-        _log.getLogger("gigsfill.db").warning(f"flyers migration: {_e}")
+    # SQLite path only: the `PRAGMA + executescript` idiom is SQLite-specific.
+    # On Postgres, use plain `ALTER TABLE ... ALTER COLUMN ... DROP NOT NULL`
+    # which is idempotent and doesn't require the recreate dance.
+    if _IS_POSTGRES:
+        try:
+            from sqlalchemy import text as _pt
+            with engine.begin() as _pg:
+                _pg.execute(_pt("ALTER TABLE flyers ALTER COLUMN venue_id DROP NOT NULL"))
+        except Exception as _pge:
+            import logging as _log
+            _log.getLogger("gigsfill.db").info(f"flyers venue_id drop-not-null skip (PG): {_pge}")
+    else:
+        try:
+            import sqlite3 as _sqlite3
+            _mc = _sqlite3.connect(str(db_path))
+            _mc.row_factory = _sqlite3.Row
+            _cur = _mc.cursor()
+            # Check if venue_id has a NOT NULL constraint on flyers table
+            _tbl_info = _cur.execute("PRAGMA table_info(flyers)").fetchall()
+            _venue_col = next((r for r in _tbl_info if r['name'] == 'venue_id'), None)
+            if _venue_col and _venue_col['notnull'] == 1:
+                # Recreate table without NOT NULL on venue_id
+                _cur.executescript("""
+                    PRAGMA foreign_keys=OFF;
+                    BEGIN;
+                    CREATE TABLE IF NOT EXISTS flyers_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        venue_id INTEGER,
+                        gig_id INTEGER,
+                        artist_id INTEGER,
+                        name TEXT,
+                        canvas_data TEXT DEFAULT '{}',
+                        thumbnail_data TEXT DEFAULT '',
+                        is_template INTEGER DEFAULT 0,
+                        size_preset TEXT DEFAULT 'instagram_post',
+                        width INTEGER DEFAULT 1080,
+                        height INTEGER DEFAULT 1350,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+                    INSERT INTO flyers_new SELECT id, venue_id, gig_id, artist_id, name, canvas_data,
+                        COALESCE(thumbnail_data,''), is_template,
+                        COALESCE(size_preset,'instagram_post'), COALESCE(width,1080), COALESCE(height,1350),
+                        created_at, updated_at FROM flyers;
+                    DROP TABLE flyers;
+                    ALTER TABLE flyers_new RENAME TO flyers;
+                    COMMIT;
+                    PRAGMA foreign_keys=ON;
+                """)
+                _mc.commit()
+            _mc.close()
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger("gigsfill.db").warning(f"flyers migration: {_e}")
     
     # ==========================================
     # NEW TABLES: reviews, messages, availability
@@ -1910,6 +2098,128 @@ def setup_database():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Jul 2026 audit (D-M2): onboarding_visits was referenced by
+    # routes/onboarding.py but never created here. Prod picked it up
+    # ambiently; fresh installs got 500s on any onboarding endpoint.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS onboarding_visits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            task_key TEXT NOT NULL,
+            visited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(entity_type, entity_id, task_key)
+        )
+    """)
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_visits_entity ON onboarding_visits(entity_type, entity_id)")
+
+    # Jul 2026: demo request queue — prospects submit up to 3 preferred
+    # time slots; admin gets an email with 3 one-click HMAC-signed accept
+    # links, or handles from the admin panel. Preferred slots are stored
+    # as JSON so we don't need extra join tables for a simple 3-column
+    # structure.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS demo_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            first_name TEXT,
+            last_name TEXT,
+            email TEXT NOT NULL,
+            phone TEXT,
+            entity_type TEXT,
+            entity_name TEXT,
+            city TEXT,
+            state TEXT,
+            notes TEXT,
+            preferred_slots_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            scheduled_slot_index INTEGER,
+            scheduled_at TEXT,
+            admin_notes TEXT,
+            reminder_sent_at TEXT,
+            history_json TEXT,
+            slots_version INTEGER DEFAULT 1,
+            meeting_url TEXT,
+            admin_suggested_slots_json TEXT,
+            outcome_notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            responded_at TIMESTAMP
+        )
+    """)
+    # Additive migration: add first_name/last_name + reminder_sent_at to existing installs
+    try:
+        _dr_cols = {r[1] for r in c4.execute("PRAGMA table_info(demo_requests)").fetchall()}
+        if "first_name" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN first_name TEXT")
+        if "last_name" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN last_name TEXT")
+        # Jul 2026: morning-of reminder. Naive UTC timestamp — stamped
+        # when the reminder emails go out so we don't double-send.
+        if "reminder_sent_at" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN reminder_sent_at TEXT")
+        # Jul 18 2026: per-row Teams / Zoom / Meet URL override. When set,
+        # this URL is embedded into confirmation + reminder emails + the
+        # ICS attachment for THIS demo; otherwise the platform-wide
+        # `demo_meeting_url` setting is used as the default.
+        if "meeting_url" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN meeting_url TEXT")
+        # Jul 18 2026: admin-suggested counter-slots on decline. When
+        # admin declines a demo and picks 1-3 alternative times, they
+        # land here as a JSON list; the decline email then shows those
+        # to the prospect as one-click accept buttons (mirroring the
+        # admin's own accept email from the prospect side).
+        if "admin_suggested_slots_json" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN admin_suggested_slots_json TEXT")
+        # Jul 18 2026: post-demo internal notes. Populated from the
+        # outcome modal when admin marks Completed / No Show — free
+        # text about how the demo went, follow-up needed, etc. Never
+        # shown to the prospect; strictly internal.
+        if "outcome_notes" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN outcome_notes TEXT")
+        # Jul 18 2026: prospect-driven cancel + reschedule from confirmation email.
+        # `history_json` is an append-only JSON array of prior actions
+        # (scheduled/rescheduled/cancelled) so we retain an audit trail across
+        # many rounds. `slots_version` increments every time preferred_slots
+        # changes — it's encoded in admin accept tokens so a stale email link
+        # (from before a reschedule) can be rejected with a helpful message.
+        if "history_json" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN history_json TEXT")
+        if "slots_version" not in _dr_cols:
+            c4.execute("ALTER TABLE demo_requests ADD COLUMN slots_version INTEGER DEFAULT 1")
+    except Exception:
+        pass
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_demo_requests_status ON demo_requests(status, created_at)")
+    # Reminder scanner index — every scheduler tick reads pending
+    # scheduled demos whose reminder hasn't fired yet.
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_demo_requests_pending_reminder ON demo_requests(status, reminder_sent_at) WHERE status='scheduled' AND reminder_sent_at IS NULL")
+
+    # Jul 19 2026: lightweight "Send us a note" contact form for
+    # not-yet-signed-up visitors — separate from support tickets (which
+    # require a login) and from demo_requests (which forces a meeting).
+    # Anonymous submitters land here with just name + email + message.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS contact_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            message TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'new',
+            admin_notes TEXT,
+            source_ip TEXT,
+            replies_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            responded_at TIMESTAMP
+        )
+    """)
+    # `replies_json` may not exist on installs created before Jul 19 — add it.
+    try:
+        _cm_cols = {r[1] for r in c4.execute("PRAGMA table_info(contact_messages)").fetchall()}
+        if "replies_json" not in _cm_cols:
+            c4.execute("ALTER TABLE contact_messages ADD COLUMN replies_json TEXT")
+    except Exception:
+        pass
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_contact_messages_status ON contact_messages(status, created_at DESC)")
 
     c4.execute("""
         CREATE TABLE IF NOT EXISTS venue_reviews (
@@ -1967,6 +2277,55 @@ def setup_database():
     c4.execute("CREATE INDEX IF NOT EXISTS idx_messages_gig ON gig_messages(gig_id)")
     c4.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON gig_messages(sender_user_id)")
     c4.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON gig_messages(is_read, gig_id)")
+    # Jul 2026 audit fix: the FK on gig_messages.gig_id has no ON DELETE
+    # CASCADE. SQLite can't ALTER TABLE to change a foreign key without
+    # recreating the table (destructive), so instead we install a trigger
+    # that mimics the cascade. Every delete path currently re-implements
+    # this cleanup by hand; verified 3 orphan rows in prod (ids 49,50,51
+    # for deleted gig 487) because the admin cleanup script omitted the
+    # table. The trigger closes that hole permanently.
+    # Postgres path: use real ON DELETE CASCADE via ALTER (below).
+    if _IS_POSTGRES:
+        try:
+            c4.execute("""
+                ALTER TABLE gig_messages
+                DROP CONSTRAINT IF EXISTS gig_messages_gig_id_fkey
+            """)
+            c4.execute("""
+                ALTER TABLE gig_messages
+                ADD CONSTRAINT gig_messages_gig_id_fkey
+                FOREIGN KEY (gig_id) REFERENCES gigs(id) ON DELETE CASCADE
+            """)
+        except Exception as _pgca:
+            import logging as _pgca_log
+            _pgca_log.getLogger("gigsfill.db").warning(
+                f"gig_messages CASCADE ALTER skip: {_pgca}"
+            )
+    else:
+        try:
+            c4.execute("""
+                CREATE TRIGGER IF NOT EXISTS trg_cascade_gig_messages_on_gig_delete
+                BEFORE DELETE ON gigs
+                FOR EACH ROW BEGIN
+                    DELETE FROM gig_messages WHERE gig_id = OLD.id;
+                END
+            """)
+        except Exception as _trgm:
+            import logging as _trgm_log
+            _trgm_log.getLogger("gigsfill.db").warning(
+                f"trg_cascade_gig_messages create skip: {_trgm}"
+            )
+    # Clean up any pre-existing orphan gig_messages rows (safe to run every
+    # startup — no-op after first pass). Commit explicitly to survive any
+    # later rolled-back exception (see uidx_transactions rationale above).
+    try:
+        c4.execute("""
+            DELETE FROM gig_messages
+            WHERE gig_id NOT IN (SELECT id FROM gigs)
+        """)
+        conn4.commit()
+    except Exception:
+        pass
 
     c4.execute("""
         CREATE TABLE IF NOT EXISTS artist_availability (
@@ -2033,6 +2392,62 @@ def setup_database():
     # index-range scan instead of a table scan.
     try:
         c4.execute("CREATE INDEX IF NOT EXISTS idx_transactions_status_scheduled ON transactions(status, scheduled_process_at)")
+    except Exception:
+        pass
+    # Jul 2026 audit fix: partial UNIQUE index prevents two concurrent
+    # bookings on the same gig from both creating a venue_charge parent
+    # (which would silently double-charge). The existing post-INSERT
+    # race-loser cleanup at gigs.py:720 already handles this in the happy
+    # path, but it's not atomic — under Postgres two transactions can
+    # both pass the SELECT and both INSERT before either commits. This
+    # partial index makes the second INSERT fail with IntegrityError,
+    # which _create_booking_transaction now catches and re-reads the
+    # canonical parent. Both SQLite and Postgres support partial WHERE.
+    try:
+        c4.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uidx_transactions_venue_charge_per_gig "
+            "ON transactions(gig_id) "
+            "WHERE transaction_type = 'venue_charge' AND status != 'payment_cancelled'"
+        )
+        # Explicit commit here: without it, a later silent rollback in the
+        # setup flow (any subsequent statement that raises inside a caught
+        # try/except leaves the connection in a rolled-back state at the
+        # eventual conn4.commit() call below, dropping my index change).
+        # Committing right after guarantees the DDL sticks.
+        conn4.commit()
+    except Exception as _uix:
+        import logging as _uix_log
+        _uix_log.getLogger("gigsfill.db").warning(
+            f"uidx_transactions_venue_charge_per_gig create skip: {type(_uix).__name__}: {_uix}"
+        )
+
+    # Jul 2026 full-site audit: five missing indexes that were causing
+    # full-table scans on hot paths + one partial UNIQUE that closes
+    # the double-booking race on gig_slots.
+    for _idx_stmt in (
+        "CREATE INDEX IF NOT EXISTS idx_transactions_parent ON transactions(parent_transaction_id) WHERE parent_transaction_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_transactions_stripe_pi ON transactions(stripe_payment_intent_id)",
+        "CREATE INDEX IF NOT EXISTS idx_payment_methods_user ON payment_methods(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_venue_reviews_venue ON venue_reviews(venue_id, is_visible)",
+        "CREATE INDEX IF NOT EXISTS idx_gig_email_log_key ON gig_email_log(notification_key, gig_id)",
+        # Partial UNIQUE on the hold state — prevents two concurrent
+        # accepts on the same slot both writing 'booked' (CLAUDE.md
+        # race protection warning that turned out to be un-enforced).
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_gig_slots_hold ON gig_slots(gig_id, artist_id) WHERE status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')",
+    ):
+        try:
+            c4.execute(_idx_stmt)
+        except Exception as _ie:
+            import logging as _ie_log
+            _ie_log.getLogger("gigsfill.db").warning(
+                f"index create skip ({_idx_stmt[:70]}...): {type(_ie).__name__}: {_ie}"
+            )
+    conn4.commit()
+
+    # Drop the redundant duplicate index (was doing double writes).
+    try:
+        c4.execute("DROP INDEX IF EXISTS idx_transactions_gig_artist_unique")
+        conn4.commit()
     except Exception:
         pass
     try:
@@ -2201,11 +2616,15 @@ def setup_database():
     c_aff.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_affiliate_code ON users(affiliate_code)")
 
     # Emails sent via Recommend GigsFill
-    c_aff.execute("""
+    # Jul 1 2026 R4 audit: `COLLATE NOCASE` is SQLite-only. Drop it on
+    # Postgres; enforce case-insensitivity at query time via LOWER()
+    # comparisons where the callers use recipient_email in a WHERE clause.
+    _collate_clause = "" if _IS_POSTGRES else " COLLATE NOCASE"
+    c_aff.execute(f"""
         CREATE TABLE IF NOT EXISTS affiliate_recommend_emails (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sender_user_id INTEGER NOT NULL,
-            recipient_email TEXT NOT NULL COLLATE NOCASE,
+            recipient_email TEXT NOT NULL{_collate_clause},
             recipient_name TEXT,
             sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             affiliate_code TEXT NOT NULL,
@@ -2256,6 +2675,60 @@ def setup_database():
     c_aff.execute("CREATE INDEX IF NOT EXISTS idx_aff_earnings_user ON affiliate_earnings(affiliate_user_id)")
     c_aff.execute("CREATE INDEX IF NOT EXISTS idx_aff_earnings_quarter ON affiliate_earnings(quarter)")
     c_aff.execute("CREATE INDEX IF NOT EXISTS idx_aff_earnings_txn ON affiliate_earnings(transaction_id)")
+
+    # Jul 2026 audit fix: affiliate_referrals / affiliate_earnings /
+    # affiliate_payouts had ON DELETE CASCADE declared in models.py but
+    # NOT in the raw db.py CREATE TABLE — models.py is only used by ORM
+    # readers, not for schema, so the FKs on live data lack cascade. Match
+    # the intent via triggers on SQLite / ALTER on Postgres. Cascading
+    # affiliate rows when a user is deleted is intentional (see
+    # delete_account's explicit DELETEs on affiliate_referrals /
+    # affiliate_earnings / affiliate_payouts by affiliate_user_id).
+    if _IS_POSTGRES:
+        for _stmt in (
+            "ALTER TABLE affiliate_referrals DROP CONSTRAINT IF EXISTS affiliate_referrals_affiliate_user_id_fkey",
+            "ALTER TABLE affiliate_referrals ADD CONSTRAINT affiliate_referrals_affiliate_user_id_fkey FOREIGN KEY (affiliate_user_id) REFERENCES users(id) ON DELETE CASCADE",
+            "ALTER TABLE affiliate_referrals DROP CONSTRAINT IF EXISTS affiliate_referrals_venue_id_fkey",
+            "ALTER TABLE affiliate_referrals ADD CONSTRAINT affiliate_referrals_venue_id_fkey FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE",
+            "ALTER TABLE affiliate_earnings DROP CONSTRAINT IF EXISTS affiliate_earnings_affiliate_user_id_fkey",
+            "ALTER TABLE affiliate_earnings ADD CONSTRAINT affiliate_earnings_affiliate_user_id_fkey FOREIGN KEY (affiliate_user_id) REFERENCES users(id) ON DELETE CASCADE",
+            "ALTER TABLE affiliate_earnings DROP CONSTRAINT IF EXISTS affiliate_earnings_transaction_id_fkey",
+            "ALTER TABLE affiliate_earnings ADD CONSTRAINT affiliate_earnings_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE",
+            "ALTER TABLE affiliate_payouts DROP CONSTRAINT IF EXISTS affiliate_payouts_affiliate_user_id_fkey",
+            "ALTER TABLE affiliate_payouts ADD CONSTRAINT affiliate_payouts_affiliate_user_id_fkey FOREIGN KEY (affiliate_user_id) REFERENCES users(id) ON DELETE CASCADE",
+        ):
+            try: c_aff.execute(_stmt)
+            except Exception as _e:
+                import logging as _pge
+                _pge.getLogger("gigsfill.db").warning(f"affiliate CASCADE ALTER skip: {_e}")
+    else:
+        # SQLite triggers — one per (parent, child) delete direction.
+        for _stmt in (
+            """CREATE TRIGGER IF NOT EXISTS trg_cascade_aff_ref_on_user_del
+               BEFORE DELETE ON users FOR EACH ROW BEGIN
+                 DELETE FROM affiliate_referrals WHERE affiliate_user_id = OLD.id;
+               END""",
+            """CREATE TRIGGER IF NOT EXISTS trg_cascade_aff_ref_on_venue_del
+               BEFORE DELETE ON venues FOR EACH ROW BEGIN
+                 DELETE FROM affiliate_referrals WHERE venue_id = OLD.id;
+               END""",
+            """CREATE TRIGGER IF NOT EXISTS trg_cascade_aff_earn_on_user_del
+               BEFORE DELETE ON users FOR EACH ROW BEGIN
+                 DELETE FROM affiliate_earnings WHERE affiliate_user_id = OLD.id;
+               END""",
+            """CREATE TRIGGER IF NOT EXISTS trg_cascade_aff_earn_on_txn_del
+               BEFORE DELETE ON transactions FOR EACH ROW BEGIN
+                 DELETE FROM affiliate_earnings WHERE transaction_id = OLD.id;
+               END""",
+            """CREATE TRIGGER IF NOT EXISTS trg_cascade_aff_payouts_on_user_del
+               BEFORE DELETE ON users FOR EACH ROW BEGIN
+                 DELETE FROM affiliate_payouts WHERE affiliate_user_id = OLD.id;
+               END""",
+        ):
+            try: c_aff.execute(_stmt)
+            except Exception as _e:
+                import logging as _sqe
+                _sqe.getLogger("gigsfill.db").warning(f"affiliate CASCADE trigger skip: {_e}")
 
     # Quarterly payout records
     c_aff.execute("""
@@ -2326,9 +2799,19 @@ def setup_database():
                 token TEXT PRIMARY KEY,
                 gig_id INTEGER NOT NULL,
                 artist_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                expires_at TEXT
             )
         """)
+        # Additive migration (Jul 2026 audit B-C2): add expires_at to
+        # existing installs so replayable approval tokens can't sit
+        # valid forever.
+        try:
+            _pat_cols = {r[1] for r in c_idem.execute("PRAGMA table_info(pending_approval_tokens)").fetchall()}
+            if "expires_at" not in _pat_cols:
+                c_idem.execute("ALTER TABLE pending_approval_tokens ADD COLUMN expires_at TEXT")
+        except Exception:
+            pass
         c_idem.execute("CREATE INDEX IF NOT EXISTS idx_pending_approval_gig_artist ON pending_approval_tokens(gig_id, artist_id)")
         c_idem.execute("""
             CREATE TABLE IF NOT EXISTS stripe_webhook_events (
@@ -2410,7 +2893,10 @@ if _IS_POSTGRES:
 
     def _sqlite_to_pg_funcs_only(sql: str) -> str:
         """Same as _sqlite_to_pg but skips the `?` → `%s` step since
-        SQLAlchemy handled that for ORM-issued queries already."""
+        SQLAlchemy handled that for ORM-issued queries already. Kept in
+        sync with `_sqlite_to_pg` (Jul 1 2026 audit R2 caught drift after
+        the localtime/time-col rewriters were added only to `_sqlite_to_pg`;
+        ORM `text()` queries in preferred_artists.py bypassed them)."""
         if not sql:
             return sql
         import re as _re
@@ -2446,6 +2932,10 @@ if _IS_POSTGRES:
         s = _re.sub(r"datetime\(\s*'now'\s*\)", 'CURRENT_TIMESTAMP', s, flags=_re.IGNORECASE)
         s = _re.sub(r"date\(\s*'now'\s*\)", 'CURRENT_DATE', s, flags=_re.IGNORECASE)
         s = _re.sub(
+            r"julianday\(\s*'now'\s*\)",
+            "julianday(CURRENT_TIMESTAMP)", s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(
             r"julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)",
             r"EXTRACT(EPOCH FROM ((\1)::timestamp - (\2)::timestamp))/86400.0",
             s, flags=_re.IGNORECASE
@@ -2462,6 +2952,42 @@ if _IS_POSTGRES:
         s = _re.sub(
             r"strftime\(\s*'%Y-%m-%d'\s*,\s*([^)]+)\)",
             r"to_char((\1)::timestamp, 'YYYY-MM-DD')", s, flags=_re.IGNORECASE
+        )
+        # Jul 1 2026 additions (mirrors _sqlite_to_pg):
+        # date/time('now','localtime') → CURRENT_DATE / current-time text
+        s = _re.sub(
+            r"date\(\s*'now'\s*,\s*'\s*localtime\s*'\s*\)",
+            'CURRENT_DATE', s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(
+            r"time\(\s*'now'\s*,\s*'\s*localtime\s*'\s*\)",
+            "to_char(CURRENT_TIMESTAMP, 'HH24:MI:SS')", s, flags=_re.IGNORECASE
+        )
+        # time(col, '+N unit') / date(col, '+N unit') with expression-safe
+        # column matcher (accepts dotted identifiers or brief expressions).
+        s = _re.sub(
+            r"time\(\s*([a-zA-Z_][a-zA-Z_0-9\.]*)\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+            lambda m: f"to_char((({m.group(1)})::timestamp {m.group(2)} INTERVAL '{m.group(3)} {m.group(4)}'), 'HH24:MI:SS')",
+            s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(
+            r"date\(\s*([a-zA-Z_][a-zA-Z_0-9\.]*)\s*,\s*'\s*([+-])\s*(\d+)\s+(\w+)\s*'\s*\)",
+            lambda m: f"((({m.group(1)})::date {m.group(2)} INTERVAL '{m.group(3)} {m.group(4)}'))",
+            s, flags=_re.IGNORECASE
+        )
+        # GROUP_CONCAT(x) / GROUP_CONCAT(x, 'sep') → STRING_AGG (audit R3).
+        s = _re.sub(
+            r"\bGROUP_CONCAT\(\s*([^,)]+)\s*,\s*'([^']*)'\s*\)",
+            r"STRING_AGG((\1)::text, '\2')", s, flags=_re.IGNORECASE
+        )
+        s = _re.sub(
+            r"\bGROUP_CONCAT\(\s*([^,)]+?)\s*\)",
+            r"STRING_AGG((\1)::text, ',')", s, flags=_re.IGNORECASE
+        )
+        # INSTR(a, b) → POSITION(b IN a). Note argument order flip.
+        s = _re.sub(
+            r"\bINSTR\(\s*([^,)]+?)\s*,\s*([^)]+?)\s*\)",
+            r"POSITION((\2) IN (\1))", s, flags=_re.IGNORECASE
         )
         return s
 

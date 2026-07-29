@@ -61,6 +61,27 @@ window._adminConfirm = function(opts) {
 
 (function () {
 
+  // Show/hide the amber "no default meeting URL set" warning under the
+  // Demo Pipeline settings header. Called after loadSettings populates
+  // the field AND on every blur/input of the URL field so the banner
+  // disappears the instant admin types a value in.
+  function _updateDemoMeetingUrlWarn() {
+    var warn = document.getElementById('demoMeetingUrlWarn');
+    var input = document.getElementById('demoMeetingUrl');
+    if (!warn || !input) return;
+    warn.style.display = (input.value || '').trim() ? 'none' : 'block';
+  }
+  window._updateDemoMeetingUrlWarn = _updateDemoMeetingUrlWarn;
+  document.addEventListener('DOMContentLoaded', function () {
+    var input = document.getElementById('demoMeetingUrl');
+    if (input) {
+      input.addEventListener('input', _updateDemoMeetingUrlWarn);
+      // Initial state after DOM is ready but before loadSettings runs —
+      // loadSettings will re-call this once the value is populated.
+      _updateDemoMeetingUrlWarn();
+    }
+  });
+
   // ── Data Section (ps-stat bubbles) ─────────────────────────────────────────
   let _dsType    = '';
   let _dsData    = [];
@@ -250,6 +271,14 @@ window._adminConfirm = function(opts) {
       const arrow = _dsSort.col === key ? (_dsSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
       return `<th style="${thStyle}" onclick="dsSortBy('${key}')">${label}${arrow}</th>`;
     }).join('');
+    // Jul 21 2026: Users drill-down grows a trailing trash column that
+    // fires a full cascade delete. Only the 'users' section has it — the
+    // other types (artists / venues / gigs) already have their own
+    // delete paths in the venue/artist-facing UIs.
+    const showDelete = (_dsType === 'users');
+    const trashHead = showDelete
+      ? '<th style="padding:6px 4px;text-align:right;font-size:0.7rem;color:var(--text-gray);border-bottom:1px solid var(--border);white-space:nowrap;"></th>'
+      : '';
 
     const _fmt12h = (t) => {
       if (!t) return '';
@@ -260,17 +289,90 @@ window._adminConfirm = function(opts) {
       return h + ':' + m + ' ' + ampm;
     };
     const tdStyle = 'padding:5px 10px;font-size:0.75rem;border-bottom:1px solid rgba(255,255,255,0.04);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;';
-    const rows = slice.map(row => '<tr>' + cols.map(([key]) => {
-      let v = row[key] ?? '';
-      if ((key === 'date' || key === 'created_at') && v) v = String(v).substring(0, 10);
-      if (key === 'start_time') v = _fmt12h(v);
-      if (key === 'pay_dollars' && v !== '') v = '$' + v;
-      if (key === 'is_admin') v = v ? '✓' : '';
-      return `<td style="${tdStyle}">${esc(String(v))}</td>`;
-    }).join('') + '</tr>').join('');
+    const rows = slice.map(row => {
+      const cells = cols.map(([key]) => {
+        let v = row[key] ?? '';
+        if ((key === 'date' || key === 'created_at') && v) v = String(v).substring(0, 10);
+        if (key === 'start_time') v = _fmt12h(v);
+        if (key === 'pay_dollars' && v !== '') v = '$' + v;
+        if (key === 'is_admin') v = v ? '✓' : '';
+        return `<td style="${tdStyle}">${esc(String(v))}</td>`;
+      }).join('');
+      let trashCell = '';
+      if (showDelete) {
+        const uid = parseInt(row.id, 10) || 0;
+        const email = String(row.email || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        trashCell = `<td style="padding:5px 4px;text-align:right;border-bottom:1px solid rgba(255,255,255,0.04);">
+          <button onclick="window.adminDeleteUser(${uid}, '${email}')"
+                  title="Force-delete this user (cascades to their artists / venues)"
+                  style="background:transparent;border:0;color:#94a3b8;font-size:0.85rem;cursor:pointer;padding:2px 6px;border-radius:4px;line-height:1;"
+                  onmouseover="this.style.color='#fca5a5';this.style.background='rgba(239,68,68,0.1)';"
+                  onmouseout="this.style.color='#94a3b8';this.style.background='transparent';">🗑</button>
+        </td>`;
+      }
+      return '<tr>' + cells + trashCell + '</tr>';
+    }).join('');
 
-    container.innerHTML = `<table style="width:100%;border-collapse:collapse;"><thead><tr>${th}</tr></thead><tbody>${rows}</tbody></table>`;
+    container.innerHTML = `<table style="width:100%;border-collapse:collapse;"><thead><tr>${th}${trashHead}</tr></thead><tbody>${rows}</tbody></table>`;
   }
+
+  // Force-delete a user from the Users drill-down. Two-step confirm
+  // (branded modal → then a "type DELETE" text guard) because this
+  // action cascades to every artist/venue the user owns.
+  window.adminDeleteUser = function(userId, email) {
+    if (!userId) return;
+    const doDelete = async () => {
+      try {
+        const res = await fetch('/api/admin/users/' + userId,
+                                 { method: 'DELETE', credentials: 'include' });
+        let body = null;
+        try { body = await res.json(); } catch (_) {}
+        if (!res.ok) {
+          if (window.showStyledModal) {
+            window.showStyledModal('Could not delete',
+              '<p style="margin:0;font-size:0.9rem;color:var(--text-gray,#94a3b8);">' +
+                esc((body && body.detail) || ('HTTP ' + res.status)) + '</p>',
+              [{ text: 'OK', style: 'ghost' }], { size: 'sm', tone: 'error' });
+          } else {
+            alert('Delete failed: ' + ((body && body.detail) || res.status));
+          }
+          return;
+        }
+        // Full page reload so every surface (Platform Settings
+        // drill-down, Directory tab Users sub-tab, dashboard counters,
+        // etc.) reflects the delete without partial state drift.
+        // Delete is destructive + rare — one reload is the simplest
+        // correct thing.
+        window.location.reload();
+      } catch (_e) {
+        if (window.showStyledModal) {
+          window.showStyledModal('Network error',
+            '<p style="margin:0;font-size:0.9rem;color:var(--text-gray,#94a3b8);">Could not reach the server.</p>',
+            [{ text: 'OK', style: 'ghost' }], { size: 'sm', tone: 'error' });
+        }
+      }
+    };
+    // First confirm — explain the blast radius.
+    if (window.showStyledModal) {
+      window.showStyledModal('Delete user?',
+        '<p style="margin:0 0 12px;color:var(--text-gray,#94a3b8);font-size:0.9rem;line-height:1.5;">' +
+          'Permanently delete <strong style="color:var(--text,#e5e7eb);">' + esc(email || ('user #' + userId)) + '</strong>?' +
+        '</p>' +
+        '<p style="margin:0 0 8px;color:var(--text-gray,#94a3b8);font-size:0.82rem;line-height:1.5;">' +
+          'This cascades to every <strong>artist and venue</strong> they own — including booked gigs (counterparties will be notified), contracts, flyers, W-9 data, reviews, and media. ' +
+          '<strong style="color:#fca5a5;">Cannot be undone.</strong>' +
+        '</p>' +
+        '<p style="margin:0;color:var(--text-gray,#94a3b8);font-size:0.78rem;line-height:1.5;font-style:italic;">' +
+          'Blocked if any transaction is still charged/pending — refund those first.' +
+        '</p>',
+        [
+          { text: 'Keep it', style: 'ghost' },
+          { text: '🗑 Delete', style: 'danger', onClick: function () { doDelete(); } },
+        ], { size: 'sm', tone: 'error' });
+    } else {
+      if (confirm('DELETE user "' + email + '" and all their artists/venues? Cannot be undone.')) doDelete();
+    }
+  };
 
   // Search box wired via oninput in HTML
   window.filterDsSearch = function (val) {
@@ -407,6 +509,13 @@ window._adminConfirm = function(opts) {
   };
 
   // ── Email Settings ──────────────────────────────────────────────────────────
+  // 2026-07-25: autoSaveSettings is gated on a "loaded" flag set after the
+  // initial GET populates the inputs. Prevents the race where a blur (or a
+  // stray autofill) fires before the fetch resolves, snapshots empty inputs,
+  // and PUTs empty strings for every email/SMTP/demo field at once. That
+  // race actually happened on 2026-07-21 (audit log row #82) and wiped 15
+  // settings in one shot.
+  window._settingsLoaded = false;
   async function loadEmailSettings() {
     try {
       const r = await fetch('/api/admin/settings', { credentials: 'include' });
@@ -425,6 +534,10 @@ window._adminConfirm = function(opts) {
       set('supportSmtpPort',       d.support_smtp_port);
       set('adminAlertEmail',       d.admin_alert_email);
       set('farBookingAlertMiles',  d.far_booking_alert_miles);
+      // Demo pipeline — notify address + default video-call URL.
+      set('demoRequestAdminEmail', d.demo_request_admin_email);
+      set('demoMeetingUrl',        d.demo_meeting_url);
+      _updateDemoMeetingUrlWarn();
       // Rate limits — integer requests/minute per IP. See backend/rate_limiter.py
       // for the callable getters that read these live (30s TTL, plus immediate
       // invalidation on PUT in admin.py).
@@ -457,6 +570,8 @@ window._adminConfirm = function(opts) {
           statusEl.textContent = 'Never polled. Click "Test & Poll Now" to verify your IMAP config.';
         }
       }
+      // Fields populated — safe to let autoSaveSettings write from now on.
+      window._settingsLoaded = true;
     } catch (e) { console.error('loadEmailSettings:', e); }
   }
 
@@ -524,20 +639,39 @@ window._adminConfirm = function(opts) {
   };
 
   window.autoSaveSettings = async function () {
-    const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-    const payload = {
-      platform_email_from_name: get('platformEmailFromName'),
-      platform_email:           get('platformEmail'),
-      platform_email_password:  get('platformEmailPassword'),
-      platform_smtp_server:     get('platformSmtpServer'),
-      platform_smtp_port:       get('platformSmtpPort'),
-      support_email_from_name:  get('supportEmailFromName'),
-      support_email:            get('supportEmail'),
-      support_email_password:   get('supportEmailPassword'),
-      support_smtp_server:      get('supportSmtpServer'),
-      support_smtp_port:        get('supportSmtpPort'),
-      admin_alert_email:        get('adminAlertEmail'),
+    // 2026-07-25 wipe-prevention: refuse to fire until loadEmailSettings has
+    // populated the inputs. A blur before the initial GET returns would
+    // otherwise snapshot empty inputs and blank every stored setting.
+    if (!window._settingsLoaded) return;
+    // Only include a field if its element is present. Password fields
+    // additionally skip when showing the placeholder mask (either the
+    // backend "•" marker or an empty box + the input renderer's own dots).
+    const push = (payload, id, key, opts) => {
+      opts = opts || {};
+      const el = document.getElementById(id);
+      if (!el) return;
+      const v = String(el.value || '').trim();
+      if (opts.isPassword && (v === '' || v.startsWith('•'))) return;
+      payload[key] = v;
     };
+    const payload = {};
+    push(payload, 'platformEmailFromName', 'platform_email_from_name');
+    push(payload, 'platformEmail',         'platform_email');
+    push(payload, 'platformEmailPassword', 'platform_email_password', { isPassword: true });
+    push(payload, 'platformSmtpServer',    'platform_smtp_server');
+    push(payload, 'platformSmtpPort',      'platform_smtp_port');
+    push(payload, 'supportEmailFromName',  'support_email_from_name');
+    push(payload, 'supportEmail',          'support_email');
+    push(payload, 'supportEmailPassword',  'support_email_password', { isPassword: true });
+    push(payload, 'supportSmtpServer',     'support_smtp_server');
+    push(payload, 'supportSmtpPort',       'support_smtp_port');
+    push(payload, 'adminAlertEmail',       'admin_alert_email');
+    // Demo pipeline — include always (clearing the field IS the way to
+    // clear the stored value), but only if the element exists.
+    push(payload, 'demoRequestAdminEmail', 'demo_request_admin_email');
+    push(payload, 'demoMeetingUrl',        'demo_meeting_url');
+    // Legacy shim: some downstream code still expects the raw `get` closure.
+    const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
     const _farMi = get('farBookingAlertMiles');
     if (_farMi !== '') payload.far_booking_alert_miles = _farMi;
     // Rate limits — only include if the field has a value. The PUT endpoint
@@ -600,14 +734,11 @@ window._adminConfirm = function(opts) {
       if (!r.ok) return;
       const d = await r.json();
 
-      const enabled = d.payments_enabled === 'true' || d.payments_enabled === true || d.payments_enabled === '1';
-      setToggle(enabled);
-
-      // Mirror status in the Payment subtab banner
+      // Test Mode removed (Jul 1 2026): payments are always live.
       const mirror = document.getElementById('paymentStatusMirror');
       if (mirror) {
-        mirror.textContent = enabled ? '✅ Live Payments ON' : '⏸ Live Payments OFF';
-        mirror.style.color = enabled ? '#10b981' : '#ef4444';
+        mirror.textContent = '✅ Live Payments';
+        mirror.style.color = '#10b981';
       }
 
       const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
@@ -628,10 +759,8 @@ window._adminConfirm = function(opts) {
 
   window.autoSavePaymentSettings = async function () {
     const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-    const enabled = document.getElementById('paymentsEnabled');
-    const payload = {
-      payments_enabled: enabled ? (enabled.checked ? 'true' : 'false') : 'false',
-    };
+    // Test Mode removed (Jul 1 2026): no longer sends payments_enabled.
+    const payload = {};
     // Only include fee fields if they have a non-empty value — prevents wiping DB values
     // when user hasn't opened the Payment subtab yet and fields are blank
     const feePercent = get('platformFeePercent');
@@ -661,47 +790,11 @@ window._adminConfirm = function(opts) {
     } catch (e) { console.error('autoSavePaymentSettings:', e); }
   };
 
-  window.togglePaymentsEnabled = async function () {
-    const cb = document.getElementById('paymentsEnabled');
-    if (!cb) return;
-    const enabled = cb.checked;
-    setToggle(enabled);
-    // Save ONLY the payments_enabled flag — do NOT send empty stripe keys
-    // (the full payment fields may not be loaded yet if user hasn't clicked Payment subtab)
-    try {
-      const r = await fetch('/api/admin/payment-settings', {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payments_enabled: enabled ? 'true' : 'false' })
-      });
-      if (r.ok) {
-        window.flashSaved('siteStatusSaved');
-        window._adminToast(
-          enabled ? '⚡ Live payments are now ON' : '⏸ Live payments are now OFF',
-          enabled ? 'rgba(16,185,129,0.8)' : 'rgba(245,158,11,0.8)'
-        );
-        const mirror = document.getElementById('paymentStatusMirror');
-        if (mirror) { mirror.textContent = enabled ? '✅ Live Payments ON' : '⏸ Live Payments OFF'; mirror.style.color = enabled ? '#10b981' : '#ef4444'; }
-      } else {
-        const err = await r.json().catch(() => ({}));
-        window._adminToast('Save failed: ' + (err.detail || r.status), 'rgba(239,68,68,0.8)');
-        // Revert toggle visually
-        setToggle(!enabled);
-      }
-    } catch(e) { window._adminToast('Save failed: ' + e.message, 'rgba(239,68,68,0.8)'); }
-  };
-
-  window.setToggle = function setToggle(enabled) {
-    const cb     = document.getElementById('paymentsEnabled');
-    const track  = document.getElementById('paymentsToggleTrack');
-    const thumb  = document.getElementById('paymentsToggleThumb');
-    const label  = document.getElementById('paymentsStatusLabel');
-    if (cb)    cb.checked = enabled;
-    if (track) track.style.background = enabled ? '#10b981' : '#333';
-    if (thumb) thumb.style.left = enabled ? '19px' : '3px';  // 36px track - 14px thumb - 3px pad
-    if (label) { label.textContent = enabled ? 'ON' : 'OFF'; label.style.color = enabled ? '#10b981' : '#ef4444'; }
-  }
+  // Test Mode removed (Jul 1 2026): togglePaymentsEnabled + setToggle
+  // are no longer used. Retained as no-ops so any legacy caller
+  // (e.g. cached onclick handlers) can't throw.
+  window.togglePaymentsEnabled = function () {};
+  window.setToggle = function () {};
 
   // ── Venue Payment Overrides ────────────────────────────────────────────────
   window.loadVenuePaymentOverrides = async function () {
@@ -755,12 +848,12 @@ window._adminConfirm = function(opts) {
         return `
           <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.05);">
             <span style="flex:1;min-width:0;">
-              <span style="font-size:0.78rem;color:var(--text-white);font-weight:500;">${v.venue_name || ''}</span>
-              ${sub ? `<span style="display:block;font-size:0.65rem;color:var(--text-gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sub}</span>` : ''}
-              ${suspended && v.notes ? `<span style="display:block;font-size:0.63rem;color:#f59e0b;font-style:italic;margin-top:1px;">${v.notes}</span>` : ''}
+              <span style="font-size:0.78rem;color:var(--text-white);font-weight:500;">${window.esc ? window.esc(v.venue_name || '') : (v.venue_name || '')}</span>
+              ${sub ? `<span style="display:block;font-size:0.65rem;color:var(--text-gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${window.esc ? window.esc(sub) : sub}</span>` : ''}
+              ${suspended && v.notes ? `<span style="display:block;font-size:0.63rem;color:#f59e0b;font-style:italic;margin-top:1px;">${window.esc ? window.esc(v.notes) : v.notes}</span>` : ''}
             </span>
             <span style="font-size:0.7rem;white-space:nowrap;color:${suspended ? '#f59e0b' : 'var(--text-gray)'};">${suspended ? '🎟 Free Trial' : 'Standard'}</span>
-            <button onclick="toggleVenueOverride(${v.id}, ${!suspended}, this.dataset.vname)" data-vname="${(v.venue_name||'')}"
+            <button onclick="toggleVenueOverride(${v.id}, ${!suspended}, this.dataset.vname)" data-vname="${window.escAttr ? window.escAttr(v.venue_name || '') : (v.venue_name||'')}"
 
               style="white-space:nowrap;padding:3px 10px;font-size:0.7rem;border-radius:5px;cursor:pointer;
                      background:${suspended ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)'};
@@ -895,11 +988,10 @@ window._adminConfirm = function(opts) {
 
   async function loadSiteStatusToggles() {
     try {
-      // Load payment settings — populate both the toggle AND the form fields
+      // Load payment settings — populate the form fields.
+      // Test Mode removed (Jul 1 2026): no toggle to sync.
       const pay = await fetch('/api/admin/payment-settings', { credentials: 'include' })
         .then(r => r.ok ? r.json() : {});
-      const paymentsOn = pay.payments_enabled === 'true' || pay.payments_enabled === true || pay.payments_enabled === '1';
-      setToggle(paymentsOn);  // setToggle lives in the IIFE — updates #paymentsEnabled + track + thumb + label
 
       // Pre-populate payment form fields so they're ready when user clicks Payment subtab
       // (avoids the "blank fields wipe DB values" bug)

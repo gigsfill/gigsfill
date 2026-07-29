@@ -223,6 +223,10 @@ function escapeHtml(text) {
 // Auto-initialize when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => { initUserDropdown(); injectGlobalModals(); });
+// Exposed so pages that mutate the user's profile (e.g. user-profile.js
+// after a successful Save Changes) can trigger the header re-render
+// without a full page reload. Jul 22 2026.
+window.initUserDropdown = initUserDropdown;
 } else {
   initUserDropdown();
   injectGlobalModals();
@@ -560,6 +564,12 @@ async function submitHelpTicket() {
     btn.textContent = 'OK';
     btn.disabled = false;
     btn.onclick = () => closeHelpModal();
+    // Auto-close after 3s so the user isn't forced to click OK — they
+    // still can if they want to dismiss sooner.
+    setTimeout(function () {
+      var m = document.getElementById('helpModal');
+      if (m && m.classList.contains('open')) closeHelpModal();
+    }, 3000);
   } catch (error) {
     console.error('Error submitting help ticket:', error);
     status.textContent = (error && error.message) || 'Failed to submit. Please try again.';
@@ -634,6 +644,11 @@ async function submitFeedback() {
     btn.textContent = 'OK';
     btn.disabled = false;
     btn.onclick = () => closeFeedbackModal();
+    // Auto-close after 3s (parity with Help modal).
+    setTimeout(function () {
+      var m = document.getElementById('feedbackModal');
+      if (m && m.classList.contains('open')) closeFeedbackModal();
+    }, 3000);
   } catch (error) {
     console.error('Error submitting feedback:', error);
     status.textContent = (error && error.message) || 'Failed to send. Please try again.';

@@ -28,9 +28,14 @@ def get_stripe():
 
 
 def get_stripe_keys(db):
-    """Load Stripe keys from platform_settings"""
+    """Load Stripe keys from platform_settings.
+    Test Mode removed (Jul 1 2026): `payments_enabled` is no longer read;
+    callers should treat this dict as if payments are always live. The
+    `payments_enabled` key is retained as `True` for any legacy consumer
+    that still branches on it — those branches now always take the live
+    path."""
     rows = db.execute(
-        text("SELECT setting_key, setting_value FROM platform_settings WHERE setting_key LIKE 'admin_stripe%' OR setting_key IN ('platform_fee_percent', 'platform_min_fee', 'platform_fee_split', 'payments_enabled')")
+        text("SELECT setting_key, setting_value FROM platform_settings WHERE setting_key LIKE 'admin_stripe%' OR setting_key IN ('platform_fee_percent', 'platform_min_fee', 'platform_fee_split')")
     ).fetchall()
     keys = {r[0]: r[1] for r in rows}
     return {
@@ -40,7 +45,7 @@ def get_stripe_keys(db):
         'platform_fee_percent': float(keys.get('platform_fee_percent', '10')),
         'platform_min_fee': float(keys.get('platform_min_fee', '20')),
         'platform_fee_split': keys.get('platform_fee_split', 'split'),
-        'payments_enabled': keys.get('payments_enabled', '0') in ('1', 'true'),
+        'payments_enabled': True,
     }
 
 
@@ -224,8 +229,14 @@ def remove_venue_payment_method(venue_id: int, user=Depends(get_current_user), d
         text("SELECT user_id, venue_name FROM venues WHERE id = :vid"),
         {"vid": venue_id}
     ).mappings().first()
-    if not venue or venue["user_id"] != user.id:
-        raise HTTPException(403, "Not your venue")
+    if not venue:
+        raise HTTPException(404, "Venue not found")
+    # Audit fix (Jul 2026): use check_venue_access so entity_users
+    # co-managers can rotate the card too — previously owner-only,
+    # forcing every card update to escalate. Matches the pattern used
+    # for artist Connect onboarding at stripe_connect.py:310.
+    from backend.utils import check_venue_access
+    check_venue_access(db, venue_id, user.id)
     
     settings = db.execute(
         text("SELECT stripe_payment_method_id FROM entity_payment_settings WHERE entity_type = 'venue' AND entity_id = :vid"),
@@ -332,7 +343,13 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
         # second click reuses the first call's account.
         import uuid as _uuid_acct
         _acct_idem = f"artist_connect_create_{artist_id}"
-        account = stripe.Account.create(
+
+        # Jul 2026: if the artist filed a W-9 BEFORE clicking Connect (venue-
+        # required-W-9 flow), pre-fill Stripe's individual.* fields so they
+        # don't have to re-enter the same legal name + address + SSN during
+        # onboarding. Express blocks post-create updates so this is the ONLY
+        # window we get.
+        _create_params = dict(
             type="express",
             country="US",
             email=user_row["email"] if user_row else None,
@@ -344,6 +361,21 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
             metadata={"artist_id": str(artist_id), "platform": "gigsfill"},
             idempotency_key=_acct_idem,
         )
+        try:
+            from backend.routes.tax import build_stripe_individual_from_w9
+            _individual = build_stripe_individual_from_w9(db, artist_id)
+            if _individual:
+                _create_params["individual"] = _individual
+        except Exception as _ind_e:
+            # Non-blocking — Account.create must succeed even if the W-9
+            # pre-fill assembly fails; Stripe will just collect the data
+            # during onboarding.
+            import logging
+            logging.getLogger("gigsfill.stripe_connect").warning(
+                f"W-9 pre-fill assembly failed for artist {artist_id}: {_ind_e}"
+            )
+
+        account = stripe.Account.create(**_create_params)
         account_id = account.id
 
         # Upsert entity_payment_settings
@@ -356,6 +388,13 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
             {"aid": artist_id, "acid": account_id, "now": utcnow_naive()}
         )
         db.commit()
+
+        # Pre-fill happened at Account.create above via the `individual` param.
+        # Post-create edits aren't supported on Express (verified: Stripe
+        # returns "does not have the required permissions for the parameter
+        # 'individual'" for both first_name/last_name/address AND id_number).
+        # If W-9 is filled AFTER Connect exists, the artist enters info via
+        # the Stripe Express onboarding UI directly.
     
     # Create onboarding link.
     # Audit fix (May 2026 part 5): pull from platform_settings.site_url with
@@ -630,7 +669,7 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
             JOIN gigs g ON t.gig_id = g.id
             JOIN venues v ON g.venue_id = v.id
             LEFT JOIN artists a ON a.id = COALESCE(t.artist_id, g.artist_id)
-            WHERE t.gig_id = :gid AND t.status IN ('scheduled', 'test')
+            WHERE t.gig_id = :gid AND t.status = 'scheduled'
               AND COALESCE(t.transaction_type, 'single') IN ('venue_charge', 'single')
             ORDER BY
               CASE WHEN COALESCE(t.transaction_type,'single')='venue_charge' THEN 0 ELSE 1 END,
@@ -651,7 +690,7 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
                 JOIN gigs g ON t.gig_id = g.id
                 JOIN venues v ON g.venue_id = v.id
                 LEFT JOIN artists a ON a.id = COALESCE(t.artist_id, g.artist_id)
-                WHERE t.gig_id = :gid AND t.status IN ('scheduled', 'test')
+                WHERE t.gig_id = :gid AND t.status = 'scheduled'
                 ORDER BY t.id ASC
                 LIMIT 1
             """),
@@ -821,11 +860,10 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
     else:
         venue_fee_cents = commission // 2
     
-    # Charge venue's card for platform fee only
-    payments_live = keys.get('payments_enabled', False)
+    # Charge venue's card for platform fee only. Test Mode removed
+    # (Jul 1 2026) — always live.
     platform_fee_pi_id = None
-    
-    if payments_live and venue_fee_cents > 0:
+    if venue_fee_cents > 0:
         venue_settings = db.execute(
             text("SELECT stripe_customer_id, stripe_payment_method_id FROM entity_payment_settings WHERE entity_type = 'venue' AND entity_id = :vid"),
             {"vid": venue_id}
@@ -857,7 +895,7 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
     
     # Update transaction
     db.execute(
-        text("""UPDATE transactions SET 
+        text("""UPDATE transactions SET
             status = 'payment_cancelled',
             cancel_reason = :reason,
             cancelled_at = :now,
@@ -874,7 +912,34 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
             "tid": txn["id"]
         }
     )
-    
+
+    # Audit fix (Jun 2026): also cancel any artist_payout child rows still
+    # 'scheduled' for this gig. cancel_slot_payment already operates per
+    # child; the legacy whole-gig path was only flipping the row it found
+    # (parent or single), so on a parent+child setup the child stayed
+    # 'scheduled' indefinitely and showed up in the artist's "upcoming
+    # payouts" forever even though no money would ever move (the parent-
+    # status guard in payout_scheduler.py blocks transfer once parent is
+    # 'payment_cancelled', so this is state-cleanup, not money-saving).
+    db.execute(
+        text("""UPDATE transactions
+                SET status = 'payment_cancelled',
+                    cancel_reason = :reason,
+                    cancelled_at = :now,
+                    notes = COALESCE(notes, '') || :note
+                WHERE gig_id = :gid
+                  AND transaction_type = 'artist_payout'
+                  AND status = 'scheduled'
+                  AND id != :tid"""),
+        {
+            "reason": reason,
+            "now": utcnow_naive().isoformat(),
+            "note": f" [parent cancelled by venue: {reason[:80]}]",
+            "gid": gig_id,
+            "tid": txn["id"],
+        }
+    )
+
     # Create notifications
     gig_label = txn.get("gig_title") or str(txn.get("gig_date") or "a gig")
     venue_name = txn.get("venue_name") or "Venue"
@@ -1048,7 +1113,7 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
                        scheduled_process_at, status, parent_transaction_id, notes
                 FROM transactions
                 WHERE gig_id = :gid AND artist_id = :aid
-                  AND status IN ('scheduled', 'test')
+                  AND status = 'scheduled'
                   AND (transaction_type IS NULL
                        OR transaction_type IN ('artist_payout', 'single'))
                   AND (
@@ -1069,7 +1134,7 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
                            scheduled_process_at, status, parent_transaction_id, notes
                     FROM transactions
                     WHERE gig_id = :gid AND artist_id = :aid
-                      AND status IN ('scheduled', 'test')
+                      AND status = 'scheduled'
                       AND (transaction_type IS NULL
                            OR transaction_type IN ('artist_payout', 'single'))
                       AND (notes IS NULL OR notes NOT LIKE 'Slot %')
@@ -1116,10 +1181,10 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
     # fee charge via the Payments console). The response carries a
     # fee_charge_error so the modal can warn the venue that their
     # card wasn't actually debited.
-    payments_live = keys.get('payments_enabled', False)
+    # Test Mode removed (Jul 1 2026) — always live.
     platform_fee_pi_id = None
     fee_charge_error = None
-    if payments_live and venue_fee_cents > 0:
+    if venue_fee_cents > 0:
         venue_settings = db.execute(
             text("SELECT stripe_customer_id, stripe_payment_method_id FROM entity_payment_settings WHERE entity_type='venue' AND entity_id=:vid"),
             {"vid": venue_id}
@@ -1213,7 +1278,7 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
             text("""UPDATE transactions SET status='payment_cancelled',
                        cancel_reason=:reason, cancelled_at=:now
                     WHERE gig_id=:gid AND transaction_type='venue_charge'
-                      AND status IN ('scheduled','test')"""),
+                      AND status = 'scheduled'"""),
             {"reason": "All slots cancelled", "now": utcnow_naive().isoformat(),
              "gid": slot["gig_id"]}
         )
@@ -1319,7 +1384,7 @@ def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depend
     Body: {slot_id: int}
 
     Safe-only within the pre-5pm window — the parent venue_charge
-    must still be 'scheduled' or 'test'. If the parent has already
+    must still be 'scheduled'. If the parent has already
     been charged (the rest of the gig has already paid), the venue
     needs to use Admin → Payments to manually reinstate via the
     full charge+transfer flow.
@@ -1368,6 +1433,15 @@ def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depend
 
     # Find the cancelled child for this slot. Prefer transactions.slot_id
     # FK; legacy rows fall back to notes-LIKE.
+    #
+    # Audit fix (Jun 2026): drop the `OR notes NOT LIKE 'Slot %'` fallback —
+    # on a multi-slot gig with multiple legacy cancelled rows for the same
+    # artist (both slot_id=NULL, neither note mentioning a slot), the
+    # ORDER BY id DESC LIMIT 1 would silently reinstate whichever row was
+    # most recent instead of the one the venue clicked. The narrowed query
+    # still catches: (a) new-format rows via slot_id FK, and (b) legacy
+    # rows whose notes explicitly name the slot. Legacy rows with no
+    # disambiguator are refused — admin must reinstate those manually.
     txn = db.execute(
         text("""SELECT id, amount_cents, commission_cents, platform_fee_charged_cents,
                        stripe_payment_intent_id, notes
@@ -1379,8 +1453,7 @@ def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depend
                   AND (
                     slot_id = :sid
                     OR (slot_id IS NULL
-                        AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid
-                             OR notes NOT LIKE 'Slot %'))
+                        AND (notes LIKE :slot_like OR notes LIKE :slot_like_mid))
                   )
                 ORDER BY id DESC LIMIT 1"""),
         {"gid": slot["gig_id"], "aid": slot["artist_id"],
@@ -1403,7 +1476,7 @@ def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depend
     ).mappings().first()
     if not parent:
         raise HTTPException(400, "Parent venue charge missing — admin reinstate required.")
-    if parent["status"] not in ("scheduled", "test", "payment_cancelled"):
+    if parent["status"] not in ("scheduled", "payment_cancelled"):
         raise HTTPException(400,
             f"Parent has been charged (status='{parent['status']}'). "
             "Use Admin → Payments to reinstate this slot manually.")
@@ -1412,24 +1485,32 @@ def reinstate_slot_payment(data: dict, user=Depends(get_current_user), db=Depend
     refund_id = None
     refund_error = None
     fee_to_refund = int(txn.get("platform_fee_charged_cents") or 0)
+    # Test Mode removed (Jul 1 2026) — always live.
     if fee_to_refund > 0 and txn.get("stripe_payment_intent_id"):
-        payments_live = keys.get('payments_enabled', False)
-        if payments_live:
-            try:
-                refund = stripe_mod.Refund.create(
-                    payment_intent=txn["stripe_payment_intent_id"],
-                    amount=fee_to_refund,
-                    metadata={
-                        "gig_id": str(slot["gig_id"]),
-                        "slot_id": str(slot_id),
-                        "type": "slot_reinstate_fee_refund",
-                        "platform": "gigsfill"
-                    },
-                )
-                refund_id = refund.id
-            except Exception as e:
-                logging.error(f"[ReinstateSlotPayment] Refund failed for gig {slot['gig_id']} slot {slot_id}: {e}")
-                refund_error = str(e)[:160]
+        try:
+            refund = stripe_mod.Refund.create(
+                payment_intent=txn["stripe_payment_intent_id"],
+                amount=fee_to_refund,
+                metadata={
+                    "gig_id": str(slot["gig_id"]),
+                    "slot_id": str(slot_id),
+                    "type": "slot_reinstate_fee_refund",
+                    "platform": "gigsfill"
+                },
+                # Audit fix (Jul 2026 full-site audit — M-H1): every
+                # other Stripe write in this file has a deterministic
+                # idempotency key; this one did not. On network retry
+                # / double-clicked "Reinstate" the endpoint re-entered
+                # and refunded the cancel fee twice. Slot+fee-scoped
+                # key so retries fold together but a re-cancel →
+                # reinstate cycle at a DIFFERENT fee amount gets its
+                # own key.
+                idempotency_key=f"reinstate_slot_{slot_id}_fee_refund_{fee_to_refund}",
+            )
+            refund_id = refund.id
+        except Exception as e:
+            logging.error(f"[ReinstateSlotPayment] Refund failed for gig {slot['gig_id']} slot {slot_id}: {e}")
+            refund_error = str(e)[:160]
 
     # Flip the child back to scheduled. Clear cancel fields so the
     # row reads as "live again" everywhere. Keep amount_cents — it's
@@ -1575,10 +1656,10 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
     already_charged = txn.get("platform_fee_charged_cents") or 0
     reinstate_charge_cents = venue_charge_cents - already_charged
     
-    payments_live = keys.get('payments_enabled', False)
+    # Test Mode removed (Jul 1 2026) — always live.
     payment_intent_id = None
-    
-    if payments_live and reinstate_charge_cents > 0:
+
+    if reinstate_charge_cents > 0:
         venue_settings = db.execute(
             text("SELECT stripe_customer_id, stripe_payment_method_id FROM entity_payment_settings WHERE entity_type = 'venue' AND entity_id = :vid"),
             {"vid": venue_id}
@@ -1609,36 +1690,64 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
             payment_intent_id = pi.id
         except Exception as e:
             logger.error(f"Card charge failed: {e}"); raise HTTPException(402, "Card charge failed. Please check your payment method.")
-    
+
+    # Pull the charge_id for source_transaction on the Connect transfer.
+    # Without source_transaction, Stripe treats the artist's incoming funds
+    # as immediately available and the artist's bank receives them before
+    # the venue's card payment has finished settling (~3 business days),
+    # leaving the platform exposed if the venue then chargebacks.
+    # Mirrors the scheduler pattern at payout_scheduler.py:946-947.
+    reinstate_charge_id = None
+    if payment_intent_id:
+        try:
+            _pi_obj = stripe_mod.PaymentIntent.retrieve(payment_intent_id)
+            _latest = getattr(_pi_obj, "latest_charge", None)
+            if _latest:
+                reinstate_charge_id = _latest if isinstance(_latest, str) else getattr(_latest, "id", None)
+        except Exception as _pe:
+            logger.warning(f"[ReinstatePayment] charge_id retrieve failed for pi={payment_intent_id}: {_pe}")
+
     # Transfer to artist
     transfer_id = None
-    if payments_live:
-        artist_settings = db.execute(
-            text("""SELECT eps.stripe_connect_account_id, eps.stripe_connect_onboarding_complete
-                FROM entity_payment_settings eps WHERE eps.entity_type = 'artist' AND eps.entity_id = :aid"""),
-            {"aid": txn.get("aid")}
-        ).mappings().first()
-        
-        if artist_settings and artist_settings.get("stripe_connect_account_id") and artist_settings.get("stripe_connect_onboarding_complete"):
-            try:
-                transfer = stripe_mod.Transfer.create(
-                    amount=artist_payout_cents,
-                    currency="usd",
-                    destination=artist_settings["stripe_connect_account_id"],
-                    metadata={
-                        "gig_id": str(txn["gig_id"]),
-                        "transaction_id": str(txn_id),
-                        "type": "reinstated_payment",
-                        "platform": "gigsfill"
-                    },
-                    description=f"GigsFill Gig #{txn['gig_id']} - reinstated payout"
-                )
-                transfer_id = transfer.id
-            except Exception as e:
-                logging.error(f"[ReinstatePayment] Transfer failed: {e}")
-    
-    # Update transaction with recalculated amounts
-    new_status = 'paid' if transfer_id or not payments_live else 'charged'
+    artist_settings = db.execute(
+        text("""SELECT eps.stripe_connect_account_id, eps.stripe_connect_onboarding_complete
+            FROM entity_payment_settings eps WHERE eps.entity_type = 'artist' AND eps.entity_id = :aid"""),
+        {"aid": txn.get("aid")}
+    ).mappings().first()
+
+    if artist_settings and artist_settings.get("stripe_connect_account_id") and artist_settings.get("stripe_connect_onboarding_complete"):
+        try:
+            # Audit fix (Jun 2026): idempotency_key prevents a network
+            # retry from paying the artist twice. source_transaction
+            # links the transfer to the just-completed reinstate
+            # charge so funds are gated on the parent settling.
+            _transfer_kwargs = dict(
+                amount=artist_payout_cents,
+                currency="usd",
+                destination=artist_settings["stripe_connect_account_id"],
+                metadata={
+                    "gig_id": str(txn["gig_id"]),
+                    "transaction_id": str(txn_id),
+                    "type": "reinstated_payment",
+                    "platform": "gigsfill"
+                },
+                description=f"GigsFill Gig #{txn['gig_id']} - reinstated payout"
+            )
+            if reinstate_charge_id:
+                _transfer_kwargs["source_transaction"] = reinstate_charge_id
+            transfer = stripe_mod.Transfer.create(
+                idempotency_key=f"reinstate_{txn_id}_transfer",
+                **_transfer_kwargs,
+            )
+            transfer_id = transfer.id
+        except Exception as e:
+            logging.error(f"[ReinstatePayment] Transfer failed: {e}")
+
+    # 'transferred' = Stripe accepted the transfer, awaiting bank settle.
+    # 'paid' is reserved for "money landed in the artist's bank" and is
+    # set by payout_scheduler's transfer-poll loop, NOT here.
+    # Test Mode removed (Jul 1 2026).
+    new_status = 'transferred' if transfer_id else 'charged'
     db.execute(
         text("""UPDATE transactions SET 
             status = :status,
@@ -1656,13 +1765,25 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
             "artist_payout": artist_payout_cents,
             "commission": total_fee_cents,
             "pi_id": payment_intent_id,
-            "xfer_id": transfer_id or ('test_reinstated' if not payments_live else None),
+            "xfer_id": transfer_id,
             "now": utcnow_naive().isoformat(),
             "notes": f"Payment reinstated by venue after earlier cancellation.",
             "tid": txn_id
         }
     )
-    
+
+    # Audit fix (Jun 2026): accrue affiliate commission on the reinstated
+    # charge. The original cancel called clawback_affiliate_earnings —
+    # without this re-accrual the inviting artist permanently lost their
+    # commission when the venue restored the booking. Mirrors the
+    # scheduler's transfer-success path at payout_scheduler.py:962-968.
+    if new_status == 'transferred':
+        try:
+            from backend.routes.affiliate import accrue_affiliate_earnings
+            accrue_affiliate_earnings(db, txn_id)
+        except Exception as _ae:
+            logger.warning(f"[ReinstatePayment] affiliate accrual failed for txn {txn_id}: {_ae}")
+
     # Notifications
     gig_label = txn.get("gig_title") or str(txn.get("gig_date") or "a gig")
     venue_name = txn.get("venue_name") or "Venue"
@@ -1738,7 +1859,7 @@ def get_gig_transaction_status(gig_id: int, user=Depends(get_current_user), db=D
       - Prefers the parent venue_charge row's status + scheduled_process_at
         for the "deadline" question (all children fire on the same tick).
       - Adds `cancellable_count`: how many artist_payout children are still
-        in 'scheduled' / 'test' state (i.e. cancel button has work to do).
+        in 'scheduled' state (i.e. cancel button has work to do).
         0 → frontend hides the button entirely.
     """
     # Parent venue_charge: drives the deadline + already-cancelled banner.
@@ -1765,7 +1886,7 @@ def get_gig_transaction_status(gig_id: int, user=Depends(get_current_user), db=D
                 WHERE gig_id = :gid
                   AND (transaction_type IS NULL
                        OR transaction_type IN ('artist_payout', 'single'))
-                  AND status IN ('scheduled', 'test')"""),
+                  AND status = 'scheduled'"""),
         {"gid": gig_id}
     ).scalar() or 0
 
@@ -1843,7 +1964,9 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
     txns = db.execute(
         text("""
             SELECT t.*,
-                   g.date as gig_date, g.start_time as gig_time, g.title as gig_title,
+                   g.date as gig_date, g.start_time as gig_time,
+                   g.end_time as gig_end_time,
+                   g.title as gig_title,
                    -- Multi-slot: comma-separated list of all booked artists.
                    -- Single-slot or no-slots: fall back to the gig's resolved artist name.
                    COALESCE(
@@ -1924,6 +2047,15 @@ def get_venue_transactions(venue_id: int, user=Depends(get_current_user), db=Dep
                 g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval','started','completed','paid')
                 -- OR historical paid/cancelled / free-trial audit transactions regardless of gig status
                 OR t.status IN ('paid','transferred','payment_cancelled','suspended','free_trial')
+                -- Jul 2026 fix: multi-slot gigs stay g.status='open' until every
+                -- slot is booked, so a real venue_charge with booked slots on an
+                -- otherwise-open gig was invisible on the Payments tab. Surface
+                -- any gig with at least one booked/pending slot.
+                OR EXISTS (
+                  SELECT 1 FROM gig_slots gs
+                  WHERE gs.gig_id = g.id
+                    AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval','started','completed','paid')
+                )
               )
             ORDER BY g.date DESC, t.id DESC
             LIMIT 50
@@ -2011,7 +2143,7 @@ def _correct_transaction_amount_if_needed(db, txn, venue_id, artist_id, gig_pay)
     booking time (which already reflects any per-artist override), so the
     corrector is a no-op for them.
     """
-    if txn.get("status") not in ("scheduled", "test"):
+    if txn.get("status") not in ("scheduled",):
         return
     if (txn.get("transaction_type") or "").lower() == "artist_payout":
         # Multi-slot child — amount is authoritatively the slot's pay,
@@ -2184,7 +2316,7 @@ def get_venue_upcoming_charges(venue_id: int, user=Depends(get_current_user), db
             JOIN gigs g ON t.gig_id = g.id
             LEFT JOIN artists a ON a.id = t.artist_id
             LEFT JOIN artists a2 ON a2.id = g.artist_id
-            WHERE g.venue_id = :vid AND t.status IN ('scheduled', 'charged', 'pending', 'test')
+            WHERE g.venue_id = :vid AND t.status IN ('scheduled', 'charged', 'pending')
               AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval','started','completed')
             ORDER BY t.scheduled_process_at ASC
         """),
@@ -2203,6 +2335,11 @@ def get_artist_upcoming_payouts(artist_id: int, user=Depends(get_current_user), 
     if not artist:
         raise HTTPException(404, "Artist not found")
     
+    # Jul 2026 refactor: dropped `OR g.artist_id = :aid` belt-and-suspenders
+    # leg. `t.artist_id` is authoritative on transactions (set by
+    # _create_booking_transaction to the booked-slot artist). The g.artist_id
+    # fallback was covering legacy single-slot bookings that pre-dated the
+    # transaction schema — irrelevant post-backfill.
     txns = db.execute(
         text("""
             SELECT t.*, g.date as gig_date, g.title as gig_title,
@@ -2210,13 +2347,13 @@ def get_artist_upcoming_payouts(artist_id: int, user=Depends(get_current_user), 
             FROM transactions t
             JOIN gigs g ON t.gig_id = g.id
             LEFT JOIN venues v ON v.id = g.venue_id
-            WHERE (t.artist_id = :aid OR g.artist_id = :aid)
-              AND t.status IN ('scheduled', 'charged', 'pending', 'test')
+            WHERE t.artist_id = :aid
+              AND t.status IN ('scheduled', 'charged', 'pending')
             ORDER BY t.scheduled_process_at ASC
         """),
         {"aid": artist_id}
     ).mappings().all()
-    
+
     return [dict(t) for t in txns]
 
 
@@ -2244,15 +2381,19 @@ def get_venue_payment_status(venue_id: int, user=Depends(get_current_user), db=D
     ).mappings().first()
     has_card = card and card.get("stripe_payment_method_id")
     
-    # Count affected booked gigs
+    # Count affected booked slots. Jul 2026: was UNION ALL of
+    # (single-slot gigs via g.status='booked') + (slots via gs.status='booked').
+    # Post-backfill every booked single-slot gig ALSO has gs.status='booked'
+    # on its 1 slot, so the UNION double-counted single-slot bookings.
+    # Semantic is "artists whose payments would be affected by suspension" —
+    # one per booked slot.
     booked_count = db.execute(
         text("""
-            SELECT COUNT(*) as cnt FROM (
-                SELECT g.id FROM gigs g WHERE g.venue_id = :vid AND g.status = 'booked' AND g.date >= DATE('now', 'localtime')
-                UNION ALL
-                SELECT gs.id FROM gig_slots gs JOIN gigs g ON gs.gig_id = g.id 
-                WHERE g.venue_id = :vid AND gs.status = 'booked' AND g.date >= DATE('now', 'localtime')
-            )
+            SELECT COUNT(*) as cnt
+            FROM gig_slots gs JOIN gigs g ON gs.gig_id = g.id
+            WHERE g.venue_id = :vid
+              AND gs.status = 'booked'
+              AND g.date >= DATE('now', 'localtime')
         """),
         {"vid": venue_id}
     ).mappings().first()
@@ -2414,10 +2555,11 @@ def _wh_admin_emails(conn):
             return [row["setting_value"].strip()]
     except Exception:
         pass
-    # Fallback: all admin users
+    # Fallback: all admin users. Normalize TEXT vs INTEGER is_admin so
+    # both legacy 'true'/'false' rows and newer 1/0 rows are matched.
     try:
         rows = conn.execute(
-            "SELECT email FROM users WHERE (is_admin = 'true' OR is_admin = 1) AND email IS NOT NULL"
+            "SELECT email FROM users WHERE LOWER(COALESCE(CAST(is_admin AS TEXT), 'false')) IN ('true', '1') AND email IS NOT NULL"
         ).fetchall()
         return [r["email"] for r in rows if r["email"]]
     except Exception:
@@ -2607,11 +2749,24 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                 return {"received": True, "duplicate": True}
             _webhook_event_owned = True
         except Exception as _ie:
-            # Don't let idempotency-bookkeeping failures block real event
-            # processing — Stripe will retry; better to potentially double-
-            # apply once than to drop a critical webhook.
-            logger.warning(f"Webhook idempotency check failed (proceeding): {_ie}")
-            _webhook_dedup_skip = True
+            # Audit fix (Jul 2026 full-site audit — M-H3): previously we
+            # set `_webhook_dedup_skip=True` and processed the event
+            # anyway, on the theory that "better to double-apply once
+            # than to drop a critical webhook." But that means any
+            # transient sqlite lock during a Stripe redelivery re-runs
+            # full side effects (re-suspend venue, re-refund artist,
+            # re-clawback, re-alert). Stripe retries with exponential
+            # backoff for 3 days on 5xx — refusing here with 503 lets
+            # Stripe redeliver later when the DB is unlocked, WITH the
+            # dedup guard intact. Zero-drop, zero-duplicate.
+            logger.error(
+                f"Webhook idempotency check failed for event_id={event_id} "
+                f"type={event_type} — refusing with 503 so Stripe retries "
+                f"under the dedup guard: {_ie}",
+                exc_info=True,
+            )
+            from fastapi import HTTPException as _HE
+            raise _HE(503, "Webhook idempotency store unavailable — retry later")
 
     try:
 
@@ -3064,7 +3219,7 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                                 SET status = 'payment_cancelled',
                                     notes = COALESCE(notes || ' | ', '') || ?
                                 WHERE parent_transaction_id = ?
-                                  AND status IN ('scheduled','pending_transfer','charge_retry','test')
+                                  AND status IN ('scheduled','pending_transfer','charge_retry')
                             """, (_kid_note, txn["id"]))
                             try:
                                 cancelled_kids = _res.rowcount or 0
@@ -3205,7 +3360,7 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                                 SET status = 'payment_cancelled',
                                     notes = COALESCE(notes || ' | ', '') || ?
                                 WHERE parent_transaction_id = ?
-                                  AND status IN ('scheduled','pending_transfer','charge_retry','test')
+                                  AND status IN ('scheduled','pending_transfer','charge_retry')
                             """, (_kid_note, txn["id"]))
                             try:
                                 clawback_children = _res.rowcount or 0
@@ -3282,7 +3437,10 @@ def get_artist_earnings_summary(artist_id: int, user=Depends(get_current_user), 
         raise HTTPException(404, "Artist not found")
     uid = artist["user_id"]
 
-    base_where = "(t.artist_id = :aid OR g.artist_id = :aid) AND t.status NOT IN ('payment_cancelled')"
+    # Jul 2026 refactor: `t.artist_id` is authoritative on transactions —
+    # dropped the `OR g.artist_id = :aid` fallback (legacy single-slot
+    # pre-transaction-schema safety net, now unnecessary post-backfill).
+    base_where = "t.artist_id = :aid AND t.status NOT IN ('payment_cancelled')"
 
     # All-time total paid out
     row = db.execute(text(f"""
@@ -3319,7 +3477,7 @@ def get_artist_earnings_summary(artist_id: int, user=Depends(get_current_user), 
     row = db.execute(text(f"""
         SELECT COALESCE(SUM(t.artist_payout_cents),0) as total
         FROM transactions t JOIN gigs g ON t.gig_id = g.id
-        WHERE {base_where} AND t.status IN ('scheduled','charged','pending','pending_transfer','test')
+        WHERE {base_where} AND t.status IN ('scheduled','charged','pending','pending_transfer')
     """), {"aid": artist_id}).mappings().first()
     pending_payout = (row["total"] or 0) / 100
 

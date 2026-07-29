@@ -1,5 +1,15 @@
 import { apiGet, apiPost } from "./api.js";
 
+// Jul 2026 full-site audit fix: HTML-escape helper for stored XSS prevention.
+// Venue/artist names come from user input and get interpolated into innerHTML
+// throughout this file. Without escaping, a venue named `<img src=x onerror=...>`
+// runs on every artist's discovery view.
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const params = new URLSearchParams(window.location.search);
   const artistId = params.get("artist_id");
@@ -125,10 +135,10 @@ document.addEventListener("DOMContentLoaded", async () => {
             <div>
               <div class="venue-name">
                 <a href="/app/venue-profile.html?venue_id=${venue.id}" target="_blank" style="color: inherit; text-decoration: none;">
-                  ${venue.venue_name}
+                  ${esc(venue.venue_name)}
                 </a>
               </div>
-              <div class="venue-location">📍 ${location}</div>
+              <div class="venue-location">📍 ${esc(location)}</div>
             </div>
             <div style="display: flex; gap: 12px; align-items: center;">
               ${statusBadge}
@@ -136,7 +146,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             </div>
           </div>
 
-          ${venue.description ? `<p style="color: var(--text-secondary); margin-top: 12px; line-height: 1.6;">${venue.description}</p>` : ''}
+          ${venue.description ? `<p style="color: var(--text-secondary); margin-top: 12px; line-height: 1.6;">${esc(venue.description)}</p>` : ''}
 
           ${features.length > 0 ? `
             <div class="venue-details">

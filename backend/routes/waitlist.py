@@ -193,14 +193,25 @@ def join_waitlist(gig_id: int, artist_id: int, user=Depends(get_current_user), d
             raise HTTPException(400, "This gig is not fully booked — you can book it directly")
 
     existing = db.execute(
-        text("SELECT id, offer_declined FROM gig_waitlist WHERE gig_id = :gid AND artist_id = :aid"),
+        text("SELECT id, offer_declined, source FROM gig_waitlist WHERE gig_id = :gid AND artist_id = :aid"),
         {"gid": gig_id, "aid": artist_id}
     ).mappings().first()
     if existing:
-        if existing["offer_declined"]:
-            # Previously declined — reset so they can rejoin
+        existing_source = (existing["source"] or "").lower()
+        if existing["offer_declined"] or existing_source == "hold":
+            # Previously declined OR existing row is a leftover from a
+            # hold cycle (Jun 2026) — repurpose it as a cancellation-
+            # waitlist row so the modal-data filter (which excludes
+            # source='hold' rows from the standard waitlist UI) picks
+            # it up. Without the source flip, modal-data showed
+            # "Join Waitlist" forever after a successful join because
+            # its wl_row query filtered out the hold row.
             db.execute(
-                text("UPDATE gig_waitlist SET offer_declined = 0, offer_sent = 0, offer_expires_at = NULL WHERE gig_id = :gid AND artist_id = :aid"),
+                text("""UPDATE gig_waitlist
+                        SET offer_declined = 0, offer_sent = 0,
+                            offer_expires_at = NULL,
+                            source = 'cancellation'
+                        WHERE gig_id = :gid AND artist_id = :aid"""),
                 {"gid": gig_id, "aid": artist_id}
             )
             db.commit()
@@ -208,7 +219,7 @@ def join_waitlist(gig_id: int, artist_id: int, user=Depends(get_current_user), d
             return {"status": "already_on_waitlist"}
     else:
         db.execute(
-            text("INSERT INTO gig_waitlist (gig_id, artist_id) VALUES (:gid, :aid)"),
+            text("INSERT INTO gig_waitlist (gig_id, artist_id, source) VALUES (:gid, :aid, 'cancellation')"),
             {"gid": gig_id, "aid": artist_id}
         )
         db.commit()
@@ -337,15 +348,26 @@ def get_gig_waitlist(venue_id: int, gig_id: int, user=Depends(get_current_user),
     from backend.utils import check_venue_access
     check_venue_access(db, venue_id, user.id)
 
+    # Exclude hold-source rows (Jun 2026). The venue's "View Waitlist"
+    # button on the gig modal is for the cancellation-waitlist UX
+    # (artists who joined because a slot was booked); hold-cycle history
+    # is a separate concern surfaced through the hold-mgmt panel. Without
+    # this filter, an exhausted hold leaves stale "View Waitlist (N)"
+    # bubbles on the venue's gig modal pointing at artists who already
+    # declined / let the offer expire — meaningless and confusing.
     rows = db.execute(
         text("""
             SELECT w.id, w.artist_id, w.created_at, w.notified, w.notified_at,
                    w.offer_sent, w.offer_expires_at, w.offer_declined,
                    a.name as artist_name, a.artist_type,
-                   (SELECT COUNT(*) FROM gig_waitlist w2 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id AND (w2.offer_declined = 0 OR w2.offer_declined IS NULL)) as position
+                   (SELECT COUNT(*) FROM gig_waitlist w2
+                    WHERE w2.gig_id = w.gig_id AND w2.id <= w.id
+                      AND (w2.offer_declined = 0 OR w2.offer_declined IS NULL)
+                      AND (w2.source IS NULL OR w2.source = 'cancellation')) as position
             FROM gig_waitlist w
             JOIN artists a ON a.id = w.artist_id
             WHERE w.gig_id = :gid
+              AND (w.source IS NULL OR w.source = 'cancellation')
             ORDER BY w.id ASC
         """),
         {"gid": gig_id}
@@ -362,20 +384,30 @@ def get_artist_waitlists(artist_id: int, user=Depends(get_current_user), db=Depe
     from backend.utils import check_artist_access
     check_artist_access(db, artist_id, user.id)
 
-    # Rows from gig_waitlist (waiting or declined)
+    # Rows from gig_waitlist (waiting or declined).
+    # Position + total scoped to cancellation-waitlist rows only —
+    # hold-cycle history must not inflate counts on the artist's
+    # "My Waitlists" view (Jun 2026 fix).
     rows = db.execute(
         text("""
             SELECT w.id, w.gig_id, w.created_at, w.notified,
                    w.offer_sent, w.offer_expires_at,
                    g.date, g.start_time, g.end_time, g.pay, g.title, g.artist_type, g.status,
                    v.venue_name, v.id as venue_id,
-                   (SELECT COUNT(*) FROM gig_waitlist w2 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id AND (w2.offer_declined = 0 OR w2.offer_declined IS NULL)) as position,
-                   (SELECT COUNT(*) FROM gig_waitlist w3 WHERE w3.gig_id = w.gig_id) as total_waiting,
+                   (SELECT COUNT(*) FROM gig_waitlist w2
+                    WHERE w2.gig_id = w.gig_id AND w2.id <= w.id
+                      AND (w2.offer_declined = 0 OR w2.offer_declined IS NULL)
+                      AND (w2.source IS NULL OR w2.source = 'cancellation')) as position,
+                   (SELECT COUNT(*) FROM gig_waitlist w3
+                    WHERE w3.gig_id = w.gig_id
+                      AND (w3.offer_declined = 0 OR w3.offer_declined IS NULL)
+                      AND (w3.source IS NULL OR w3.source = 'cancellation')) as total_waiting,
                    0 as has_offer
             FROM gig_waitlist w
             JOIN gigs g ON g.id = w.gig_id
             LEFT JOIN venues v ON v.id = g.venue_id
             WHERE w.artist_id = :aid
+              AND (w.source IS NULL OR w.source = 'cancellation')
               AND (w.offer_declined = 0 OR w.offer_declined IS NULL)
               AND g.date >= date('now', '-1 day')
             ORDER BY g.date ASC
@@ -881,12 +913,26 @@ def _send_sequential_offer(db, gig_id: int, gig, hours_until: float = 999):
             "booking_url": book_url,
             "slots_html": _wl_slots_html,
         }
-        email_service.send_notification_email(
-            user_email=entry["email"],
-            user_id=entry["user_id"],
-            notification_type="waitlist_offer",
-            variables=variables,
-        )
+        # Fan out waitlist offer to every artist entity user (Jun 2026 audit).
+        # Previously only entry["email"] (the row's stored user) got the offer
+        # email, so secondary band members managing the inbox would miss it.
+        # Falls back to the row's stored email if entity-user lookup is empty.
+        try:
+            from backend.utils import get_all_entity_users as _gaeu_wl
+            _wl_artist_users = _gaeu_wl(db, "artist", entry["artist_id"]) or []
+            _wl_emails = sorted({u["email"] for u in _wl_artist_users if u.get("email")})
+        except Exception as _wluxe:
+            logger.warning(f"[OFFER] entity-user fan-out lookup failed artist={entry['artist_id']}: {_wluxe}")
+            _wl_emails = []
+        if not _wl_emails:
+            _wl_emails = [entry["email"]]
+        for _wto in _wl_emails:
+            email_service.send_notification_email(
+                user_email=_wto,
+                user_id=entry["user_id"],
+                notification_type="waitlist_offer",
+                variables=variables,
+            )
 
         # Preserve token so respond_to_offer still works after row deletion
         db.execute(
@@ -952,8 +998,25 @@ def _send_waitlist_exhausted_email(db, gig_id: int, gig, hours_until: float,
         venue_id = gig.get("venue_id")
         venue_name = gig.get("venue_name") or "Your Venue"
         gig_date = format_email_date(str(gig.get("date", "")))
-        start_time = format_time_12hr(gig.get("start_time", ""))
-        end_time = gig.get("end_time")
+        # BUG FIX (Jul 2026 audit): pull the times from the FIRST OPEN slot,
+        # not the gig-umbrella window. Waitlist-exhausted fires because the
+        # venue still has ≥1 unfilled slot; showing "7-11pm" (umbrella) when
+        # the actual unfilled slot is "9-11pm" was misleading. Fall back to
+        # gig-level times if no open slot found (defensive — this callback
+        # shouldn't fire in that case anyway).
+        try:
+            from sqlalchemy import text as _wt_time
+            _open_slot = db.execute(_wt_time("""
+                SELECT start_time, end_time FROM gig_slots
+                WHERE gig_id = :gid AND status = 'open'
+                ORDER BY slot_number ASC LIMIT 1
+            """), {"gid": gig_id}).mappings().first()
+        except Exception:
+            _open_slot = None
+        _st_src = (_open_slot or {}).get("start_time") or gig.get("start_time", "")
+        _et_src = (_open_slot or {}).get("end_time")   or gig.get("end_time")
+        start_time = format_time_12hr(_st_src)
+        end_time = _et_src
         end_time_str = f" – {format_time_12hr(end_time)}" if end_time else ""
         # FIX (May 2026): format hours_until as human-readable "X hours and Y minutes"
         # instead of "3.9 hours". Handles edge cases (<1hr → just minutes, exact hours → no minutes).

@@ -26,6 +26,12 @@ def create_artist(data: dict, user=Depends(get_current_user), db=Depends(get_db)
             raise HTTPException(400, "Lineup selection required for Live Band artists.")
         if not styles:
             raise HTTPException(400, "At least one style is required for Live Band artists.")
+    # Jul 1 2026: MC-type artists get an equipment opt-in. Coerce the
+    # signup payload to a bool. Non-MC types can send it too — it's
+    # stored but doesn't gate matching unless a venue sets
+    # requires_equipment on a slot.
+    _has_equip_in = data.get("has_own_equipment")
+    has_own_equipment = bool(_has_equip_in) if _has_equip_in is not None else False
     
     # v91: Geocode city to get coordinates
     city = data.get("city")
@@ -69,6 +75,7 @@ def create_artist(data: dict, user=Depends(get_current_user), db=Depends(get_db)
         artist_type=artist_type,
         band_formats=band_formats,
         styles=styles,
+        has_own_equipment=has_own_equipment,
         city=city,
         state=state,
         latitude=latitude,
@@ -108,9 +115,12 @@ def create_artist(data: dict, user=Depends(get_current_user), db=Depends(get_db)
 def search_artists(db=Depends(get_db)):
     """Search all artists - returns all artist data for venue filtering"""
     try:
+        # Jul 2026: exclude tombstoned artists — historical joins still see
+        # them under the "[Deleted]" name, but they don't show up in venue
+        # search / preferred-artist add flows since they can't be booked.
         rows = db.execute(
             text("""
-                SELECT 
+                SELECT
                     id,
                     name,
                     COALESCE(city, '') as city,
@@ -121,6 +131,7 @@ def search_artists(db=Depends(get_db)):
                     COALESCE(band_formats, '') as band_formats,
                     COALESCE(styles, '') as styles
                 FROM artists
+                WHERE deleted_at IS NULL
                 ORDER BY name ASC
             """)
         ).mappings().all()
@@ -156,7 +167,8 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.website_url,
                 a.social_order,
                 a.latitude,
-                a.longitude
+                a.longitude,
+                COALESCE(a.has_own_equipment, 0) as has_own_equipment
             FROM artists a
             WHERE a.id = :id
               AND (
@@ -240,6 +252,7 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 social_order
             FROM artists
             WHERE id=:id
+              AND deleted_at IS NULL
         """),
         {"id": artist_id}
     ).mappings().first()
@@ -275,6 +288,13 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
     if not exists:
         raise HTTPException(403)
 
+    # Grab prior name so we can detect a rename after the UPDATE
+    # and invalidate cached flyer thumbnails (they bake in the old
+    # artist name via canvas-rendered PNGs). Jul 20 2026 addition.
+    _prior_artist_name = db.execute(
+        text("SELECT name FROM artists WHERE id = :id"), {"id": artist_id}
+    ).scalar()
+
     # Validate city if being updated
     new_city = data.get("city")
     new_state = data.get("state")
@@ -288,6 +308,11 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             if not city_data:
                 raise HTTPException(400, "This city is either misspelled or too small for our system. Please enter the closest big city to yours.")
 
+    # Jul 1 2026: has_own_equipment normalized to int (SQLite stores
+    # booleans as 0/1). None (field not sent) leaves DB value untouched
+    # via COALESCE.
+    _hoe_in = data.get("has_own_equipment")
+    _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     db.execute(
         text("""
             UPDATE artists SET
@@ -298,6 +323,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 artist_type = COALESCE(:artist_type, artist_type),
                 band_formats = COALESCE(:band_formats, band_formats),
                 styles = COALESCE(:styles, styles),
+                has_own_equipment = COALESCE(:has_own_equipment, has_own_equipment),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -319,6 +345,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "artist_type": data.get("artist_type"),
             "band_formats": data.get("band_formats"),
             "styles": data.get("styles"),
+            "has_own_equipment": _hoe,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),
@@ -331,6 +358,38 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
         }
     )
     db.commit()
+
+    # Invalidate cached flyer thumbnails on rename — every non-template
+    # flyer where this artist is booked bakes the old artist name into
+    # its rendered PNG thumbnail. Clearing forces the frontend to
+    # regenerate from live canvas data on next open. Filename
+    # (flyers.name) is left alone — self-heals on next re-save.
+    _new_name = data.get("name")
+    if _new_name and _new_name != _prior_artist_name:
+        try:
+            db.execute(
+                text("UPDATE flyers SET thumbnail_data = NULL "
+                     "WHERE artist_id = :aid AND is_template = 0"),
+                {"aid": artist_id}
+            )
+            db.commit()
+        except Exception:
+            # Silent — the DB truth is what matters; a stale thumbnail
+            # is a tiny cosmetic issue that self-heals on next save.
+            pass
+
+        # Jul 2026: auto-migrate vanity slug on rename if the current
+        # slug matches the old-name auto-slug (user never customized).
+        # Old slug parks as a 90-day redirect. See
+        # maybe_update_slug_on_rename in backend/routes/vanity.py.
+        try:
+            from backend.routes.vanity import maybe_update_slug_on_rename
+            maybe_update_slug_on_rename(
+                db, "artist", artist_id, _prior_artist_name, _new_name
+            )
+        except Exception:
+            pass
+
     return {"ok": True}
 
 # Get artist's venues (relationships)
@@ -340,29 +399,13 @@ def get_artist_venues(artist_id: int, user=Depends(get_current_user), db=Depends
     from backend.utils import check_artist_access
     check_artist_access(db, artist_id, user.id)
 
-    # Get venues from booked gigs (regular single-artist gigs)
+    # Jul 2026 refactor: collapsed the two separate queries (one for
+    # single-slot bookings via gigs.artist_id, one for multi-slot via
+    # gig_slots.artist_id) into a single slot-only query. Post-backfill
+    # every gig has a `gig_slots` row so this covers both. Reduces the
+    # DB round-trips from 2 to 1 and eliminates double-counting when the
+    # caller merges the two lists.
     gigs_venues = db.execute(
-        text("""
-            SELECT DISTINCT
-                v.id as venue_id,
-                v.venue_name,
-                v.address_line_1,
-                v.address_line_2,
-                v.city,
-                v.state,
-                COUNT(g.id) as gigs_count,
-                MIN(g.date) as next_gig_date,
-                'normal' as status
-            FROM gigs g
-            JOIN venues v ON g.venue_id = v.id
-            WHERE g.artist_id = :aid AND g.status = 'booked'
-            GROUP BY v.id
-        """),
-        {"aid": artist_id}
-    ).mappings().all()
-    
-    # Also get venues from slot bookings (multi-slot gigs)
-    slot_venues = db.execute(
         text("""
             SELECT DISTINCT
                 v.id as venue_id,
@@ -382,6 +425,9 @@ def get_artist_venues(artist_id: int, user=Depends(get_current_user), db=Depends
         """),
         {"aid": artist_id}
     ).mappings().all()
+
+    # Legacy slot_venues query retired — same data as gigs_venues above.
+    slot_venues = []
     
     # Get preferred status with override fields
     preferred = db.execute(
@@ -419,13 +465,29 @@ def get_artist_venues(artist_id: int, user=Depends(get_current_user), db=Depends
                     g.end_time
                 ) as waitlist_gig_end,
                 w.id as waitlist_id,
-                (SELECT COUNT(*) FROM gig_waitlist w2 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id) as waitlist_position,
-                (SELECT COUNT(*) FROM gig_waitlist w3 WHERE w3.gig_id = w.gig_id) as waitlist_total,
+                -- Position + total scoped to active cancellation-waitlist
+                -- rows only (Jun 2026). Hold-cycle history (source='hold',
+                -- already-declined offers) and stale declined rows must
+                -- not inflate the artist-facing "Position N of M" badge.
+                -- Without the source + offer_declined filters, an artist
+                -- who joined the cancellation waitlist after a hold ran
+                -- saw "Position 1 of 2" — the 2 counted the consumed
+                -- hold offer for the artist who booked.
+                (SELECT COUNT(*) FROM gig_waitlist w2
+                 WHERE w2.gig_id = w.gig_id AND w2.id <= w.id
+                   AND (w2.offer_declined = 0 OR w2.offer_declined IS NULL)
+                   AND (w2.source IS NULL OR w2.source = 'cancellation')) as waitlist_position,
+                (SELECT COUNT(*) FROM gig_waitlist w3
+                 WHERE w3.gig_id = w.gig_id
+                   AND (w3.offer_declined = 0 OR w3.offer_declined IS NULL)
+                   AND (w3.source IS NULL OR w3.source = 'cancellation')) as waitlist_total,
                 w.gig_id as waitlist_gig_id
             FROM gig_waitlist w
             JOIN gigs g ON g.id = w.gig_id
             JOIN venues v ON v.id = g.venue_id
             WHERE w.artist_id = :aid
+              AND (w.source IS NULL OR w.source = 'cancellation')
+              AND (w.offer_declined = 0 OR w.offer_declined IS NULL)
               -- Audit fix (May 2026): include 'open' and 'cancelled_blast' so
               -- the artist's "Venues" tab keeps showing their position when a
               -- waitlist-trigger gig is re-listed (was being silently dropped).
@@ -570,34 +632,11 @@ def get_artist_venues(artist_id: int, user=Depends(get_current_user), db=Depends
 def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     """Get all booked gigs for an artist at a specific venue (including slot bookings)"""
     
-    # Regular gigs booked by this artist. Door-deal terms live on the
-    # gig_slots row for single-slot bookings too — pull from the matching
-    # slot when it exists so My Venues can render "$X guarantee + Y% of
-    # door" instead of just the dollar floor.
-    regular_gigs = db.execute(
-        text("""
-            SELECT
-                g.id, g.date, g.start_time, g.end_time, g.pay, g.notes,
-                g.status, g.artist_id, a.name as artist_name,
-                g.title, g.artist_type, g.band_formats, g.styles,
-                COALESCE(g.is_multi_slot, 0) as is_multi_slot,
-                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
-                gs.deal_type, gs.door_pct, gs.guarantee_cents,
-                gs.door_receipts_cents, gs.settled_pay_cents, gs.settled_at
-            FROM gigs g
-            LEFT JOIN artists a ON g.artist_id = a.id
-            LEFT JOIN venues v ON g.venue_id = v.id
-            LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = g.artist_id
-            WHERE g.artist_id = :artist_id
-                AND g.venue_id = :venue_id
-                AND g.status = 'booked'
-            ORDER BY g.date ASC
-        """),
-        {"artist_id": artist_id, "venue_id": venue_id}
-    ).mappings().all()
-
-    # Slot-booked gigs at this venue. Same deal-info columns so the
-    # frontend can call window.formatPaySummary() on the row directly.
+    # Jul 2026 refactor: collapsed the two-query merge (single-slot via
+    # gigs.artist_id + multi-slot via gig_slots.artist_id, then Python
+    # seen_ids dedup) into one slot-only query. Post-backfill every gig
+    # has ≥1 gig_slots row, so the slot query returns the same rows the
+    # gigs.artist_id query used to, without the dedup dance.
     slot_gigs = db.execute(
         text("""
             SELECT DISTINCT
@@ -619,17 +658,8 @@ def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_curren
         """),
         {"artist_id": artist_id, "venue_id": venue_id}
     ).mappings().all()
-    
-    # Merge, avoiding duplicates by gig id
-    seen_ids = set()
-    result = []
-    for g in regular_gigs:
-        seen_ids.add(g['id'])
-        result.append(dict(g))
-    for g in slot_gigs:
-        if g['id'] not in seen_ids:
-            seen_ids.add(g['id'])
-            result.append(dict(g))
+
+    result = [dict(g) for g in slot_gigs]
     
     # Add effective_pay (venue override for this artist) to each gig.
     # Override only applies when the artist is actively approved at this venue —
@@ -665,40 +695,103 @@ def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_curren
     result.sort(key=lambda x: x.get('date', ''))
     return result
 
+@router.get("/api/artists/{artist_id}/delete-preview")
+def delete_artist_preview(artist_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+    """Return everything the frontend needs to render a fully-informed
+    delete-artist modal WITHOUT actually deleting:
+
+      - `is_owner`: True only if this user created the artist (delegates get False)
+      - `name`, `deleted_at`, `other_users_count`
+      - `upcoming_gigs`: [{gig_id, date, venue_name}, ...] the tombstone will cancel
+      - `live_txns`: [{status, date, venue_name, ...}, ...] that would BLOCK deletion (409)
+
+    Modal uses `is_owner=False` to grey out the Delete button and show a
+    "only the owner can delete" hint. Non-empty `live_txns` blocks and shows
+    the mid-flight items so the user can act on them (contact support / wait
+    for the payout scheduler / etc.) instead of just seeing a bare 409.
+    """
+    from backend.utils import utcnow_naive
+    from backend.services.entity_delete import (
+        count_other_team_members, list_live_transactions,
+    )
+
+    row = db.execute(text("""
+        SELECT id, name, user_id, deleted_at
+        FROM artists WHERE id = :aid
+    """), {"aid": artist_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Artist not found")
+
+    # BUG FIX (Jul 2026 audit): access-gate BEFORE the tombstone short-circuit
+    # so a random logged-in user can't confirm whether a given id is
+    # tombstoned via the response shape. Since check_artist_access itself now
+    # rejects tombstones, we bypass it and manually check ownership +
+    # entity_users for the tombstone case.
+    is_owner = (row["user_id"] == user.id)
+    _is_member = bool(db.execute(text(
+        "SELECT 1 FROM entity_users WHERE entity_type='artist' AND entity_id=:aid AND user_id=:uid"
+    ), {"aid": artist_id, "uid": user.id}).first())
+    if not is_owner and not _is_member:
+        raise HTTPException(403, "You don't have access to this artist")
+
+    if row["deleted_at"]:
+        # Already tombstoned — the modal shouldn't show any Delete button.
+        return {
+            "id": row["id"], "name": row["name"], "is_owner": False,
+            "already_deleted": True,
+            "other_users_count": 0, "upcoming_gigs": [], "live_txns": [],
+        }
+
+    upcoming = db.execute(text("""
+        SELECT DISTINCT g.id as gig_id, g.date, v.venue_name
+        FROM gigs g
+        JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
+                         AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
+        LEFT JOIN venues v ON v.id = g.venue_id
+        WHERE g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
+          AND g.date >= :today
+        ORDER BY g.date ASC
+    """), {"aid": artist_id, "today": utcnow_naive().date().isoformat()}).mappings().all()
+
+    return {
+        "id": row["id"], "name": row["name"], "is_owner": is_owner,
+        "already_deleted": False,
+        "other_users_count": count_other_team_members(db, "artist", artist_id, user.id),
+        "upcoming_gigs":    [dict(g) for g in upcoming],
+        "live_txns":        list_live_transactions(db, "artist", artist_id),
+    }
+
+
 @router.delete("/api/artists/{artist_id}")
 def delete_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    """Delete artist and all associated data"""
-    import shutil
-    from pathlib import Path
-    
+    """SOFT-delete (tombstone) an artist. See services/entity_delete.delete_artist
+    for the exact pipeline. Owner-only: delegated team members get 403.
+
+    Historical rows (past gig_slots, settled transactions, reviews both
+    directions) are PRESERVED so venue history keeps rendering "[Deleted]
+    <name>" correctly. Future in-flight bookings are cancelled with
+    counter-party notifications. Live (mid-flight) transactions block
+    deletion with 409 — the frontend can preview these via GET
+    /api/artists/{id}/delete-preview.
+    """
+    from backend.services.entity_delete import delete_artist as _delete_artist, _rm_tree
     try:
-        # Verify ownership
-        artist = db.execute(
-            text("SELECT user_id FROM artists WHERE id = :aid"),
-            {"aid": artist_id}
-        ).first()
-        
-        if not artist or artist[0] != user.id:
-            raise HTTPException(403, "Not authorized")
-        
-        # Audit fix (May 2026 part 5): drop the vanity URL so the slug stops
-        # resolving — otherwise resolve_vanity returns an empty profile.
-        try:
-            db.execute(text("DELETE FROM vanity_urls WHERE entity_type='artist' AND entity_id=:aid"), {"aid": artist_id})
-        except Exception:
-            pass
-        # Delete artist (cascades to gigs, media, etc)
-        db.execute(text("DELETE FROM artists WHERE id = :aid"), {"aid": artist_id})
-        
-        # Delete media folder
-        media_path = Path(f"media/artist_{artist_id}")
-        if media_path.exists():
-            shutil.rmtree(media_path)
-        
+        # Audit fix (Jul 2026): _delete_artist returns the list of dirs
+        # to remove AFTER commit. Doing it before meant a commit-fail =
+        # media gone but artist row still live.
+        _rm_paths = _delete_artist(db, artist_id, user.id) or []
         db.commit()
+        for _p in _rm_paths:
+            try:
+                _rm_tree(_p)
+            except Exception:
+                pass
         return {"success": True}
     except HTTPException:
+        db.rollback()
         raise
     except Exception as e:
+        import logging as _log
+        _log.getLogger("gigsfill.artists").exception(f"delete_artist failed for artist={artist_id} user={user.id}: {e}")
         db.rollback()
-        raise HTTPException(500, "Failed to delete. Please try again.")
+        raise HTTPException(500, "Failed to delete artist. Please try again.")

@@ -9,6 +9,11 @@
   --text: #f8fafc;
   --text-gray: #94a3b8;
   --border: rgba(148, 163, 184, 0.1);
+  /* Jul 2026 experiment: bump header + calendar container from
+     1100/1250/1400 → 1600 with a viewport clamp. Modals + narrow
+     forms keep their own smaller widths (readability). Easily
+     reverted by changing this one value back to 1100px. */
+  --container-max: min(1600px, calc(100vw - 32px));
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -27,17 +32,18 @@ body {
   top: 0; 
   z-index: 100;
   background: rgba(10, 14, 23, 0.8); 
+  -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
   height: 60px;
 }
-.header-inner { 
-  max-width: 1100px; 
-  margin: 0 auto; 
+.header-inner {
+  max-width: var(--container-max);
+  margin: 0 auto;
   height: 60px;
   padding: 0 20px;
-  display: flex; 
-  align-items: center; 
+  display: flex;
+  align-items: center;
 }
 .logo { 
   font-size: 1.125rem; 
@@ -111,6 +117,7 @@ body {
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.7);
+  -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -157,8 +164,8 @@ body {
 
 .modal-close {
   background: transparent;
-  border: none;
-  color: var(--text-gray);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #ef4444;
   font-size: 1.5rem;
   cursor: pointer;
   padding: 0;
@@ -171,9 +178,22 @@ body {
   transition: all 0.2s;
 }
 
+/* iOS HIG + Android Material both call for 44×44 minimum tap targets.
+   Small "×" close buttons are the worst offenders — miss by 5px and
+   users tap the modal backdrop instead. Bump on touch-narrow viewports
+   only, so desktop keeps the tighter chrome. Added 2026-07-24. */
+@media (max-width: 768px) {
+  .modal-close {
+    width: 44px;
+    height: 44px;
+    font-size: 1.75rem;
+  }
+}
+
 .modal-close:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: #ef4444;
+  color: #ef4444;
 }
 
 .modal-body {
@@ -332,6 +352,17 @@ textarea {
   color: var(--text);
   font: 0.9375rem 'Inter', sans-serif;
   transition: all 0.2s;
+}
+
+/* iOS Safari zooms any input whose text renders below 16px when
+   the user taps it — a permanent UX papercut. Force ≥16px on
+   touch-narrow viewports so tapping a form field stops triggering
+   the page zoom + subsequent pinch-out-to-restore dance.
+   Added 2026-07-24 as part of the mobile sweep. */
+@media (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
 }
 
 input:focus,

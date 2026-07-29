@@ -290,7 +290,13 @@ import threading
 # any IP. Now the attacker locks only their own IP/email pair; legitimate
 # user from a different IP is unaffected. Slowapi's per-IP rate limit is a
 # separate, broader layer; this lockout is the per-account/per-IP layer.
-_login_attempts = {}  # {(email, ip): {"count": int, "locked_until": datetime}}
+#
+# Audit fix Auth-R3 (Jul 1 2026): state was previously kept in a module-
+# level Python dict. Under the 2-uvicorn-worker production topology,
+# worker A didn't see worker B's counter — effective threshold doubled
+# and every restart wiped state. Now backed by the `login_attempts` DB
+# table (see db.py:setup_database) so all workers share the counter and
+# state survives restarts.
 _login_lock = threading.Lock()
 
 MAX_LOGIN_ATTEMPTS = 10
@@ -312,41 +318,106 @@ def _client_ip(request) -> str:
 
 
 def _check_lockout(email: str, ip: str = ""):
-    """Check if (email, ip) is locked out. Raises HTTPException if locked."""
-    key = (email, ip)
-    with _login_lock:
-        record = _login_attempts.get(key)
-        if record and record.get("locked_until"):
-            if utcnow_naive() < record["locked_until"]:
-                remaining = (record["locked_until"] - utcnow_naive()).seconds // 60 + 1
+    """Check if (email, ip) is locked out. Raises HTTPException if locked.
+    DB-backed so it works across uvicorn workers."""
+    if not email:
+        return
+    _db = SessionLocal()
+    try:
+        with _login_lock:
+            row = _db.execute(
+                text("""SELECT locked_until FROM login_attempts
+                           WHERE email = :e AND ip = :i"""),
+                {"e": email, "i": ip or ""}
+            ).mappings().first()
+            if not row or not row.get("locked_until"):
+                return
+            try:
+                _lu = row["locked_until"]
+                if isinstance(_lu, str):
+                    # Handle both 'YYYY-MM-DD HH:MM:SS' and ISO forms.
+                    _lu = datetime.fromisoformat(_lu.replace("Z", "").replace("T", " ").split(".")[0])
+            except Exception:
+                return
+            _now = utcnow_naive()
+            if _now < _lu:
+                remaining = int((_lu - _now).total_seconds() // 60) + 1
                 raise HTTPException(
                     429,
                     f"Too many failed login attempts. Try again in {remaining} minutes."
                 )
-            else:
-                # Lockout expired — reset
-                _login_attempts.pop(key, None)
+            # Lockout expired — clear the row so retries start fresh.
+            _db.execute(
+                text("""DELETE FROM login_attempts
+                           WHERE email = :e AND ip = :i"""),
+                {"e": email, "i": ip or ""}
+            )
+            _db.commit()
+    finally:
+        _db.close()
 
 
 def _record_failed_login(email: str, ip: str = ""):
-    """Record a failed login attempt. Lock the (email, ip) pair if threshold exceeded."""
-    key = (email, ip)
-    with _login_lock:
-        record = _login_attempts.setdefault(key, {"count": 0, "locked_until": None})
-        record["count"] += 1
-        if record["count"] >= MAX_LOGIN_ATTEMPTS:
-            record["locked_until"] = utcnow_naive() + LOCKOUT_DURATION
-            logger.warning(f"Login locked for ({email}, {ip}) after {record['count']} failed attempts")
+    """Record a failed login attempt. Lock the (email, ip) pair if threshold
+    exceeded. Cross-worker safe via a single atomic upsert-with-increment —
+    the previous read-then-write pattern let two uvicorn workers both read
+    count=4, both compute count=5, both UPDATE to 5 (effective threshold
+    doubled). The `INSERT ... ON CONFLICT DO UPDATE` form serializes the
+    increment at the SQL layer so exactly one +1 lands per call regardless
+    of worker concurrency.
+    """
+    if not email:
+        return
+    _db = SessionLocal()
+    try:
+        with _login_lock:
+            # Atomic increment via UPSERT — same semantics on SQLite (3.24+)
+            # and Postgres (9.5+). CASE selects the lockout stamp when
+            # the incremented count crosses the threshold.
+            _lockout_str = (utcnow_naive() + LOCKOUT_DURATION).strftime("%Y-%m-%d %H:%M:%S")
+            _db.execute(
+                text("""
+                    INSERT INTO login_attempts (email, ip, attempt_count, locked_until, updated_at)
+                    VALUES (:e, :i, 1, NULL, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email, ip) DO UPDATE SET
+                        attempt_count = login_attempts.attempt_count + 1,
+                        locked_until = CASE
+                            WHEN login_attempts.attempt_count + 1 >= :thr THEN :lu
+                            ELSE login_attempts.locked_until
+                        END,
+                        updated_at = CURRENT_TIMESTAMP
+                """),
+                {"e": email, "i": ip or "", "thr": MAX_LOGIN_ATTEMPTS, "lu": _lockout_str}
+            )
+            _db.commit()
+            # Post-check for the logger.warning (best-effort — the state
+            # is already committed either way).
+            _cur = _db.execute(
+                text("SELECT attempt_count FROM login_attempts WHERE email = :e AND ip = :i"),
+                {"e": email, "i": ip or ""}
+            ).scalar()
+            if _cur and int(_cur) >= MAX_LOGIN_ATTEMPTS and int(_cur) < MAX_LOGIN_ATTEMPTS + 3:
+                logger.warning(f"Login locked for ({email}, {ip}) after {int(_cur)} failed attempts")
+    finally:
+        _db.close()
 
 
 def _clear_failed_logins(email: str, ip: str = ""):
-    """Clear failed attempts on successful login. Clears every IP for this email."""
-    with _login_lock:
-        # Clear every entry that matches the email — covers legit user across
-        # IPs and prevents stale lockouts for users on dynamic IPs.
-        for k in list(_login_attempts.keys()):
-            if isinstance(k, tuple) and k[0] == email:
-                _login_attempts.pop(k, None)
+    """Clear failed attempts on successful login. Clears every IP for this
+    email — covers a legit user across IPs (dynamic IPs, mobile hop) and
+    prevents stale lockouts. Cross-worker via DB backing."""
+    if not email:
+        return
+    _db = SessionLocal()
+    try:
+        with _login_lock:
+            _db.execute(
+                text("DELETE FROM login_attempts WHERE email = :e"),
+                {"e": email}
+            )
+            _db.commit()
+    finally:
+        _db.close()
 
 # ============================================
 # SIGN UP
@@ -362,6 +433,14 @@ def signup(request: Request, data: dict, response: Response):
     db = SessionLocal()
     try:
         # ── Check signups_enabled kill switch ────────────────────────────────
+        # Audit Y8 fix (Jul 1 2026): the previous bare-except swallowed
+        # transient DB errors (connection blip, temporary lock) and
+        # let signups proceed silently — defeating the admin kill
+        # switch during exactly the outage windows it's meant for.
+        # Now: only swallow "table missing" specifically; every other
+        # error is re-raised as a 503 so signup fails closed. The kill
+        # switch is a positive opt-out — "no setting row = allowed" is
+        # deliberate, but "settings table exploded" should NOT be.
         try:
             signups_on = db.execute(
                 text("SELECT setting_value FROM platform_settings WHERE setting_key = 'signups_enabled'")
@@ -371,8 +450,14 @@ def signup(request: Request, data: dict, response: Response):
                 raise HTTPException(503, "New signups are temporarily closed. Please check back soon.")
         except HTTPException:
             raise
-        except Exception:
-            pass  # If settings table missing, allow signup
+        except Exception as _sig_e:
+            _msg = str(_sig_e).lower()
+            if "no such table" in _msg or "does not exist" in _msg:
+                # Fresh DB before setup_database completed — allow signup.
+                pass
+            else:
+                logger.error(f"signups_enabled kill-switch check failed transiently: {_sig_e}")
+                raise HTTPException(503, "Signup is temporarily unavailable. Please try again in a moment.")
 
         # Validate required fields
         email = (data.get("email") or "").strip().lower()
@@ -596,13 +681,16 @@ def signup(request: Request, data: dict, response: Response):
                 db.delete(user); db.commit()
                 raise HTTPException(409, f"An artist named '{_dup_a['name']}' already exists in {_dup_a['city']}, {_dup_a['state']}. If this is your artist, use 'Request Access' on the duplicate alert.")
 
-            # Create artist profile
+            # Create artist profile.
+            # Jul 1 2026: MC-type equipment opt-in on signup.
+            _has_own_equipment = bool(data.get("has_own_equipment"))
             artist = Artist(
                 user_id=user.id,
                 name=artist_name,
                 artist_type=artist_type,
                 band_formats=band_formats,
                 styles=styles,
+                has_own_equipment=_has_own_equipment,
                 city=city,
                 state=state,
                 latitude=latitude,
@@ -988,6 +1076,23 @@ def login(request: Request, data: LoginRequest, response: Response):
         # Success — clear failed attempts and set session
         _clear_failed_logins(email, ip)
         set_session_cookie(response, user.id)
+
+        # 2026-07-26: stamp last_login so the admin Directory tab shows a
+        # real value. Previously never written, so every row in Directory
+        # rendered "never" for last_login even for daily-active users.
+        # Best-effort — swallow errors so a schema drift or DB blip
+        # doesn't fail an otherwise-good login.
+        try:
+            from backend.utils import utcnow_naive
+            db.execute(
+                text("UPDATE users SET last_login = :now WHERE id = :uid"),
+                {"now": utcnow_naive(), "uid": user.id}
+            )
+            db.commit()
+        except Exception as _e:
+            logger.warning(f"last_login update failed for user {user.id}: {_e}")
+            try: db.rollback()
+            except Exception: pass
 
         return {"ok": True}
 

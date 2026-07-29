@@ -81,6 +81,42 @@ async def send_venue_email(
     if not check_venue_access(venue_id, user.id, db):
         raise HTTPException(403, "You don't have permission to send emails from this venue")
 
+    # BUG FIX (Jul 2026 audit): scope the recipient list. Previously a venue
+    # could POST any artist_ids and the send would proceed — effectively
+    # anonymous mass-email to any artist on the platform. Restrict to
+    # artists the venue has an established relationship with:
+    #   (a) preferred artists (status='approved'), OR
+    #   (b) any artist who has ever been booked (past or in-flight) on
+    #       one of this venue's gigs.
+    # Anything outside that set is dropped from artist_ids. If the entire
+    # list is filtered out, return 400 so the venue sees why.
+    _in_ph = ','.join(f':aid{i}' for i in range(len(artist_ids)))
+    _in_params = {f'aid{i}': aid for i, aid in enumerate(artist_ids)}
+    _allowed_rows = db.execute(text(f"""
+        SELECT DISTINCT pa.artist_id AS aid FROM preferred_artists pa
+        WHERE pa.venue_id = :vid AND pa.status = 'approved'
+          AND pa.artist_id IN ({_in_ph})
+        UNION
+        SELECT DISTINCT gs.artist_id AS aid
+        FROM gigs g
+        JOIN gig_slots gs ON gs.gig_id = g.id
+        WHERE g.venue_id = :vid
+          AND gs.artist_id IS NOT NULL
+          AND gs.artist_id IN ({_in_ph})
+    """), {**_in_params, "vid": venue_id}).fetchall()
+    _allowed = {row[0] for row in _allowed_rows}
+    _dropped = [aid for aid in artist_ids if aid not in _allowed]
+    if _dropped:
+        import logging as _drop_log
+        _drop_log.getLogger("gigsfill.venue_emails").warning(
+            f"venue {venue_id} tried to email non-preferred/non-booked artist_ids={_dropped}"
+        )
+    artist_ids = [aid for aid in artist_ids if aid in _allowed]
+    if not artist_ids:
+        raise HTTPException(400,
+            "No eligible recipients. You can only email preferred artists or "
+            "artists who have been booked at your venue.")
+
     # Sanitize text that will be substituted into the HTML email template.
     # Strip every tag, then re-introduce newline → <br>. The previous code
     # piped the raw body straight into {{body}}, which let venues author
@@ -289,8 +325,12 @@ def delete_venue_email_history_item(
     if not row:
         raise HTTPException(404, "Email history row not found")
 
-    if not check_venue_access(row["venue_id"], user.id, db):
-        raise HTTPException(403, "You don't have permission to delete this email history")
+    # Audit fix (Jul 2026): args were in the wrong order (real signature:
+    # `check_venue_access(db, venue_id, user_id)`) AND the return value
+    # was treated as a bool but the helper raises on failure / returns
+    # None on success. Endpoint was previously broken — either 500 on
+    # arg mis-type or 403 for everyone.
+    check_venue_access(db, row["venue_id"], user.id)
 
     db.execute(text("DELETE FROM venue_email_history WHERE id = :eid"), {"eid": email_id})
     db.commit()
@@ -380,11 +420,17 @@ def create_venue_email_html(venue_name: str, subject: str, body: str) -> str:
 # =====================================================
 
 NOTIFICATION_DEFAULTS = {
+    # Jul 2026: per-key waive_frequency + cancel_* defaults per venue-user spec.
+    # Early reminders (4w/2w) don't waive frequency limits and don't fire
+    # cancellation blasts; late reminders (1w/36h) waive frequency + fire
+    # cancellation blasts (venue is trying harder to fill the gig as it
+    # approaches). cancelled_blast + radius_blast are legacy rows kept for
+    # backwards compat; fire_cancelled_gig_blast no longer reads them.
     'gig_confirmation': {'time_value': 1,  'time_unit': 'weeks', 'template_key': 'venue_gig_confirmation_reminder', 'blink_enabled': False, 'blink_color': '#10b981'},
-    'open_gig_4w':      {'time_value': 4,  'time_unit': 'weeks', 'template_key': 'venue_open_gig_4w',              'blink_enabled': False, 'blink_color': '#10b981'},
-    'open_gig_2w':      {'time_value': 2,  'time_unit': 'weeks', 'template_key': 'venue_open_gig_2w',              'blink_enabled': False, 'blink_color': '#10b981'},
-    'open_gig_1w':      {'time_value': 1,  'time_unit': 'weeks', 'template_key': 'venue_open_gig_1w',              'blink_enabled': False, 'blink_color': '#10b981'},
-    'open_gig_36h':     {'time_value': 36, 'time_unit': 'hours', 'template_key': 'venue_open_gig_36h', 'blast_all_enabled': True,  'blast_all_radius': 20, 'blink_enabled': False, 'blink_color': '#f59e0b'},
+    'open_gig_4w':      {'time_value': 4,  'time_unit': 'weeks', 'template_key': 'venue_open_gig_4w',              'blast_all_enabled': False, 'blast_all_radius': 20, 'waive_frequency': False, 'cancel_notify_preferred': False, 'cancel_notify_all_enabled': False, 'cancel_notify_all_radius': 20, 'blink_enabled': False, 'blink_color': '#10b981'},
+    'open_gig_2w':      {'time_value': 2,  'time_unit': 'weeks', 'template_key': 'venue_open_gig_2w',              'blast_all_enabled': False, 'blast_all_radius': 20, 'waive_frequency': False, 'cancel_notify_preferred': False, 'cancel_notify_all_enabled': False, 'cancel_notify_all_radius': 20, 'blink_enabled': False, 'blink_color': '#10b981'},
+    'open_gig_1w':      {'time_value': 1,  'time_unit': 'weeks', 'template_key': 'venue_open_gig_1w',              'blast_all_enabled': False, 'blast_all_radius': 20, 'waive_frequency': True,  'cancel_notify_preferred': True,  'cancel_notify_all_enabled': False, 'cancel_notify_all_radius': 20, 'blink_enabled': False, 'blink_color': '#10b981'},
+    'open_gig_36h':     {'time_value': 36, 'time_unit': 'hours', 'template_key': 'venue_open_gig_36h',             'blast_all_enabled': False, 'blast_all_radius': 20, 'waive_frequency': True,  'cancel_notify_preferred': True,  'cancel_notify_all_enabled': True,  'cancel_notify_all_radius': 20, 'blink_enabled': False, 'blink_color': '#f59e0b'},
     'cancelled_blast':  {'time_value': 1,  'time_unit': 'weeks', 'template_key': 'cancelled_gig_preferred_blast', 'radius_miles': None, 'blast_all_enabled': True,  'blast_all_radius': 20, 'blink_enabled': True,  'blink_color': '#f59e0b'},
     'radius_blast':     {'time_value': 36, 'time_unit': 'hours', 'template_key': 'cancelled_gig_radius_blast', 'radius_miles': 20, 'blast_all_enabled': True,  'blast_all_radius': 20, 'blink_enabled': True,  'blink_color': '#f59e0b'},
 }
@@ -405,50 +451,88 @@ def get_venue_email_notifications(
                    COALESCE(blast_all_enabled, 0) as blast_all_enabled,
                    blast_all_radius,
                    COALESCE(blink_enabled, 0) as blink_enabled,
-                   blink_color
+                   blink_color,
+                   COALESCE(waive_frequency, 1) as waive_frequency,
+                   COALESCE(cancel_notify_preferred, 0)   as cancel_notify_preferred,
+                   COALESCE(cancel_notify_all_enabled, 0) as cancel_notify_all_enabled,
+                   COALESCE(cancel_notify_all_radius, 20) as cancel_notify_all_radius
             FROM venue_email_notifications
             WHERE venue_id = :vid
         """),
         {"vid": venue_id}
     ).mappings().all()
-    
+
+    # Keys that consume the Jul 2026 fields — audit fix so the API response
+    # doesn't hydrate irrelevant defaults into keys that don't read them
+    # (was returning waive_frequency=True on gig_confirmation etc., which the
+    # frontend echoed back and POST'd into DB rows, creating meaningless state).
+    _OPEN_GIG_KEYS = {'open_gig_4w', 'open_gig_2w', 'open_gig_1w', 'open_gig_36h'}
+
+    def _base_settings(key, defaults, *, enabled, time_value, time_unit, radius_miles,
+                      blast_all_enabled, blast_all_radius, blink_enabled, blink_color,
+                      waive_frequency, cancel_notify_preferred,
+                      cancel_notify_all_enabled, cancel_notify_all_radius):
+        """Assemble the response dict for one notification key, including only
+        the fields that key actually consumes. Falls back to NOTIFICATION_DEFAULTS
+        for blink_color so both the pristine-venue path and the null-color path
+        use the same source of truth (was previously two divergent maps)."""
+        out = {
+            'enabled': enabled,
+            'time_value': time_value,
+            'time_unit': time_unit,
+            'radius_miles': radius_miles,
+            'blast_all_enabled': blast_all_enabled,
+            'blast_all_radius': blast_all_radius,
+            'blink_enabled': blink_enabled,
+            'blink_color': blink_color or defaults.get('blink_color', '#f59e0b'),
+        }
+        # Only the 4 open-gig rows consume these — omit for others so the
+        # frontend doesn't round-trip meaningless values into DB.
+        if key in _OPEN_GIG_KEYS:
+            out['waive_frequency'] = waive_frequency
+            out['cancel_notify_preferred'] = cancel_notify_preferred
+            out['cancel_notify_all_enabled'] = cancel_notify_all_enabled
+            out['cancel_notify_all_radius'] = cancel_notify_all_radius
+        return out
+
     # Build response with defaults for missing keys (default ON)
     settings = {}
     for key, defaults in NOTIFICATION_DEFAULTS.items():
-        settings[key] = {
-            'enabled': True,
-            'time_value': defaults['time_value'],
-            'time_unit': defaults['time_unit'],
-            'radius_miles': defaults.get('radius_miles'),
-            'blast_all_enabled': defaults.get('blast_all_enabled', False),
-            'blast_all_radius': defaults.get('blast_all_radius', 20),
-            'blink_enabled': defaults.get('blink_enabled', False),
-            'blink_color': defaults.get('blink_color', '#f59e0b'),
-        }
-    
-    _default_blink_colors = {
-        'gig_confirmation': '#10b981',
-        'open_gig_4w':      '#10b981',
-        'open_gig_2w':      '#10b981',
-        'open_gig_1w':      '#f59e0b',
-        'open_gig_36h':     '#f59e0b',
-        'cancelled_blast':  '#f59e0b',
-        'radius_blast':     '#f59e0b',
-    }
+        settings[key] = _base_settings(
+            key, defaults,
+            enabled=True,
+            time_value=defaults['time_value'],
+            time_unit=defaults['time_unit'],
+            radius_miles=defaults.get('radius_miles'),
+            blast_all_enabled=defaults.get('blast_all_enabled', False),
+            blast_all_radius=defaults.get('blast_all_radius', 20),
+            blink_enabled=defaults.get('blink_enabled', False),
+            blink_color=defaults.get('blink_color'),
+            waive_frequency=defaults.get('waive_frequency', True),
+            cancel_notify_preferred=defaults.get('cancel_notify_preferred', False),
+            cancel_notify_all_enabled=defaults.get('cancel_notify_all_enabled', False),
+            cancel_notify_all_radius=defaults.get('cancel_notify_all_radius', 20),
+        )
 
     for row in rows:
         key = row['notification_key']
         if key in settings:
-            settings[key] = {
-                'enabled': bool(row['enabled']),
-                'time_value': row['time_value'],
-                'time_unit': row['time_unit'],
-                'radius_miles': row['radius_miles'],
-                'blast_all_enabled': bool(row.get('blast_all_enabled', 0)),
-                'blast_all_radius': row.get('blast_all_radius') or 20,
-                'blink_enabled': bool(row.get('blink_enabled', 0)),
-                'blink_color': row.get('blink_color') or _default_blink_colors.get(key, '#f59e0b'),
-            }
+            defaults = NOTIFICATION_DEFAULTS[key]
+            settings[key] = _base_settings(
+                key, defaults,
+                enabled=bool(row['enabled']),
+                time_value=row['time_value'],
+                time_unit=row['time_unit'],
+                radius_miles=row['radius_miles'],
+                blast_all_enabled=bool(row.get('blast_all_enabled', 0)),
+                blast_all_radius=row.get('blast_all_radius') or 20,
+                blink_enabled=bool(row.get('blink_enabled', 0)),
+                blink_color=row.get('blink_color'),  # None → falls back to defaults inside _base_settings
+                waive_frequency=bool(row.get('waive_frequency', 1)),
+                cancel_notify_preferred=bool(row.get('cancel_notify_preferred', 0)),
+                cancel_notify_all_enabled=bool(row.get('cancel_notify_all_enabled', 0)),
+                cancel_notify_all_radius=row.get('cancel_notify_all_radius') or 20,
+            )
     
     return settings
 
@@ -493,36 +577,85 @@ def save_venue_email_notifications(
         if blink_color and not (blink_color.startswith('#') and len(blink_color) in (4, 7)):
             blink_color = None
 
+        # Jul 2026: waive_frequency toggle (default 1 = current behavior)
+        waive_frequency = 0 if val.get('waive_frequency') is False else 1
+
+        # Jul 2026: per-window cancellation blast toggles.
+        cancel_notify_preferred = 1 if val.get('cancel_notify_preferred') else 0
+        cancel_notify_all_enabled = 1 if val.get('cancel_notify_all_enabled') else 0
+        cancel_notify_all_radius_raw = val.get('cancel_notify_all_radius')
+        cancel_notify_all_radius = int(cancel_notify_all_radius_raw) if cancel_notify_all_radius_raw else 20
+        cancel_notify_all_radius = max(1, min(500, cancel_notify_all_radius))
+
+        # Jul 2026: enforce per-key semantics. Only open_gig_* rows consume the
+        # waive_frequency + cancel_notify_* fields. For any other key, force DB
+        # defaults so a stale payload can't accumulate meaningless state (was
+        # writing waive_frequency=1 into gig_confirmation/cancelled_blast/
+        # radius_blast rows on every save).
+        _OPEN_GIG_KEYS = ('open_gig_4w', 'open_gig_2w', 'open_gig_1w', 'open_gig_36h')
+        if key not in _OPEN_GIG_KEYS:
+            waive_frequency = 1
+            cancel_notify_preferred = 0
+            cancel_notify_all_enabled = 0
+            cancel_notify_all_radius = 20
+
+        _params = {"vid": venue_id, "key": key, "enabled": enabled, "tv": time_value, "tu": time_unit,
+                   "rm": radius_miles, "bae": blast_all_enabled, "bar": blast_all_radius,
+                   "be": blink_enabled, "bc": blink_color, "wf": waive_frequency,
+                   "cnp": cancel_notify_preferred, "cnae": cancel_notify_all_enabled,
+                   "cnar": cancel_notify_all_radius}
         try:
             db.execute(
                 text("""
                     INSERT INTO venue_email_notifications
                         (venue_id, notification_key, enabled, time_value, time_unit, radius_miles,
-                         blast_all_enabled, blast_all_radius, blink_enabled, blink_color, updated_at)
-                    VALUES (:vid, :key, :enabled, :tv, :tu, :rm, :bae, :bar, :be, :bc, CURRENT_TIMESTAMP)
+                         blast_all_enabled, blast_all_radius, blink_enabled, blink_color,
+                         waive_frequency, cancel_notify_preferred, cancel_notify_all_enabled,
+                         cancel_notify_all_radius, updated_at)
+                    VALUES (:vid, :key, :enabled, :tv, :tu, :rm, :bae, :bar, :be, :bc, :wf,
+                            :cnp, :cnae, :cnar, CURRENT_TIMESTAMP)
                     ON CONFLICT(venue_id, notification_key)
                     DO UPDATE SET enabled = :enabled, time_value = :tv, time_unit = :tu, radius_miles = :rm,
                         blast_all_enabled = :bae, blast_all_radius = :bar,
-                        blink_enabled = :be, blink_color = :bc, updated_at = CURRENT_TIMESTAMP
+                        blink_enabled = :be, blink_color = :bc,
+                        waive_frequency = :wf,
+                        cancel_notify_preferred = :cnp,
+                        cancel_notify_all_enabled = :cnae,
+                        cancel_notify_all_radius = :cnar,
+                        updated_at = CURRENT_TIMESTAMP
                 """),
-                {"vid": venue_id, "key": key, "enabled": enabled, "tv": time_value, "tu": time_unit,
-                 "rm": radius_miles, "bae": blast_all_enabled, "bar": blast_all_radius,
-                 "be": blink_enabled, "bc": blink_color}
+                _params
             )
         except Exception as _col_err:
-            # Fallback: columns may not exist yet — save core fields only
-            db.execute(
-                text("""
-                    INSERT INTO venue_email_notifications
-                        (venue_id, notification_key, enabled, time_value, time_unit, radius_miles, updated_at)
-                    VALUES (:vid, :key, :enabled, :tv, :tu, :rm, CURRENT_TIMESTAMP)
-                    ON CONFLICT(venue_id, notification_key)
-                    DO UPDATE SET enabled = :enabled, time_value = :tv, time_unit = :tu,
-                        radius_miles = :rm, updated_at = CURRENT_TIMESTAMP
-                """),
-                {"vid": venue_id, "key": key, "enabled": enabled, "tv": time_value,
-                 "tu": time_unit, "rm": radius_miles}
-            )
+            # Tiered fallback for DBs missing one of the additive column sets.
+            # Try trimming Jul 2026 fields first, then May 2026 blast_*/blink_*,
+            # so we keep as much of the payload as the schema supports.
+            try:
+                db.execute(
+                    text("""
+                        INSERT INTO venue_email_notifications
+                            (venue_id, notification_key, enabled, time_value, time_unit, radius_miles,
+                             blast_all_enabled, blast_all_radius, blink_enabled, blink_color, updated_at)
+                        VALUES (:vid, :key, :enabled, :tv, :tu, :rm, :bae, :bar, :be, :bc, CURRENT_TIMESTAMP)
+                        ON CONFLICT(venue_id, notification_key)
+                        DO UPDATE SET enabled = :enabled, time_value = :tv, time_unit = :tu, radius_miles = :rm,
+                            blast_all_enabled = :bae, blast_all_radius = :bar,
+                            blink_enabled = :be, blink_color = :bc, updated_at = CURRENT_TIMESTAMP
+                    """),
+                    {k: _params[k] for k in ("vid", "key", "enabled", "tv", "tu", "rm", "bae", "bar", "be", "bc")}
+                )
+            except Exception:
+                db.execute(
+                    text("""
+                        INSERT INTO venue_email_notifications
+                            (venue_id, notification_key, enabled, time_value, time_unit, radius_miles, updated_at)
+                        VALUES (:vid, :key, :enabled, :tv, :tu, :rm, CURRENT_TIMESTAMP)
+                        ON CONFLICT(venue_id, notification_key)
+                        DO UPDATE SET enabled = :enabled, time_value = :tv, time_unit = :tu,
+                            radius_miles = :rm, updated_at = CURRENT_TIMESTAMP
+                    """),
+                    {k: _params[k] for k in ("vid", "key", "enabled", "tv", "tu", "rm")}
+                )
     
     db.commit()
     return {"ok": True}
