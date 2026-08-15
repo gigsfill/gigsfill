@@ -2256,10 +2256,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Gig cache - avoids fetching from API on every calendar render
   let venueGigsCache = [];
   let gigsCacheDirty = true;
-  
+
+  // Expose the cache + venue id/name to page-level scripts (the "Show
+  // All Gigs" launcher in venue-create-gigs.html needs to build the
+  // shared list-modal payload without duplicating the fetch).
+  window._vcgGigsCache = () => venueGigsCache;
+  window._vcgVenueId = venueId;
+
   async function refreshGigs() {
     venueGigsCache = await api(`/venues/${venueId}/gigs`);
     gigsCacheDirty = false;
+    window._vcgVenueName = (venueGigsCache && venueGigsCache[0] && venueGigsCache[0].venue_name) || '';
   }
   
   function invalidateGigs() {

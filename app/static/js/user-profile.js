@@ -850,7 +850,7 @@ async function loadEmailPreferences() {
     // per-window toggles below. Per-window toggles still gate what
     // gets ENQUEUED — the master toggle gates what gets SENT.
     const blastLabels = {
-      'open_gig_daily_digest': { title: 'Daily Open-Gig Digest', desc: 'One consolidated email per day listing every open gig you\'d be notified about (replaces the individual per-gig emails below). Turn off if you prefer not to receive a daily summary.' },
+      'open_gig_daily_digest': { title: 'Daily Open-Gig Digest', desc: 'One consolidated email per day listing your upcoming booked gigs and open gigs you are eligible to book in the next 4 weeks. Turn off if you prefer not to receive a daily summary.' },
       'venue_open_gig_36h':  { title: '36-Hour Gig Notice',   desc: 'Include last-minute open gigs (within 36 hours) in your daily digest' },
       'venue_open_gig_1w':   { title: '1-Week Gig Notice',    desc: 'Include open gigs 1 week out in your daily digest' },
       'venue_open_gig_2w':   { title: '2-Week Gig Notice',    desc: 'Include open gigs 2 weeks out in your daily digest' },
@@ -873,7 +873,12 @@ async function loadEmailPreferences() {
     const venueLabels = {
       'venue_gig_booked':              { title: 'Gig Booked',               desc: 'When an Artist books a gig at your Venue' },
       'venue_gig_cancelled':           { title: 'Gig Cancelled',            desc: 'When an Artist cancels a gig at your Venue' },
-      'venue_booking_approval_request':{ title: 'Same-Day Booking Approval', desc: 'When ON: same-day bookings by non-preferred artists are held pending your in-app approval, and you get an email. When OFF: same-day bookings auto-confirm with no gatekeeper (no email either).' },
+      // 2026-08-10: 'venue_booking_approval_request' row removed. This
+      // notification is fully venue-scoped now — controlled by the
+      // "Require my approval for same-day bookings" toggle on each
+      // venue's Email Notifications → Booking Policies section. When
+      // the gate is ON, every venue team member gets the email; when
+      // OFF, no gate fires so no email is sent. No per-user opt-out.
       'venue_contract_sign_needed':    { title: 'Contract Signed',          desc: 'When an Artist signs a contract and needs your countersignature' },
       'venue_payment_charged':         { title: 'Payment Charged',          desc: 'When your card is charged for a gig booking' },
       'transfer_failed_venue':         { title: 'Payment Failed',           desc: 'When a charge to your card fails' },
@@ -1070,8 +1075,14 @@ async function loadDigestHistory() {
     }[c]));
   }
 
+  // 2026-08-07: whole row is now clickable → opens a preview modal
+  // that renders the digest email inline (via /api/me/digest-preview).
+  // The Resend button stays available on the row but stopPropagates so
+  // its click doesn't open the modal.
   const rows = data.recent_sends.map(r => `
-    <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+    <tr class="digestMyRow" data-minute="${_esc(r.sent_at_minute)}"
+        style="border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;transition:background 0.12s;"
+        title="Click to preview this digest">
       <td style="padding:8px 12px 8px 0;font-size:0.82rem;color:var(--text);">${_esc(_fmtSent(r.sent_at_minute))}</td>
       <td style="padding:8px 12px;font-size:0.78rem;color:var(--text-gray);text-align:right;">${r.gig_count} gig${r.gig_count === 1 ? '' : 's'}</td>
       <td style="padding:8px 12px;font-size:0.78rem;color:var(--text-gray);text-align:right;">${r.venue_count} venue${r.venue_count === 1 ? '' : 's'}</td>
@@ -1087,9 +1098,81 @@ async function loadDigestHistory() {
     '<th style="text-align:right;padding:4px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;">Gigs</th>' +
     '<th style="text-align:right;padding:4px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;">Venues</th>' +
     '<th></th></tr></thead><tbody>' + rows + '</tbody></table>';
-  list.querySelectorAll('.digestMyResendBtn').forEach(btn => {
-    btn.addEventListener('click', () => _myDigestResend(btn.dataset.minute, btn));
+  list.querySelectorAll('.digestMyRow').forEach(tr => {
+    tr.addEventListener('mouseenter', () => { tr.style.background = 'rgba(6,182,212,0.06)'; });
+    tr.addEventListener('mouseleave', () => { tr.style.background = ''; });
+    tr.addEventListener('click', () => _myDigestPreview(tr.dataset.minute));
   });
+  list.querySelectorAll('.digestMyResendBtn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();  // don't open the preview modal
+      _myDigestResend(btn.dataset.minute, btn);
+    });
+  });
+}
+
+// Preview modal — fetches the rendered digest HTML and drops it into a
+// sandboxed iframe so the email's own inline styles can't leak into the
+// page. Modal chrome matches the rest of the site (dark card + purple
+// gradient header + Close button). Escape / backdrop / ✕ all close.
+async function _myDigestPreview(minute) {
+  if (!minute) return;
+  const OV_ID = 'digestMyPreviewOverlay';
+  let ov = document.getElementById(OV_ID);
+  if (ov) ov.remove();
+  ov = document.createElement('div');
+  ov.id = OV_ID;
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;padding:20px;';
+  ov.innerHTML = `
+    <div style="background:#1a1f2e;border:1px solid #2a3040;border-radius:14px;width:100%;max-width:820px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.55);overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 22px;border-bottom:1px solid #2a3040;flex-wrap:wrap;gap:10px;">
+        <div>
+          <div id="digestMyPreviewTitle" style="font-size:1rem;font-weight:700;background:linear-gradient(135deg,#8b5cf6,#06b6d4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">📬 Digest preview</div>
+          <div id="digestMyPreviewSub" style="font-size:0.75rem;color:#94a3b8;margin-top:2px;"></div>
+        </div>
+        <button id="digestMyPreviewClose" style="background:transparent;border:none;color:#94a3b8;font-size:1.4rem;cursor:pointer;line-height:1;padding:0 6px;" title="Close">✕</button>
+      </div>
+      <div id="digestMyPreviewBody" style="flex:1;overflow:auto;background:#f5f5f7;">
+        <div style="padding:40px;text-align:center;color:#64748b;font-size:0.9rem;">Loading…</div>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  const close = () => { ov.remove(); document.removeEventListener('keydown', esc); };
+  const esc = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc);
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  document.getElementById('digestMyPreviewClose').addEventListener('click', close);
+
+  try {
+    const res = await fetch('/api/me/digest-preview?sent_at_minute=' + encodeURIComponent(minute), {
+      credentials: 'include',
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(data.detail || ('HTTP ' + res.status));
+    }
+    const titleEl = document.getElementById('digestMyPreviewTitle');
+    const subEl   = document.getElementById('digestMyPreviewSub');
+    if (titleEl && data.subject) titleEl.textContent = '📬 ' + data.subject;
+    if (subEl)   subEl.textContent = 'Sent ' + minute + ' UTC · ' + data.row_count + ' gig' + (data.row_count === 1 ? '' : 's');
+    const bodyEl = document.getElementById('digestMyPreviewBody');
+    // Sandboxed iframe — the digest email uses inline table layouts +
+    // its own colors; letting them cascade into the page would clash
+    // with the dark theme. srcdoc keeps it self-contained and same-
+    // origin-safe.
+    bodyEl.innerHTML = '';
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'width:100%;height:100%;min-height:60vh;border:0;background:#fff;display:block;';
+    frame.setAttribute('sandbox', 'allow-same-origin');
+    frame.srcdoc = data.body_html || '<p style="padding:40px;text-align:center;color:#64748b;">Empty digest.</p>';
+    bodyEl.appendChild(frame);
+  } catch (e) {
+    const bodyEl = document.getElementById('digestMyPreviewBody');
+    if (bodyEl) {
+      bodyEl.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;font-size:0.9rem;">Could not load preview: ' +
+        (e.message || 'unknown') + '</div>';
+    }
+  }
 }
 
 async function _myDigestResend(minute, btn) {

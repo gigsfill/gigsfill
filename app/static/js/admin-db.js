@@ -120,37 +120,91 @@
       // Audit fix (May 2026): mirror the backend `_PROTECTED_TABLES` list so
       // the UI doesn't show Edit/Delete buttons that the API will 403 on.
       // Keep in sync with `routes/admin.py:_PROTECTED_TABLES`.
+      // 2026-08-15: brought fully in sync — the list had drifted, leaving
+      // Edit/Delete buttons visible on artists/venues/notifications/reviews/
+      // preferred_artists/venue_artist_bans/entity_users/entity_invitations/
+      // admin_audit_log/vanity_urls/email_templates/webhook idempotency
+      // tables. Clicking Delete on any of those 403'd on the backend; the
+      // failure toast is subtle so it read as "nothing happened." For
+      // artists/venues in particular, deletion MUST go through
+      // services.entity_delete (tombstoning + gig cancellation + notify
+      // fan-out + file cleanup) — not raw SQL. Directory tab has proper
+      // admin flows for that. For users, Directory > Users sub-tab has
+      // adminDeleteUser() which cascades correctly.
       const PROTECTED = [
         'users', 'platform_settings',
         'gigs', 'gig_slots', 'transactions', 'gig_contracts', 'flyers',
         'payment_cancellations', 'venue_payment_overrides', 'entity_payment_settings',
         'affiliate_referrals', 'affiliate_earnings', 'affiliate_payouts',
+        'artists', 'venues', 'venue_contracts',
+        'artist_reviews', 'venue_reviews', 'notifications',
+        'preferred_artists', 'venue_artist_bans',
+        'connect_account_health',
+        'admin_audit_log', 'entity_users', 'entity_invitations',
+        'vanity_urls', 'email_templates',
+        'stripe_webhook_events', 'pending_approval_tokens',
       ];
       const isProtected = PROTECTED.includes(_activeTable);
     
       // Build header
+      // 2026-08-15: Actions column moved from far-right to just after # so
+      // wide tables (users, artists, venues) don't require horizontal
+      // scrolling to find the row's Edit/Delete affordance. Row identity
+      // (# + Actions) stays anchored at the left; the data columns scroll
+      // beside it.
       let thead = '<thead><tr>';
       thead += '<th style="width:32px;">#</th>';
+      thead += '<th style="width:90px;">Actions</th>';
       columns.forEach(col => {
         const isSorted = _sortCol === col;
         const arrow = isSorted ? (_sortDir === 'asc' ? ' ▲' : ' ▼') : '';
         thead += `<th onclick="dbSortBy('${col}')" class="db-th-sortable" title="Sort by ${col}">${col}${arrow}</th>`;
       });
-      thead += '<th style="width:90px;">Actions</th>';
       thead += '</tr></thead>';
-    
+
       // Build rows
       let tbody = '<tbody>';
       _rows.forEach((row, rowIdx) => {
         // We use the first column as rowid proxy, or try 'id' column
         const idColIdx = columns.indexOf('id');
         const rowid    = idColIdx >= 0 ? row[idColIdx] : (rowIdx + 1 + (_page - 1) * _pageSize);
-    
+
         const isEditing = _editRowId === rowid && !isProtected;
-    
+
         tbody += `<tr id="dbrow-${rowid}" class="${isEditing ? 'db-row-editing' : ''}">`;
         tbody += `<td style="color:var(--text-gray);font-size:0.7rem;">${(_page - 1) * _pageSize + rowIdx + 1}</td>`;
-    
+
+        // Action buttons — rendered before the data cells so they stay
+        // visible on wide tables without horizontal scrolling.
+        if (isEditing) {
+          tbody += `<td>
+            <button class="db-btn-save" onclick="dbSaveEdit(${rowid}, '${escAttr(JSON.stringify(columns))}')">💾 Save</button>
+            <button class="db-btn-cancel" onclick="dbCancelEdit()">✕</button>
+          </td>`;
+        } else if (_activeTable === 'users') {
+          // 2026-08-15: users are backend-protected in this raw DB tool,
+          // but admins do need a delete affordance. Special-case: show a
+          // Delete button that routes to the Directory tab's Users sub-tab
+          // and fires the existing adminDeleteUser() confirmation, which
+          // hits /api/admin/users/{id} — that endpoint runs the full
+          // cascade (artists/venues, contracts, media, notifications) and
+          // surfaces charged-transaction blocks with real error text.
+          const _idIdx  = columns.indexOf('id');
+          const _emIdx  = columns.indexOf('email');
+          const _uid    = _idIdx >= 0 ? row[_idIdx] : 0;
+          const _emVal  = _emIdx >= 0 ? String(row[_emIdx] || '') : '';
+          tbody += `<td>`;
+          tbody += `<button class="db-btn-delete" title="Delete via Directory (cascades to artists/venues)" onclick="dbUsersDeleteViaDirectory(${_uid}, '${escAttr(_emVal)}')">🗑</button>`;
+          tbody += `</td>`;
+        } else {
+          tbody += `<td>`;
+          if (!isProtected) {
+            tbody += `<button class="db-btn-edit" onclick="dbStartEdit(${rowid})">✏️</button>`;
+            tbody += `<button class="db-btn-delete" onclick="dbDeleteRow(${rowid})">🗑</button>`;
+          }
+          tbody += `</td>`;
+        }
+
         columns.forEach((col, ci) => {
           const val = row[ci];
           // Audit fix May 2026: HTML-escape cell display before innerHTML
@@ -171,22 +225,7 @@
             tbody += `<td title="${escAttr(String(val ?? ''))}">${display}</td>`;
           }
         });
-    
-        // Action buttons
-        if (isEditing) {
-          tbody += `<td>
-            <button class="db-btn-save" onclick="dbSaveEdit(${rowid}, '${escAttr(JSON.stringify(columns))}')">💾 Save</button>
-            <button class="db-btn-cancel" onclick="dbCancelEdit()">✕</button>
-          </td>`;
-        } else {
-          tbody += `<td>`;
-          if (!isProtected) {
-            tbody += `<button class="db-btn-edit" onclick="dbStartEdit(${rowid})">✏️</button>`;
-            tbody += `<button class="db-btn-delete" onclick="dbDeleteRow(${rowid})">🗑</button>`;
-          }
-          tbody += `</td>`;
-        }
-    
+
         tbody += '</tr>';
       });
       tbody += '</tbody>';
@@ -305,6 +344,30 @@
       }
     };
     
+    /* ── Delete via Directory (users only) ──
+       2026-08-15: DB tool can't safely delete users directly (backend
+       protects `users` — /api/admin/db/tables/users/rows/:id returns
+       403), so this bridges to the Directory tab's proper flow. Switches
+       tabs, then fires the branded adminDeleteUser() confirmation from
+       admin-platform.js which hits /api/admin/users/{id} with the full
+       cascade (artists, venues, contracts, media, notifications) and
+       surfaces charged-transaction blocks with real error text. */
+    window.dbUsersDeleteViaDirectory = function(userId, email) {
+      if (!userId) return;
+      if (typeof window.switchTab === 'function') {
+        window.switchTab('directory');
+      }
+      // Directory tab's _dirActivate() reasserts the Users sub-tab default
+      // (see admin-directory.js:398), so we don't need to switch sub-tabs
+      // explicitly. Delay the confirmation modal until tab render settles
+      // so it stacks on top of the Directory panel rather than the DB tool.
+      setTimeout(function() {
+        if (typeof window.adminDeleteUser === 'function') {
+          window.adminDeleteUser(userId, email || '');
+        }
+      }, 250);
+    };
+
     /* ── Delete ── */
     window.dbDeleteRow = async function(rowid) {
       window._adminConfirm({

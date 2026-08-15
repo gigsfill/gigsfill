@@ -1,7 +1,11 @@
 // Auto-extracted from venue-profile.html inline scripts
 // Generated for CSP compliance (Phase 5)
 
-const TAB_NAMES = ['info','calendar','videos','pictures','social','reviews'];
+// 'info' tab retired 2026-07-26 (see venue-profile.html:359 comment)
+// — bio/details/perks/PRO cert moved into the hero. Removing 'info'
+// from TAB_NAMES so shared links like #info fall through cleanly
+// instead of trying to activate a nonexistent panel.
+const TAB_NAMES = ['calendar','videos','pictures','social','reviews'];
 function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.profile-tabs button').forEach(b => b.classList.remove('active'));
@@ -49,18 +53,10 @@ let venueId = new URLSearchParams(window.location.search).get("venue_id");
   const _aboutEl = document.getElementById("venueAboutHeader");
   if (_aboutEl && venueData.description) _aboutEl.textContent = venueData.description.trim();
 
-  // Check if logged-in user is an artist → show Venue Info tab
-  try {
-    const _meRes = await fetch('/api/me', { credentials: 'include' });
-    if (_meRes.ok) {
-      const _me = await _meRes.json();
-      // /api/me returns artists array — if non-empty, user is an artist
-      if (_me.artists && _me.artists.length > 0) {
-        const _infoBtn = document.getElementById('tabBtnInfo');
-        if (_infoBtn) _infoBtn.style.display = '';
-      }
-    }
-  } catch(_e) {}
+  // Venue Info tab retired 2026-07-26 — the artist-reveal /api/me
+  // check + `tabBtnInfo` hydration that used to live here is gone,
+  // since the button + panel are both gone. Removes a spurious
+  // /api/me fetch on every venue-profile page load.
 
   // Details
   const dh = [];

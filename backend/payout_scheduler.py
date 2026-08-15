@@ -110,6 +110,24 @@ def process_payouts_now():
         has_stripe_key = row and row[0]
         if has_stripe_key:
             stripe.api_key = row[0]
+            # 2026-08-08 audit fix (finding #3): the scheduler runs in
+            # its own process (gigsfill-scheduler.service via
+            # scheduler_main.py) that never imports backend.main, so
+            # the SDK network-retry setting configured in main.py is
+            # NOT active here. Without it, the SDK bails on the first
+            # transient blip (TCP drop, timeout) and we take the
+            # non-CardError branch below — which used to bump
+            # charge_attempts and, on the next tick, charge the card
+            # AGAIN with a fresh idempotency key. Setting
+            # max_network_retries=2 lets the SDK replay under the same
+            # idempotency key on network errors, so Stripe returns the
+            # cached result if the original request actually reached it.
+            # Timeout at 15s matches main.py.
+            try:
+                stripe.max_network_retries = 2
+                stripe.default_http_client_timeout = 15
+            except Exception:
+                pass  # older SDKs — safe to skip
 
         # Test Mode removed (Jul 1 2026): every scheduled row is now
         # treated as live. `payments_enabled` still exists in
@@ -314,12 +332,31 @@ def process_payouts_now():
                 reason = str(getattr(e, 'user_message', e))
                 _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz)
                 continue
+            except (stripe.error.APIConnectionError, stripe.error.RateLimitError,
+                    stripe.error.APIError) as e:
+                # 2026-08-08 audit fix (finding #3): transient network /
+                # rate-limit / API errors can be raised AFTER Stripe
+                # accepted the request and charged the card (TCP drop
+                # mid-response). Do NOT bump charge_attempts — the
+                # idempotency key at line 297 is attempt-scoped, so a
+                # counter bump makes the next tick's retry use a
+                # DIFFERENT key and Stripe would charge the card a
+                # second time. Instead, leave the row's status/counter
+                # untouched (it stays 'processing'); the orphan-'processing'
+                # reaper up top will reclaim it on the next tick and the
+                # retry will use the SAME idempotency key, giving Stripe
+                # a chance to return the cached success response.
+                logger.warning(
+                    f"[payout] Transient Stripe error on txn {txn_id} "
+                    f"(attempt {attempts + 1}) — leaving row 'processing' for "
+                    f"reaper reclaim under same idempotency key: {e}"
+                )
+                continue
             except Exception as e:
-                # Same rationale as CardError above. A generic Stripe
-                # exception COULD in theory be an infra issue (API down,
-                # network), but the retry cycle handles that just as
-                # well as card-side declines — no need to page admin on
-                # every one.
+                # Non-CardError, non-network exceptions (e.g. AuthenticationError,
+                # PermissionError, unexpected shape). These are unlikely to
+                # have half-committed a charge, so we take the retry path
+                # (bump attempts, fresh idempotency key next tick).
                 reason = str(e)[:200]
                 _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz)
                 continue

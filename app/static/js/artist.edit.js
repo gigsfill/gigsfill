@@ -256,6 +256,11 @@ async function loadArtist() {
   // AUTOSAVE
   bindAutosave(qs("city"), "city", artistId);
   bindAutosave(qs("state"), "state", artistId);
+  // 2026-08-06: bio now autosaves on blur, matching the venue.description
+  // autosave pattern. The manual "Save Bio" button is preserved for
+  // discoverability but its handler still works (single click still saves;
+  // debounce guards against double-writes).
+  if (qs("bio")) bindAutosave(qs("bio"), "bio", artistId);
 
   // Social Media Autosave
   if (qs("spotify_url")) bindAutosave(qs("spotify_url"), "spotify_url", artistId);

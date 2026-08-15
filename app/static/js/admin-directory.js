@@ -395,7 +395,20 @@
   // types in parallel so sub-tab count badges ("Artists (127)") populate
   // immediately — otherwise the two inactive tabs would sit at "(–)"
   // until clicked. Cached responses keep sub-tab switches instant.
+  // 2026-08-13: also force the Users sub-tab to be the active one on
+  // every tab entry (was persisting whichever sub-tab the admin last
+  // clicked). Snap-back-to-Users matches the requested default.
   window._dirActivate = function () {
+    const container = document.getElementById('directory-tab');
+    if (container) {
+      container.querySelectorAll('.ps-subtab').forEach(b => b.classList.remove('active'));
+      container.querySelectorAll('.ps-subtab-content').forEach(c => c.classList.remove('active'));
+      const btn = container.querySelector('.ps-subtab[onclick*="users"]');
+      if (btn) btn.classList.add('active');
+      const panel = document.getElementById('directory-users');
+      if (panel) panel.classList.add('active');
+      activeType = 'users';
+    }
     Promise.all([
       window._dirLoad('users',   false),
       window._dirLoad('artists', false),

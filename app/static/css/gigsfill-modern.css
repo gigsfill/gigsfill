@@ -56,6 +56,22 @@
   --space-xl: 1.5rem;
   --space-2xl: 2rem;
   --space-3xl: 3rem;
+
+  /* 2026-08-11: sticky-header offset. .app-header uses position:sticky;top:0
+     so its rendered height is what any sticky element below it needs to
+     clear. Header content is EITHER the 44px logo OR taller buttons
+     (padding 12 top/bot + ~24px line-height = 48px) — the tallest child
+     wins the header row height, so measure by 48 not 44. Desktop:
+     48 + padding-y (space-lg = 16) * 2 + border-bottom 1 = 81px; use
+     88 for safety. Mobile shrinks: padding-y space-md = 12; total
+     48 + 24 + 1 = 73; use 78. Consumed by .tabs / .profile-tabs /
+     .ec-subtabs so their sticky top: matches without gaps or overlap. */
+  --app-header-height: 88px;
+  /* Outer .tabs bar height when it's sticky, used to stack nested
+     sub-tabs below it (currently only .ec-subtabs on venue-create-gigs).
+     Rendered ~44px (button padding-y 16 + line-height ~24 - border-bottom
+     collapse); use 48 for safety. */
+  --app-tabs-height: 48px;
   
   /* Radius */
   --radius-sm: 0.375rem;
@@ -721,6 +737,17 @@ input[type="radio"]:active {
   border-bottom: 1px solid var(--border-subtle);
   padding-bottom: 0;
   overflow-x: auto;
+  /* 2026-08-11: stick just below the app-header so tab navigation stays
+     visible while scrolling long pages. z-index sits below the header
+     (100) so on the rare 1-2px visual overlap the header wins. Same
+     translucent + blur treatment as the header so content scrolling
+     under is subtly visible but not distracting. */
+  position: sticky;
+  top: var(--app-header-height);
+  z-index: 90;
+  background: rgba(10, 14, 26, 0.85);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
 }
 
 .tab {
@@ -1037,6 +1064,13 @@ input[type="radio"]:active {
   
   .header-inner {
     padding: var(--space-md) var(--space-lg);
+  }
+
+  /* Mobile header height override (see :root --app-header-height comment).
+     Mobile padding = space-md = 12; tallest child stays ~48 (buttons).
+     48 + 12*2 + 1 border = 73; use 78 for safety. */
+  :root {
+    --app-header-height: 78px;
   }
   
   h1 {

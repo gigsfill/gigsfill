@@ -2038,33 +2038,50 @@
   gap: 2px;
   margin-bottom: 20px;
   border-bottom: 1px solid var(--border);
+  /* 2026-08-11: nested sticky bar. Stacks below the outer .tabs bar
+     which itself sticks at --app-header-height. Offset accounts for
+     header + outer tabs so both stay visible on scroll. z-index 80
+     sits under .tabs (90) which sits under .app-header (100). */
+  position: sticky;
+  top: calc(var(--app-header-height, 60px) + var(--app-tabs-height, 48px));
+  z-index: 80;
+  background: var(--bg);
+  padding: 6px 0 0;
 }
 .ec-subtab {
-  padding: 10px 18px;
+  padding: 8px 14px;
   background: transparent;
   border: none;
   color: var(--text-gray);
   cursor: pointer;
-  font: 600 0.8rem 'Inter', sans-serif;
+  font: 600 0.78rem 'Inter', sans-serif;
   border-bottom: 2px solid transparent;
   transition: all 0.2s;
   white-space: nowrap;
   margin-bottom: -1px;
+  flex-shrink: 0;
 }
-.ec-subtab:hover { color: var(--text); }
-.ec-subtab.active { color: var(--purple); border-bottom-color: var(--purple); }
+.ec-subtab:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.03);
+}
+.ec-subtab.active {
+  color: #10b981;
+  border-bottom-color: #10b981;
+  background: rgba(16,185,129,0.1);
+}
 .ec-subtab-content { display: none; }
 .ec-subtab-content.active { display: block; }
 
 /* Legal/Taxes Sub-tabs — exactly matches main .tab styling */
 .legal-subtab {
-  padding: 12px 20px;
+  padding: 8px 14px;
   background: transparent;
   border: none;
   color: var(--text-gray);
   cursor: pointer;
-  font: 600 0.875rem 'Inter', sans-serif;
-  border-bottom: 3px solid transparent;
+  font: 600 0.78rem 'Inter', sans-serif;
+  border-bottom: 2px solid transparent;
   transition: all 0.2s;
   white-space: nowrap;
   position: relative;
@@ -2076,9 +2093,9 @@
   background: rgba(255, 255, 255, 0.02);
 }
 .legal-subtab.active {
-  color: var(--cyan);
-  border-bottom-color: var(--cyan);
-  background: rgba(6,182,212,0.1);
+  color: #10b981;
+  border-bottom-color: #10b981;
+  background: rgba(16,185,129,0.1);
 }
 .legal-subtab-content { display: none; }
 .legal-subtab-content.active { display: block; }
@@ -2212,12 +2229,12 @@
      render and door split terms are invisible on the slot row. This
      was the root cause of door deals showing as just the guarantee
      amount on the venue calendar's gig modal. -->
-<script src="/app/static/js/api-globals.js?v=11"></script>
+<script src="/app/static/js/api-globals.js?v=12"></script>
 <script src="/app/static/js/event-delegate.js"></script>
 <script src="/app/static/js/timezone-utils.js"></script>
 <script src="/app/static/js/auth.guard.js?v=3"></script>
 <script src="/app/static/js/time-format.js"></script>
-<link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
+<link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet"/>
 <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet"/>
   <link href="/app/static/css/mobile.css?v=5" rel="stylesheet"/>
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
@@ -2486,7 +2503,16 @@
 <h2 id="monthLabel">Month YYYY</h2>
 <button class="btn ghost" id="nextMonth">Next ▶</button>
 </div>
-<div style="text-align:right; padding: 0 0 8px 0;">
+<div style="text-align:right; padding: 0 0 8px 0; display:flex; justify-content:flex-end; gap:8px;">
+  <!-- "Show All Gigs" — sortable list view of every gig this venue
+       has scheduled (open + booked). Same shared modal the public
+       calendars use; venue owner sees the full row set (no auth-gated
+       endpoints involved since /api/gigs/public covers this venue's
+       gigs, same as the venue's public profile). -->
+  <button type="button" onclick="openVenueCreateGigsList()"
+    style="font-size:0.75rem; color:var(--text-muted); background:transparent; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; cursor:pointer;"
+    onmouseover="this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#22c55e'"
+    onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📋 Show All Gigs</button>
   <a id="venueIcalBtn" href="#" download style="font-size:0.75rem; color:var(--text-muted); text-decoration:none; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; transition:all 0.2s;" onmouseover="this.style.borderColor='rgba(6,182,212,0.4)';this.style.color='#06b6d4'" onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📅 Export to Calendar (.ics)</a>
 </div>
 <div class="calendar-header">
@@ -2530,29 +2556,39 @@
         <span style="font-size: 0.8rem; color: var(--text-gray); font-style: italic; margin-left: 10px;">(Configure automatic emails sent to artists about upcoming gigs at this venue.)</span>
       </div>
 
+      <!-- ─── Booking Policies — venue-level, apply to this venue only ── -->
+      <!-- 2026-08-10: same-day approval gate moved from a per-user email
+           pref to a per-venue booking policy. Owner used to control this
+           via the "Same-Day Booking Approval" row on their user profile
+           Notifications tab; that row now controls only the EMAIL, not
+           the gate. This toggle is the actual gate. -->
+      <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">🛡️ Booking Policies</div>
+      <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0; margin-top: 2px;"><input type="checkbox" id="venue_require_same_day_approval" onchange="saveVenueRequireSameDayApproval()"><span class="toggle-slider"></span></label>
+          <span style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.8rem; line-height: 1.4;">Require my approval for same-day bookings by non-preferred artists <em style="color: var(--cyan);">(When ON: a same-day booking by a non-preferred artist — including via a cancellation blast — is held pending your approval and every venue team member gets an email. When OFF: it auto-confirms silently, no email.)</em></span>
+        </div>
+      </div>
       <!-- ─── Gig Confirmation ─────────────────────────────────────────── -->
       <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">🎵 Gig Confirmation Reminder</div>
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_gig_confirmation" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 1 week before gig date</span><input type="hidden" id="notif_gig_confirmation_val" value="1"><input type="hidden" id="notif_gig_confirmation_unit" value="weeks">
-        
-          
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_gig_confirmation" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 1 week before gig date <em style="color: var(--cyan);">(Send confirmation email to the booked Artist reminding them of their upcoming gig.)</em></span><input type="hidden" id="notif_gig_confirmation_val" value="1"><input type="hidden" id="notif_gig_confirmation_unit" value="weeks">
+
+
         </div>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Send confirmation email to the booked Artist reminding them of their upcoming gig.</div>
 
       <!-- ─── Open Gig Notifications ──────────────────────────────────── -->
-      <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">📢 Open Gig Notifications</div>
-      <div style="font-size: 0.7rem; color: var(--text-gray); margin-bottom: 8px; padding: 0 14px; line-height: 1.3;">Email Artists about open or cancelled gigs and lift frequency limitations if desired.</div>
+      <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">📢 Open Gig Notifications <em style="color: var(--cyan); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 0.7rem;">(Email Artists about open or cancelled gigs and lift frequency limitations if desired.)</em></div>
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_4w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 4 weeks before gig date</span><input type="hidden" id="notif_open_gig_4w_val" value="4"><input type="hidden" id="notif_open_gig_4w_unit" value="weeks">
-        
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_4w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 4 weeks before gig date <em style="color: var(--cyan);">(Reminder that a gig is still open and can be booked.)</em></span><input type="hidden" id="notif_open_gig_4w_val" value="4"><input type="hidden" id="notif_open_gig_4w_unit" value="weeks">
+
           <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_4w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_4w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Reminder that a gig is still open and can be booked — sent 4 weeks before the gig date.</div>
             <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_waive_freq" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
@@ -2561,27 +2597,28 @@
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
         <input type="number" id="notif_open_gig_4w_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="Non-preferred artists in this radius can book directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above.">miles <em style="color:#fbbf24;">⚠ (Non-preferred artists in radius get the email AND auto-book — no preferred status, frequency, or venue approval required.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_cancel_pref" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 6px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_4w_cancel_pref" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.4;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig. Whether the frequency limit is waived for that email is inherited from this window's 'Waive Frequency Limits for this reminder' toggle above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists. <em style="color:var(--text-gray);">(Frequency waiver on this cancellation email follows this window's "Waive Frequency Limits" toggle above.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_4w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
-        <input type="number" id="notif_open_gig_4w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 10px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_4w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <div style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.6;">
+          <span title="Non-preferred artists in this radius can book this cancelled gig directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+          <input type="number" id="notif_open_gig_4w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center; vertical-align: middle; margin: 0 4px;">
+          <span>miles of venue. <em style="color:#fbbf24;">⚠ These artists auto-book — no preferred status, frequency, or venue approval required (except same-day if you have that gate on).</em></span>
+        </div>
       </div>
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_2w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 2 weeks before gig date</span><input type="hidden" id="notif_open_gig_2w_val" value="2"><input type="hidden" id="notif_open_gig_2w_unit" value="weeks">
-        
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_2w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 2 weeks before gig date <em style="color: var(--cyan);">(Second reminder that the gig is still open.)</em></span><input type="hidden" id="notif_open_gig_2w_val" value="2"><input type="hidden" id="notif_open_gig_2w_unit" value="weeks">
+
           <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_2w_blink"  onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_2w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Second reminder that the gig is still open — sent 2 weeks before the gig date.</div>
             <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_waive_freq" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
@@ -2590,27 +2627,28 @@
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
         <input type="number" id="notif_open_gig_2w_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="Non-preferred artists in this radius can book directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above.">miles <em style="color:#fbbf24;">⚠ (Non-preferred artists in radius get the email AND auto-book — no preferred status, frequency, or venue approval required.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_cancel_pref" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 6px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_2w_cancel_pref" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.4;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig. Whether the frequency limit is waived for that email is inherited from this window's 'Waive Frequency Limits for this reminder' toggle above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists. <em style="color:var(--text-gray);">(Frequency waiver on this cancellation email follows this window's "Waive Frequency Limits" toggle above.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_2w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
-        <input type="number" id="notif_open_gig_2w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 10px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_2w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <div style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.6;">
+          <span title="Non-preferred artists in this radius can book this cancelled gig directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+          <input type="number" id="notif_open_gig_2w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center; vertical-align: middle; margin: 0 4px;">
+          <span>miles of venue. <em style="color:#fbbf24;">⚠ These artists auto-book — no preferred status, frequency, or venue approval required (except same-day if you have that gate on).</em></span>
+        </div>
       </div>
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_1w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 1 week before gig date</span><input type="hidden" id="notif_open_gig_1w_val" value="1"><input type="hidden" id="notif_open_gig_1w_unit" value="weeks">
-        
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_1w" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 1 week before gig date <em style="color: var(--cyan);">(Third reminder that the gig is still open.)</em></span><input type="hidden" id="notif_open_gig_1w_val" value="1"><input type="hidden" id="notif_open_gig_1w_unit" value="weeks">
+
           <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_1w_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_1w_blink_color" value="#10b981" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Third reminder that the gig is still open — sent 1 week before the gig date.</div>
             <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_waive_freq" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
@@ -2619,27 +2657,28 @@
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
         <input type="number" id="notif_open_gig_1w_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="Non-preferred artists in this radius can book directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above.">miles <em style="color:#fbbf24;">⚠ (Non-preferred artists in radius get the email AND auto-book — no preferred status, frequency, or venue approval required.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_cancel_pref" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 6px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_1w_cancel_pref" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.4;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig. Whether the frequency limit is waived for that email is inherited from this window's 'Waive Frequency Limits for this reminder' toggle above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists. <em style="color:var(--text-gray);">(Frequency waiver on this cancellation email follows this window's "Waive Frequency Limits" toggle above.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_1w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
-        <input type="number" id="notif_open_gig_1w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 10px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_1w_cancel_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <div style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.6;">
+          <span title="Non-preferred artists in this radius can book this cancelled gig directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+          <input type="number" id="notif_open_gig_1w_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center; vertical-align: middle; margin: 0 4px;">
+          <span>miles of venue. <em style="color:#fbbf24;">⚠ These artists auto-book — no preferred status, frequency, or venue approval required (except same-day if you have that gate on).</em></span>
+        </div>
       </div>
 
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_36h" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 36 hours before gig start</span><input type="hidden" id="notif_open_gig_36h_val" value="36"><input type="hidden" id="notif_open_gig_36h_unit" value="hours">
-        
+          <label class="toggle-switch" style="flex-shrink: 0;"><input type="checkbox" id="notif_open_gig_36h" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label> <span style="color: var(--text-gray); font-size: 0.8rem;">Fires 36 hours before gig start <em style="color: var(--cyan);">(Last-chance reminder that the gig is still open.)</em></span><input type="hidden" id="notif_open_gig_36h_val" value="36"><input type="hidden" id="notif_open_gig_36h_unit" value="hours">
+
           <label style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer;" title="Blink gig bubble on calendar after this email sends"><input type="checkbox" id="notif_open_gig_36h_blink" onchange="saveVenueEmailNotifications()" style="accent-color:var(--cyan);width:12px;height:12px;"><input type="color" id="notif_open_gig_36h_blink_color" value="#f59e0b" onchange="saveVenueEmailNotifications()" style="width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;" title="Bubble blink color"><span style="font-size:0.68rem;color:var(--text-gray);white-space:nowrap;">Blink</span></label>
         </div>
       </div>
-            <div style="font-size: 0.75rem; color: var(--text-gray); padding: 0 14px 10px 72px; line-height: 1.3;">Last-chance reminder that the gig is still open — sent 36 hours before the gig start.</div>
             <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_waive_freq" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, Preferred Artists can only book this gig if they haven't played the venue within their frequency limit. If checked, this reminder lifts that restriction so any Preferred Artist can book regardless of when they last played here.">Waive Frequency Limits for this reminder <em style="color: var(--cyan);">(Preferred Artists can book even inside their frequency window)</em></span>
@@ -2648,17 +2687,19 @@
         <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_blast_all" onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
         <span style="color: var(--text-gray); font-size: 0.75rem;">Also send to ALL Artists within</span>
         <input type="number" id="notif_open_gig_36h_blast_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If left unchecked, only Preferred Artists receive this reminder. If checked, non-preferred artists within the radius also get the email — they can book this gig even without preferred status.">miles <em style="color: var(--cyan);">(non-preferred artists in radius also receive the email)</em></span>
+        <span style="color: var(--text-gray); font-size: 0.75rem;" title="Non-preferred artists in this radius can book directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above.">miles <em style="color:#fbbf24;">⚠ (Non-preferred artists in radius get the email AND auto-book — no preferred status, frequency, or venue approval required.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 6px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_cancel_pref" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig — Frequency Limits are waived so any Preferred Artist can book."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 6px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_36h_cancel_pref" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <span style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.4;" title="If a booked artist cancels their gig within this time window, matching Preferred Artists are immediately emailed about the newly-open gig. Whether the frequency limit is waived for that email is inherited from this window's 'Waive Frequency Limits for this reminder' toggle above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to Preferred Artists. <em style="color:var(--text-gray);">(Frequency waiver on this cancellation email follows this window's "Waive Frequency Limits" toggle above.)</em></span>
       </div>
-            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px 72px; flex-wrap: wrap;">
-        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8);"><input type="checkbox" id="notif_open_gig_36h_cancel_all" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
-        <span style="color: var(--text-gray); font-size: 0.75rem;" title="If a booked artist cancels their gig within this time window, non-preferred artists within the radius are also emailed about the newly-open gig — they can book it even without preferred status."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
-        <input type="number" id="notif_open_gig_36h_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center;">
-        <span style="color: var(--text-gray); font-size: 0.75rem;">miles of venue.</span>
+            <div style="display: flex; align-items: flex-start; gap: 8px; padding: 2px 14px 10px 72px;">
+        <label class="toggle-switch" style="flex-shrink:0; transform:scale(0.8); margin-top: 2px;"><input type="checkbox" id="notif_open_gig_36h_cancel_all" checked onchange="saveVenueEmailNotifications()"><span class="toggle-slider"></span></label>
+        <div style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.75rem; line-height: 1.6;">
+          <span title="Non-preferred artists in this radius can book this cancelled gig directly by clicking the email link — no preferred status required, no frequency limit checked, and no venue approval unless the booking is also same-day AND you have the 'Require my approval for same-day bookings' toggle enabled in the Booking Policies section above."><strong style="color:var(--cyan);">GIG CANCELLED:</strong> If a gig gets cancelled within this window, send email to ALL other artists within</span>
+          <input type="number" id="notif_open_gig_36h_cancel_all_radius" min="5" max="200" value="20" onchange="saveVenueEmailNotifications()" style="width: 50px; padding: 3px 5px; background: #151b28; border: 1px solid #333; border-radius: 4px; color: var(--text-white); font-size: 0.75rem; text-align: center; vertical-align: middle; margin: 0 4px;">
+          <span>miles of venue. <em style="color:#fbbf24;">⚠ These artists auto-book — no preferred status, frequency, or venue approval required (except same-day if you have that gate on).</em></span>
+        </div>
       </div>
 
       <!-- Jul 2026: Cancelled Gig Blast + Radius Blast sections folded into the
@@ -3012,7 +3053,7 @@
 <div class="tab-content" id="taxes-tab">
 
 <!-- Sub-tab navigation -->
-<div style="display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); overflow-x:auto;">
+<div class="legal-subtabs" style="display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); overflow-x:auto;">
   <button class="legal-subtab active" onclick="switchLegalSubtab('contractSettings', this)">Contract Settings</button>
   <button class="legal-subtab" onclick="switchLegalSubtab('executedContracts', this)">Executed Contracts</button>
   <button class="legal-subtab" onclick="switchLegalSubtab('taxSettings', this)">Tax Settings</button>
@@ -3743,17 +3784,18 @@
 <script src="https://js.stripe.com/v3/" async></script>
 <script src="/app/static/js/venue-stripe-payment.js?v=17" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
-<script src="/app/static/js/onboarding-checklist.js?v=2" defer></script>
-<script src="/app/static/js/messages.js?v=7"></script>
+<script src="/app/static/js/onboarding-checklist.js?v=7" defer></script>
+<script src="/app/static/js/messages.js?v=8"></script>
 <script src="/app/static/js/review-modal.js?v=3"></script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
-<script src="/app/static/js/gig-modal.js?v=28"></script>
+<script src="/app/static/js/gig-modal.js?v=30"></script>
+<script src="/app/static/js/venue-gig-details-modal.js?v=1"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
-<script src="/app/static/js/hold-mgmt.js?v=12"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=241"></script>
+<script src="/app/static/js/hold-mgmt.js?v=13"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=242"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
 <script src="/app/static/js/venue.contracts.js?v=4" defer></script>
-<script src="/app/static/js/flyer-editor.js?v=17" defer></script>
+<script src="/app/static/js/flyer-editor.js?v=25" defer></script>
 
 <script src="/app/static/js/activity-center.js?v=4"></script>
 
@@ -3766,10 +3808,73 @@
 </footer>
 
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
-<script src="/app/static/js/venue-create-gigs-init.js?v=11"></script>
+<script src="/app/static/js/venue-create-gigs-init.js?v=12"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
-<script src="/app/static/js/gig-hover-card.js?v=21"></script>
+<script src="/app/static/js/gig-hover-card.js?v=23"></script>
+<script src="/app/static/js/public-gigs-list-modal.js?v=6"></script>
+<script>
+  // "Show All Gigs" launcher for the venue create-gigs page. Reads
+  // window._vcgGigsCache() (venue.create-gigs.js exposes this). Same
+  // public-gigs-list-modal shared with the public calendars; no pay
+  // column exposed (venue owner already sees pay everywhere else).
+  window.openVenueCreateGigsList = function () {
+    const source = (typeof window._vcgGigsCache === 'function')
+      ? window._vcgGigsCache() : [];
+    const rows = [];
+    (source || []).forEach(g => {
+      const slots = Array.isArray(g.slots) ? g.slots : [];
+      const isReallyMulti = slots.length > 1;
+      if (isReallyMulti) {
+        slots.forEach(s => {
+          rows.push({
+            date: g.date,
+            venue_id: g.venue_id,
+            venue_name: g.venue_name || '',
+            city: g.city || '',
+            state: g.state || '',
+            start_time: s.start_time || g.start_time,
+            end_time:   s.end_time   || g.end_time,
+            title: g.title || '',
+            is_multi_slot: true,
+            slot_number: s.slot_number,
+            artist_name: s.artist_name || '',
+            artist_id:   s.artist_id   || null,
+            _no_venue_link: true,
+          });
+        });
+      } else {
+        rows.push({
+          date: g.date,
+          venue_id: g.venue_id,
+          venue_name: g.venue_name || '',
+          city: g.city || '',
+          state: g.state || '',
+          start_time: g.start_time,
+          end_time: g.end_time,
+          title: g.title || '',
+          is_multi_slot: false,
+          slot_number: null,
+          artist_name: g.artist_name || '',
+          artist_id:   g.artist_id   || null,
+          _no_venue_link: true,
+        });
+      }
+    });
+    const nameSlug = (window._vcgVenueName || 'venue')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    window.openPublicGigsListModal({
+      title: '📅 All Gigs' + (window._vcgVenueName ? ' — ' + window._vcgVenueName : ''),
+      rows: rows,
+      exportBasename: `${nameSlug}_gigs`,
+      // Venue owner already knows where the venue is — no address /
+      // city column. Artist gets flex space; Time is one combined
+      // column ("7:00 PM – 10:00 PM").
+      columns: ['date', 'venue', 'artist', 'time'],
+    });
+  };
+</script>
 <script src="/app/static/js/venue-hold-offers-banner.js?v=13" defer></script>
 <script src="/app/static/js/sw-register.js"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

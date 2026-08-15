@@ -199,22 +199,27 @@ def _check_venue_access(venue_id, user_id, db):
 def get_artist_w9(artist_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     if not _check_artist_access(artist_id, user.id, db):
         raise HTTPException(403, "Access denied")
-    
+
     current_year = _current_tax_year(db)
     w9 = db.execute(
         text("SELECT * FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :eid ORDER BY tax_year DESC LIMIT 1"),
         {"eid": artist_id}
     ).mappings().first()
-    
+
     if w9:
+        # Aug 2026 audit fix: never return the decrypted TIN. Previously
+        # this endpoint decrypted `tin_encrypted` and returned the
+        # plaintext under `tin`, which any user with artist access
+        # (owner + entity_users team members) could read — the display
+        # UI on artist-book-gigs.html then rendered the full SSN as
+        # "SSN: XXX-XX-XXXX". Only `tin_last4` (already public-safe)
+        # goes over the wire now. The Edit form doesn't pre-fill the
+        # TIN either: the artist re-types their 9 digits to confirm
+        # identity, and the save path preserves the stored TIN when
+        # the field is left blank on an existing row.
         result = dict(w9)
-        # Decrypt TIN for the owner to view/edit their own data
-        if result.get("tin_encrypted"):
-            try:
-                result["tin"] = _decrypt_tin(result["tin_encrypted"])
-            except Exception:
-                result["tin"] = ""
         result.pop("tin_encrypted", None)
+        result.pop("tin", None)
         result["needs_recertification"] = (w9["tax_year"] or 0) < current_year
         return result
     else:
@@ -237,27 +242,42 @@ def get_artist_w9(artist_id: int, user=Depends(get_current_user), db=Depends(get
 def save_artist_w9(artist_id: int, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
     if not _check_artist_access(artist_id, user.id, db):
         raise HTTPException(403, "Access denied")
-    
-    required = ["tax_name", "tax_classification", "tin_type", "tin"]
+
+    # Required-on-create fields — tin is validated separately below since
+    # the UPDATE path allows blank (means "keep the stored TIN").
+    required = ["tax_name", "tax_classification", "tin_type"]
     for field in required:
         if not data.get(field, "").strip():
             raise HTTPException(400, f"Missing required field: {field}")
-    
-    tin = data["tin"].strip().replace("-", "").replace(" ", "")
-    if len(tin) != 9 or not tin.isdigit():
-        raise HTTPException(400, "TIN must be exactly 9 digits")
+
     if not data.get("certified"):
         raise HTTPException(400, "You must certify the information is correct")
-    
+
     current_year = _current_tax_year(db)
-    tin_encrypted = _encrypt_tin(tin)
-    tin_last4 = tin[-4:]
     now = utcnow_naive().isoformat()
-    
+
+    # Pull the existing row FIRST so we can decide: new tin submitted →
+    # re-encrypt + update tin_last4; blank tin on an existing row → keep
+    # the previously stored ciphertext + last4 untouched. This is what
+    # lets the artist edit their address/name without re-typing SSN,
+    # while still forcing SSN entry on first-time submission.
     existing = db.execute(
-        text("SELECT id FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :eid AND tax_year = :year"),
+        text("SELECT id, tin_encrypted, tin_last4 FROM w9_forms WHERE entity_type = 'artist' AND entity_id = :eid AND tax_year = :year"),
         {"eid": artist_id, "year": current_year}
-    ).first()
+    ).mappings().first()
+
+    tin_raw = (data.get("tin") or "").strip().replace("-", "").replace(" ", "")
+    if tin_raw:
+        if len(tin_raw) != 9 or not tin_raw.isdigit():
+            raise HTTPException(400, "TIN must be exactly 9 digits")
+        tin_encrypted = _encrypt_tin(tin_raw)
+        tin_last4 = tin_raw[-4:]
+    elif existing:
+        # Blank TIN on an edit → preserve prior ciphertext + last4.
+        tin_encrypted = existing["tin_encrypted"]
+        tin_last4 = existing["tin_last4"]
+    else:
+        raise HTTPException(400, "TIN required on first W-9 submission")
     
     params = {
         "tax_name": data["tax_name"].strip(), "business_name": data.get("business_name", "").strip() or None,
@@ -272,7 +292,7 @@ def save_artist_w9(artist_id: int, data: dict, user=Depends(get_current_user), d
     }
     
     if existing:
-        params["id"] = existing[0]
+        params["id"] = existing["id"]
         db.execute(text("""UPDATE w9_forms SET tax_name=:tax_name, business_name=:business_name, tax_classification=:tax_classification,
             other_classification=:other_classification, exempt_payee_code=:exempt_payee_code, fatca_exemption_code=:fatca_exemption_code,
             address_line_1=:address_line_1, address_line_2=:address_line_2, city=:city, state=:state, zip_code=:zip_code,

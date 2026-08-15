@@ -327,44 +327,81 @@ def _get_meeting_url(row: dict, db) -> str:
     return _get_platform_meeting_url(db)
 
 
-def _fmt_meeting_line(meeting_url: str) -> str:
+def _fmt_meeting_line(meeting_url: str, req_id: int | None = None,
+                       site_url: str = "") -> str:
     """Small HTML fragment used inside every confirmation/reminder body
     so all emails treat the join link consistently — either a bold
     "Join demo" panel with the URL, or fallback copy that keeps the
     body sane when no URL is configured yet.
 
-    Jul 22 2026: when the URL is a Microsoft Teams link, append an
-    Apple-user warning — Teams meetings genuinely do NOT work in iOS
-    Safari (iPad/iPhone force the App Store install prompt), and Mac
-    Safari has partial support with unreliable audio/screen-share.
-    Skipped for Zoom (works fine in Safari) and Meet (also fine in
-    Safari). Detection is a plain substring check on the two hostnames
-    Microsoft actually uses for Teams meeting links."""
-    import html as _h
+    Aug 4 2026 (revised): earlier iterations tried a gigsfill.com
+    landing page + Copy-link / Open-in-Chrome fallbacks to work around
+    iOS Safari's "address is invalid" error on Teams links. Most
+    iPhone users don't have Chrome installed, so those workarounds
+    just moved the problem. Reverted to the simpler flow: raw meeting
+    URL as the primary link, plus a straightforward "install the
+    Teams app first" recommendation for iPhone/iPad users. Teams app
+    opens Teams meetings reliably every time — no Safari drama.
+
+    Kept: Meeting ID + Passcode extraction for teams.live.com URLs so
+    prospects who already have Teams installed can paste them in
+    manually if the tap-through doesn't launch the app cleanly.
+    Kept: support@gigsfill.com fallback offering Zoom / Google Meet.
+
+    `req_id` + `site_url` retained in the signature so callers don't
+    break, but no longer used to route through a landing page.
+    """
+    import html as _h, re as _re
     if not meeting_url:
         return ""
     esc = _h.escape(meeting_url)
     _mu_low = meeting_url.lower()
     is_teams = ("teams.microsoft.com" in _mu_low) or ("teams.live.com" in _mu_low)
     apple_note = ""
+    manual_join = ""
+    trouble_line = ""
     if is_teams:
+        # Extract "Meet Now" style Meeting ID + Passcode so the prospect
+        # can join manually from the Teams app if the auto-launch
+        # doesn't fire cleanly. Skip silently for enterprise
+        # `/l/meetup-join/...` URLs (those don't carry a short id/pass).
+        m = _re.search(r"teams\.live\.com/meet/(\d+)\?p=([A-Za-z0-9]+)", meeting_url)
+        if m:
+            mid, pw = m.group(1), m.group(2)
+            manual_join = (
+                '<div style="margin-top:10px;padding:10px 12px;background:rgba(6,182,212,0.06);'
+                'border:1px solid rgba(6,182,212,0.25);border-radius:6px;font-size:12px;color:#cbd5e1;line-height:1.6;">'
+                '<div style="color:#7dd3fc;font-weight:600;margin-bottom:4px;">Or join manually in the Teams app:</div>'
+                f'<div>Meeting ID: <span style="font-family:monospace;color:#e5e7eb;font-weight:600;">{_h.escape(mid)}</span></div>'
+                f'<div>Passcode: <span style="font-family:monospace;color:#e5e7eb;font-weight:600;">{_h.escape(pw)}</span></div>'
+                '</div>'
+            )
+        # Apple-device recommendation — install the Teams App first.
+        # "Teams App" text is a clickable link to the iOS App Store.
         apple_note = (
             '<div style="margin-top:10px;padding:10px 12px;background:rgba(245,158,11,0.08);'
             'border:1px solid rgba(245,158,11,0.3);border-radius:6px;font-size:12px;color:#fbbf24;line-height:1.5;">'
-            '🍎 <strong>Apple device?</strong> Teams meetings don\'t work in Safari on iPhone/iPad — '
-            'please install the free '
+            '🍎 <strong>iPhone / iPad users:</strong> Safari browser does not always work with '
+            'Teams, so we recommend downloading the '
             '<a href="https://apps.apple.com/us/app/microsoft-teams/id1113153706" '
-            'style="color:#fbbf24;text-decoration:underline;">Microsoft Teams app</a> '
-            'from the App Store before your demo. On a Mac, we recommend Chrome, Edge, or the Teams desktop app '
-            '(Safari partially works but audio and screen-share are unreliable).'
+            'style="display:inline-block;padding:2px 10px;background:#fbbf24;color:#0f172a;'
+            'border-radius:4px;text-decoration:none;font-weight:700;">Teams App</a> '
+            'before your meeting.'
+            '</div>'
+        )
+        trouble_line = (
+            '<div style="margin-top:8px;font-size:12px;color:#94a3b8;">'
+            'Having trouble joining? Reply to this email or reach us at '
+            '<a href="mailto:support@gigsfill.com" style="color:#7dd3fc;text-decoration:underline;">support@gigsfill.com</a>.'
             '</div>'
         )
     return (
         '<div style="margin:16px 0;padding:14px 18px;background:linear-gradient(135deg,rgba(139,92,246,0.06),rgba(6,182,212,0.06));border:1px solid rgba(6,182,212,0.3);border-radius:8px;">'
         '<div style="font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:6px;">Join the demo</div>'
         f'<a href="{esc}" style="color:#7dd3fc;font-size:14px;font-weight:600;text-decoration:none;word-break:break-all;">{esc}</a>'
-        '<div style="margin-top:6px;font-size:12px;color:#94a3b8;">No account required — click the link at your scheduled time. Opens in your browser (Teams / Zoom / Meet).</div>'
+        f'{manual_join}'
         f'{apple_note}'
+        f'{trouble_line}'
         '</div>'
     )
 
@@ -898,7 +935,7 @@ def _build_prospect_confirmation_html(req_row: dict, slot: dict, site_url: str =
         prior_html = f"""
   <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:14px 20px;margin:0 0 12px;text-align:center;">
     <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#fca5a5;margin-bottom:4px;">Was scheduled for</div>
-    <div style="font-size:16px;font-weight:600;color:#e5e7eb;text-decoration:line-through;opacity:0.75;">{_h.escape(prior_human)}</div>
+    <div style="font-size:16px;font-weight:600;color:#e5e7eb;opacity:0.75;"><del style="text-decoration:line-through;text-decoration-thickness:2px;">{_h.escape(prior_human)}</del></div>
   </div>"""
 
     # Jul 2026 dark-theme rebrand — matches _build_admin_email_html /
@@ -921,7 +958,7 @@ def _build_prospect_confirmation_html(req_row: dict, slot: dict, site_url: str =
     <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;margin-bottom:4px;">{_h.escape(new_time_label)}</div>
     <div style="font-size:20px;font-weight:700;color:#e5e7eb;">{_h.escape(slot_human)}</div>
   </div>
-  {_fmt_meeting_line(meeting_url)}
+  {_fmt_meeting_line(meeting_url, req_id=req_row.get("id"), site_url=site_url)}
 
   <p style="margin:0 0 8px;font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">Add to your calendar</p>
   {cal_buttons}
@@ -995,7 +1032,7 @@ def _build_admin_confirmation_html(req_row: dict, slot: dict, site_url: str,
         prior_html = f"""
   <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:12px 18px;margin:0 0 12px;text-align:center;">
     <div style="font-size:11px;color:#fca5a5;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px;">Was scheduled for</div>
-    <div style="font-size:15px;font-weight:600;color:#e5e7eb;text-decoration:line-through;opacity:0.75;">{_h.escape(prior_human)}</div>
+    <div style="font-size:15px;font-weight:600;color:#e5e7eb;opacity:0.75;"><del style="text-decoration:line-through;text-decoration-thickness:2px;">{_h.escape(prior_human)}</del></div>
     <div style="margin-top:6px;font-size:11px;color:#94a3b8;">Remove this from your calendar and add the new one below.</div>
   </div>"""
 
@@ -1039,7 +1076,7 @@ def _build_admin_confirmation_html(req_row: dict, slot: dict, site_url: str,
     <div style="font-size:18px;font-weight:700;color:#e5e7eb;">{_h.escape(slot_human)}</div>
   </div>
 
-  {_fmt_meeting_line(meeting_url)}
+  {_fmt_meeting_line(meeting_url, req_id=req_row.get("id"), site_url=site_url)}
 
   <div style="margin:0 0 12px;font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">Add to your calendar</div>
   {cal_buttons}
@@ -2583,7 +2620,7 @@ def _build_prospect_reminder_html(req_row: dict, slot: dict, local_tz_label: str
     <div style="font-size:20px;font-weight:700;color:#e5e7eb;">{_h.escape(slot_human)}</div>
   </div>
 
-  {_fmt_meeting_line(meeting_url)}
+  {_fmt_meeting_line(meeting_url, req_id=req_row.get("id"), site_url=site_url)}
 
   <p style="margin:0 0 4px;font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">Not on your calendar yet?</p>
   {cal_buttons}
@@ -2670,7 +2707,7 @@ def _build_admin_reminder_html(req_row: dict, slot: dict, site_url: str,
   {location_line}
   {notes_html}
 
-  {_fmt_meeting_line(meeting_url)}
+  {_fmt_meeting_line(meeting_url, req_id=req_row.get("id"), site_url=site_url)}
 
   <div style="margin-top:20px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.06);">
     <div style="font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:4px;">Not on your calendar yet?</div>

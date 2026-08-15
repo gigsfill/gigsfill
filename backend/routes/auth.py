@@ -988,48 +988,65 @@ def signup(request: Request, data: dict, response: Response):
             except Exception:
                 pass
 
-        # Send welcome email — but skip if the venue entity-save failed
-        # silently above. We don't want a "Welcome!" message landing while
-        # the user's venue is missing capacity / pay / amenities.
-        # Audit fix (May 2026 part 4).
-        if locals().get("_venue_entity_save_failed"):
-            logger.warning(
-                f"Skipping welcome email for user {user.id} — venue entity "
-                f"creation didn't fully populate; admin should follow up."
-            )
-        else:
-            try:
-                email_service = EmailService(db)
-                user_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or email
-                email_service.send_notification_email(
-                    user_email=email,
-                    user_id=user.id,
-                    notification_type="welcome",
-                    variables={
-                        "user_name": user_name,
-                        "user_email": email
-                    }
-                )
-            except Exception as e:
-                logger.warning(f"Welcome email send failed for user {user.id}: {e}")
-
-        # Send email verification (background thread so signup doesn't block on SMTP)
+        # 2026-08-15: combined welcome + verify into ONE email (was two).
+        # Previously users got a "Welcome to GigsFill" email AND a "Verify
+        # your GigsFill email address" email within seconds of signup, and
+        # the Welcome CTA linked to /app/user-profile.html — which is behind
+        # the verify-email wall (see auth.guard.js:102), so users clicked
+        # Complete Profile and got shunted to a verify page, then had to
+        # hunt for the second email. The combined "welcome" template now
+        # includes the verify CTA as the primary action AND role-specific
+        # "once verified you can…" copy so it feels tailored to the artist
+        # or venue signup they just completed. Fires in a background thread
+        # so signup doesn't block on SMTP. Even when the venue entity save
+        # partially failed above (see Audit fix May 2026 part 4), we still
+        # send — the verify link is more important than the welcome copy
+        # being contextually pristine, and admin follow-up handles the
+        # missing venue fields.
         try:
             _ensure_email_verified_column(db)
-            import threading as _threading_verify
-            _v_uid   = user.id
-            _v_email = email
-            _v_name  = data.get("first_name", "") or ""
-            _v_base  = str(request.base_url).rstrip("/")
-            def _send_verify_bg():
-                _vdb = SessionLocal()
+            import threading as _threading_welcome
+            _w_uid    = user.id
+            _w_email  = email
+            _w_first  = data.get("first_name", "") or ""
+            _w_last   = data.get("last_name", "") or ""
+            _w_role   = role  # 'artist' or 'venue' — signup already validated
+            _w_base   = str(request.base_url).rstrip("/")
+            _w_partial = bool(locals().get("_venue_entity_save_failed"))
+            def _send_welcome_bg():
+                _wdb = SessionLocal()
                 try:
-                    _send_verification_email(_vdb, _v_uid, _v_email, _v_name, _v_base)
+                    token = _verify_serializer.dumps({"uid": _w_uid, "email": _w_email})
+                    base = _w_base if (_w_base and "127.0.0.1" not in _w_base and "localhost" not in _w_base) else _get_base_url(_wdb)
+                    verify_url = f"{base}/api/verify-email?token={token}"
+                    user_name = f"{_w_first} {_w_last}".strip() or _w_email
+                    variables = {
+                        "user_name":  user_name,
+                        "user_email": _w_email,
+                        "verify_url": verify_url,
+                        # Mustache-style {{#is_artist}}…{{/is_artist}} truthy blocks
+                        # in the welcome template branch on these flags.
+                        "is_artist":  "1" if _w_role == "artist" else "",
+                        "is_venue":   "1" if _w_role == "venue"  else "",
+                    }
+                    if _w_partial:
+                        logger.warning(
+                            f"Sending combined welcome+verify to user {_w_uid} "
+                            f"despite partial venue-entity save; admin follow-up needed."
+                        )
+                    EmailService(_wdb).send_notification_email(
+                        user_email=_w_email,
+                        user_id=_w_uid,
+                        notification_type="welcome",
+                        variables=variables,
+                    )
+                except Exception as _we:
+                    logger.warning(f"Combined welcome+verify send failed for user {_w_uid}: {_we}")
                 finally:
-                    _vdb.close()
-            _threading_verify.Thread(target=_send_verify_bg, daemon=True).start()
+                    _wdb.close()
+            _threading_welcome.Thread(target=_send_welcome_bg, daemon=True).start()
         except Exception:
-            pass  # Never block signup if verification email fails
+            pass  # Never block signup on email failure
 
         # Auto-login: set signed session cookie
         set_session_cookie(response, user.id)

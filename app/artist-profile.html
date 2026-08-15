@@ -18,7 +18,7 @@
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Artist Profile – GigsFill">
   <meta name="twitter:description" content="View this artist's profile on GigsFill.">
-  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
   <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
@@ -57,6 +57,10 @@
     .artist-location { font-size: 0.85rem; color: var(--text-gray); margin: 0; }
 
     /* TABS */
+    /* 2026-08-11: sticky under the app-header. --app-header-height is
+       defined in gigsfill-modern.css and adapts for mobile. z-index:90
+       sits under the header (100). Opaque background so page content
+       doesn't bleed through as it scrolls under the tab bar. */
     .profile-tabs {
       display: flex; gap: 0; border-bottom: 1px solid var(--border);
       margin-bottom: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch;
@@ -65,6 +69,21 @@
          scrolling, and justify-content:center is ignored anyway because
          content overflows. */
       justify-content: center;
+      position: fixed;
+      top: 60px;
+      left: 0;
+      right: 0;
+      z-index: 90;
+      background: var(--bg);
+      height: 50px;
+      /* Align first tab under the logo — see gigsfill.css .tabs comment. */
+      padding-left: calc((100vw - var(--container-max)) / 2 + 20px);
+      padding-right: calc((100vw - var(--container-max)) / 2 + 20px);
+      box-sizing: border-box;
+      align-items: center;
+    }
+    .profile-container:has(.profile-tabs) {
+      padding-top: 66px !important;
     }
     .profile-tabs button {
       flex-shrink: 0; padding: 10px 16px; background: none; border: none;
@@ -409,6 +428,15 @@
           <h3 id="calMonth"></h3>
           <button onclick="changeMonth(1)">Next ▶</button>
         </div>
+        <!-- "Show All Booked Gigs" — parity with the artist book-gigs
+             page's own list. Public view: no pay, no cancel, just the
+             sortable table with CSV / PDF export. -->
+        <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+          <button id="publicArtistShowAllGigsBtn" type="button" onclick="openArtistPublicGigsList()"
+            style="font-size:0.75rem; color:var(--text-muted); background:transparent; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; cursor:pointer;"
+            onmouseover="this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#22c55e'"
+            onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📋 Show All Booked Gigs</button>
+        </div>
         <div class="cal-header"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
         <div class="cal-grid" id="calGrid"></div>
       </div>
@@ -599,6 +627,16 @@
       loadMedia();
       loadGigs();
 
+      // Analytics — one page_view per profile load. artist_id lets us
+      // attribute traffic to the artist even before any gig-bubble
+      // click. Fire once per DOMContentLoaded → matches how the city
+      // public calendar tracks page_view.
+      if (typeof window.gfTrackPageView === 'function') {
+        window.gfTrackPageView('artist_profile', {
+          artist_id: parseInt(artistId, 10) || null,
+        });
+      }
+
       // Populate the Reviews tab badge ("Reviews (N)") on first load — without
       // this, the badge stays blank until the user actually clicks the Reviews
       // tab. Cheap one-shot fetch; failure is silent (badge just stays empty).
@@ -613,8 +651,15 @@
     })();
 
     // ========== CALENDAR ==========
+    let artistExternalGigs = [];    // 2026-08-01: non-GigsFill gigs the artist logged themselves
     async function loadGigs() {
       try { const r = await fetch(`/api/artists/${artistId}/gigs/public`); if (r.ok) artistGigs = await r.json(); } catch(e) {}
+      // Also fetch external (non-GigsFill) gigs so visitors see the
+      // full picture on the public calendar. Public endpoint — no auth.
+      try {
+        const r2 = await fetch(`/api/public/artists/${artistId}/external-gigs`);
+        if (r2.ok) artistExternalGigs = await r2.json();
+      } catch(e) { artistExternalGigs = []; }
       // /api/artists/:id/gigs/public now embeds `slots` for multi-slot
       // gigs in a single batched query (Jun 30 2026 fix) — no per-gig
       // fan-out needed. Just ensure they're sorted by start_time.
@@ -671,9 +716,16 @@
         const isPast = ds < todayStr;
         const dayGigs = artistGigs.filter(g => g.date === ds);
         const dayClickAttr = (!isPast && dayGigs.length > 0) ? ` onclick="openDayGigsModal(event,'${ds}')"` : '';
+        // 2026-08-01: also look up any external (non-GigsFill) gigs for this
+        // day. Rendered as muted grey chips below the real gig bubbles so
+        // visitors see a full schedule without confusing them for real
+        // bookable gigs.
+        const dayExt = (artistExternalGigs || []).filter(g => g.date === ds);
         html += `<div class="cal-day${isToday ? ' today' : ''}${isPast ? ' past' : ''}"${dayClickAttr}>${_renderDayNum(d, calMonth)}`;
-        if (dayGigs.length > 0) {
+        if (dayGigs.length > 0 || dayExt.length > 0) {
           html += '<div class="cal-gigs-container">';
+        }
+        if (dayGigs.length > 0) {
           dayGigs.forEach((g, idx) => {
             const hasBookedSlots = g.is_multi_slot && g.booked_slots_count > 0;
             const cls = (g.status === 'booked' || hasBookedSlots) ? 'booked' : 'open';
@@ -695,6 +747,21 @@
             // logic — so the profile hover was missing everything new.
             html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${idx})" data-cal-date="${ds}" data-cal-idx="${idx}">${esc(label)}</div>`;
           });
+        }
+        // External-gig bubbles — 2026-08-02: render identically to real
+        // booked gigs (blue `.cal-gig.booked` class) with artist_type icon
+        // + 12-hour time + venue name. Wired to attachGigHoverCard below
+        // with a synthesized __card payload so the hover matches too.
+        // Click opens showExtGigDetail() — a public-safe read-only view.
+        if (dayExt.length > 0) {
+          dayExt.forEach((g, extIdx) => {
+            const t = g.start_time ? fmtTime(g.start_time) : '';
+            const icon = (icons[g.artist_type] || '🎵') + ' ';
+            const label = `${icon}${t}${t ? ' ' : ''}${g.venue_name || 'Gig'}`;
+            html += `<div class="cal-gig booked" onclick="showExtGigDetail('${ds}',${extIdx})" data-ext-cal-date="${ds}" data-ext-cal-idx="${extIdx}">${esc(label)}</div>`;
+          });
+        }
+        if (dayGigs.length > 0 || dayExt.length > 0) {
           html += '</div>';
         }
         html += '</div>';
@@ -722,14 +789,241 @@
           const g = artistGigs.filter(x => x.date === ds)[idx];
           if (g) window.attachGigHoverCard(el, g);
         });
+        // External-gig bubbles: build a __card payload so the same hover
+        // renderer emits the same visual (date/time block + venue/location
+        // + lineup/style chips) as booked-mine bubbles do.
+        document.querySelectorAll('#calGrid .cal-gig[data-ext-cal-date]').forEach(el => {
+          const ds = el.getAttribute('data-ext-cal-date');
+          const idx = parseInt(el.getAttribute('data-ext-cal-idx'), 10);
+          const g = (artistExternalGigs || []).filter(x => x.date === ds)[idx];
+          if (g) window.attachGigHoverCard(el, _extGigHoverPayload(g));
+        });
       }
     }
+
+    // Build a hover-card payload for an external gig. `__card:true` tells
+    // gig-hover-card.js the shape is already flattened — it skips
+    // payloadFromGig and renders directly.
+    function _extGigHoverPayload(g) {
+      const start = g.start_time || '';
+      const end = g.end_time || '';
+      const city = g.venue_city || '';
+      const state = g.venue_state || '';
+      const venue = g.venue_name || '';
+      return {
+        __card: true,
+        headerPrefix: 'Booked — ',
+        artistChips: (artist && artist.name) ? [{ id: artistId || null, name: artist.name }] : [],
+        openSlotsSuffix: '',
+        isOpen: false,
+        venue: venue,
+        streetAddress: '',   // address not published on the public payload
+        cityState: city && state ? `${city}, ${state}` : (city || state || ''),
+        date: fmtDate(g.date),
+        time: fmtTime(start) + (end ? ` – ${fmtTime(end)}` : ''),
+        slotLines: null,
+        lineupChips: Array.isArray(g.lineup) ? g.lineup : [],
+        styleChips:  Array.isArray(g.styles) ? g.styles : [],
+        mapsUrl: '',
+        artistType: g.artist_type || '',
+      };
+    }
+
+    // Public details modal for an external gig. Body content mirrors
+    // gig-modal.js renderGigModal EXACTLY (row grid + slot card visual
+    // chrome) minus the pay pill and any Cancel/Countersign actions —
+    // per user's "make it look identical minus the pay field" ask.
+    // Kept in sync by hand with the same helper in artist-external-gigs.js
+    // (different pages, no shared module).
+    window.showExtGigDetail = function (date, idx) {
+      const list = (artistExternalGigs || []).filter(x => x.date === date);
+      const g = list[idx];
+      if (!g) return;
+      // Analytics — external gigs have no numeric gig_id so the helper
+      // sends gig_id:null and stashes the ext_id + is_external:true in
+      // event_data. artist_id is derived from the URL param since the
+      // row shape doesn't carry it.
+      if (typeof window.gfTrackGigClick === 'function') {
+        window.gfTrackGigClick(
+          Object.assign({}, g, {
+            _is_external: true,
+            artist_id: parseInt(artistId, 10) || null,
+            venue_id: null,
+          }),
+          { source: 'artist_profile' }
+        );
+      }
+      const start12 = fmtTime(g.start_time);
+      const end12   = g.end_time ? fmtTime(g.end_time) : '';
+      const timeStr = end12 ? `${start12} – ${end12}` : start12;
+      const artType = g.artist_type || '';
+      const lineup  = Array.isArray(g.lineup) ? g.lineup : [];
+      const styles  = Array.isArray(g.styles) ? g.styles : [];
+      const formats = lineup.join(', ');
+      const stylesStr = styles.join(', ');
+      const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤',
+        'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
+
+      let locHtml = '';
+      if (g.venue_address) locHtml += esc(g.venue_address) + '<br>';
+      if (g.venue_city || g.venue_state) locHtml += esc([g.venue_city, g.venue_state].filter(Boolean).join(', '));
+
+      // Row grid — matches gig-modal.js:108 exactly.
+      const gmRow = (label, val) =>
+        `<div style="font-weight:600;color:var(--text-primary);">${label}:</div>
+         <div style="color:var(--text-primary);">${val}</div>`;
+
+      let html = `<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:0.95rem;line-height:1.6;margin-bottom:16px;">`;
+      html += gmRow('Date', esc(fmtDate(g.date)));
+      if (timeStr) html += gmRow('Time', esc(timeStr));
+      html += gmRow('Venue', esc(g.venue_name || ''));
+      if (locHtml) html += gmRow('Location', locHtml);
+      if (artType) html += gmRow('Artist Type', esc(artType));
+      if (artType === 'Live Band' && formats)   html += gmRow('Lineup', esc(formats));
+      if (artType === 'Live Band' && stylesStr) html += gmRow('Styles', esc(stylesStr));
+      if (g.notes) html += gmRow('Notes', esc(g.notes).replace(/\n/g, '<br>'));
+      html += `</div>`;
+
+      // Slot card — cyan-tinted "my slot" treatment with purple left
+      // stripe, "Slot 1" label in purple, gray time, "✓ Your Slot" on
+      // right, italic type summary as second line. No pay pill.
+      const icon = icons[artType] || '🎵';
+      const summaryParts = [];
+      if (artType) summaryParts.push(`${icon} ${artType}`);
+      if (formats)   summaryParts.push(formats);
+      if (stylesStr) summaryParts.push(stylesStr);
+      const summary = summaryParts.join(' · ');
+
+      html += `<div style="border-top:1px solid rgba(255,255,255,0.1); padding-top:12px; margin-top:4px;">
+        <div style="padding:10px 12px 10px 10px; background:rgba(6,182,212,0.1); border:1px solid rgba(6,182,212,0.4); border-left:3px solid #a855f7; border-radius:6px; margin-bottom:6px;">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <span style="font-weight:700; color:#a855f7; font-size:0.85rem; letter-spacing:0.3px;">Slot 1</span>
+            <span style="color:#cbd5e1; font-size:0.85rem;">${esc(timeStr || '')}</span>
+            <span style="flex:1;"></span>
+            <span style="color:#06b6d4; font-weight:600; font-size:0.8rem;">✓ Your Slot</span>
+          </div>
+          ${summary ? `<div style="margin-top:5px; color:var(--text-muted); font-size:0.78rem; line-height:1.4; font-style:italic;">${esc(summary)}</div>` : ''}
+        </div>
+      </div>`;
+
+      // View Event Flyer — server-side gated by flyer_public (public
+      // endpoint returns flyer_url only when the artist opted in).
+      // Click opens a full-screen lightbox overlay.
+      if (g.flyer_url) {
+        const bust = g.flyer_uploaded_at ? `?t=${encodeURIComponent(g.flyer_uploaded_at)}` : '';
+        const src = g.flyer_public_url + bust;
+        html += `<div style="margin-top:14px;text-align:center;">
+          <button onclick="showExtFlyerLightbox('${esc(src)}')" style="padding:8px 20px;border:1px solid rgba(139,92,246,0.4);border-radius:8px;background:rgba(139,92,246,0.15);color:#c4b5fd;cursor:pointer;font-size:0.85rem;font-weight:600;">🎨 View Event Flyer</button>
+        </div>`;
+      }
+
+      document.getElementById('gigModalBody').innerHTML = html;
+      document.getElementById('gigModal').classList.remove('hidden');
+    };
+
+    // Public-profile flyer lightbox — kept local so we don't rely on
+    // artist-external-gigs.js (which isn't loaded on the public profile).
+    window.showExtFlyerLightbox = function (src) {
+      let ov = document.getElementById('extGigFlyerLightbox');
+      if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'extGigFlyerLightbox';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:100010;display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;';
+        ov.innerHTML = `<img id="extGigFlyerLightboxImg" style="max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">`;
+        ov.addEventListener('click', () => { ov.style.display = 'none'; });
+        document.body.appendChild(ov);
+      }
+      document.getElementById('extGigFlyerLightboxImg').src = src;
+      ov.style.display = 'flex';
+    };
     function fmtTime(t) { if (!t) return ''; const [h,m] = t.split(':').map(Number); return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h>=12?'PM':'AM'); }
+
+    // "Show All Booked Gigs" launcher for the public artist profile.
+    // Aggregates real GigsFill bookings + external (non-GigsFill) gigs
+    // the artist added, expanding multi-slot gigs into one row per
+    // BOOKED slot the artist actually holds. Passes to the shared
+    // public-gigs-list-modal.js — no pay column exposed, matches the
+    // artist book-gigs page's list-view feature.
+    window.openArtistPublicGigsList = function () {
+      const rows = [];
+      (artistGigs || []).forEach(g => {
+        const slots = Array.isArray(g.slots) ? g.slots : [];
+        const isReallyMulti = slots.length > 1;
+        if (slots.length) {
+          slots.forEach(s => {
+            if (s.status !== 'booked') return;
+            if (String(s.artist_id) !== String(artistId)) return;
+            rows.push({
+              date: g.date,
+              venue_id: g.venue_id,
+              venue_name: g.venue_name || '',
+              address_line_1: g.address_line_1 || '',
+              address_line_2: g.address_line_2 || '',
+              city: g.city || '',
+              state: g.state || '',
+              start_time: s.start_time || g.start_time,
+              end_time:   s.end_time   || g.end_time,
+              title: g.title || '',
+              is_multi_slot: isReallyMulti,
+              slot_number: s.slot_number,
+            });
+          });
+        } else if (g.status === 'booked') {
+          rows.push({
+            date: g.date,
+            venue_id: g.venue_id,
+            venue_name: g.venue_name || '',
+            address_line_1: g.address_line_1 || '',
+            address_line_2: g.address_line_2 || '',
+            city: g.city || '',
+            state: g.state || '',
+            start_time: g.start_time,
+            end_time: g.end_time,
+            title: g.title || '',
+            is_multi_slot: false,
+            slot_number: null,
+          });
+        }
+      });
+      // External (non-GigsFill) gigs — no venue link since they're not
+      // on GigsFill; no slot chip. `venue_address` covers the street
+      // line since these gigs don't have address_line_1/2 fields.
+      (artistExternalGigs || []).forEach(g => {
+        rows.push({
+          date: g.date,
+          venue_id: null,
+          venue_name: g.venue_name || '',
+          venue_address: g.venue_address || '',
+          venue_city: g.venue_city || '', venue_state: g.venue_state || '',
+          city: g.venue_city || '',
+          state: g.venue_state || '',
+          start_time: g.start_time,
+          end_time: g.end_time,
+          title: '',
+          is_multi_slot: false,
+          slot_number: null,
+        });
+      });
+      const artistSlug = (artist && artist.name || 'artist').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      window.openPublicGigsListModal({
+        title: '📅 All Booked Gigs' + (artist && artist.name ? ' — ' + artist.name : ''),
+        rows: rows,
+        exportBasename: `${artistSlug}_booked_gigs`,
+        // Venue first (headline of the row), Address next, then Time.
+        // No Artist column since every row is this profile's artist.
+        columns: ['date', 'venue', 'address', 'time'],
+      });
+    };
     function fmtDate(d) { if (!d) return ''; const [y,mo,dy] = d.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[parseInt(mo)-1]} ${parseInt(dy)}, ${y}`; }
 
     async function showGigDetail(date, idx) {
       const dayGigs = artistGigs.filter(g => g.date === date);
       const g = dayGigs[idx]; if (!g) return;
+      // Analytics — fire once per bubble click. `source` tags the surface
+      // so backend can attribute each click to the right page later.
+      if (typeof window.gfTrackGigClick === 'function') {
+        window.gfTrackGigClick(g, { source: 'artist_profile' });
+      }
       const timeStr = fmtTime(g.start_time) + (g.end_time ? ' – ' + fmtTime(g.end_time) : '');
       const loc = [g.city, g.state].filter(Boolean).join(', ');
       const artType = g.artist_actual_type || g.artist_type || '';
@@ -749,7 +1043,10 @@
       rows += modalRow('Date', fmtDate(g.date));
       if (!isMultiSlot) rows += modalRow('Time', timeStr || 'TBD');
       const venueLink = g.venue_id ? `<a href="/app/venue-profile.html?venue_id=${g.venue_id}" target="_blank">${esc(g.venue_name || '')}</a>` : esc(g.venue_name || '');
-      rows += modalRowRaw('Venue', venueLink);
+      // 2026-08-07: (Venue Gig Details) placeholder — mountLinks fills it
+      // in when the viewer is an artist.
+      const _vgdSlot = g.venue_id ? `<span class="vgd-link-slot" data-vgd-vid="${parseInt(g.venue_id,10)||0}" data-vgd-name="${(g.venue_name||'').replace(/"/g,'&quot;')}"></span>` : '';
+      rows += modalRowRaw('Venue', venueLink + _vgdSlot);
       if (locHtml) rows += modalRowRaw('Location', locHtml);
       if (!isMultiSlot) rows += modalRow('Artist', g.artist_name || artist?.name || '');
       if (artType) rows += modalRow('Artist Type', artType);
@@ -781,6 +1078,9 @@
       }
       
       document.getElementById('gigModalBody').innerHTML = rows;
+      if (window.venueGigDetails && window.venueGigDetails.mountLinks) {
+        window.venueGigDetails.mountLinks(document.getElementById('gigModalBody'));
+      }
       // Only show flyer button for booked gigs
       const gigIsBooked = g.status === 'booked' || (g.is_multi_slot && g.booked_slots_count > 0);
       if (gigIsBooked) {
@@ -1410,9 +1710,13 @@
   </script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
-<script src="/app/static/js/gig-hover-card.js?v=21"></script>
+<script src="/app/static/js/venue-gig-details-modal.js?v=1"></script>
+<script src="/app/static/js/gig-hover-card.js?v=23"></script>
+<script src="/app/static/js/gf-analytics.js?v=1"></script>
+<script src="/app/static/js/public-gigs-list-modal.js?v=6"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

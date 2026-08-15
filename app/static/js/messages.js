@@ -63,7 +63,7 @@ async function _loadMessages(gigId) {
     if (!res.ok) {
       if (res.status === 401) {
         const body = document.getElementById(`msgBody_${gigId}`);
-        if (body) body.innerHTML = '<div style="text-align:center;padding:32px;"><div style="color:#f59e0b;font-size:0.9rem;font-weight:600;margin-bottom:10px;">Session expired</div><div style="color:#888;font-size:0.82rem;margin-bottom:16px;">Please log in again.</div><button onclick="window.location.href=\'/app/login.html\'" class="btn primary" style="font-size:0.82rem;">Go to Login</button></div>';
+        if (body) body.innerHTML = '<div style="text-align:center;padding:32px;"><div style="color:#f59e0b;font-size:0.9rem;font-weight:600;margin-bottom:10px;">Session expired</div><div style="color:#888;font-size:0.82rem;margin-bottom:16px;">Please log in again.</div><button onclick="window.location.href=\'/app/index.html\'" class="btn primary" style="font-size:0.82rem;">Go to Login</button></div>';
         return;
       }
       let detail = `Failed to load (${res.status})`;
@@ -404,7 +404,7 @@ window.openInboxModal = async function({ side = 'venue', artistId = null, venueI
     const body = document.getElementById('msgInboxBody');
     if (!res.ok) {
       if (res.status === 401) {
-        body.innerHTML = '<div style="text-align:center;padding:32px;"><div style="color:#f59e0b;font-size:0.95rem;font-weight:600;margin-bottom:12px;">Session expired</div><div style="color:#888;font-size:0.85rem;margin-bottom:18px;">Please log in again to view your messages.</div><button onclick="window.location.href=\'/app/login.html\'" class="btn primary" style="font-size:0.85rem;">Go to Login</button></div>';
+        body.innerHTML = '<div style="text-align:center;padding:32px;"><div style="color:#f59e0b;font-size:0.95rem;font-weight:600;margin-bottom:12px;">Session expired</div><div style="color:#888;font-size:0.85rem;margin-bottom:18px;">Please log in again to view your messages.</div><button onclick="window.location.href=\'/app/index.html\'" class="btn primary" style="font-size:0.85rem;">Go to Login</button></div>';
       } else {
         body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:32px;">Failed to load messages. Please try again.</div>';
       }

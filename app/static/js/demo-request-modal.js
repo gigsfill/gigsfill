@@ -708,7 +708,7 @@
             '</div>' +
             '<div class="dr-field">' +
               '<label>Phone</label>' +
-              '<input type="tel" id="drPhone" placeholder="(555) 123-4567" autocomplete="tel" inputmode="tel" maxlength="14">' +
+              '<input type="tel" id="drPhone" placeholder="(555) 555-5555" autocomplete="tel" inputmode="tel" maxlength="14">' +
             '</div>' +
           '</div>' +
           '<div class="dr-grid-2">' +
@@ -723,24 +723,24 @@
             '</div>' +
             '<div class="dr-field">' +
               '<label>Venue / Artist name</label>' +
-              '<input type="text" id="drEntityName" placeholder="14 Cannons" maxlength="200">' +
+              '<input type="text" id="drEntityName" placeholder="My Venue Name" maxlength="200">' +
             '</div>' +
           '</div>' +
           '<div class="dr-grid-2">' +
             '<div class="dr-field">' +
               '<label>City</label>' +
-              '<input type="text" id="drCity" placeholder="Nashville" maxlength="100">' +
+              '<input type="text" id="drCity" placeholder="Los Angeles" maxlength="100">' +
             '</div>' +
             '<div class="dr-field">' +
               '<label>State</label>' +
-              '<input type="text" id="drState" placeholder="TN" maxlength="2" style="text-transform:uppercase;">' +
+              '<input type="text" id="drState" placeholder="CA" maxlength="2" style="text-transform:uppercase;">' +
             '</div>' +
           '</div>' +
           '<div class="dr-field">' +
             '<label>What are you hoping to see?</label>' +
             '<textarea id="drNotes" placeholder="e.g. I book weekly live music at my brewery and want to see how the booking flow works" maxlength="2000"></textarea>' +
           '</div>' +
-          '<label class="dr-req" style="display:block;margin:8px 0 4px;">Choose a start time for a 30-60 minute demo presentation</label>' +
+          '<label class="dr-req" style="display:block;margin:8px 0 4px;">Choose a start time for a 30 minutes or less demo presentation</label>' +
           '<div style="font-size:11px;color:#94a3b8;margin:0 0 12px;text-transform:none;letter-spacing:0;font-weight:400;">Pick 1-3 options. Times shown in Pacific.</div>' +
           '<div id="drSlotsContainer"></div>' +
           '<button type="button" class="dr-add-slot" id="drAddSlotBtn">+ Add another preferred time (1/3)</button>' +

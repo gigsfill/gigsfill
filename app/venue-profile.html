@@ -18,7 +18,7 @@
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Venue Profile – GigsFill">
   <meta name="twitter:description" content="View this venue's profile on GigsFill.">
-  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
   <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
@@ -59,11 +59,32 @@
     .venue-address { font-size: 0.85rem; color: var(--text-gray); margin: 0; }
 
     /* TABS */
+    /* 2026-08-11: sticky under the app-header. --app-header-height is
+       defined in gigsfill-modern.css and adapts for mobile. z-index:90
+       sits under the header (100). Opaque background so page content
+       doesn't bleed through as it scrolls under the tab bar. */
     .profile-tabs {
       display: flex; gap: 0; border-bottom: 1px solid var(--border);
       margin-bottom: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch;
       /* Center tabs when they all fit; horizontal scroll otherwise. */
       justify-content: center;
+      position: fixed;
+      top: 60px;
+      left: 0;
+      right: 0;
+      z-index: 90;
+      background: var(--bg);
+      height: 50px;
+      /* Align first tab under the logo — see gigsfill.css .tabs comment. */
+      padding-left: calc((100vw - var(--container-max)) / 2 + 20px);
+      padding-right: calc((100vw - var(--container-max)) / 2 + 20px);
+      box-sizing: border-box;
+      align-items: center;
+    }
+    /* Reserve space in flow for the fixed tab bar (main container has
+       40px padding-top by default; add 50 for tabs + gap). */
+    .profile-container:has(.profile-tabs) {
+      padding-top: 66px !important;
     }
     .profile-tabs button {
       flex-shrink: 0; padding: 10px 16px; background: none; border: none;
@@ -365,6 +386,12 @@
       <button id="tabBtnPictures" onclick="switchTab('pictures')">Pictures</button>
       <button id="tabBtnSocial" onclick="switchTab('social')">Social Media</button>
       <button id="tabBtnReviews" onclick="switchTab('reviews')">Reviews <span id="reviewsBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
+      <!-- 2026-08-07: Gig Details tab — hidden by default, revealed only
+           when the /public endpoint reports viewer_is_artist=true. Gives
+           logged-in artist users a full view of the venue's rig / pay /
+           tabs / load-in details (same info venues manage on venue-edit.html)
+           so artists can decide whether to book. -->
+      <button id="tabBtnGigdetails" onclick="switchTab('gigdetails')" style="display:none;">Gig Details</button>
     </div>
 
     <!-- CALENDAR TAB -->
@@ -374,6 +401,14 @@
           <button onclick="changeMonth(-1)">◀ Prev</button>
           <h3 id="calMonth"></h3>
           <button onclick="changeMonth(1)">Next ▶</button>
+        </div>
+        <!-- "Show All Gigs" — parity with the artist book-gigs page's
+             list view. Public: no pay column, no cancel action. -->
+        <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+          <button type="button" onclick="openVenuePublicGigsList()"
+            style="font-size:0.75rem; color:var(--text-muted); background:transparent; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; cursor:pointer;"
+            onmouseover="this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#22c55e'"
+            onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📋 Show All Gigs</button>
         </div>
         <div class="cal-header"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
         <div class="cal-grid" id="calGrid"></div>
@@ -401,6 +436,12 @@
       <div class="content-card">
         <div id="venueRatingSummaryContainer" style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);"></div>
         <div id="venueReviewsListContainer"></div>
+      </div>
+    </div>
+    <!-- GIG DETAILS TAB (artists only — populated by _renderGigDetailsTab) -->
+    <div class="tab-panel" id="tab-gigdetails">
+      <div class="content-card">
+        <div id="gigDetailsContent"></div>
       </div>
     </div>
   </main>
@@ -453,7 +494,11 @@
       return ICONS[name] || ICONS.website;
     }
 
-    const TAB_NAMES = ['info','calendar','videos','pictures','social','reviews'];
+    // 'info' tab retired 2026-07-26 — the button + panel were removed,
+    // bio/details/perks moved into the hero. Removing 'info' from
+    // TAB_NAMES so shared links like #info fall through cleanly instead
+    // of activating a nonexistent panel.
+    const TAB_NAMES = ['calendar','videos','pictures','social','reviews','gigdetails'];
     function switchTab(name) {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.profile-tabs button').forEach(b => b.classList.remove('active'));
@@ -559,6 +604,26 @@
       document.getElementById("venueLogo").src = "/app/static/img/profile-placeholder.svg";
       loadMedia();
       loadGigs();
+
+      // 2026-08-07: Gig Details tab — only artists see it. Backend
+      // computes viewer_is_artist against the current session cookie
+      // (any artist owned or granted via entity_users flips it true).
+      if (venueData.viewer_is_artist) {
+        const btn = document.getElementById("tabBtnGigdetails");
+        if (btn) btn.style.display = "";
+        _renderGigDetailsTab();
+      }
+
+      // Analytics — one page_view per venue profile load, so the
+      // venue's Analytics tab reflects direct-URL traffic even before
+      // any gig click.
+      if (typeof window.gfTrackPageView === 'function') {
+        window.gfTrackPageView('venue_profile', {
+          venue_id: parseInt(venueId, 10) || null,
+          city:  (venueData && venueData.city)  || null,
+          state: (venueData && venueData.state) || null,
+        });
+      }
 
       // Populate the Reviews tab badge ("Reviews (N)") on first load —
       // without this, the badge stays blank until the user actually clicks
@@ -745,9 +810,87 @@
     function fmtTime(t) { if (!t) return ''; const [h,m] = t.split(':').map(Number); return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h>=12?'PM':'AM'); }
     function fmtDate(d) { if (!d) return ''; const [y,mo,dy] = d.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[parseInt(mo)-1]} ${parseInt(dy)}, ${y}`; }
 
+    // "Show All Gigs" launcher for the venue public profile. Flattens
+    // venueGigs (which comes from /api/gigs/public filtered to this
+    // venue_id) into one row per slot for multi-slot gigs. Since this
+    // list is scoped to a single venue, we suppress the venue link
+    // (nowhere new to go) and instead surface the ARTIST as a link
+    // when there's an artist_id — visitors can click through to the
+    // artist's public profile. No pay column exposed.
+    window.openVenuePublicGigsList = function () {
+      const rows = [];
+      (venueGigs || []).forEach(g => {
+        const slots = Array.isArray(g.slots) ? g.slots : [];
+        const isReallyMulti = slots.length > 1;
+        // Address bits from venueData — the venue-owner's saved profile
+        // carries the full street + city/state; use that for every row
+        // since it's the same venue on this page.
+        const _va1 = (venueData && venueData.address_line_1) || '';
+        const _va2 = (venueData && venueData.address_line_2) || '';
+        const _vc  = (venueData && venueData.city)  || '';
+        const _vs  = (venueData && venueData.state) || '';
+        if (isReallyMulti) {
+          slots.forEach(s => {
+            rows.push({
+              date: g.date,
+              venue_id: g.venue_id,
+              venue_name: g.venue_name || (venueData && venueData.venue_name) || '',
+              address_line_1: _va1, address_line_2: _va2,
+              city: _vc, state: _vs,
+              start_time: s.start_time || g.start_time,
+              end_time:   s.end_time   || g.end_time,
+              title: g.title || '',
+              is_multi_slot: true,
+              slot_number: s.slot_number,
+              artist_name: s.artist_name || '',
+              artist_id:   s.artist_id   || null,
+              _no_venue_link: true,
+            });
+          });
+        } else {
+          rows.push({
+            date: g.date,
+            venue_id: g.venue_id,
+            venue_name: g.venue_name || (venueData && venueData.venue_name) || '',
+            address_line_1: _va1, address_line_2: _va2,
+            city: _vc, state: _vs,
+            start_time: g.start_time,
+            end_time: g.end_time,
+            title: g.title || '',
+            is_multi_slot: false,
+            slot_number: null,
+            artist_name: g.artist_name || '',
+            artist_id:   g.artist_id   || null,
+            _no_venue_link: true,
+          });
+        }
+      });
+      const venueSlug = ((venueData && venueData.venue_name) || 'venue')
+        .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      window.openPublicGigsListModal({
+        title: '📅 All Gigs' + (venueData && venueData.venue_name ? ' — ' + venueData.venue_name : ''),
+        rows: rows,
+        exportBasename: `${venueSlug}_gigs`,
+        // Venue first (headline of the row), Address next, then Artist.
+        // Time is one combined column ("7:00 PM – 10:00 PM").
+        columns: ['date', 'venue', 'address', 'artist', 'time'],
+      });
+    };
+
     async function showGigDetail(date, idx) {
       const dayGigs = venueGigs.filter(g => g.date === date);
       const g = dayGigs[idx]; if (!g) return;
+      // Analytics — one gig_click event per bubble click. venue_id
+      // comes from the profile URL param since the row shape doesn't
+      // always carry it; artist_id + gig_id come off the row.
+      if (typeof window.gfTrackGigClick === 'function') {
+        window.gfTrackGigClick(
+          Object.assign({}, g, {
+            venue_id: g.venue_id || (parseInt(new URLSearchParams(location.search).get('venue_id'), 10) || null),
+          }),
+          { source: 'venue_profile' }
+        );
+      }
       const timeStr = fmtTime(g.start_time) + (g.end_time ? ' – ' + fmtTime(g.end_time) : '');
       const loc = [venueData?.city, venueData?.state].filter(Boolean).join(', ');
       const artType = g.artist_actual_type || g.artist_type || '';
@@ -768,7 +911,11 @@
       if (g.title && String(g.title).trim()) rows += modalRow('Event', String(g.title).trim());
       rows += modalRow('Date', fmtDate(g.date));
       if (!isMultiSlot) rows += modalRow('Time', timeStr || 'TBD');
-      rows += modalRow('Venue', g.venue_name || venueData?.venue_name || '');
+      // 2026-08-07: append (Venue Gig Details) placeholder — mountLinks
+      // fills it with the click affordance for artist viewers.
+      const _vgdVid = parseInt(venueId, 10) || parseInt(g.venue_id, 10) || 0;
+      const _vgdName = g.venue_name || venueData?.venue_name || '';
+      rows += modalRowRaw('Venue', `${esc(_vgdName)}<span class="vgd-link-slot" data-vgd-vid="${_vgdVid}" data-vgd-name="${escAttr(_vgdName)}"></span>`);
       if (locHtml) rows += modalRowRaw('Location', locHtml);
       if (!isMultiSlot && g.status === 'booked' && g.artist_name) {
         const artistLink = g.artist_id ? `<a href="/app/artist-profile.html?artist_id=${g.artist_id}" target="_blank">${esc(g.artist_name)}</a>` : esc(g.artist_name);
@@ -802,6 +949,9 @@
       }
 
       document.getElementById('gigModalBody').innerHTML = rows;
+      if (window.venueGigDetails && window.venueGigDetails.mountLinks) {
+        window.venueGigDetails.mountLinks(document.getElementById('gigModalBody'));
+      }
       // Only show flyer button for booked gigs
       const gigIsBooked = g.status === 'booked' || (g.is_multi_slot && g.booked_slots_count > 0);
       if (gigIsBooked) {
@@ -1383,6 +1533,21 @@
     function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     function escAttr(s) { return String(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
+    // 2026-08-07: Gig Details tab — flat single-line-per-field layout.
+    // Row-building lives in venue-gig-details-modal.js buildRowsHTML()
+    // so this tab and the shared (Venue Gig Details) modal can't drift
+    // apart. Only invoked when venueData.viewer_is_artist is true (see
+    // the reveal check in loadVenue).
+    function _renderGigDetailsTab() {
+      const el = document.getElementById("gigDetailsContent");
+      if (!el) return;
+      if (window.venueGigDetails && window.venueGigDetails.buildRowsHTML) {
+        el.innerHTML = window.venueGigDetails.buildRowsHTML(venueData || {});
+      } else {
+        el.innerHTML = `<div style="color:var(--text-muted);font-style:italic;padding:12px 0;">Venue details module not loaded.</div>`;
+      }
+    }
+
     async function loadVenueReviews(page) {
   if (!venueId) return;
   const list = document.getElementById('venueReviewsList');
@@ -1465,9 +1630,13 @@ window.loadVenueReviews = loadVenueReviews;
   </script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
-<script src="/app/static/js/gig-hover-card.js?v=21"></script>
+<script src="/app/static/js/venue-gig-details-modal.js?v=1"></script>
+<script src="/app/static/js/gig-hover-card.js?v=23"></script>
+<script src="/app/static/js/gf-analytics.js?v=1"></script>
+<script src="/app/static/js/public-gigs-list-modal.js?v=6"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

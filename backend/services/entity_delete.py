@@ -254,6 +254,16 @@ def _notify_cancelled_gigs_for_artist(db, artist_id: int) -> None:
         # AND g.date >= today: only FUTURE gigs actually get cancelled by the
         # tombstone. Past gigs happened, the venue was paid, they don't need
         # a cancellation notice today.
+        # 2026-08-08 audit fix (finding #6): the previous outer
+        # `WHERE g.status IN (...)` filter dropped any partial
+        # multi-slot gig (parent stays g.status='open' until the LAST
+        # slot books — see routes/gigs.py:2853-2862). But the release
+        # UPDATE below at line 448-453 frees the artist's slot
+        # regardless of g.status, so venues on partial multi-slot
+        # gigs silently lost their booking with no email/notification.
+        # The slot-side JOIN condition already restricts to gigs
+        # where the artist holds an active slot; dropping the outer
+        # status filter is safe and closes the notification gap.
         booked = db.execute(text("""
             SELECT DISTINCT g.id, g.date, g.venue_id, g.title,
                    v.venue_name, v.user_id as venue_user_id,
@@ -263,8 +273,7 @@ def _notify_cancelled_gigs_for_artist(db, artist_id: int) -> None:
                              AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
             LEFT JOIN venues v ON g.venue_id = v.id
             LEFT JOIN users u_venue ON v.user_id = u_venue.id
-            WHERE g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-              AND g.date >= DATE('now', 'localtime')
+            WHERE g.date >= DATE('now', 'localtime')
         """), {"aid": artist_id}).mappings().all()
 
         for gig in booked:
@@ -331,6 +340,12 @@ def _notify_cancelled_gigs_for_venue(db, venue_id: int) -> None:
             {"vid": venue_id}
         ).scalar() or "the venue"
 
+        # 2026-08-08 audit fix (finding #7): same class as #6, mirror
+        # side. Outer g.status filter dropped partial multi-slot gigs
+        # (parent stays 'open') so booked artists on those gigs
+        # received no email/notification before delete_venue at
+        # entity_delete.py:668 DELETEs the future gigs wholesale.
+        # The slot-side JOIN condition already scopes correctly.
         booked = db.execute(text("""
             SELECT DISTINCT g.id, g.date, g.title, gs.artist_id,
                    a.name as artist_name, a.user_id as artist_user_id,
@@ -341,7 +356,6 @@ def _notify_cancelled_gigs_for_venue(db, venue_id: int) -> None:
             LEFT JOIN artists a ON a.id = gs.artist_id
             LEFT JOIN users u_artist ON a.user_id = u_artist.id
             WHERE g.venue_id = :vid
-              AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
               AND g.date >= DATE('now', 'localtime')
         """), {"vid": venue_id}).mappings().all()
 

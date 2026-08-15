@@ -80,6 +80,26 @@
       clearTimeout(timer);
     }
   }
+  // 2026-08-15: intercept the backend's email-verification lock
+  // (main.py EmailVerificationMiddleware returns 403 + detail:
+  // "EMAIL_NOT_VERIFIED" on state-changing calls from unverified sessions).
+  // When that fires from a page like user-profile that IS reachable while
+  // unverified, we bounce the user to the verify wall instead of surfacing
+  // a raw "EMAIL_NOT_VERIFIED" alert. Clones the response so the body is
+  // still readable by _readErrorMessage on the false-negative path.
+  async function _bounceIfUnverified(res) {
+    if (res.status !== 403) return false;
+    try {
+      const body = await res.clone().json();
+      if (body && body.detail === 'EMAIL_NOT_VERIFIED') {
+        const ret = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
+        window.location.href = '/app/verify-email.html?redirect=' + ret;
+        return true;
+      }
+    } catch (_) { /* not JSON, or clone failed — fall through */ }
+    return false;
+  }
+
   async function _parseBodyOr204(res) {
     if (res.status === 204) return null;
     const _len = res.headers.get('content-length');
@@ -95,6 +115,7 @@
   async function apiGetSafe(url) {
     const res = await _fetchWithTimeout(url, { credentials: 'include', cache: 'no-store' }, false);
     if (!res.ok) {
+      if (await _bounceIfUnverified(res)) throw new Error('EMAIL_NOT_VERIFIED');
       const msg = await _readErrorMessage(res);
       throw new Error(msg);
     }
@@ -109,6 +130,7 @@
       body: JSON.stringify(body || {})
     }, true);
     if (!res.ok) {
+      if (await _bounceIfUnverified(res)) throw new Error('EMAIL_NOT_VERIFIED');
       const msg = await _readErrorMessage(res);
       throw new Error(msg);
     }
@@ -123,6 +145,7 @@
       body: JSON.stringify(body || {})
     }, true);
     if (!res.ok) {
+      if (await _bounceIfUnverified(res)) throw new Error('EMAIL_NOT_VERIFIED');
       const msg = await _readErrorMessage(res);
       throw new Error(msg);
     }
@@ -143,6 +166,7 @@
     }
     const res = await _fetchWithTimeout(url, opts, true);
     if (!res.ok) {
+      if (await _bounceIfUnverified(res)) throw new Error('EMAIL_NOT_VERIFIED');
       const msg = await _readErrorMessage(res);
       throw new Error(msg);
     }

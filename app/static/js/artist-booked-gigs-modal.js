@@ -24,6 +24,8 @@
                          // Date column is a custom split-sort: future ascending
                          // (soonest first), then past descending (most recent
                          // first, oldest very last).
+    showPast: false,     // Past gigs collapse behind an expandable divider by
+                         // default. Toggle via _artistBookedGigsTogglePast().
   };
 
   // YYYY-MM-DD string for today, for splitting past vs future.
@@ -199,19 +201,25 @@
     const thStyleRight = thStyle + 'text-align:right;';
     const th = (col, label, right) => `<th onclick="window._artistBookedGigsSort('${col}')" style="${right ? thStyleRight : thStyle}">${label}${arrow(col)}</th>`;
 
-    // Track the first past row when the date sort is active so we can
-    // drop a thin section header between the two groups — makes the
-    // future/past split obvious without crowding the table.
-    let sawPast = false;
+    // Past-gigs section collapses by default behind a clickable
+    // divider. Emit the divider immediately before the first past row
+    // so it stays visible whether or not the section is expanded.
     const showSplitHeader = STATE.sortCol === 'date';
+    const pastCount = STATE.rows.filter(isPast).length;
+    const chev = STATE.showPast ? '▲' : '▼';
+    const dividerLabel = STATE.showPast ? 'Hide past gigs' : 'Show past gigs';
+    const pastDividerHtml = (showSplitHeader && pastCount > 0)
+      ? `<tr><td colspan="7" onclick="window._artistBookedGigsTogglePast()" style="padding:10px 10px 6px;font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;background:rgba(255,255,255,0.03);border-top:1px solid rgba(255,255,255,0.06);cursor:pointer;user-select:none;" onmouseover="this.style.color='#e2e8f0'" onmouseout="this.style.color='#94a3b8'">${chev} ${dividerLabel} (${pastCount})</td></tr>`
+      : '';
+    let sawPast = false;
     const rowsHtml = STATE.rows.map(r => {
       const past = isPast(r);
       let splitHeader = '';
-      if (showSplitHeader && past && !sawPast) {
+      if (past && !sawPast) {
         sawPast = true;
-        splitHeader = `
-          <tr><td colspan="7" style="padding:10px 10px 6px;font-size:0.7rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;background:rgba(255,255,255,0.02);border-top:1px solid rgba(255,255,255,0.06);">Past gigs</td></tr>`;
+        splitHeader = pastDividerHtml;
       }
+      if (past && !STATE.showPast) return splitHeader; // divider only, past row hidden
       const venueLink = r.venue_id
         ? `<a href="/app/venue-profile.html?venue_id=${r.venue_id}" target="_blank" rel="noopener" style="color:${past ? '#94a3b8' : '#7c6bff'};text-decoration:none;font-weight:600;">${esc(r.venue_name)}</a>`
         : esc(r.venue_name);
@@ -264,8 +272,13 @@
         </table>
       </div>
       <div style="margin-top:12px;font-size:0.75rem;color:#64748b;text-align:right;">
-        ${STATE.rows.length} booked ${STATE.rows.length === 1 ? 'slot' : 'slots'}
+        ${STATE.rows.length} booked ${STATE.rows.length === 1 ? 'slot' : 'slots'} total${pastCount > 0 && !STATE.showPast ? ` · ${pastCount} past hidden` : ''}
       </div>`;
+  }
+
+  function togglePast() {
+    STATE.showPast = !STATE.showPast;
+    render();
   }
 
   // ---------- Export: CSV (Excel-friendly) ----------
@@ -445,6 +458,7 @@
     STATE.artistId = artistId;
     STATE.sortCol = 'date';
     STATE.sortDir = 1;
+    STATE.showPast = false;  // collapsed by default on each open
     let overlay = document.getElementById('artistBookedGigsOverlay');
     if (overlay) overlay.remove();
     overlay = document.createElement('div');
@@ -479,4 +493,5 @@
   window._artistBookedGigsCancel = cancelRow;
   window._artistBookedGigsExportCsv = exportCsv;
   window._artistBookedGigsExportPdf = exportPdf;
+  window._artistBookedGigsTogglePast = togglePast;
 })();

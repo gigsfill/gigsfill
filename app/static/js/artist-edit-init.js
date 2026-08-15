@@ -42,18 +42,9 @@ document.addEventListener('DOMContentLoaded', function(){
 
 
 // === Availability Panel ===
-(function() {
-  const params = new URLSearchParams(window.location.search);
-  const artistId = params.get('artist_id');
-  if (!artistId) return;
-
-  const section = document.getElementById('availabilitySection');
-  if (section) section.style.display = '';
-
-  if (typeof renderAvailabilityPanel === 'function') {
-    renderAvailabilityPanel('availabilityContainer', parseInt(artistId));
-  }
-})();
+// 2026-08-01: moved to artist-book-gigs (new "Availability" tab). The
+// #availabilitySection element no longer exists on artist-edit.html, so
+// the render + reveal now live in artist-book-gigs-init.js instead.
 
 
 // ── MESSAGES HEADER BUTTON (2026-07-26) ─────────────────────────────────────

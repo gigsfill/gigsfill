@@ -174,7 +174,7 @@
     <div class="big-check">✅</div>
     <div class="success-title">Review Submitted!</div>
     <div class="success-sub">Thank you — your review helps make GigsFill better for everyone.</div>
-    <a href="/app/login.html" class="login-btn">Log in to GigsFill →</a>
+    <a href="/app/index.html" class="login-btn">Log in to GigsFill →</a>
   </div>
 </div>
 
@@ -281,7 +281,7 @@
       // Success — show success state, then redirect to login after 3s
       formEl.style.display = 'none';
       successEl.style.display = '';
-      setTimeout(() => { window.location.href = '/app/login.html'; }, 4000);
+      setTimeout(() => { window.location.href = '/app/index.html'; }, 4000);
 
     } catch(e) {
       msg.textContent = 'Submission failed. Please try again.';

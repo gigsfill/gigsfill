@@ -55,6 +55,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   let currentDate = new Date();
   let gigs = [];
   let allGigs = [];
+  // Expose the currently-filtered `gigs` array so the "Show All Gigs"
+  // launcher in public-gigs.html can read it without duplicating the
+  // filter logic. Kept as a getter so callers always see the latest.
+  window._pgFilteredGigs = () => gigs;
   let allCities = [];
   let allVenues = []; // For venue autocomplete
   let allArtists = []; // For artist autocomplete
@@ -312,7 +316,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       content += `
         <div
-          onclick="openGigFromDayModal(${g.id})"
+          onclick="openGigFromDayModal('${g.id}')"
           class="gig ${gigClass} gig-row"
           style="
             display: block;
@@ -356,7 +360,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   window.openGigFromDayModal = function(gigId) {
-    const gig = gigs.find(g => g.id === gigId);
+    // String comparison so external gigs (id="ext_4") match alongside
+    // real numeric ids without coercion accidents.
+    const gig = gigs.find(g => String(g.id) === String(gigId));
     if (gig) {
       const overlay = document.getElementById("modalOverlay");
       const modal = overlay.querySelector(".modal");
@@ -372,26 +378,45 @@ document.addEventListener("DOMContentLoaded", async () => {
   /* ---------------- GIG MODAL ---------------- */
 
   async function openGigModal(gig) {
-    // Track gig click
-    trackEvent('gig_click', {
-      gig_id: gig.id,
-      venue_id: gig.venue_id,
-      artist_id: gig.artist_id || null,
-      city: gig.venue_city || gig.city || null,
-      state: gig.venue_state || gig.state || null,
-      event_data: {
-        gig_status: gig.status,
-        artist_type: gig.artist_type,
-        venue_name: gig.venue_name,
-        gig_date: gig.date
-      }
-    });
-    
+    // External (non-GigsFill) gig: route to a dedicated renderer.
+    // These rows have no venue_id / no real gig_id, so the standard
+    // modal's venue link + slots fetch + flyer-by-gig-id fetch would
+    // all mis-fire.
+    if (gig._is_external) {
+      openExternalGigModal(gig);
+      return;
+    }
+
+    // Track gig click. Prefer the shared gf-analytics.js helper when
+    // it's loaded on the page (Aug 2026) — same POST payload but the
+    // helper tags each row with `source` so backend can attribute
+    // clicks to the specific public surface (city vs artist vs venue
+    // profile). Falls back to the page-local `trackEvent` so the call
+    // still works if the shared file failed to load.
+    if (typeof window.gfTrackGigClick === 'function') {
+      window.gfTrackGigClick(gig, { source: 'city_public' });
+    } else {
+      trackEvent('gig_click', {
+        gig_id: gig.id,
+        venue_id: gig.venue_id,
+        artist_id: gig.artist_id || null,
+        city: gig.venue_city || gig.city || null,
+        state: gig.venue_state || gig.state || null,
+        event_data: {
+          gig_status: gig.status,
+          artist_type: gig.artist_type,
+          venue_name: gig.venue_name,
+          gig_date: gig.date,
+          source: 'city_public',
+        }
+      });
+    }
+
     const overlay = document.getElementById("modalOverlay");
     const modal = overlay.querySelector(".modal");
     const title = document.getElementById("modalTitle");
     const body = document.getElementById("modalBody");
-    
+
     modal.classList.remove("day-modal");
     title.textContent = "Gig Details";
     
@@ -422,7 +447,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         ${_titleStr ? `<div><span style="${labelStyle}">Event:</span> ${esc(_titleStr)}</div>` : ''}
         <div><span style="${labelStyle}">Date:</span> ${esc(gig.date)}</div>
         ${!isMultiSlot ? `<div><span style="${labelStyle}">Time:</span> ${formatTime12Hour(gig.start_time)} – ${formatTime12Hour(gig.end_time)}</div>` : ''}
-        <div><span style="${labelStyle}">Venue:</span> <a href="/app/venue-profile.html?venue_id=${gig.venue_id}" target="_blank" rel="noopener" style="color: var(--cyan); text-decoration: none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${esc(gig.venue_name)}</a></div>
+        <div><span style="${labelStyle}">Venue:</span> <a href="/app/venue-profile.html?venue_id=${gig.venue_id}" target="_blank" rel="noopener" style="color: var(--cyan); text-decoration: none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${esc(gig.venue_name)}</a><span class="vgd-link-slot" data-vgd-vid="${parseInt(gig.venue_id,10)||0}" data-vgd-name="${esc(gig.venue_name||'').replace(/"/g,'&quot;')}"></span></div>
         <div><span style="${labelStyle}">Location:</span> <span style="display:inline-block; line-height:1.5;">${locationHtml || 'N/A'}</span></div>
       </div>
     `;
@@ -509,6 +534,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     body.innerHTML = content;
+    if (window.venueGigDetails && window.venueGigDetails.mountLinks) {
+      window.venueGigDetails.mountLinks(body);
+    }
 
     // Only show flyer button for booked gigs (open gigs don't have flyers yet)
     const gigIsBooked = gig.status === 'booked' || gig.booked_slots_count > 0;
@@ -532,6 +560,109 @@ document.addEventListener("DOMContentLoaded", async () => {
     overlay.classList.remove("hidden");
   }
 
+  // ---------- EXTERNAL (non-GigsFill) GIG MODAL ----------
+  // Rendered in the same #modalOverlay shell as openGigModal but with
+  // fields shaped for artist_external_gigs rows: no venue link, no
+  // slot fetch, flyer served from the artist-scoped public URL the
+  // backend already returned on the row.
+  function _escHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function openExternalGigModal(gig) {
+    const overlay = document.getElementById("modalOverlay");
+    const modal   = overlay.querySelector(".modal");
+    const title   = document.getElementById("modalTitle");
+    const body    = document.getElementById("modalBody");
+    modal.classList.remove("day-modal");
+    title.textContent = "Gig Details";
+    setTimeout(() => {
+      if (!title.nextElementSibling || !title.nextElementSibling.classList.contains('modal-separator')) {
+        const sep = document.createElement('div');
+        sep.className = 'modal-separator';
+        title.after(sep);
+      }
+    }, 10);
+
+    const cityState = [gig.city, gig.state].filter(Boolean).join(', ');
+    const addr1 = gig.address_line_1 || '';
+    let locationHtml = '';
+    if (addr1) locationHtml += _escHtml(addr1) + '<br>';
+    if (cityState) locationHtml += _escHtml(cityState);
+
+    const labelStyle = 'font-weight:600;color:var(--text-muted);min-width:100px;display:inline-block;vertical-align:top;';
+    const timeStr = (gig.start_time ? formatTime12Hour(gig.start_time) : '')
+      + (gig.end_time ? ' – ' + formatTime12Hour(gig.end_time) : '');
+
+    let content = `
+      <div style="font-size:0.95rem;line-height:2;">
+        <div><span style="${labelStyle}">Date:</span> ${_escHtml(gig.date)}</div>
+        ${timeStr ? `<div><span style="${labelStyle}">Time:</span> ${_escHtml(timeStr)}</div>` : ''}
+        <div><span style="${labelStyle}">Venue:</span> ${_escHtml(gig.venue_name || '')}</div>
+        <div><span style="${labelStyle}">Location:</span> <span style="display:inline-block;line-height:1.5;">${locationHtml || 'N/A'}</span></div>
+      </div>
+    `;
+
+    // Booked-by panel — links to the artist's public profile.
+    if (gig.artist_id && gig.artist_name) {
+      content += `
+        <div style="margin-top:16px;padding:16px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;">
+          <div style="font-size:0.875rem;color:#ffffff;margin-bottom:4px;font-weight:600;">Booked by:</div>
+          <a href="/app/artist-profile.html?artist_id=${gig.artist_id}" target="_blank" rel="noopener"
+             style="color:#ffffff;font-weight:700;font-size:1.1rem;text-decoration:none;">
+            ${_escHtml(gig.artist_name)}
+          </a>
+        </div>
+      `;
+    }
+
+    if (gig.artist_type) {
+      content += `
+        <div style="font-size:0.95rem;line-height:2;margin-top:16px;">
+          <div><span style="${labelStyle}">Artist Type:</span> ${_escHtml(gig.artist_type)}</div>
+      `;
+      if (gig.artist_type === 'Live Band' && gig.band_formats) {
+        content += `<div><span style="${labelStyle}">Band Formats:</span> ${_escHtml(gig.band_formats.split(',').map(f => f.trim()).join(', '))}</div>`;
+      }
+      content += `</div>`;
+    }
+
+    if (gig.notes) {
+      content += `<div style="margin-top:12px;font-size:0.9rem;color:var(--text-muted);line-height:1.55;">${_escHtml(gig.notes)}</div>`;
+    }
+
+    body.innerHTML = content;
+
+    // Flyer button — the row already carries flyer_public_url when the
+    // artist enabled public visibility. No id-based fetch needed.
+    if (gig.flyer_public_url) {
+      const bust = gig.flyer_uploaded_at ? `?t=${encodeURIComponent(gig.flyer_uploaded_at)}` : '';
+      const src = gig.flyer_public_url + bust;
+      const fd = document.createElement('div');
+      fd.style.cssText = 'margin-top:16px;text-align:center;';
+      fd.innerHTML = `<button type="button" onclick="window._pgShowExtFlyer('${_escHtml(src)}')" style="padding:8px 20px;border:1px solid rgba(139,92,246,0.4);border-radius:8px;background:rgba(139,92,246,0.15);color:#c4b5fd;cursor:pointer;font-size:0.85rem;font-weight:600;">🎨 View Event Flyer</button>`;
+      body.appendChild(fd);
+    }
+
+    overlay.classList.remove("hidden");
+  }
+
+  // Full-screen dark lightbox for the external gig flyer image.
+  window._pgShowExtFlyer = function (src) {
+    let ov = document.getElementById('_pgExtFlyerLightbox');
+    if (!ov) {
+      ov = document.createElement('div');
+      ov.id = '_pgExtFlyerLightbox';
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:100010;display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;';
+      ov.innerHTML = `<img id="_pgExtFlyerImg" style="max-width:100%;max-height:calc(100vh - 48px);border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,0.5);object-fit:contain;">`;
+      ov.addEventListener('click', () => { ov.style.display = 'none'; });
+      document.body.appendChild(ov);
+    }
+    document.getElementById('_pgExtFlyerImg').src = src;
+    ov.style.display = 'flex';
+  };
+
   /* ---------------- LOAD DATA ---------------- */
 
   async function loadGigs() {
@@ -548,13 +679,63 @@ document.addEventListener("DOMContentLoaded", async () => {
             g._slots = g.slots;
           }
         });
-        gigs = [...allGigs];
-        updateVenueList();
-        updateArtistList();
       }
     } catch (error) {
       console.error('Error loading gigs:', error);
     }
+    // 2026-08-05: fetch artist external (non-GigsFill) gigs too. Shape
+    // them so the existing filter + render pipeline treats them the same
+    // as booked GigsFill gigs — `_is_external: true` lets renderers
+    // branch on the fields they need to (no venue_id link, no flyer
+    // fetch by g.id, etc.). Lat/lon comes from the endpoint via
+    // us_cities.find_city(city, state) so the radius filter works.
+    try {
+      const extResp = await fetch('/api/public/external-gigs');
+      if (extResp.ok) {
+        const ext = await extResp.json();
+        (ext || []).forEach(e => {
+          allGigs.push({
+            _is_external: true,
+            // Sentinel gig-id so key-lookups don't collide with real ids.
+            // Prefixed so any accidental /api/gigs/{id}/... call throws
+            // instead of hitting a random real gig.
+            id: `ext_${e.id}`,
+            ext_id:    e.id,
+            artist_id: e.artist_id,
+            artist_name: e.artist_name || '',
+            artist_type: e.artist_type || '',
+            date:       e.date,
+            start_time: e.start_time,
+            end_time:   e.end_time,
+            status:     'booked',       // externals are always booked
+            venue_id:   null,           // not on GigsFill — no profile link
+            venue_name: e.venue_name || '',
+            address_line_1: e.venue_address || '',
+            address_line_2: '',
+            city:  e.venue_city  || '',
+            state: e.venue_state || '',
+            venue_lat: e.venue_lat, venue_lon: e.venue_lon,
+            title: '',
+            notes: e.notes || '',
+            band_formats: (e.lineup || []).join(','),
+            styles:       (e.styles || []).join(','),
+            artist_band_formats: e.artist_band_formats || '',
+            artist_styles:       e.artist_styles       || '',
+            flyer_url:           e.flyer_url           || null,
+            flyer_public_url:    e.flyer_public_url    || null,
+            flyer_uploaded_at:   e.flyer_uploaded_at   || null,
+            is_multi_slot: 0,
+            total_slots_count: 1,
+            booked_slots_count: 1,
+          });
+        });
+      }
+    } catch (e) {
+      console.warn('external-gigs fetch failed:', e);
+    }
+    gigs = [...allGigs];
+    updateVenueList();
+    updateArtistList();
   }
 
   async function loadCities() {

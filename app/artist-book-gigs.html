@@ -1199,13 +1199,13 @@
 
 /* Legal/Taxes Sub-tabs — matches main .tab styling */
 .artist-legal-subtab {
-  padding: 12px 20px;
+  padding: 8px 14px;
   background: transparent;
   border: none;
   color: var(--text-gray, #94a3b8);
   cursor: pointer;
-  font: 600 0.875rem 'Inter', sans-serif;
-  border-bottom: 3px solid transparent;
+  font: 600 0.78rem 'Inter', sans-serif;
+  border-bottom: 2px solid transparent;
   transition: all 0.2s;
   white-space: nowrap;
   position: relative;
@@ -1217,9 +1217,9 @@
   background: rgba(255, 255, 255, 0.02);
 }
 .artist-legal-subtab.active {
-  color: var(--cyan, #00d9ff);
-  border-bottom-color: var(--cyan, #00d9ff);
-  background: rgba(6,182,212,0.1);
+  color: #10b981;
+  border-bottom-color: #10b981;
+  background: rgba(16,185,129,0.1);
 }
 .artist-legal-subtab-content { display: none; }
 .artist-legal-subtab-content.active { display: block; }
@@ -1302,19 +1302,19 @@
      first paint. Previously the links were below the scripts inside <head>,
      causing a brief FOUC on slow connections — especially noticeable on
      gf-modals dialogs that build their DOM before modals.css arrived. -->
-<link href="/app/static/css/gigsfill.css" rel="stylesheet"/>
+<link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet"/>
 <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet"/>
 <link href="/app/static/css/mobile.css" rel="stylesheet"/>
 <link href="/app/static/css/modals.css?v=4" rel="stylesheet"/>
 <link href="/app/static/css/modals-legacy.css?v=1" rel="stylesheet"/>
 
 <script src="/app/static/js/auth.guard.js?v=3"></script>
-<script src="/app/static/js/api-globals.js?v=11"></script>
+<script src="/app/static/js/api-globals.js?v=12"></script>
 <script src="/app/static/js/time-format.js"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/activity-center.js?v=102"></script>
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/artist-stripe-payment.js?v=15" defer></script>
+<script src="/app/static/js/artist-stripe-payment.js?v=18" defer></script>
 <script src="/app/static/js/hold-offers-banner.js?v=19" defer></script>
 <script src="/app/static/js/series-hold-modal.js?v=9" defer></script>
 <script src="/app/static/js/flyer-overlay.js"></script>
@@ -1327,7 +1327,7 @@
     }
   })();
 </script>
-    <script src="/app/static/js/artist.book-gigs.js?v=176" type="module"></script>
+    <script src="/app/static/js/artist.book-gigs.js?v=181" type="module"></script>
     <style>
       /* My Venues rows: on portrait phones, collapse the 3-col grid
          (name | pay-chip | actions) to a stack so the pay chip and
@@ -1386,6 +1386,7 @@
   <button class="tab" onclick="switchTab('payments', this)">Payments</button>
   <button class="tab" onclick="switchTab('taxes', this)">Legal/Taxes</button>
   <button class="tab" onclick="switchTab('users', this)">Users <span id="usersBadge">(0)</span></button>
+  <button class="tab" onclick="switchTab('availability', this)">Availability</button>
   <button class="tab" onclick="switchTab('analytics', this)">Analytics</button>
 </div>
 
@@ -1851,6 +1852,50 @@
 </section>
 </div>
 
+<!-- TAB: AVAILABILITY (2026-08-01)
+     Moved from artist-edit.html so the artist team can manage blackout
+     dates and see member conflicts from one place, alongside gig booking.
+     Same #availabilitySection + #memberAvailabilityContainer targets
+     the JS modules already look for. -->
+<div class="tab-content" id="availability-tab">
+<section class="panel">
+
+  <!-- Artist-wide availability (hard block) -->
+  <div class="content-card" id="availabilitySection" style="display:none;">
+    <h2 class="section-header gradient-title" style="margin: 0 0 8px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Artist Availability</h2>
+    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 6px;">
+      Dates this <strong style="color:var(--text);">whole artist</strong> is unavailable — e.g. band on hiatus,
+      touring elsewhere, drummer's wedding, holiday break.
+    </p>
+    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 14px;">
+      🚫 <strong style="color:#ef4444;">Hard block</strong> — no warning, no override; the dates
+      are simply not offered as bookable. For a single member being unavailable
+      (rest of the band still plays), use
+      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Availability</a>
+      on that member's profile instead.
+    </p>
+    <div id="availabilityContainer"></div>
+  </div>
+
+  <!-- Member availability (read-only summary) -->
+  <div class="content-card" id="memberAvailabilitySection" style="display:none;margin-top:16px;">
+    <h2 class="section-header gradient-title" style="margin: 0 0 8px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Member Availability</h2>
+    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 14px;">
+      Read-only view of the personal blackout dates each band member has
+      added on their own profile. These are <strong style="color:#f59e0b;">soft warnings</strong> —
+      bookings on these dates still go through, but the artist gets an
+      alert like "Jim is unavailable that night — play as a duo?" so the
+      band can decide. Members edit their own dates from
+      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Profile → My Availability</a>.
+    </p>
+    <div id="memberAvailabilityContainer">
+      <p style="color:var(--text-gray);">Loading…</p>
+    </div>
+  </div>
+
+</section>
+</div>
+
 <!-- TAB 5: ANALYTICS -->
 <div class="tab-content" id="analytics-tab">
 <section class="panel">
@@ -1913,7 +1958,7 @@
 <div class="tab-content" id="taxes-tab">
 
 <!-- Sub-tab navigation -->
-<div style="display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); overflow-x:auto;">
+<div class="artist-legal-subtabs" style="display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); overflow-x:auto;">
   <button class="artist-legal-subtab active" onclick="switchArtistLegalSubtab('artistContracts', this)">My Contracts</button>
   <button class="artist-legal-subtab" onclick="switchArtistLegalSubtab('artistTaxInfo', this)">Tax Information</button>
 </div>
@@ -2192,6 +2237,415 @@
 </div>
 </div>
 
+<!-- External Gig VIEW Modal (2026-08-02) — read-only details view opened
+     when the artist clicks a bubble on the calendar. Mirrors the visual
+     structure of the regular gig-modal (Date / Time / Venue / Location /
+     Artist Type / Lineup / Styles / Notes) so external gigs feel like
+     part of the same product. Body is populated at open time by
+     openViewExternalGigModal() in artist-external-gigs.js. -->
+<div class="modal-overlay hidden" id="extGigViewModal">
+<div class="modal modal-clean" role="dialog" aria-modal="true" aria-labelledby="extGigViewTitle" style="max-width:640px;">
+  <div class="modal-header-row" style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+    <h2 id="extGigViewTitle" style="margin:0; font-size:1.15rem; letter-spacing:0.02em;">Gig Details</h2>
+    <button onclick="closeExtGigViewModal()" style="background:none;border:none;color:var(--text-gray);font-size:1.4rem;cursor:pointer;padding:0 6px;line-height:1;" title="Close" aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-separator"></div>
+
+  <div id="extGigViewBody"></div>
+
+  <!-- Footer buttons — same visual pattern as regular gig-modal (four
+       stretched buttons). Flyer button (leftmost) is dual-purpose:
+       "🎨 View Event Flyer" when a flyer exists → lightbox;
+       "📎 Add Event Flyer" when it doesn't → jumps to the edit modal
+       so the artist can attach one. Label + handler are swapped in
+       openViewExternalGigModal() based on the row's flyer_url. -->
+  <div class="modal-actions" id="extGigViewActions">
+    <button class="btn ghost" id="extGigViewFlyerBtn" style="color:#c4b5fd !important; border-color:rgba(139,92,246,0.4) !important; display:flex; align-items:center; justify-content:center;">View Event Flyer</button>
+    <button class="btn ghost" id="extGigViewDeleteBtn" onclick="deleteExternalGigFromView()" style="color:#fca5a5 !important; border-color:rgba(239,68,68,0.35) !important;">Delete Gig</button>
+    <button class="btn primary" id="extGigViewEditBtn" onclick="editExternalGigFromView()">Edit</button>
+    <button class="btn ghost" onclick="closeExtGigViewModal()">Close</button>
+  </div>
+</div>
+</div>
+
+<!-- Scope the shared button styling to the view modal too. -->
+<style>
+  #extGigViewModal .modal-actions {
+    display: flex; justify-content: flex-end; gap: 10px;
+    margin-top: 20px; padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.06); flex-wrap: wrap;
+  }
+  #extGigViewModal .modal-actions .btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    padding: 10px 16px; border-radius: 6px; cursor: pointer;
+    font-weight: 500; font-size: 0.95rem; transition: all 0.2s;
+    flex: 1; min-width: 0; justify-content: center; text-align: center; white-space: nowrap;
+  }
+  #extGigViewModal .modal-actions .btn.primary {
+    background: #3b82f6; border-color: #3b82f6; color: #fff;
+  }
+  #extGigViewModal .modal-actions .btn.primary:hover {
+    background: #2563eb; border-color: #2563eb;
+  }
+  #extGigViewModal .modal-actions .btn.ghost:hover {
+    background: rgba(255,255,255,0.05); border-color: var(--cyan); color: var(--cyan);
+  }
+  #extGigViewModal #extGigViewDeleteBtn:hover {
+    background: rgba(239,68,68,0.10);
+    border-color: rgba(239,68,68,0.6) !important; color: #fecaca !important;
+  }
+  /* Slot card — mirrors the venue Create Gig slot-card visual. */
+  #extGigViewModal .ext-slot-card {
+    border: 1px solid rgba(168,85,247,0.45);
+    border-radius: 8px; padding: 14px 16px;
+    background: linear-gradient(180deg, rgba(168,85,247,0.05), rgba(168,85,247,0.01));
+    margin-top: 14px;
+  }
+  #extGigViewModal .ext-slot-card .ext-slot-header {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    margin-bottom: 10px;
+  }
+  #extGigViewModal .ext-slot-card .ext-slot-label {
+    font-weight: 700; color: #a855f7; letter-spacing: 0.05em; font-size: 0.8rem;
+  }
+  #extGigViewModal .ext-slot-card .ext-slot-time {
+    color: var(--text); font-weight: 600; font-size: 0.95rem;
+  }
+  #extGigViewModal .ext-slot-card .ext-slot-tags {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;
+  }
+  #extGigViewModal .ext-slot-card .ext-slot-tag {
+    padding: 3px 10px;
+    background: rgba(34,197,94,0.18);
+    border: 1px solid rgba(34,197,94,0.45);
+    color: #86efac;
+    border-radius: 999px;
+    font-size: 0.72rem; font-weight: 500;
+  }
+</style>
+
+<!-- External Gig Modal (2026-08-01) — artist logs a non-GigsFill gig.
+     Chrome mirrors the venue Create Gig modal (.modal-clean / .modal-row /
+     purple-cyan gradient separator) so the visual language is consistent
+     across all gig-creation surfaces. Artist name is read-only — this
+     modal is always scoped to ?artist_id=X. -->
+<style>
+  /* External-gig modal — visual parity with the venue Create Gig modal.
+     Rules are all scoped to #extGigModal so nothing bleeds into other
+     modals on this page. Palette / border / button styles are lifted
+     directly from venue-create-gigs.html so both modals read as siblings. */
+
+  /* Match the venue Create Gig modal width (~700px in the screenshot). */
+  #extGigModal .modal.modal-clean { max-width: 720px; width: 100%; }
+
+  /* Selects — signup-page treatment. Keep the site's custom chevron
+     (appearance:none) so the OS' white system dropdown never renders.
+     background-color is set explicitly (not via shorthand) because the
+     chevron background-image gets its own layer; a shorthand `background:`
+     would clobber the image. */
+  #extGigModal select {
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    appearance: none !important;
+    background-color: #151b28 !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2394a3b8' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 12px center !important;
+    border: 1px solid #333 !important;
+    color: var(--text) !important;
+    color-scheme: dark;
+    border-radius: 6px;
+    padding: 8px 36px 8px 10px;
+    font-size: 0.9rem;
+    height: 38px;
+    cursor: pointer;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  #extGigModal select option {
+    background: #151b28;
+    color: #ffffff;
+  }
+
+  /* City / State on one row — state column stays a consistent narrow width
+     so the pulldown never dominates the city input. */
+  #extGigModal .ext-loc-row {
+    display: grid;
+    grid-template-columns: 1fr 130px;
+    gap: 10px;
+  }
+
+  /* Tag pills — same visual as the venue Create Gig modal's artist-type /
+     lineup / style pills. Purple filled when active. */
+  #extGigModal .ext-tag {
+    padding: 4px 10px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: var(--text-muted);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 0.78rem;
+    font-weight: 500;
+  }
+  #extGigModal .ext-tag:hover {
+    border-color: rgba(168,85,247,0.5);
+    color: #e2e8f0;
+  }
+  #extGigModal .ext-tag[data-active="true"] {
+    background: rgba(34, 197, 94, 0.20);
+    border-color: rgba(34, 197, 94, 0.55);
+    color: #86efac;
+  }
+  #extGigModal .ext-tag-row {
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+
+  /* Venue-name autocomplete dropdown inside the modal-row. */
+  #extGigModal .ext-venue-name-wrap { position: relative; flex: 1; }
+  #extGigModal #extGigVenueDropdown {
+    display: none; position: absolute; top: 100%; left: 0; right: 0;
+    z-index: 100; background: #151b28;
+    border: 1px solid rgba(124,107,255,0.35); border-top: none;
+    border-radius: 0 0 6px 6px; max-height: 220px; overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+
+  /* Time row: two <input type="time"> with a "to" separator, dark styling
+     that matches the venue modal's time inputs. */
+  #extGigModal .modal-time-row { display: flex; gap: 8px; align-items: center; }
+  #extGigModal .modal-time-row input[type="time"] {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.10);
+    color: var(--text);
+    color-scheme: dark;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.9rem;
+    width: 130px;
+    flex: 0 0 auto;
+  }
+
+  /* Footer buttons — same treatment as the venue Create Gig modal:
+     stretch flex:1, blue #3b82f6 primary, grey ghost. Divider line above. */
+  #extGigModal .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    flex-wrap: wrap;
+  }
+  #extGigModal .modal-actions > div {
+    display: flex; gap: 10px; flex: 1;
+  }
+  #extGigModal .modal-actions .btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.95rem;
+    transition: all 0.2s;
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+    text-align: center;
+    white-space: nowrap;
+  }
+  #extGigModal .modal-actions .btn.primary {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: #fff;
+  }
+  #extGigModal .modal-actions .btn.primary:hover {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+  #extGigModal .modal-actions .btn.ghost:hover {
+    background: rgba(255,255,255,0.05);
+    border-color: var(--cyan);
+    color: var(--cyan);
+  }
+  /* Delete Gig button — stretches equally with the other two footer
+     buttons (venue Create Gig modal convention), red-tinted so it reads
+     as destructive without becoming a filled danger button. */
+  #extGigModal #extGigDeleteBtn {
+    color: #fca5a5 !important;
+    border-color: rgba(239, 68, 68, 0.35) !important;
+  }
+  #extGigModal #extGigDeleteBtn:hover {
+    background: rgba(239, 68, 68, 0.10);
+    border-color: rgba(239, 68, 68, 0.6) !important;
+    color: #fecaca !important;
+  }
+
+  /* Field-level defaults so text/textarea inputs match select chrome. */
+  #extGigModal input[type="text"],
+  #extGigModal textarea {
+    background: #151b28;
+    border: 1px solid #333;
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.9rem;
+  }
+</style>
+<div class="modal-overlay hidden" id="extGigModal">
+<div class="modal modal-clean" role="dialog" aria-modal="true" aria-labelledby="extGigModalTitle">
+
+  <div class="modal-header-row" style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+    <h2 id="extGigModalTitle" style="margin:0; font-size:1.15rem; letter-spacing:0.02em;">ADD GIG NOT BOOKED WITH GIGSFILL</h2>
+    <button onclick="closeExtGigModal()" style="background:none;border:none;color:var(--text-gray);font-size:1.4rem;cursor:pointer;padding:0 6px;line-height:1;" title="Close" aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-separator"></div>
+
+  <p style="color:var(--text-gray);font-size:0.82rem;margin:0 0 16px;line-height:1.5;">
+    Add a gig you booked outside of GigsFill to your calendar. It will appear
+    on your public calendar so your fans know about all of your upcoming gigs.
+  </p>
+
+  <section class="modal-section">
+
+    <div class="modal-row">
+      <label>Artist</label>
+      <div class="modal-control">
+        <span id="extGigArtistName" style="color: var(--text); font-size: 0.9rem; font-weight: 500;">—</span>
+      </div>
+    </div>
+
+    <!-- Venue name — autocompletes from /api/venues/public. Selecting a
+         GigsFill venue auto-fills address/city/state. -->
+    <div class="modal-row">
+      <label>Venue Name</label>
+      <div class="modal-control">
+        <div class="ext-venue-name-wrap">
+          <input id="extGigVenueName" type="text" autocomplete="off" placeholder="Name of the venue" maxlength="200" style="width:100%;">
+          <div id="extGigVenueDropdown"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>Address</label>
+      <div class="modal-control">
+        <input id="extGigVenueAddress" type="text" placeholder="Street address" maxlength="300" style="width:100%;">
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>City / State</label>
+      <div class="modal-control" style="width:100%;">
+        <div class="ext-loc-row" style="width:100%;">
+          <input id="extGigVenueCity" type="text" autocomplete="off" placeholder="e.g. Nashville" maxlength="120">
+          <select id="extGigVenueState"><option value="">State</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>Date</label>
+      <div class="modal-control">
+        <input id="extGigDate" type="text" readonly class="gf-date-input" placeholder="mm/dd/yyyy" style="width: 180px;">
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>Time</label>
+      <div class="modal-control modal-time-row" style="width:100%;">
+        <input id="extGigStart" type="time" value="19:00" aria-label="Start time">
+        <span style="color:var(--text-muted); font-size:0.8rem;">to</span>
+        <input id="extGigEnd" type="time" value="22:00" aria-label="End time">
+      </div>
+    </div>
+
+    <!-- Artist Type / Lineup / Styles — tags stored with the external gig
+         so the artist's public calendar can show what kind of gig it was.
+         Lineup + Styles only surface when Live Band is selected (mirrors
+         the venue Create Gig filter behavior). -->
+    <div class="modal-row">
+      <label>Artist Type</label>
+      <div class="modal-control ext-tag-row" id="extGigArtistTypeRow">
+        <button type="button" class="ext-tag" data-active="false" data-type="Live Band">Live Band</button>
+        <button type="button" class="ext-tag" data-active="false" data-type="DJ">DJ</button>
+        <button type="button" class="ext-tag" data-active="false" data-type="Comedian">Comedian</button>
+        <button type="button" class="ext-tag" data-active="false" data-type="Trivia Host">Trivia Host</button>
+        <button type="button" class="ext-tag" data-active="false" data-type="Open Mic MC">Open Mic MC</button>
+        <button type="button" class="ext-tag" data-active="false" data-type="Karaoke MC">Karaoke MC</button>
+      </div>
+    </div>
+
+    <div class="modal-row" id="extGigLineupRow" style="display:none;">
+      <label>Lineup</label>
+      <div class="modal-control ext-tag-row" id="extGigLineupTags">
+        <button type="button" class="ext-tag" data-active="false" data-lineup="Solo">Solo</button>
+        <button type="button" class="ext-tag" data-active="false" data-lineup="Duo">Duo</button>
+        <button type="button" class="ext-tag" data-active="false" data-lineup="Trio">Trio</button>
+        <button type="button" class="ext-tag" data-active="false" data-lineup="Full Band">Full Band</button>
+      </div>
+    </div>
+
+    <div class="modal-row" id="extGigStylesRow" style="display:none;">
+      <label>Styles</label>
+      <div class="modal-control ext-tag-row" id="extGigStylesTags">
+        <!-- Populated in _initChrome() to keep the list in one place. -->
+      </div>
+    </div>
+
+    <div class="modal-row" style="align-items:start;">
+      <label style="padding-top:8px;">Notes</label>
+      <div class="modal-control" style="flex:1;">
+        <textarea id="extGigNotes" rows="3" maxlength="2000"
+          placeholder="Enter any pertinent details about this gig for the audience. This information will be visible to the public."
+          style="width:100%;"></textarea>
+      </div>
+    </div>
+
+    <!-- Flyer upload — drag/drop or browse. 3 MB cap, JPG/PNG. When a
+         flyer is set, this area collapses to a thumbnail preview + Remove
+         button. "Visible to the public" checkbox gates whether visitors
+         to the artist's public profile can see the flyer; defaults on. -->
+    <div class="modal-row" style="align-items:start;">
+      <label style="padding-top:8px;">Flyer</label>
+      <div class="modal-control" style="flex:1; flex-direction:column; align-items:stretch; gap:8px;">
+        <div id="extGigFlyerDrop" style="border:2px dashed rgba(168,85,247,0.35); border-radius:8px; padding:16px; text-align:center; cursor:pointer; background:rgba(168,85,247,0.05); transition:all 0.15s;">
+          <div style="color:var(--text); font-size:0.85rem; font-weight:600; margin-bottom:4px;">📎 Drop flyer here or click to browse</div>
+          <div style="color:var(--text-muted); font-size:0.72rem;">JPG or PNG, max 3 MB</div>
+        </div>
+        <input id="extGigFlyerInput" type="file" accept="image/jpeg,image/png" style="display:none;">
+        <div id="extGigFlyerPreview" style="display:none; padding:8px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.1); border-radius:6px;">
+          <img id="extGigFlyerImg" style="max-width:100%; max-height:200px; border-radius:4px; display:block; margin:0 auto 8px;">
+          <div style="display:flex; gap:8px; justify-content:center;">
+            <button type="button" id="extGigFlyerReplaceBtn" style="padding:5px 12px; background:transparent; border:1px solid var(--border); color:var(--text); border-radius:4px; cursor:pointer; font-size:0.78rem;">Replace</button>
+            <button type="button" id="extGigFlyerRemoveBtn" style="padding:5px 12px; background:transparent; border:1px solid rgba(239,68,68,0.35); color:#fca5a5; border-radius:4px; cursor:pointer; font-size:0.78rem;">Remove flyer</button>
+          </div>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-muted); font-weight:400; margin:0; cursor:pointer;">
+          <input id="extGigFlyerPublic" type="checkbox" checked style="width:auto; margin:0;">
+          <span>Visible to the public on your artist page</span>
+        </label>
+      </div>
+    </div>
+
+  </section>
+
+  <div id="extGigStatus" style="margin-top:8px;font-size:0.82rem;min-height:18px;"></div>
+
+  <!-- Footer: Delete Gig (edit mode only) + Save Changes/Add Gig (primary
+       blue) + Close (ghost). Same three-button stretched layout as the
+       venue Create Gig modal in edit mode. Primary button label swaps
+       between "Add Gig" and "Save Changes" via _setSaveLabel() in JS. -->
+  <div class="modal-actions">
+    <button id="extGigDeleteBtn" class="btn ghost" onclick="deleteExternalGig()" style="display:none;">Delete Gig</button>
+    <button class="btn primary" id="extGigSaveBtn" onclick="saveExternalGig()">Add Gig</button>
+    <button class="btn ghost" onclick="closeExtGigModal()">Close</button>
+  </div>
+</div>
+</div>
+
 <!-- Payment Method Required Modal -->
 <div class="modal-overlay hidden" id="paymentRequiredModal">
 <div class="modal" style="max-width: 450px;">
@@ -2234,23 +2688,30 @@
 </style>
 
 <script src="/app/static/js/us-states.js"></script>
-<script src="/app/static/js/my-venues-redesign.js?v=15"></script>
+<script src="/app/static/js/city-autocomplete.js?v=3"></script>
+<script src="/app/static/js/gf-date-picker.js?v=1"></script>
+<script src="/app/static/js/my-venues-redesign.js?v=17"></script>
 <script src="/app/static/js/entity-users.js?v=7"></script>
 
 <footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
-<script src="/app/static/js/messages.js?v=7"></script>
+<script src="/app/static/js/messages.js?v=8"></script>
 <script src="/app/static/js/review-modal.js?v=3"></script>
-<script src="/app/static/js/gig-modal.js?v=28"></script>
+<script src="/app/static/js/gig-modal.js?v=30"></script>
+<script src="/app/static/js/venue-gig-details-modal.js?v=1"></script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
-<script src="/app/static/js/artist-booked-gigs-modal.js?v=2"></script>
-<script src="/app/static/js/artist-book-gigs-init.js?v=11"></script>
-<script src="/app/static/js/onboarding-checklist.js?v=2" defer></script>
+<script src="/app/static/js/artist-booked-gigs-modal.js?v=3"></script>
+<script src="/app/static/js/artist-availability.js?v=6"></script>
+<script src="/app/static/js/artist-member-availability.js?v=4"></script>
+<script src="/app/static/js/artist-external-gigs.js?v=22"></script>
+<script src="/app/static/js/artist-book-gigs-init.js?v=15"></script>
+<script src="/app/static/js/onboarding-checklist.js?v=7" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
-<script src="/app/static/js/gig-hover-card.js?v=21"></script>
+<script src="/app/static/js/gig-hover-card.js?v=23"></script>
 <script src="/app/static/js/sw-register.js"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

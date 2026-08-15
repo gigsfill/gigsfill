@@ -987,7 +987,7 @@ TEMPLATES = {
     },
 
     "welcome": {
-        "subject": 'Welcome to GigsFill',
+        "subject": 'Welcome to GigsFill — verify your email to get started',
         "body": '''<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -1004,10 +1004,18 @@ TEMPLATES = {
 <tr>
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Welcome, {{user_name}}!</h1>
-<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Thanks for joining GigsFill - the easiest way to connect artists with venues.</p>
-<p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;"><strong style="color: #111827;">Artists:</strong> Create your profile, browse gigs, and start booking.</p>
-<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;"><strong style="color: #111827;">Venues:</strong> Set up your space, post gigs, and find talented performers.</p>
-<a href="https://gigsfill.com/app/user-profile.html" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">Complete Your Profile</a>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Thanks for joining GigsFill &mdash; the easiest way to connect artists with venues.</p>
+<p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">One quick step first: verify your email address so you can start using your account.</p>
+<div style="margin-bottom: 24px;">
+<a href="{{verify_url}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Verify Email Address</a>
+</div>
+{{#is_artist}}
+<p style="margin: 0 0 8px 0; font-size: 14px; line-height: 1.6; color: #4b5563;"><strong style="color: #111827;">Once verified as an Artist:</strong> complete your profile, browse open gigs in your area, and start booking shows.</p>
+{{/is_artist}}
+{{#is_venue}}
+<p style="margin: 0 0 8px 0; font-size: 14px; line-height: 1.6; color: #4b5563;"><strong style="color: #111827;">Once verified as a Venue:</strong> finish setting up your venue, post gigs, and connect with talented performers.</p>
+{{/is_venue}}
+<p style="margin: 20px 0 0 0; font-size: 13px; color: #9ca3af;">This verify link expires in 72 hours. If you didn&#39;t create a GigsFill account, you can safely ignore this email.</p>
 </td>
 </tr>
 <tr>
@@ -2158,7 +2166,7 @@ TEMPLATES = {
 <tr>
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #f59e0b;">Gig Just Opened Up!&#160;</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, a gig at <strong>{{venue_name}}</strong> just became available after a cancellation. As a preferred artist, you have first access to book it - no frequency limitation!</p>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, a gig at <strong>{{venue_name}}</strong> just became available after a cancellation. As a preferred artist, you have first access to book it{{#waive_frequency}} — the venue has waived its frequency limit for this reminder, so you can book even inside your usual frequency window{{/waive_frequency}}.</p>
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 24px;">
 <tbody>
 <tr>
@@ -2815,6 +2823,52 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 <td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{title}}</td>
 </tr>{{/title}}
 {{slots_table_rows}}
+<tr>
+<td colspan="2" style="padding: 4px 0; border-top: 1px solid #e5e7eb;"></td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Address</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_address_link}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Capacity</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_capacity}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Arrival</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{arrival_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Stage</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{stage_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Sound</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{sound_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Engineer</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{engineer_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Lighting</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{lighting_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Bar Tab</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{bar_tab}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Food Tab</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{food_tab}}</td>
+</tr>
+{{#notes_to_artist}}<tr>
+<td colspan="2" style="padding: 4px 0; border-top: 1px solid #e5e7eb;"></td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; vertical-align: top;">Notes</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500; white-space: pre-wrap;">{{notes_to_artist}}</td>
+</tr>{{/notes_to_artist}}
 </table>
 </td></tr>
 </table>
@@ -2855,6 +2909,71 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 <tr><td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #d97706;">12 hours left on your offer</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, just a heads up — the private gig offer from <strong>{{venue_name}}</strong> for {{date}} expires in 12 hours. After that, it moves to the next artist on the venue&#39;s list.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 24px;">
+<tr><td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 80px;">Venue</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
+</tr>
+{{#title}}<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Title</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{title}}</td>
+</tr>{{/title}}
+{{slots_table_rows}}
+<tr>
+<td colspan="2" style="padding: 4px 0; border-top: 1px solid #e5e7eb;"></td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Address</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_address_link}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Capacity</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_capacity}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Arrival</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{arrival_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Stage</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{stage_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Sound</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{sound_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Engineer</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{engineer_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Lighting</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{lighting_info}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Bar Tab</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{bar_tab}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Food Tab</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{food_tab}}</td>
+</tr>
+{{#notes_to_artist}}<tr>
+<td colspan="2" style="padding: 4px 0; border-top: 1px solid #e5e7eb;"></td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; vertical-align: top;">Notes</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500; white-space: pre-wrap;">{{notes_to_artist}}</td>
+</tr>{{/notes_to_artist}}
+</table>
+</td></tr>
+</table>
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto;">
 <tr>
 <td style="padding-right: 12px;">
@@ -2944,6 +3063,24 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 </tr></thead>
 <tbody>{{rows_html}}</tbody>
 </table>
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin: 8px 0 20px 0;">
+<tr><td style="padding: 16px 18px;">
+<p style="margin: 0 0 10px 0; font-size: 12px; color: #92400e; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Venue Details</p>
+<table cellpadding="0" cellspacing="0" border="0" width="100%">
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280; width: 90px;">Address</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{venue_address_link}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Capacity</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{venue_capacity}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Arrival</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{arrival_info}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Stage</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{stage_info}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Sound</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{sound_info}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Engineer</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{engineer_info}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Lighting</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{lighting_info}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Bar Tab</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{bar_tab}}</td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280;">Food Tab</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500;">{{food_tab}}</td></tr>
+{{#notes_to_artist}}<tr><td colspan="2" style="padding: 4px 0; border-top: 1px solid #fcd34d;"></td></tr>
+<tr><td style="padding: 4px 0; font-size: 13px; color: #6b7280; vertical-align: top;">Notes</td><td style="padding: 4px 0; font-size: 13px; color: #111827; font-weight: 500; white-space: pre-wrap;">{{notes_to_artist}}</td></tr>{{/notes_to_artist}}
+</table>
+</td></tr>
+</table>
 <table cellpadding="0" cellspacing="0" border="0" style="margin: 4px 0;"><tr>
 <td style="padding-right: 12px;"><a href="{{pick_url}}" style="display:inline-block;padding:12px 28px;background:#7c6bff;color:white;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Pick Your Dates →</a></td>
 <td><a href="{{decline_url}}" style="display:inline-block;padding:12px 24px;background:transparent;color:#dc2626;border:1px solid #dc2626;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Decline All</a></td>
@@ -3025,6 +3162,120 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 
 <p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">Open it up to all artists, or cancel the slots that didn&#39;t fill — your call. Manage from your calendar:</p>
 <a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">Decide What to Do</a>
+</td></tr>
+<tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Door-deal settlement summary (Aug 12 2026)
+    # ─────────────────────────────────────────────────────────────────────
+    # Fired from routes/door_settle.py after a venue enters door receipts.
+    # Both venue + artist get a receipt of the math so there's a written
+    # trail of how the final pay was calculated (guarantee floor + door
+    # share). Small-venue door deals used to just quietly become a bank
+    # transfer — this gives both sides a document to reference.
+    "door_settlement_summary_artist": {
+        "subject": "Settlement filed — {{venue_name}} on {{date}}",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr><td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;"></td></tr>
+<tr><td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #059669;">Your Door Deal Settlement</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, <strong>{{venue_name}}</strong> just filed the door receipts for your gig on <strong>{{date}}</strong>. Here&#39;s how your pay was calculated:</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; margin-bottom: 24px;">
+<tr><td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 45%;">Door receipts</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{door_receipts_dollars}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Your door share ({{door_pct}}%)</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{door_share_dollars}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Guarantee (floor)</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{guarantee_dollars}}</td>
+</tr>
+<tr>
+<td colspan="2" style="padding: 4px 0; border-top: 1px solid #86efac;"></td>
+</tr>
+<tr>
+<td style="padding: 10px 0 6px 0; font-size: 15px; color: #111827; font-weight: 700;">Final payout</td>
+<td style="padding: 10px 0 6px 0; font-size: 15px; color: #059669; font-weight: 700;">${{final_pay_dollars}}</td>
+</tr>
+</table>
+<p style="margin: 12px 0 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">You&#39;re paid the <strong>higher</strong> of the guarantee or (guarantee + door share). {{settlement_narrative}}</p>
+</td></tr>
+</table>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">{{platform_note}}</p>
+<a href="https://gigsfill.com/app/artist-book-gigs.html?artist_id={{artist_id}}" style="display: inline-block; background: #059669; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View My Payments</a>
+</td></tr>
+<tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+    },
+
+    "door_settlement_summary_venue": {
+        "subject": "Settlement filed — {{artist_name}} on {{date}}",
+        "body": '''<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tr><td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tr><td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;">
+<img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;"></td></tr>
+<tr><td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #059669;">Door Deal Settlement Filed</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{user_name}}, you filed the door receipts for <strong>{{artist_name}}</strong>&#39;s gig on <strong>{{date}}</strong>. Here&#39;s the final math for your records:</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; margin-bottom: 24px;">
+<tr><td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 45%;">Door receipts</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{door_receipts_dollars}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Artist door share ({{door_pct}}%)</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{door_share_dollars}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Guarantee (floor)</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">${{guarantee_dollars}}</td>
+</tr>
+<tr>
+<td colspan="2" style="padding: 4px 0; border-top: 1px solid #86efac;"></td>
+</tr>
+<tr>
+<td style="padding: 10px 0 6px 0; font-size: 15px; color: #111827; font-weight: 700;">Artist paid</td>
+<td style="padding: 10px 0 6px 0; font-size: 15px; color: #059669; font-weight: 700;">${{final_pay_dollars}}</td>
+</tr>
+</table>
+<p style="margin: 12px 0 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">Artist is paid the <strong>higher</strong> of guarantee or (guarantee + door share). {{settlement_narrative}}</p>
+</td></tr>
+</table>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">{{platform_note}}</p>
+<a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #059669; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Payments</a>
 </td></tr>
 <tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
 <p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>

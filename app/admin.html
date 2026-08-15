@@ -37,7 +37,7 @@
         });
     })();
   </script>
-  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=11" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
@@ -52,7 +52,7 @@
     }
 
     .admin-container {
-      max-width: 1100px;
+      max-width: var(--container-max);
       margin: 0 auto;
       padding: 40px 20px;
     }
@@ -762,7 +762,7 @@
       white-space: nowrap;
     }
     .ps-subtab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
-    .ps-subtab.active { color: var(--cyan); border-bottom-color: var(--cyan); background: rgba(6,182,212,0.08); }
+    .ps-subtab.active { color: #10b981; border-bottom-color: #10b981; background: rgba(16,185,129,0.1); }
 
     .ps-subtab-content { display: none; }
     .ps-subtab-content.active { display: block; }
@@ -771,7 +771,7 @@
 <body>
   <header class="app-header">
     <div class="header-inner">
-      <a href="/app/venue-create-gigs.html" style="text-decoration: none;"><div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div></a>
+      <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
       <div class="header-actions">
       </div>
     </div>
@@ -781,7 +781,7 @@
   <script src="/app/static/js/timezone-utils.js"></script>
   
   <script src="/app/static/js/auth.guard.js?v=3"></script>
-  <script src="/app/static/js/api-globals.js?v=11"></script>
+  <script src="/app/static/js/api-globals.js?v=12"></script>
   <script src="/app/static/js/user-dropdown.js?v=11"></script>
 
   <div class="admin-container">
@@ -804,88 +804,15 @@
       <button class="tab" onclick="switchTab('messages')">Messages <span id="messagesTabBadge" style="display:none;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:4px;vertical-align:middle;"></span></button>
       <button class="tab" onclick="switchTab('templates')">Templates</button>
       <button class="tab" onclick="switchTab('affiliates')">Affiliates</button>
+      <button class="tab" onclick="switchTab('serverstats')">Server Stats</button>
       <button class="tab" onclick="switchTab('dblogs')">Stats/DB/Logs</button>
     </div>
 
     <!-- PLATFORM SETTINGS TAB -->
     <div class="tab-content active" id="platform-tab">
 
-      <!-- ── SERVER HEALTH (always visible at top) ───────────────────────────── -->
-      <div id="serverHealthPanel" style="margin-bottom:12px;">
-        <!-- Alerts (red) -->
-        <div id="serverAlerts" style="display:none;margin-bottom:6px;"></div>
-        <!-- Warnings (yellow) -->
-        <div id="serverWarnings" style="display:none;margin-bottom:6px;"></div>
-        <!-- Metrics bar -->
-        <div id="serverMetrics" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
-          <span style="font-size:0.68rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;white-space:nowrap;">🖥 Server</span>
-          <span id="shMemBar" style="font-size:0.78rem;"></span>
-          <span id="shCpuBar" style="font-size:0.78rem;"></span>
-          <span id="shDiskBar" style="font-size:0.78rem;"></span>
-          <span id="shDbBar" style="font-size:0.78rem;"></span>
-          <span id="shRedisBar" style="font-size:0.78rem;"></span>
-          <span id="shDbType" style="font-size:0.78rem;"></span>
-          <span id="shWorkers" style="font-size:0.78rem;"></span>
-          <button onclick="loadServerHealth()" style="margin-left:auto;background:transparent;border:1px solid rgba(255,255,255,0.12);color:var(--text-muted);border-radius:4px;padding:2px 10px;font-size:0.68rem;cursor:pointer;white-space:nowrap;">↻ Refresh</button>
-        </div>
-      </div>
-
-      <!-- ── PLATFORM STATUS STRIP ─────────────────────────────────────────── -->
-      <!-- Quick-action strip: live toggles for the most critical site-wide switches -->
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:8px;align-items:center;">
-        <span style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px;">Site Status</span>
-
-        <!-- Payments: always live (Test Mode removed Jul 1 2026) -->
-        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <span style="font-size:0.7rem;color:var(--text-gray);">💳 Payments</span>
-          <span style="font-size:0.7rem;font-weight:700;color:#10b981;">LIVE</span>
-        </div>
-
-        <!-- Affiliate program on/off (quick toggle mirrors affiliate settings) -->
-        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <span style="font-size:0.7rem;color:var(--text-gray);">🤝 Affiliates</span>
-          <span id="affQuickLabel" style="font-size:0.7rem;font-weight:700;color:#ef4444;">OFF</span>
-          <div style="position:relative;width:36px;height:20px;">
-            <input type="checkbox" id="affQuickEnabled" onchange="toggleAffQuick()" style="opacity:0;width:0;height:0;position:absolute;">
-            <div id="affQuickTrack" onclick="document.getElementById('affQuickEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
-            <div id="affQuickThumb" onclick="document.getElementById('affQuickEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
-          </div>
-        </div>
-
-        <!-- New signups (future kill switch) -->
-        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <span style="font-size:0.7rem;color:var(--text-gray);">🔐 Signups</span>
-          <span id="signupsQuickLabel" style="font-size:0.7rem;font-weight:700;color:#10b981;">OPEN</span>
-          <div style="position:relative;width:36px;height:20px;">
-            <input type="checkbox" id="signupsEnabled" onchange="toggleSignupsEnabled()" style="opacity:0;width:0;height:0;position:absolute;" checked>
-            <div id="signupsToggleTrack" onclick="document.getElementById('signupsEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#10b981;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
-            <div id="signupsToggleThumb" onclick="document.getElementById('signupsEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
-          </div>
-        </div>
-
-        <!-- Maintenance mode -->
-        <div style="display:flex;flex-direction:column;gap:6px;padding:8px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span style="font-size:0.7rem;color:var(--text-gray);">🚧 Maintenance</span>
-            <span id="maintQuickLabel" style="font-size:0.7rem;font-weight:700;color:#6b7280;">OFF</span>
-            <div style="position:relative;width:36px;height:20px;">
-              <input type="checkbox" id="maintEnabled" onchange="toggleMaintenance()" style="opacity:0;width:0;height:0;position:absolute;">
-              <div id="maintToggleTrack" onclick="document.getElementById('maintEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
-              <div id="maintToggleThumb" onclick="document.getElementById('maintEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:3px;">
-            <label for="maintMessage" style="font-size:0.68rem;color:#6b7280;">Message shown to users:</label>
-            <input id="maintMessage" type="text"
-              placeholder="We'll be back shortly!"
-              onchange="saveMaintMessage()"
-              style="width:100%;background:#111827;border:1px solid #374151;border-radius:5px;
-                     color:#e2e8f0;padding:5px 8px;font-size:0.75rem;box-sizing:border-box;">
-          </div>
-        </div>
-
-        <div id="siteStatusSaved" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity .3s;margin-left:4px;">✓ Saved</div>
-      </div>
+      <!-- 2026-08-13: SERVER HEALTH + SITE STATUS STRIP moved out to their
+           own "Server Stats" tab — see #serverstats-tab below. -->
 
       <!-- ── DATA BUBBLES ────────────────────────────────────────────────────── -->
       <div class="ps-stats-row" id="dashboardStatsGrid">
@@ -1924,6 +1851,91 @@
     <!-- ACCOUNTING TAB -->
 
 
+    <!-- SERVER STATS TAB (2026-08-13: moved out of Platform Settings so
+         the top-of-page live health metrics + Site Status toggles have
+         their own home. Loader hook lives in admin-platform.js.) -->
+    <div class="tab-content" id="serverstats-tab">
+
+      <!-- ── SERVER HEALTH ──────────────────────────────────────────────── -->
+      <div id="serverHealthPanel" style="margin-bottom:12px;">
+        <!-- Alerts (red) -->
+        <div id="serverAlerts" style="display:none;margin-bottom:6px;"></div>
+        <!-- Warnings (yellow) -->
+        <div id="serverWarnings" style="display:none;margin-bottom:6px;"></div>
+        <!-- Metrics bar -->
+        <div id="serverMetrics" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:0.68rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;white-space:nowrap;">🖥 Server</span>
+          <span id="shMemBar" style="font-size:0.78rem;"></span>
+          <span id="shCpuBar" style="font-size:0.78rem;"></span>
+          <span id="shDiskBar" style="font-size:0.78rem;"></span>
+          <span id="shDbBar" style="font-size:0.78rem;"></span>
+          <span id="shRedisBar" style="font-size:0.78rem;"></span>
+          <span id="shDbType" style="font-size:0.78rem;"></span>
+          <span id="shWorkers" style="font-size:0.78rem;"></span>
+          <button onclick="loadServerHealth()" style="margin-left:auto;background:transparent;border:1px solid rgba(255,255,255,0.12);color:var(--text-muted);border-radius:4px;padding:2px 10px;font-size:0.68rem;cursor:pointer;white-space:nowrap;">↻ Refresh</button>
+        </div>
+      </div>
+
+      <!-- ── SITE STATUS STRIP ─────────────────────────────────────────── -->
+      <!-- Quick-action strip: live toggles for the most critical site-wide switches -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:8px;align-items:center;">
+        <span style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px;">Site Status</span>
+
+        <!-- Payments: always live (Test Mode removed Jul 1 2026) -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <span style="font-size:0.7rem;color:var(--text-gray);">💳 Payments</span>
+          <span style="font-size:0.7rem;font-weight:700;color:#10b981;">LIVE</span>
+        </div>
+
+        <!-- Affiliate program on/off (quick toggle mirrors affiliate settings) -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <span style="font-size:0.7rem;color:var(--text-gray);">🤝 Affiliates</span>
+          <span id="affQuickLabel" style="font-size:0.7rem;font-weight:700;color:#ef4444;">OFF</span>
+          <div style="position:relative;width:36px;height:20px;">
+            <input type="checkbox" id="affQuickEnabled" onchange="toggleAffQuick()" style="opacity:0;width:0;height:0;position:absolute;">
+            <div id="affQuickTrack" onclick="document.getElementById('affQuickEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
+            <div id="affQuickThumb" onclick="document.getElementById('affQuickEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+          </div>
+        </div>
+
+        <!-- New signups (future kill switch) -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <span style="font-size:0.7rem;color:var(--text-gray);">🔐 Signups</span>
+          <span id="signupsQuickLabel" style="font-size:0.7rem;font-weight:700;color:#10b981;">OPEN</span>
+          <div style="position:relative;width:36px;height:20px;">
+            <input type="checkbox" id="signupsEnabled" onchange="toggleSignupsEnabled()" style="opacity:0;width:0;height:0;position:absolute;" checked>
+            <div id="signupsToggleTrack" onclick="document.getElementById('signupsEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#10b981;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
+            <div id="signupsToggleThumb" onclick="document.getElementById('signupsEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+          </div>
+        </div>
+
+        <!-- Maintenance mode -->
+        <div style="display:flex;flex-direction:column;gap:6px;padding:8px 10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:0.7rem;color:var(--text-gray);">🚧 Maintenance</span>
+            <span id="maintQuickLabel" style="font-size:0.7rem;font-weight:700;color:#6b7280;">OFF</span>
+            <div style="position:relative;width:36px;height:20px;">
+              <input type="checkbox" id="maintEnabled" onchange="toggleMaintenance()" style="opacity:0;width:0;height:0;position:absolute;">
+              <div id="maintToggleTrack" onclick="document.getElementById('maintEnabled').click()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#333;border-radius:10px;cursor:pointer;transition:background .3s;"></div>
+              <div id="maintToggleThumb" onclick="document.getElementById('maintEnabled').click()" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:white;border-radius:50%;cursor:pointer;transition:left .3s;"></div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <label for="maintMessage" style="font-size:0.68rem;color:#6b7280;">Message shown to users:</label>
+            <input id="maintMessage" type="text"
+              placeholder="We'll be back shortly!"
+              onchange="saveMaintMessage()"
+              style="width:100%;background:#111827;border:1px solid #374151;border-radius:5px;
+                     color:#e2e8f0;padding:5px 8px;font-size:0.75rem;box-sizing:border-box;">
+          </div>
+        </div>
+
+        <div id="siteStatusSaved" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity .3s;margin-left:4px;">✓ Saved</div>
+      </div>
+
+    </div>
+
+
     <!-- DB/LOGS TAB (consolidated; Database default, Logs as subtab) -->
     <div class="tab-content" id="dblogs-tab">
       <div class="ps-subtabs">
@@ -2253,7 +2265,7 @@
   
   <script src="/app/static/js/modals.js"></script>
   <script src="/app/static/js/gf-modals.js?v=8"></script>
-  <script src="/app/static/js/flyer-editor.js?v=17" defer></script>
+  <script src="/app/static/js/flyer-editor.js?v=25" defer></script>
 
 <script>
 function openAdminFlyerEditor() {
@@ -2385,7 +2397,7 @@ function switchTemplatesSubTab(tab) {
 }
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
-<script src="/app/static/js/admin-db.js?v=2"></script>
+<script src="/app/static/js/admin-db.js?v=4"></script>
 <script src="/app/static/js/admin-platform.js?v=13"></script>
 <script src="/app/static/js/admin-payments.js?v=32"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
@@ -2397,7 +2409,7 @@ function switchTemplatesSubTab(tab) {
 <!-- demo-request-modal.js is loaded here so admin-demos.js can reuse the
      GfDatePicker + dark time selects for the decline-modal's slot picker.
      The auto-open-on-?reschedule path inside it is gated to homepage only. -->
-<script src="/app/static/js/demo-request-modal.js?v=20"></script>
+<script src="/app/static/js/demo-request-modal.js?v=21"></script>
 <script src="/app/static/js/admin-demos.js?v=19"></script>
 <script src="/app/static/js/admin-contact.js?v=11"></script>
 <script src="/app/static/js/admin-init.js?v=6"></script>
@@ -2490,15 +2502,13 @@ async function _messagesActivate() {
     const n = parseInt((el.textContent || '').trim(), 10);
     return isNaN(n) ? 0 : n;
   };
-  const order = [
-    { key: 'demos',   n: badgeCount('demosPendingBadge')    },
-    { key: 'tickets', n: badgeCount('supportTicketsBadge')  },
-    { key: 'contact', n: badgeCount('contactMessagesBadge') },
-  ];
-  const firstUnread = order.find(x => x.n > 0);
-  if (firstUnread) {
-    switchMessagesSubTab(firstUnread.key);
-  }
+  // 2026-08-13: always snap to Demo Requests on Messages tab entry
+  // (per user request — parallels the Directory-tab Users-default
+  // behavior). Previously auto-jumped to the leftmost sub-tab with
+  // unread items; that's still useful info, so the per-sub-tab red
+  // badges + the top-level Messages tab badge still surface unread
+  // counts without hijacking navigation.
+  switchMessagesSubTab('demos');
   _updateMessagesTotalBadge();
 }
 window._messagesActivate = _messagesActivate;
@@ -2556,5 +2566,6 @@ window._updateMessagesTotalBadge = _updateMessagesTotalBadge;
 </div>
 
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

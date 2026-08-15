@@ -14,6 +14,113 @@
      forms keep their own smaller widths (readability). Easily
      reverted by changing this one value back to 1100px. */
   --container-max: min(1600px, calc(100vw - 32px));
+  /* 2026-08-11: sticky-tabs offset. `.app-header` uses height:60px
+     (fixed) + 1px border → 61 rendered; use 62 for safe clearance.
+     Consumed by `.tabs` (rule added below), by inline `.profile-tabs`
+     on artist-profile / venue-profile, and by `.ec-subtabs` inside
+     the Email Center tab on venue-create-gigs, so their sticky top:
+     matches without gap or overlap. --app-tabs-height is the outer
+     .tabs bar's rendered height, used when a nested sub-tab bar
+     stacks below the outer one (currently only Email Center). */
+  --app-header-height: 62px;
+  --app-tabs-height: 48px;
+}
+
+/* 2026-08-11 v3: FIXED positioning for the tabs bar (was sticky).
+   sticky was fighting container padding / overflow contexts / SW
+   cache issues — went in circles. Fixed positioning always works:
+   the tabs are pulled OUT of normal flow and pinned at top:60
+   regardless of any parent's overflow/padding/scroll state.
+   We reserve the vertical space they consumed via padding-top on
+   the containers below. Full viewport width so no bleed possible.
+   z-index 90 sits under .app-header (100). Height explicit so the
+   reserved space matches exactly. */
+/* Active-tab highlight rounded to match the Search Artists (and other
+   .panel) card radius of 12px. Every page's inline .tab.active block
+   sets a cyan background tint; this rule adds the radius on top. */
+/* Active highlight rounded to match card radius. Sub-tabs get a
+   slightly smaller radius (8 vs 12) since they're physically smaller
+   pills — same visual weight relationship the main tabs have to the
+   Search Artists card. */
+.tab.active {
+  border-radius: 12px;
+}
+.ec-subtab.active,
+.legal-subtab.active,
+.artist-legal-subtab.active,
+.ps-subtab.active {
+  border-radius: 8px;
+}
+
+/* Sub-tab bars — same fixed-pin treatment as the main .tabs so nested
+   navigation stays visible when scrolling long panels. Positioned
+   just below the main tabs (60 header + 50 tabs = 110). Content
+   aligned to the logo edge via the same padding math. Only ONE
+   subtab bar is ever visible at a time (each lives inside its own
+   .tab-content which is display:none when inactive), so no stacking
+   conflicts. */
+.ec-subtabs,
+.legal-subtabs,
+.artist-legal-subtabs,
+.ps-subtabs {
+  position: fixed !important;
+  top: 110px !important;
+  left: 0 !important;
+  right: 0 !important;
+  z-index: 85 !important;
+  background: var(--bg) !important;
+  height: 38px !important;  /* smaller than main tabs (50) for subordinate hierarchy */
+  padding-left: calc((100vw - var(--container-max)) / 2 + 20px) !important;
+  padding-right: calc((100vw - var(--container-max)) / 2 + 20px) !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Reserve vertical space in the tab-content that contains a subtab
+   bar, since the subtabs are pulled out of flow by position:fixed.
+   Without this, the following panel content would slide up under
+   the fixed subtabs. Descendant match (not direct-child) because
+   .ec-subtabs sits nested inside <section class="panel"> on the
+   Email Center tab. */
+.tab-content:has(.ec-subtabs),
+.tab-content:has(.legal-subtabs),
+.tab-content:has(.artist-legal-subtabs),
+.tab-content:has(.ps-subtabs) {
+  padding-top: 48px;  /* matches new 38px subtab bar height + gap */
+}
+
+.tabs {
+  position: fixed !important;
+  top: 60px !important;
+  left: 0 !important;
+  right: 0 !important;
+  z-index: 90 !important;
+  background: var(--bg) !important;
+  height: 50px !important;
+  /* Aug 11 2026 fix (v2): align the FIRST TAB's left edge with the
+     logo's left edge. Logo sits inside .header-inner which is centered
+     to max-width var(--container-max) AND has its own 20px inner
+     padding. So logo x = (100vw - container-max) / 2 + 20. Match that
+     here so the "Calendar" tab lines up directly under the logo. */
+  padding-left: calc((100vw - var(--container-max)) / 2 + 20px) !important;
+  padding-right: calc((100vw - var(--container-max)) / 2 + 20px) !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+  align-items: center;
+}
+
+/* Reserve space in flow where the tabs USED to sit — 50px tabs height
+   plus the container's normal 40px padding minus a bit so content sits
+   comfortably below the fixed tab bar. `:has()` targets only the
+   containers that actually have tabs, so tab-less pages (e.g.
+   artist-edit which uses .profile-container without tabs) keep their
+   original 40px padding-top unchanged. */
+.book-gigs-container:has(> .tabs),
+.profile-container:has(> .tabs),
+.admin-container:has(> .tabs) {
+  padding-top: 66px !important;  /* 50 tabs + ~16px breathing room */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -27,13 +134,15 @@ body {
 }
 
 /* HEADER */
-.app-header { 
-  position: sticky; 
-  top: 0; 
+/* Aug 11 2026: switched from translucent+blur (rgba 0.8 + backdrop-blur)
+   to fully opaque var(--bg) so scrolling content doesn't ghost through
+   the header. Sticky top:0 + z-index:100 keeps it above everything,
+   .tabs uses z-index:90 to stack cleanly below it. */
+.app-header {
+  position: sticky;
+  top: 0;
   z-index: 100;
-  background: rgba(10, 14, 23, 0.8); 
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
   height: 60px;
 }

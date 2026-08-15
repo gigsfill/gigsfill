@@ -198,16 +198,32 @@
         </select>
       </div>
 
-      <!-- BACKGROUND -->
+      <!-- BACKGROUND (color · upload · clear + preset textures) -->
       <div class="fe-section">
         <div class="fe-label">Background</div>
-        <div style="display:flex;gap:4px;">
+        <div style="display:flex;gap:4px;margin-bottom:6px;">
           <label class="fe-btn fe-btn-uniform" style="cursor:pointer;position:relative;overflow:hidden;">
             🎨 BG Color
             <input type="color" id="flyerBgColor" value="#1a1a2e" onchange="FE.setBgColor(this.value)" style="position:absolute;opacity:0;width:0;height:0;">
           </label>
           <button onclick="document.getElementById('flyerBgImgUpload').click()" class="fe-btn fe-btn-uniform">🖼 BG Image</button>
           <button onclick="FE.clearBgImage()" class="fe-btn fe-btn-uniform">✕ Clear BG</button>
+        </div>
+        <!-- Preset textures — click a thumbnail to swap the current bg.
+             Same load-and-place path as the upload button above (2026-08-01). -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+          <button onclick="FE.applyBgPreset('/app/static/img/flyer-bg/dark-wood.jpg')" title="Dark wood planks"
+                  class="fe-bg-thumb" style="background-image:url('/app/static/img/flyer-bg/dark-wood.jpg');"></button>
+          <button onclick="FE.applyBgPreset('/app/static/img/flyer-bg/brick.jpg')" title="Brick wall"
+                  class="fe-bg-thumb" style="background-image:url('/app/static/img/flyer-bg/brick.jpg');"></button>
+          <button onclick="FE.applyBgPreset('/app/static/img/flyer-bg/chalkboard.jpg')" title="Chalkboard"
+                  class="fe-bg-thumb" style="background-image:url('/app/static/img/flyer-bg/chalkboard.jpg');"></button>
+          <button onclick="FE.applyBgPreset('/app/static/img/flyer-bg/stage-bulbs.jpg')" title="Stage lights"
+                  class="fe-bg-thumb" style="background-image:url('/app/static/img/flyer-bg/stage-bulbs.jpg');"></button>
+          <button onclick="FE.applyBgPreset('/app/static/img/flyer-bg/matte-gradient.jpg')" title="Matte gradient"
+                  class="fe-bg-thumb" style="background-image:url('/app/static/img/flyer-bg/matte-gradient.jpg');"></button>
+          <button onclick="FE.applyBgPreset('/app/static/img/flyer-bg/kraft-paper.jpg')" title="Kraft paper"
+                  class="fe-bg-thumb" style="background-image:url('/app/static/img/flyer-bg/kraft-paper.jpg');"></button>
         </div>
         <input type="file" id="flyerBgImgUpload" accept="image/*" style="display:none;" onchange="FE.handleBgUpload(this)">
       </div>
@@ -245,6 +261,62 @@
           <button onclick="FE.addLine()" class="fe-btn">— Line</button>
         </div>
         <input type="file" id="flyerImgUpload" accept="image/*" style="display:none;" onchange="FE.handleImageUpload(this)">
+      </div>
+
+      <!-- COLOR SCHEME (2026-08-01) — swap all colors in the currently-
+           selected accent block. Each swatch shows [surface · edge · text]
+           at a glance. Click "?" for the details. Individual pieces can
+           still be fine-tuned by double-clicking into the block. -->
+      <div class="fe-section">
+        <div class="fe-label" style="display:flex;align-items:center;gap:6px;">
+          Color Scheme
+          <span title="Select anything on the canvas — an Accent Block, a shape, or a text element — then click a scheme to recolor it. Works on shapes/text added from Add Elements too. Custom colors below let you tweak individual roles (frame fill, edge, main text, sub text, accent)." style="cursor:help;color:var(--text-gray,#94a3b8);font-size:0.75rem;">ⓘ</span>
+        </div>
+        <div id="flyerThemeSwatches" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;"></div>
+        <!-- Custom color pickers — one per role. Toggle open with the
+             button, tweak any color, changes apply live to the selected
+             accent block. 2026-08-01. -->
+        <button onclick="FE.toggleCustomTheme()" id="flyerCustomToggleBtn" class="fe-btn"
+                style="width:100%;margin-top:6px;padding:5px 8px;font-size:0.72rem;">
+          🎨 Custom colors ▾
+        </button>
+        <div id="flyerCustomTheme" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+            <label style="font-size:0.7rem;color:var(--text-gray,#94a3b8);flex:1;">Frame fill</label>
+            <input type="color" id="flyerCustomSurface" value="#2a1810" oninput="FE.customSetColor('surface', this.value)" class="fe-color">
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+            <label style="font-size:0.7rem;color:var(--text-gray,#94a3b8);flex:1;">Frame edge</label>
+            <input type="color" id="flyerCustomEdge" value="#5a3a1e" oninput="FE.customSetColor('surfaceEdge', this.value)" class="fe-color">
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+            <label style="font-size:0.7rem;color:var(--text-gray,#94a3b8);flex:1;">Accent line</label>
+            <input type="color" id="flyerCustomAccent" value="#f5d78a" oninput="FE.customSetColor('accent', this.value)" class="fe-color">
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+            <label style="font-size:0.7rem;color:var(--text-gray,#94a3b8);flex:1;">Main text</label>
+            <input type="color" id="flyerCustomPrimary" value="#f5d78a" oninput="FE.customSetColor('primaryText', this.value)" class="fe-color">
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+            <label style="font-size:0.7rem;color:var(--text-gray,#94a3b8);flex:1;">Sub text</label>
+            <input type="color" id="flyerCustomMuted" value="#c8a25a" oninput="FE.customSetColor('mutedText', this.value)" class="fe-color">
+          </div>
+        </div>
+      </div>
+
+      <!-- ACCENT BLOCKS (2026-08-01) — pre-composed Fabric.js groups.
+           Click to insert; double-click on canvas to enter group and
+           edit individual children (text, colors, etc). -->
+      <div class="fe-section">
+        <div class="fe-label">Accent Blocks</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+          <button onclick="FE.addWoodSign()"      class="fe-btn" title="Rounded wood-sign frame with editable name">🪧 Sign</button>
+          <button onclick="FE.addBulbString()"    class="fe-btn" title="String of edison-bulb string lights">💡 Bulb String</button>
+          <button onclick="FE.addRibbon()"        class="fe-btn" title="Swallowtail ribbon banner with title">🎗 Ribbon</button>
+          <button onclick="FE.addScheduleRow()"   class="fe-btn" title="3-column schedule row: date · artist · time">📅 Schedule</button>
+          <button onclick="FE.addFlourish()"      class="fe-btn" title="Ornamental star flourish">✦ Flourish</button>
+          <button onclick="FE.addTicketStub()"    class="fe-btn" title="Vintage ticket stub with 'Admit One'">🎫 Ticket</button>
+        </div>
       </div>
 
       <!-- PROPERTIES -->
@@ -305,6 +377,19 @@
           <button onclick="FE.nudgeSelected(0, -10)" class="fe-btn fe-sq" title="Move up">↑</button>
           <button onclick="FE.nudgeSelected(0, 10)"  class="fe-btn fe-sq" title="Move down">↓</button>
           <button onclick="FE.centerOnCanvas()" class="fe-btn fe-sq" title="Center on canvas">⊕</button>
+        </div>
+        <!-- 2026-08-01: rotate row. ↺ / ↻ nudge 15° at a time, the number
+             input takes any exact degree, and ◫ resets to 0. Works on any
+             selected object — accent block, text, image, shape. -->
+        <div style="display:flex;gap:3px;margin-top:6px;align-items:center;">
+          <span class="fe-mini" style="margin-right:4px;">Rotate:</span>
+          <button onclick="FE.rotateSelected(-15)" class="fe-btn fe-sq" title="Rotate 15° left">↺</button>
+          <button onclick="FE.rotateSelected(15)"  class="fe-btn fe-sq" title="Rotate 15° right">↻</button>
+          <input type="number" id="flyerAngle" min="-360" max="360" step="1" value="0"
+                 oninput="FE.setAngle(this.value)" class="fe-input"
+                 style="width:52px;text-align:center;" title="Angle in degrees">
+          <span class="fe-mini">°</span>
+          <button onclick="FE.rotateSelected(0, true)" class="fe-btn fe-sq" title="Reset to 0°" style="margin-left:auto;">◫</button>
         </div>
       </div>
 
@@ -443,6 +528,9 @@
         }
         .fe-btn{padding:5px 8px;font-size:0.72rem;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:#cbd5e1;cursor:pointer;transition:all .12s;white-space:nowrap;text-align:center;}
         .fe-btn:hover{background:rgba(139,92,246,0.2);border-color:rgba(139,92,246,0.4);color:#e2d9f3;}
+        /* Background preset thumbnails — 2:3 mini card of the actual texture. */
+        .fe-bg-thumb{padding:0;height:48px;background-size:cover;background-position:center;border:1px solid rgba(255,255,255,0.15);border-radius:5px;cursor:pointer;transition:transform .1s,border-color .1s,box-shadow .1s;background-color:#0a0a0a;}
+        .fe-bg-thumb:hover{border-color:#8b5cf6;transform:translateY(-1px);box-shadow:0 4px 12px rgba(139,92,246,0.25);}
         .fe-btn.active{background:rgba(139,92,246,0.3);border-color:rgba(139,92,246,0.5);color:#c4b5fd;}
         .fe-btn-uniform{flex:1;min-width:0;justify-content:center;display:inline-flex;align-items:center;}
         .fe-sq{width:28px;min-width:28px;padding:4px 0;text-align:center;}
@@ -765,6 +853,34 @@
     canvas._realWidth = preset.w;
     canvas._realHeight = preset.h;
     canvas._scale = scale;
+    // 2026-08-01: paint theme swatches into the sidebar now that we
+    // have DOM. Cheap to re-run — the render just overwrites innerHTML.
+    if (typeof _renderThemeSwatches === 'function') _renderThemeSwatches();
+
+    // 2026-08-01 (v5): double-click into an accent block enters edit
+    // mode on the top-most text child under the pointer. Fabric 5.x's
+    // built-in interactive:true on Group is unreliable for in-place
+    // text edit — this handler makes it definite: dblclick text → type.
+    canvas.on('mouse:dblclick', (opt) => {
+      if (!opt || !opt.target) return;
+      const tgt = opt.target;
+      // Standalone text — Fabric handles it natively; don't double up.
+      if (tgt.type === 'textbox' || tgt.type === 'i-text') return;
+      // Accent block group with subTargets populated (subTargetCheck:true)
+      if (!tgt._accentBlock || !opt.subTargets || !opt.subTargets.length) return;
+      for (let i = opt.subTargets.length - 1; i >= 0; i--) {
+        const sub = opt.subTargets[i];
+        if (sub.type !== 'textbox' && sub.type !== 'i-text') continue;
+        try {
+          canvas.setActiveObject(sub);
+          sub.enterEditing();
+          sub.hiddenTextarea && sub.hiddenTextarea.focus();
+          sub.selectAll && sub.selectAll();
+        } catch (_) {}
+        canvas.requestRenderAll();
+        return;
+      }
+    });
     // Free-scale all newly added objects (no aspect ratio lock on corner handles)
     canvas.on('object:added', e => {
       if (e && e.target) e.target.set({ lockUniScaling: false });
@@ -1996,25 +2112,679 @@
   /* =========================================================
      ADD ELEMENTS
      ========================================================= */
+  // 2026-08-01 v6: Add-Elements primitives are now tagged with _role so
+  // the Color Scheme presets + Custom colors apply to them too (not just
+  // accent blocks). Rectangle → surface, Circle → accent, Line → mutedText,
+  // Text/Heading → primaryText. Untagged objects still show their original
+  // white/purple/cyan defaults; picking a theme just recolors any tagged
+  // objects on the currently-active selection.
   function addText() { if(!canvas)return; const s=canvas._scale;
-    const t=new fabric.Textbox('Your text here',{left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',width:canvas.width*0.6,fontSize:24*s,fontFamily:'Arial',fill:'#ffffff',textAlign:'center',editable:true});
+    const t=new fabric.Textbox('Your text here',{left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',width:canvas.width*0.6,fontSize:24*s,fontFamily:'Arial',fill:'#ffffff',textAlign:'center',editable:true,_role:'primaryText'});
     canvas.add(t);canvas.setActiveObject(t);canvas.renderAll(); }
   function addHeading() { if(!canvas)return; const s=canvas._scale;
-    const t=new fabric.Textbox('HEADING',{left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',width:canvas.width*0.8,fontSize:48*s,fontFamily:'Impact',fontWeight:'bold',fill:'#ffffff',textAlign:'center',editable:true});
+    const t=new fabric.Textbox('HEADING',{left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',width:canvas.width*0.8,fontSize:48*s,fontFamily:'Impact',fontWeight:'bold',fill:'#ffffff',textAlign:'center',editable:true,_role:'primaryText'});
     canvas.add(t);canvas.setActiveObject(t);canvas.renderAll(); }
   function addRect() { if(!canvas)return; const s=canvas._scale;
-    canvas.add(new fabric.Rect({left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',width:200*s,height:100*s,fill:'rgba(139,92,246,0.4)',stroke:'#8b5cf6',strokeWidth:2*s,rx:8*s,ry:8*s}));
+    canvas.add(new fabric.Rect({left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',width:200*s,height:100*s,fill:'rgba(139,92,246,0.4)',stroke:'#8b5cf6',strokeWidth:2*s,rx:8*s,ry:8*s,_role:'surface'}));
     canvas.setActiveObject(canvas.getObjects().pop());canvas.renderAll(); }
   function addCircle() { if(!canvas)return; const s=canvas._scale;
-    canvas.add(new fabric.Circle({left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',radius:60*s,fill:'rgba(6,182,212,0.4)',stroke:'#06b6d4',strokeWidth:2*s}));
+    canvas.add(new fabric.Circle({left:canvas.width/2,top:canvas.height/2,originX:'center',originY:'center',radius:60*s,fill:'rgba(6,182,212,0.4)',stroke:'#06b6d4',strokeWidth:2*s,_role:'accent'}));
     canvas.setActiveObject(canvas.getObjects().pop());canvas.renderAll(); }
   function addLine() { if(!canvas)return; const s=canvas._scale;
-    canvas.add(new fabric.Line([canvas.width*0.2,canvas.height/2,canvas.width*0.8,canvas.height/2],{stroke:'#ffffff',strokeWidth:2*s}));
+    canvas.add(new fabric.Line([canvas.width*0.2,canvas.height/2,canvas.width*0.8,canvas.height/2],{stroke:'#ffffff',strokeWidth:2*s,_role:'mutedText'}));
     canvas.setActiveObject(canvas.getObjects().pop());canvas.renderAll(); }
   function handleImageUpload(input) {
     if(!input.files?.[0]||!canvas) return;
     _addImageFile(input.files[0]);
     input.value='';
+  }
+
+  /* =========================================================
+     BACKGROUND PRESETS (2026-08-01)
+     Load a pre-rendered texture from /app/static/img/flyer-bg/
+     and place it as the background — same cover-fit semantics
+     as handleBgUpload but skips the FileReader hop.
+     ========================================================= */
+  function applyBgPreset(url) {
+    if (!canvas || !url) return;
+    fabric.Image.fromURL(url, (img) => {
+      if (!img || !canvas) return;
+      const sc = Math.max(canvas.width / img.width, canvas.height / img.height);
+      img.set({ scaleX: sc, scaleY: sc, originX: 'left', originY: 'top',
+                selectable: true, evented: true, _isBg: true });
+      // Wipe any existing background (uploaded image OR color rect) — same
+      // rule the upload handler uses so presets act as a full swap.
+      canvas.getObjects().filter(o => o._isBg || o._isBgColor).forEach(o => canvas.remove(o));
+      canvas.add(img);
+      canvas.sendToBack(img);
+      canvas.renderAll();
+      if (typeof saveState === 'function') saveState();
+    }, { crossOrigin: 'anonymous' });
+  }
+
+  /* =========================================================
+     ACCENT BLOCKS (2026-08-01)
+     Pre-composed Fabric.js Groups that give one-click access
+     to the venue-flyer visual language: signage frames, bulb
+     strings, ribbons, schedule rows, ornamental flourishes,
+     ticket stubs. Every block:
+       - Placed centered on canvas
+       - Scales with canvas._scale (so it looks right on 4x6
+         AND 8.5x11 AND square)
+       - Uses `subTargetCheck: true` + `interactive: true` so
+         double-click drills into the group for per-child edit
+       - Serializes via Fabric's standard Group toObject path
+     ========================================================= */
+
+  // Helper: pack the N pieces of an accent block into a fabric.Group so
+  // corner-handle resizing scales the whole block together (text + frame
+  // + ornaments), then normalize the group's scale into the children's
+  // own dimensions on modified so text/strokes stay razor-sharp at any
+  // size. `interactive: true` + `subTargetCheck: true` lets the user
+  // double-click into any child Textbox to edit its text.
+  //
+  // History:
+  //   v1 (2026-07-31): plain fabric.Group — text got fuzzy on scale
+  //                    because Group applies scale via transform at
+  //                    render time, so children rasterize at their
+  //                    original fontSize and get bitmap-stretched.
+  //   v2 (2026-08-01): switched to independent objects + ActiveSelection
+  //                    to fix the fuzziness — text-corner-handles
+  //                    rescale fontSize cleanly. But this broke unified
+  //                    resize: after the user finished editing text,
+  //                    clicks selected individual pieces, so dragging
+  //                    the corner only scaled that one piece.
+  //   v3 (2026-08-01): fabric.Group again + `modified` handler that
+  //                    walks children after a scale/resize and bakes
+  //                    the scale into their sizes/fontSizes/strokeWidths,
+  //                    then resets the group's own scale to 1. Text
+  //                    stays crisp, resizes unified.
+  function _dropObjectsCentered(objs, primaryEditable) {
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    // Uniform-stroke + non-cached so scale + re-render stays sharp.
+    objs.forEach(o => {
+      if (o.stroke && o.strokeWidth) o.set({ strokeUniform: true });
+      o.set({ objectCaching: false });
+      // Prefer the top-left origin for children — Group's coord system
+      // is relative to its own bbox and centered origins mixed with
+      // Group can shift on scale-normalization. Textboxes retain their
+      // originX:'center' if authored that way — those still work.
+    });
+    // Fabric will compute the group's bbox from children and set
+    // children's positions relative to the group's own center.
+    const grp = new fabric.Group(objs, {
+      left: cx, top: cy,
+      originX: 'center', originY: 'center',
+      subTargetCheck: true,   // hit-test each child
+      interactive: true,      // double-click into a child (Textbox → edit mode)
+      objectCaching: false,   // clean re-render after normalize
+      _accentBlock: true,     // marker for potential future group-ops
+    });
+    // Normalize scale on user resize: bake group.scaleX/Y into every
+    // child's own dimensions, then reset the group to scale 1. Without
+    // this, children stay at their original sizes and only render bigger
+    // via a canvas transform — text/strokes rasterize blurry.
+    grp.on('modified', () => _bakeGroupScale(grp));
+    canvas.add(grp);
+    canvas.setActiveObject(grp);
+    canvas.requestRenderAll();
+    if (typeof saveState === 'function') saveState();
+    return primaryEditable || grp;
+  }
+
+  // Walk group children after a scale event and multiply their own
+  // width/height/radius/fontSize/strokeWidth by the group's scaleX/Y,
+  // then reset the group's scale to 1. Preserves the visual size the
+  // user just set but returns the children to a state where their
+  // rendering doesn't need any scale transform → crisp at any size.
+  function _bakeGroupScale(grp) {
+    if (!grp || !grp._objects) return;
+    const sx = grp.scaleX || 1;
+    const sy = grp.scaleY || 1;
+    if (Math.abs(sx - 1) < 0.001 && Math.abs(sy - 1) < 0.001) return;
+    // 2026-08-01 v4: use MIN(|sx|, |sy|) for text fontSize + circle radius
+    // + stroke width so a horizontal-only stretch (dragging the middle
+    // side handle) makes the BOX wider without making the text taller —
+    // which was triggering Textbox word-wrap and pushing lines onto a
+    // second row. Uniform scaling (corner drag) still grows everything
+    // in lockstep because sx == sy → min == avg. Boxes / positions still
+    // use the full sx/sy so the frame follows the drag exactly.
+    const sfont = Math.min(Math.abs(sx), Math.abs(sy));
+    grp._objects.forEach(o => {
+      if (o.left !== undefined) o.left *= sx;
+      if (o.top  !== undefined) o.top  *= sy;
+      if (o.width  !== undefined && o.type !== 'line') o.width  *= sx;
+      if (o.height !== undefined && o.type !== 'line') o.height *= sy;
+      if (o.radius !== undefined) o.radius *= sfont;
+      if (o.fontSize !== undefined) o.fontSize *= sfont;
+      // Line endpoints
+      if (o.x1 !== undefined) o.x1 *= sx;
+      if (o.x2 !== undefined) o.x2 *= sx;
+      if (o.y1 !== undefined) o.y1 *= sy;
+      if (o.y2 !== undefined) o.y2 *= sy;
+      // Corner radii on rounded rects — track the smaller axis so shape
+      // doesn't distort into an oval.
+      if (o.rx !== undefined) o.rx *= sfont;
+      if (o.ry !== undefined) o.ry *= sfont;
+      if (o.strokeWidth !== undefined) o.strokeWidth *= sfont;
+      o.setCoords && o.setCoords();
+      if (o.type && o.type.includes('text') && o.initDimensions) {
+        try { o.initDimensions(); } catch (_) {}
+      }
+    });
+    // Also grow the group's own bbox to match — otherwise the selection
+    // box is smaller than the visible content after the bake.
+    grp.width  = grp.width  * Math.abs(sx);
+    grp.height = grp.height * Math.abs(sy);
+    grp.set({ scaleX: 1, scaleY: 1 });
+    grp.setCoords && grp.setCoords();
+    canvas.requestRenderAll();
+  }
+
+  // Convenience: mark relative positioning on an object literal so
+  // _dropObjectsCentered can find the original offsets.
+  function _rel(props) {
+    props.__relLeft = props.left; props.__relTop = props.top;
+    return props;
+  }
+
+  /* =========================================================
+     COLOR SCHEMES for accent blocks (2026-08-01)
+     Each accent-block child is tagged with a `_role`. Applying a theme
+     walks children and sets fill/stroke based on role. Themes are
+     ordered light→dark just for the sidebar preview strip.
+     ========================================================= */
+  const ACCENT_THEMES = {
+    speakeasy: {
+      label: 'Speakeasy',
+      surface: '#2a1810', surfaceEdge: '#5a3a1e',
+      surfaceAlpha: 'rgba(20,15,10,0.85)',
+      accent:  'rgba(245,215,138,0.55)',
+      primaryText: '#f5d78a', mutedText: '#c8a25a',
+      ribbon: '#a52020', ribbonDark: '#4a0f13', ribbonEdge: '#e8c07a',
+      ticketBody: '#f1e4c0', ticketInk: '#8b1a1a', ticketBodyText: '#4a0f13',
+      wire: '#3a2a1c', bulb: '#ffe08a', bulbRim: '#c8a25a',
+      bulbHalo: 'rgba(255,215,120,0.28)',
+    },
+    midnight: {
+      label: 'Midnight',
+      surface: '#0f1e3d', surfaceEdge: '#3a4a72',
+      surfaceAlpha: 'rgba(10,15,30,0.85)',
+      accent:  'rgba(180,200,240,0.55)',
+      primaryText: '#e2ecff', mutedText: '#8fa3c9',
+      ribbon: '#2a3d6b', ribbonDark: '#0a1226', ribbonEdge: '#a9c1e8',
+      ticketBody: '#dfe6f1', ticketInk: '#1a2e5c', ticketBodyText: '#0a1226',
+      wire: '#3a3f5c', bulb: '#c3d5f5', bulbRim: '#7b8db0',
+      bulbHalo: 'rgba(180,200,240,0.28)',
+    },
+    neon: {
+      label: 'Neon',
+      surface: '#0a0a12', surfaceEdge: '#ff3d97',
+      surfaceAlpha: 'rgba(5,5,10,0.90)',
+      accent:  'rgba(6,182,212,0.75)',
+      primaryText: '#ff3d97', mutedText: '#06b6d4',
+      ribbon: '#ff3d97', ribbonDark: '#4a0028', ribbonEdge: '#06b6d4',
+      ticketBody: '#111122', ticketInk: '#06b6d4', ticketBodyText: '#ff3d97',
+      wire: '#2a1a2a', bulb: '#06b6d4', bulbRim: '#ff3d97',
+      bulbHalo: 'rgba(6,182,212,0.4)',
+    },
+    kraft: {
+      label: 'Kraft',
+      surface: '#f1e4c0', surfaceEdge: '#8b1a1a',
+      surfaceAlpha: 'rgba(241,228,192,0.85)',
+      accent:  'rgba(139,26,26,0.55)',
+      primaryText: '#8b1a1a', mutedText: '#4a2b0f',
+      ribbon: '#8b1a1a', ribbonDark: '#4a0f13', ribbonEdge: '#f1e4c0',
+      ticketBody: '#f1e4c0', ticketInk: '#8b1a1a', ticketBodyText: '#4a0f13',
+      wire: '#8b6a3a', bulb: '#ffe08a', bulbRim: '#8b1a1a',
+      bulbHalo: 'rgba(255,215,120,0.4)',
+    },
+    chalkboard: {
+      label: 'Chalkboard',
+      surface: '#1a2320', surfaceEdge: '#7a8c85',
+      surfaceAlpha: 'rgba(15,20,18,0.90)',
+      accent:  'rgba(255,255,255,0.6)',
+      primaryText: '#e8e6df', mutedText: '#a8b0ab',
+      ribbon: '#354541', ribbonDark: '#0f1614', ribbonEdge: '#c8d3ce',
+      ticketBody: '#e8e6df', ticketInk: '#1a2320', ticketBodyText: '#354541',
+      wire: '#2a3532', bulb: '#f5f2e8', bulbRim: '#a8b0ab',
+      bulbHalo: 'rgba(255,255,255,0.25)',
+    },
+    crimson: {
+      label: 'Crimson',
+      surface: '#4a0f13', surfaceEdge: '#8b1a1a',
+      surfaceAlpha: 'rgba(30,10,12,0.88)',
+      accent:  'rgba(245,230,200,0.7)',
+      primaryText: '#f5e6c8', mutedText: '#e8c07a',
+      ribbon: '#8b1a1a', ribbonDark: '#3a0a0c', ribbonEdge: '#f5e6c8',
+      ticketBody: '#f5e6c8', ticketInk: '#8b1a1a', ticketBodyText: '#4a0f13',
+      wire: '#3a1010', bulb: '#f5e6c8', bulbRim: '#8b1a1a',
+      bulbHalo: 'rgba(245,230,200,0.3)',
+    },
+  };
+
+  // Which theme field does each role read from? Kept as a map so the
+  // apply function can look up the target color via role → prop name.
+  const _ROLE_MAP = {
+    surface:      { fill: 'surface',      stroke: 'surfaceEdge' },
+    surfaceAlpha: { fill: 'surfaceAlpha', stroke: 'accent'      },
+    // 2026-08-01 v6: accent role now also has fill so standalone
+    // circles + solid accent shapes re-color under a theme swap.
+    accent:       { fill: 'accent',       stroke: 'accent'      },
+    primaryText:  { fill: 'primaryText',  stroke: 'primaryText' },
+    mutedText:    { fill: 'mutedText',    stroke: 'mutedText'   },
+    ribbonBody:   { fill: 'ribbon',       stroke: 'ribbonEdge'  },
+    ribbonDark:   { fill: 'ribbonDark'                          },
+    ribbonText:   { fill: 'primaryText'                         },
+    ticketBody:   { fill: 'ticketBody',   stroke: 'ticketInk'   },
+    ticketInk:    { fill: 'ticketInk',    stroke: 'ticketInk'   },
+    ticketBodyText: { fill: 'ticketBodyText'                    },
+    wire:         { stroke: 'wire'                              },
+    bulb:         { fill: 'bulb',         stroke: 'bulbRim'     },
+    bulbHalo:     { fill: 'bulbHalo'                            },
+  };
+
+  // Find the accent-block group the user currently has selected (or a
+  // child of it). Returns null if the active object isn't part of one.
+  function _activeAccentBlock() {
+    if (!canvas) return null;
+    const o = canvas.getActiveObject();
+    if (!o) return null;
+    if (o._accentBlock) return o;
+    // Walk up if the user is editing a child inside a group
+    if (o.group && o.group._accentBlock) return o.group;
+    return null;
+  }
+
+  // Return the list of Fabric objects a theme/color-picker should apply to.
+  //   - accent-block group: return its children (they carry the _role tags)
+  //   - single _role-tagged object (Add-Elements primitive): return [obj]
+  //   - multi-select (ActiveSelection): return every _role-tagged member
+  //   - anything else: return []
+  // Callers walk this list and apply color per _role. 2026-08-01 v6:
+  // generalizes what used to be _activeAccentBlock-only so themes now
+  // work on individual Rectangles / Circles / Text / Lines / Headings.
+  function _activeThemableTargets() {
+    if (!canvas) return [];
+    const grp = _activeAccentBlock();
+    if (grp) return grp._objects || [];
+    const o = canvas.getActiveObject();
+    if (!o) return [];
+    if (o.type === 'activeSelection' && o._objects) {
+      return o._objects.filter(x => x._role);
+    }
+    if (o._role) return [o];
+    return [];
+  }
+
+  // Apply a theme to an accent-block Group. Walks group children and
+  // uses their _role tag to look up the theme color for fill/stroke.
+  // Untagged children are left untouched — so any custom text the user
+  // added inside a block keeps its own color.
+  function applyThemeToBlock(themeKey) {
+    const targets = _activeThemableTargets();
+    const theme = ACCENT_THEMES[themeKey];
+    if (!theme || !targets.length) return;
+    targets.forEach(o => {
+      const role = o._role;
+      if (!role) return;
+      const spec = _ROLE_MAP[role];
+      if (!spec) return;
+      if (spec.fill && theme[spec.fill] !== undefined) {
+        o.set('fill', theme[spec.fill]);
+      }
+      if (spec.stroke && theme[spec.stroke] !== undefined) {
+        o.set('stroke', theme[spec.stroke]);
+      }
+    });
+    // Stamp the theme name on the accent-block group (if any) so save/load
+    // preserves intent. Standalone primitives just carry their new colors.
+    const grp = _activeAccentBlock();
+    if (grp) grp._accentTheme = themeKey;
+    _syncCustomPickers(theme);
+    canvas.requestRenderAll();
+    if (typeof saveState === 'function') saveState();
+  }
+
+  // Custom color set — apply one theme role (surface/edge/etc.) to
+  // matching-role children on ANY themable selection (accent block group
+  // OR standalone Add-Elements primitive). Runs live on picker input.
+  function customSetColor(themeRole, hex) {
+    const targets = _activeThemableTargets();
+    if (!targets.length) return;
+    targets.forEach(o => {
+      const role = o._role;
+      if (!role) return;
+      const spec = _ROLE_MAP[role];
+      if (!spec) return;
+      if (spec.fill === themeRole)   o.set('fill',   hex);
+      if (spec.stroke === themeRole) o.set('stroke', hex);
+    });
+    canvas.requestRenderAll();
+    if (typeof saveState === 'function') saveState();
+  }
+
+  function toggleCustomTheme() {
+    const panel = document.getElementById('flyerCustomTheme');
+    const btn = document.getElementById('flyerCustomToggleBtn');
+    if (!panel) return;
+    const open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : 'block';
+    if (btn) btn.textContent = open ? '🎨 Custom colors ▾' : '🎨 Custom colors ▴';
+  }
+
+  function _syncCustomPickers(theme) {
+    if (!theme) return;
+    const map = {
+      flyerCustomSurface: theme.surface,
+      flyerCustomEdge:    theme.surfaceEdge,
+      flyerCustomAccent:  theme.accent,
+      flyerCustomPrimary: theme.primaryText,
+      flyerCustomMuted:   theme.mutedText,
+    };
+    Object.entries(map).forEach(([id, v]) => {
+      const el = document.getElementById(id);
+      if (el && typeof v === 'string' && v.startsWith('#')) el.value = v;
+    });
+  }
+
+  // Render the theme swatch grid into the sidebar on editor open.
+  function _renderThemeSwatches() {
+    const el = document.getElementById('flyerThemeSwatches');
+    if (!el) return;
+    el.innerHTML = Object.entries(ACCENT_THEMES).map(([key, t]) => `
+      <button onclick="FE.applyThemeToBlock('${key}')" title="${t.label}"
+              class="fe-btn" style="padding:6px 4px;display:flex;flex-direction:column;gap:4px;align-items:center;">
+        <span style="display:flex;height:14px;width:100%;border-radius:2px;overflow:hidden;border:1px solid rgba(255,255,255,0.15);">
+          <span style="flex:2;background:${t.surface};"></span>
+          <span style="flex:1;background:${t.surfaceEdge};"></span>
+          <span style="flex:1;background:${t.primaryText};"></span>
+        </span>
+        <span style="font-size:0.65rem;">${t.label}</span>
+      </button>
+    `).join('');
+  }
+
+  // Gig-context auto-fill helpers (2026-08-01). If the flyer is being built
+  // for a BOOKED gig, use the real artist name / date / time as the initial
+  // text. Fall back to the friendly placeholder for open/pending gigs — the
+  // hydrateTemplateVars() pass at load time also swaps _tplVar-tagged text
+  // when a saved template is applied to a booked gig later.
+  function _isGigBooked() {
+    return !!(gigInfo && gigInfo.artist_name && gigInfo.artist_name.trim());
+  }
+  function _artistNameOr(fallback) {
+    return _isGigBooked() ? gigInfo.artist_name.toUpperCase() : fallback;
+  }
+  function _gigDateOr(fallback) {
+    if (!gigInfo || !gigInfo.date) return fallback;
+    try {
+      const d = new Date(gigInfo.date + 'T00:00:00');
+      return d.toLocaleDateString('en-US',
+        { weekday: 'long', month: 'short', day: 'numeric' }
+      ).toUpperCase();
+    } catch (_) { return fallback; }
+  }
+  function _gigTimeOr(fallback) {
+    // Prefer any Time-Text builder the editor already has; fall back to raw.
+    try { const t = buildTimeText && buildTimeText(); if (t) return t; }
+    catch (_) {}
+    return fallback;
+  }
+
+  // 1) WOOD SIGN — dark rounded plaque with editable artist name.
+  //    Auto-fills with the booked artist's name; enters edit mode on
+  //    insert so user can immediately type.
+  function addWoodSign() {
+    if (!canvas) return;
+    const s = canvas._scale;
+    const W = 360 * s, H = 110 * s;
+    const outer = new fabric.Rect(_rel({
+      left: -W/2, top: -H/2, width: W, height: H,
+      fill: '#2a1810', stroke: '#5a3a1e', strokeWidth: 4,
+      rx: 12 * s, ry: 12 * s,
+      _role: 'surface',
+    }));
+    const inner = new fabric.Rect(_rel({
+      left: -W/2 + 10*s, top: -H/2 + 10*s, width: W - 20*s, height: H - 20*s,
+      fill: 'transparent', stroke: 'rgba(245,215,138,0.55)', strokeWidth: 1.5,
+      rx: 8 * s, ry: 8 * s,
+      _role: 'accent',
+    }));
+    const label = new fabric.Textbox(_artistNameOr('ARTIST NAME'), _rel({
+      left: 0, top: 0, originX: 'center', originY: 'center',
+      width: W - 40*s, fontSize: 34 * s,
+      fontFamily: 'Georgia', fontWeight: 'bold',
+      fill: '#f5d78a', textAlign: 'center',
+      editable: true,
+      _tplVar: 'artist_name',
+      _role: 'primaryText',
+    }));
+    return _dropObjectsCentered([outer, inner, label], label);
+  }
+
+  // 2) BULB STRING — sagging wire with 9 warm edison bulbs. Decorative;
+  //    each piece independent so you can drag individual bulbs.
+  function addBulbString() {
+    if (!canvas) return;
+    const s = canvas._scale;
+    const W = 500 * s, count = 9, span = W / (count - 1);
+    const parts = [];
+    const points = [];
+    for (let i = 0; i < count; i++) {
+      points.push({
+        x: -W/2 + i * span,
+        y: -20 * s + Math.sin(Math.PI * i / (count - 1)) * 22 * s,
+      });
+    }
+    // Wire segments
+    for (let i = 0; i < points.length - 1; i++) {
+      const line = new fabric.Line(
+        [points[i].x, points[i].y, points[i+1].x, points[i+1].y],
+        { stroke: '#3a2a1c', strokeWidth: 1.5, strokeUniform: true, _role: 'wire' }
+      );
+      line.__relLeft = line.left; line.__relTop = line.top;
+      parts.push(line);
+    }
+    points.forEach(p => {
+      parts.push(new fabric.Circle(_rel({
+        left: p.x, top: p.y + 15 * s, originX: 'center', originY: 'center',
+        radius: 16 * s, fill: 'rgba(255,215,120,0.28)',
+        _role: 'bulbHalo',
+      })));
+      parts.push(new fabric.Circle(_rel({
+        left: p.x, top: p.y + 15 * s, originX: 'center', originY: 'center',
+        radius: 7 * s, fill: '#ffe08a', stroke: '#c8a25a', strokeWidth: 1,
+        _role: 'bulb',
+      })));
+    });
+    return _dropObjectsCentered(parts);
+  }
+
+  // 3) RIBBON — swallowtail banner with centered editable text.
+  //    Text stays "LIVE MUSIC" — this is a decorative header, not gig-specific.
+  function addRibbon() {
+    if (!canvas) return;
+    const s = canvas._scale;
+    const bodyW = 420 * s, bodyH = 78 * s, tailW = 40 * s;
+    // Tails — triangles poking out (behind body)
+    const tailL = new fabric.Polygon([
+      { x: 0,                    y: bodyH/2 },
+      { x: tailW * 0.6,          y: 0 },
+      { x: tailW,                y: bodyH/2 },
+      { x: tailW * 0.6,          y: bodyH },
+    ], { fill: '#8b1a1a', left: -bodyW/2 - tailW, top: -bodyH/2, strokeUniform: true, _role: 'ribbonBody' });
+    tailL.__relLeft = tailL.left; tailL.__relTop = tailL.top;
+    const tailR = new fabric.Polygon([
+      { x: 0,                    y: 0 },
+      { x: tailW * 0.4,          y: bodyH/2 },
+      { x: 0,                    y: bodyH },
+      { x: tailW,                y: bodyH/2 },
+    ], { fill: '#8b1a1a', left: bodyW/2, top: -bodyH/2, strokeUniform: true, _role: 'ribbonBody' });
+    tailR.__relLeft = tailR.left; tailR.__relTop = tailR.top;
+    const foldL = new fabric.Polygon([
+      { x: 0,       y: 0 },
+      { x: tailW/2, y: tailW/2 },
+      { x: 0,       y: tailW },
+    ], { fill: '#4a0f13', left: -bodyW/2 - tailW/2, top: bodyH/2 - tailW/2, _role: 'ribbonDark' });
+    foldL.__relLeft = foldL.left; foldL.__relTop = foldL.top;
+    const foldR = new fabric.Polygon([
+      { x: 0,        y: 0 },
+      { x: -tailW/2, y: tailW/2 },
+      { x: 0,        y: tailW },
+    ], { fill: '#4a0f13', left: bodyW/2 + tailW/2, top: bodyH/2 - tailW/2, _role: 'ribbonDark' });
+    foldR.__relLeft = foldR.left; foldR.__relTop = foldR.top;
+    const body = new fabric.Rect(_rel({
+      left: -bodyW/2, top: -bodyH/2, width: bodyW, height: bodyH,
+      fill: '#a52020', stroke: '#e8c07a', strokeWidth: 1.5,
+      _role: 'ribbonBody',
+    }));
+    const text = new fabric.Textbox('LIVE MUSIC', _rel({
+      left: 0, top: 0, originX: 'center', originY: 'center',
+      width: bodyW - 30*s, fontSize: 36 * s,
+      fontFamily: 'Georgia', fontWeight: 'bold',
+      fill: '#f5e6c8', textAlign: 'center', editable: true,
+      _role: 'ribbonText',
+    }));
+    return _dropObjectsCentered([tailL, tailR, foldL, foldR, body, text], text);
+  }
+
+  // 4) SCHEDULE ROW — three-column layout with editable date/artist/time.
+  //    Auto-fills all three from gigInfo if the gig is booked; falls back
+  //    to sample text otherwise. Stack multiple rows for a lineup strip.
+  //    Enters edit mode on ARTIST NAME so user can retype immediately.
+  function addScheduleRow() {
+    if (!canvas) return;
+    const s = canvas._scale;
+    const W = 620 * s, H = 44 * s;
+    const bg = new fabric.Rect(_rel({
+      left: -W/2, top: -H/2, width: W, height: H,
+      fill: 'rgba(20,15,10,0.85)', stroke: 'rgba(245,215,138,0.35)', strokeWidth: 1,
+      _role: 'surfaceAlpha',
+    }));
+    const date = new fabric.Textbox(_gigDateOr('FRIDAY, AUG 21'), _rel({
+      left: -W/2 + 20*s, top: -14*s,
+      width: 200 * s, fontSize: 18 * s,
+      fontFamily: 'Georgia', fontWeight: 'bold',
+      fill: '#c8a25a', textAlign: 'left', editable: true,
+      _tplVar: 'date', _role: 'mutedText',
+    }));
+    const starL = new fabric.IText('★', _rel({
+      left: -78 * s, top: -14*s,
+      fontSize: 16 * s, fill: '#c8a25a', editable: true,
+      _role: 'mutedText',
+    }));
+    const artist = new fabric.Textbox(_artistNameOr('ARTIST NAME'), _rel({
+      left: -160*s, top: -16*s,
+      width: 320 * s, fontSize: 22 * s,
+      fontFamily: 'Georgia', fontWeight: 'bold',
+      fill: '#f5e6c8', textAlign: 'center', editable: true,
+      _tplVar: 'artist_name', _role: 'primaryText',
+      splitByGrapheme: false,
+    }));
+    const starR = new fabric.IText('★', _rel({
+      left: 62 * s, top: -14*s,
+      fontSize: 16 * s, fill: '#c8a25a', editable: true,
+      _role: 'mutedText',
+    }));
+    const time = new fabric.Textbox(_gigTimeOr('7 – 10 PM'), _rel({
+      left: W/2 - 20*s - 180*s, top: -14*s,
+      width: 180 * s, fontSize: 18 * s,
+      fontFamily: 'Georgia', fontWeight: 'bold',
+      fill: '#c8a25a', textAlign: 'right', editable: true,
+      _tplVar: 'time', _role: 'mutedText',
+    }));
+    // Primary edit = artist name (most likely thing the user wants to type
+    // over first, especially for open gigs where the placeholder is generic).
+    return _dropObjectsCentered([bg, starL, starR, date, artist, time], artist);
+  }
+
+  // 5) FLOURISH — 3 gold stars with connecting hairlines. Small
+  //    ornament suitable for centering under a headline or above a
+  //    schedule strip. Stars are Textbox → change/delete freely.
+  function addFlourish() {
+    if (!canvas) return;
+    const s = canvas._scale;
+    const parts = [];
+    const lineL = new fabric.Line([-120 * s, 0, -25 * s, 0], {
+      stroke: '#c8a25a', strokeWidth: 1, strokeUniform: true,
+      _role: 'mutedText',
+    });
+    lineL.__relLeft = lineL.left; lineL.__relTop = lineL.top;
+    parts.push(lineL);
+    const lineR = new fabric.Line([25 * s, 0, 120 * s, 0], {
+      stroke: '#c8a25a', strokeWidth: 1, strokeUniform: true,
+      _role: 'mutedText',
+    });
+    lineR.__relLeft = lineR.left; lineR.__relTop = lineR.top;
+    parts.push(lineR);
+    // Center big star (IText — never wraps, no width needed)
+    parts.push(new fabric.IText('★', _rel({
+      left: -18 * s, top: -20 * s,
+      fontSize: 28 * s, fill: '#e8c07a', editable: true,
+      _role: 'primaryText',
+    })));
+    parts.push(new fabric.IText('✦', _rel({
+      left: -26 * s, top: -8 * s,
+      fontSize: 12 * s, fill: '#c8a25a', editable: true,
+      _role: 'mutedText',
+    })));
+    parts.push(new fabric.IText('✦', _rel({
+      left: 10 * s, top: -8 * s,
+      fontSize: 12 * s, fill: '#c8a25a', editable: true,
+      _role: 'mutedText',
+    })));
+    return _dropObjectsCentered(parts);
+  }
+
+  // 6) TICKET STUB — cream rectangle, dashed perforation, editable stub
+  //    number + "ADMIT ONE" + event name. Every text field editable.
+  function addTicketStub() {
+    if (!canvas) return;
+    const s = canvas._scale;
+    const W = 340 * s, H = 120 * s;
+    const body = new fabric.Rect(_rel({
+      left: -W/2, top: -H/2, width: W, height: H,
+      fill: '#f1e4c0', stroke: '#8b1a1a', strokeWidth: 2,
+      rx: 4 * s, ry: 4 * s,
+      _role: 'ticketBody',
+    }));
+    const perf = new fabric.Line(
+      [-W/2 + W * 0.28, -H/2 + 8*s, -W/2 + W * 0.28, H/2 - 8*s],
+      { stroke: '#8b1a1a', strokeWidth: 1, strokeUniform: true,
+        strokeDashArray: [3 * s, 3 * s], _role: 'ticketInk' }
+    );
+    perf.__relLeft = perf.left; perf.__relTop = perf.top;
+    const num = new fabric.Textbox('247', _rel({
+      left: -W/2 + 6*s, top: -18*s,
+      width: W * 0.22, fontSize: 34 * s, fill: '#8b1a1a',
+      fontFamily: 'Georgia', fontWeight: 'bold',
+      textAlign: 'center', editable: true,
+      _role: 'ticketInk',
+    }));
+    const admit = new fabric.Textbox('ADMIT ONE', _rel({
+      left: -W/2 + W * 0.28 + 10*s, top: -32 * s,
+      width: W * 0.68, fontSize: 22 * s, fill: '#8b1a1a',
+      fontFamily: 'Georgia', fontWeight: 'bold',
+      textAlign: 'center', charSpacing: 100, editable: true,
+      _role: 'ticketInk',
+    }));
+    const evt = new fabric.Textbox(_artistNameOr('LIVE MUSIC'), _rel({
+      left: -W/2 + W * 0.28 + 10*s, top: 4 * s,
+      width: W * 0.68, fontSize: 16 * s,
+      fontFamily: 'Georgia', fill: '#4a0f13',
+      textAlign: 'center', editable: true,
+      _tplVar: 'artist_name',
+      _role: 'ticketBodyText',
+    }));
+    _dropObjectsCentered([body, perf, num, admit, evt], evt);
+    // The tilt looks better applied to the body rect afterwards so the
+    // text editing UI isn't fighting a rotated selection box.
+    // (Kept flat for editability — user can rotate whole block via the
+    // selection-rotate handle once they're done editing.)
+    canvas.requestRenderAll();
+    return evt;
   }
 
   // Add a File-typed image to the canvas — used by both the file picker
@@ -2167,7 +2937,11 @@
     } else {document.getElementById('flyerShapeFill').value=hex(obj.fill);
       document.getElementById('flyerShapeStroke').value=hex(obj.stroke||'#ffffff');
       const op=Math.round((obj.opacity||1)*100);
-      document.getElementById('flyerOpacity').value=op;document.getElementById('flyerOpacityVal').textContent=op;}}
+      document.getElementById('flyerOpacity').value=op;document.getElementById('flyerOpacityVal').textContent=op;}
+    // 2026-08-01: keep the Rotate number input in sync with actual angle.
+    const angleInp = document.getElementById('flyerAngle');
+    if (angleInp) angleInp.value = Math.round(obj.angle || 0);
+  }
   function hideProps(){const e=document.getElementById('flyerProps');if(e)e.style.display='none';}
   function hex(c){if(!c||typeof c!=='string')return'#000000';if(c.startsWith('#'))return c.length>7?c.slice(0,7):c;
     const m=c.match(/(\d+)/g);if(m&&m.length>=3)return'#'+m.slice(0,3).map(n=>parseInt(n).toString(16).padStart(2,'0')).join('');return'#000000';}
@@ -2180,6 +2954,35 @@
   function toggleItalic(){const o=canvas?.getActiveObject();if(o){o.set('fontStyle',o.fontStyle==='italic'?'normal':'italic');canvas.renderAll();updateProps();}}
   function toggleUnderline(){const o=canvas?.getActiveObject();if(o){o.set('underline',!o.underline);canvas.renderAll();updateProps();}}
   function setOpacity(v){const o=canvas?.getActiveObject();if(o){o.set('opacity',parseInt(v)/100);canvas.renderAll();}document.getElementById('flyerOpacityVal').textContent=v;}
+
+  // 2026-08-01: rotate the current selection. `delta` is degrees to add
+  // (positive = clockwise). `reset:true` snaps to 0°. Also called by the
+  // number-input onchange via setAngle below.
+  function rotateSelected(delta, reset) {
+    if (!canvas) return;
+    const obj = canvas.getActiveObject();
+    if (!obj) return;
+    let next = reset ? 0 : (obj.angle || 0) + delta;
+    // Normalize to [-180, 180) for a saner readout
+    next = ((next + 180) % 360 + 360) % 360 - 180;
+    obj.set('angle', next);
+    obj.setCoords();
+    canvas.requestRenderAll();
+    const inp = document.getElementById('flyerAngle');
+    if (inp) inp.value = Math.round(next);
+    if (typeof saveState === 'function') saveState();
+  }
+  function setAngle(deg) {
+    if (!canvas) return;
+    const obj = canvas.getActiveObject();
+    if (!obj) return;
+    const n = parseFloat(deg);
+    if (isNaN(n)) return;
+    obj.set('angle', n);
+    obj.setCoords();
+    canvas.requestRenderAll();
+    if (typeof saveState === 'function') saveState();
+  }
   function layer(method){const o=canvas?.getActiveObject();if(o){canvas[method](o);canvas.renderAll();}}
   function deleteSelected(){const o=canvas?.getActiveObject();if(o){canvas.remove(o);canvas.discardActiveObject();canvas.renderAll();hideProps();}}
 
@@ -3036,9 +3839,15 @@
   window.FE = window.flyerEditor = {
     open, close, switchTab,
     addText, addHeading, addRect, addCircle, addLine, handleImageUpload,
+    // 2026-08-01: background presets + accent blocks
+    applyBgPreset,
+    addWoodSign, addBulbString, addRibbon, addScheduleRow, addFlourish, addTicketStub,
     setBgColor, handleBgUpload, clearBgImage, toggleBorder, updateBorder,
     setProp, setFontSize, setTextStroke, setStrokeWidth, setAlign,
     toggleBold, toggleItalic, toggleUnderline, setOpacity,
+    // 2026-08-01: rotate + accent-block color themes + custom colors
+    rotateSelected, setAngle,
+    applyThemeToBlock, customSetColor, toggleCustomTheme,
     layer, deleteSelected, copySelected, cutSelected, pasteClipboard, centerOnCanvas, nudgeSelected, changeSize,
     onTemplateSelect, saveAsDefaultTemplate, saveAsNewTemplate, deleteCurrentTemplate, deleteCurrentFlyer, loadDefaultTemplate, setSiteDefault, toggleAutoFlyers,
     saveAsAdminDefault, saveAsNewAdminTemplate, deleteAdminTemplate,

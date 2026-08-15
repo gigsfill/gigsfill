@@ -742,14 +742,18 @@ def delete_artist_preview(artist_id: int, user=Depends(get_current_user), db=Dep
             "other_users_count": 0, "upcoming_gigs": [], "live_txns": [],
         }
 
+    # 2026-08-08 audit fix (same class as #5-7): outer `g.status IN (...)`
+    # excludes partial multi-slot gigs (parent 'open' until last slot
+    # books). Slot-side JOIN already scopes to gigs where this artist
+    # holds an active slot; drop the outer filter so delete-preview
+    # accurately shows the count of future gigs affected.
     upcoming = db.execute(text("""
         SELECT DISTINCT g.id as gig_id, g.date, v.venue_name
         FROM gigs g
         JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
                          AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
         LEFT JOIN venues v ON v.id = g.venue_id
-        WHERE g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-          AND g.date >= :today
+        WHERE g.date >= :today
         ORDER BY g.date ASC
     """), {"aid": artist_id, "today": utcnow_naive().date().isoformat()}).mappings().all()
 

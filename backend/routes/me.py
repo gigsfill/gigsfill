@@ -427,11 +427,19 @@ def delete_preview(user=Depends(get_current_user), db=Depends(get_db)):
     # Audit fix (May 2026 part 7): include awaiting_venue_contract +
     # pending_contract so the delete-preview warns about in-flight contract
     # gigs (previously the user was never told and the gig got stuck after delete).
+    # 2026-08-08 audit fix (same class as findings #5-7): the previous
+    # filter counted `g.status IN ('booked',...)` at the parent level,
+    # which undercounts partial multi-slot gigs (parent stays 'open'
+    # until every slot books — routes/gigs.py:2853-2862). Count gigs
+    # with ANY future slot in an active-booking state instead.
     venues = db.execute(text("""
         SELECT v.id, v.venue_name as name,
-            (SELECT COUNT(*) FROM gigs g WHERE g.venue_id = v.id
-                                          AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
-                                          AND g.date >= :today) as booked_gigs
+            (SELECT COUNT(DISTINCT g.id) FROM gigs g
+             JOIN gig_slots gs ON gs.gig_id = g.id
+             WHERE g.venue_id = v.id
+               AND g.date >= :today
+               AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
+            ) as booked_gigs
         FROM venues v
         WHERE v.user_id = :uid AND v.deleted_at IS NULL
     """), {"uid": user_id, "today": utcnow_naive().date().isoformat()}).mappings().fetchall()
@@ -678,6 +686,48 @@ def delete_account(request: Request, data: dict = Body(default={}), user=Depends
             "DELETE FROM user_settings WHERE user_id = :uid",
             "DELETE FROM user_availability WHERE user_id = :uid",
             "DELETE FROM artist_email_digest_queue WHERE user_id = :uid",
+            # BUG FIX 2026-08-07: another sweep for FK-blocking references
+            # the previous cascades missed. Symptom: users with no
+            # artists/venues but old transaction/invitation history got
+            # "Delete Account Failed" — NOT NULL FKs on the columns
+            # below refused the final DELETE FROM users.
+            #   • transactions.from_user_id / to_user_id: audit trail —
+            #     NULL the FK (preserves the row like reviews). Schema
+            #     migrated to nullable in the same commit.
+            #   • venue_email_history.user_id: same — audit log of
+            #     venue-outbound emails; preserve row, NULL the sender.
+            #   • artist_invitations.invited_by_user_id: same policy —
+            #     invitation record survives, inviter FK cleared.
+            #   • gig_message_hides / gig_templates: per-user prefs;
+            #     no audit reason to preserve, just DELETE.
+            #   • review_link_tokens: single-use magic links; DELETE.
+            #   • admin_audit_log.admin_user_id: PRESERVED intentionally
+            #     (real audit trail — no cleanup here).
+            "UPDATE transactions SET from_user_id = NULL WHERE from_user_id = :uid",
+            "UPDATE transactions SET to_user_id   = NULL WHERE to_user_id   = :uid",
+            "UPDATE venue_email_history SET user_id = NULL WHERE user_id = :uid",
+            "UPDATE artist_invitations SET invited_by_user_id = NULL WHERE invited_by_user_id = :uid",
+            "DELETE FROM gig_message_hides WHERE user_id = :uid",
+            "DELETE FROM gig_templates WHERE created_by_user_id = :uid",
+            "DELETE FROM review_link_tokens WHERE user_id = :uid",
+            # BUG FIX 2026-08-13: another sweep. Symptom in production:
+            # deleting a user with legacy in-app notifications, pending
+            # entity invites, or any per-user email/SMS preference rows
+            # failed with FOREIGN KEY constraint failed on DELETE FROM
+            # users. All four columns below are NOT NULL, so an UPDATE
+            # ... SET NULL would silently fail — they must be deleted.
+            #   • notifications.user_id: UI-only, no audit value once
+            #     the recipient is gone.
+            #   • entity_invitations.invited_by_user_id: pending invites
+            #     the deleting user sent — cancel them (analogous to
+            #     artist_invitations, but that column is nullable so it
+            #     gets NULLed above; this one is NOT NULL so DELETE).
+            #   • email_preferences / sms_preferences: per-user prefs,
+            #     meaningless without the user.
+            "DELETE FROM notifications WHERE user_id = :uid",
+            "DELETE FROM entity_invitations WHERE invited_by_user_id = :uid",
+            "DELETE FROM email_preferences WHERE user_id = :uid",
+            "DELETE FROM sms_preferences WHERE user_id = :uid",
         ):
             try:
                 db.execute(text(_stmt), {"uid": user_id})

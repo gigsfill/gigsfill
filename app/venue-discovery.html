@@ -195,7 +195,11 @@
 <div class="header-inner">
 <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
 <div class="header-actions">
-<a class="btn ghost" href="/app/venue-email-center.html">📧 Email Center</a>
+<!-- Email Center button removed 2026-08-06: this is the artist-facing
+     "Find Venues" page, and the live Email Center is a tab inside
+     venue-create-gigs.html for venue owners — not an artist feature.
+     The stale /app/venue-email-center.html file linked here was never
+     loaded by the live UI (see CLAUDE.md note). -->
 <a class="btn ghost" href="/app/user-profile.html">User Profile</a>
 <button class="btn ghost" onclick="logout()">Logout</button>
 </div>
@@ -248,7 +252,7 @@
 </div>
 </main>
 <script src="/app/static/js/auth.guard.js?v=3"></script>
-<script src="/app/static/js/api-globals.js?v=11"></script>
+<script src="/app/static/js/api-globals.js?v=12"></script>
 <script src="/app/static/js/city-autocomplete.js"></script>
 <script src="/app/static/js/venue.discovery.js" type="module"></script>
 
@@ -261,5 +265,6 @@
 <script src="/app/static/js/sw-register.js"></script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

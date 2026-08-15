@@ -380,6 +380,22 @@ def process_gig_confirmation(cursor, smtp_config):
         # (gig umbrella). For a multi-slot gig where the artist's actual set
         # is e.g. 8-10pm within a 7-11pm gig, the confirmation reminder was
         # showing the umbrella window instead of the artist's slot window.
+        # 2026-08-08 audit fix (finding #13): two bugs here.
+        # (1) Outer `AND g.status = 'booked'` dropped every partial
+        # multi-slot gig — parent gigs.status stays 'open' until the
+        # last slot books (see routes/gigs.py:2853-2862), so any artist
+        # on slot 1 of a 3-slot gig never got the T-1w reminder.
+        # (2) The exclusion `g.id NOT IN (SELECT gig_id ... WHERE
+        # notification_key='gig_confirmation')` was gig-scoped, so once
+        # the FIRST artist on a multi-slot gig got a reminder, every
+        # subsequent artist (booked later, or in later slots) was
+        # silently skipped. Fix: scope the exclusion per artist by
+        # extending the notification_key with the artist id
+        # ('gig_confirmation_a{aid}') — the UNIQUE(gig_id,
+        # notification_key) constraint on gig_email_log still holds
+        # because keys are per-artist-distinct. Drop the outer
+        # g.status filter — the JOIN's gs.status='booked' already
+        # restricts to slots that actually got booked.
         cursor.execute("""
             SELECT g.id, g.date, gs.start_time, gs.end_time,
                    gs.pay as pay, g.notes, gs.artist_id,
@@ -389,11 +405,20 @@ def process_gig_confirmation(cursor, smtp_config):
             JOIN gig_slots gs ON gs.gig_id = g.id AND gs.status = 'booked'
             WHERE g.venue_id = ?
               AND g.date = ?
-              AND g.status = 'booked'
               AND gs.artist_id IS NOT NULL
-              AND g.id NOT IN (
-                  SELECT gig_id FROM gig_email_log
-                  WHERE notification_key = 'gig_confirmation'
+              AND NOT EXISTS (
+                  SELECT 1 FROM gig_email_log el
+                  WHERE el.gig_id = g.id
+                    AND (
+                        -- New per-artist key (post-2026-08-08).
+                        el.notification_key = 'gig_confirmation_a' || gs.artist_id
+                        -- Backward-compat: gigs that already got the OLD
+                        -- shared 'gig_confirmation' key before the deploy
+                        -- shouldn't send a duplicate to every artist on
+                        -- the next cron fire. Treat the old marker as
+                        -- "everyone on this gig was already notified".
+                        OR el.notification_key = 'gig_confirmation'
+                    )
               )
         """, (venue_id, target_date_str))
 
@@ -450,16 +475,19 @@ def process_gig_confirmation(cursor, smtp_config):
             body = render_template(template['body'], variables)
 
             if send_email(smtp_config, artist_email, subject, body):
-                # FIX (May 2026): use UPSERT so multi-slot gigs (multiple artists
-                # per gig) increment recipient_count correctly. Previously this
-                # was INSERT OR IGNORE which left the count at 1 regardless of
-                # how many artists got the email.
+                # 2026-08-08 audit fix (finding #13): key on per-artist
+                # notification_key so the SELECT above correctly excludes
+                # only THIS artist's already-sent reminder for THIS gig.
+                # The old shared 'gig_confirmation' key meant that once
+                # artist A on a multi-slot gig got their reminder, artist
+                # B never did. Per-artist keys are stable across restarts
+                # and don't require schema changes.
                 cursor.execute("""
                     INSERT INTO gig_email_log (gig_id, venue_id, notification_key, sent_for_date, recipient_count)
-                    VALUES (?, ?, 'gig_confirmation', ?, 1)
+                    VALUES (?, ?, ?, ?, 1)
                     ON CONFLICT(gig_id, notification_key) DO UPDATE SET
                         recipient_count = recipient_count + 1
-                """, (gig_id, venue_id, target_date_str))
+                """, (gig_id, venue_id, f"gig_confirmation_a{artist_id}", target_date_str))
 
 
 def _build_slots_html_for_scheduler(cursor, gig_id, gig_pay, gig_artist_type, gig_band_formats, gig_styles, artist_override_pay=None):
@@ -1674,6 +1702,38 @@ def run_scheduled_emails():
             from backend.routes.demo_requests import mark_completed_demos
             mark_completed_demos(cursor)
         _run(_mark_completed_demos, "mark_completed_demos")
+
+        # 2026-08-02: Prune external-gig flyers whose gig date is >30 days
+        # past. Long enough for fans to have gone + a buffer for the
+        # artist's calendar view. Deletes the file on disk and clears the
+        # DB pointer — the gig row itself stays so the artist's history
+        # is preserved. Runs once per tick; idempotent (rows already
+        # cleared are skipped by the WHERE flyer_path IS NOT NULL guard).
+        def _prune_ext_flyers():
+            import pathlib
+            _FLYER_ROOT = pathlib.Path("/opt/gigsfill/uploads/ext_flyers")
+            rows = cursor.execute("""
+                SELECT id, artist_id, flyer_path
+                  FROM artist_external_gigs
+                 WHERE flyer_path IS NOT NULL
+                   AND date < date('now', '-30 days')
+            """).fetchall()
+            for row in rows:
+                rel = row[2]
+                if not rel:
+                    continue
+                p = _FLYER_ROOT / rel
+                if p.exists():
+                    try: p.unlink()
+                    except Exception as e:
+                        logger.warning(f"[SCHED] ext-flyer unlink failed for {p}: {e}")
+                cursor.execute(
+                    "UPDATE artist_external_gigs SET flyer_path=NULL, flyer_uploaded_at=NULL WHERE id=?",
+                    (row[0],)
+                )
+            if rows:
+                logger.info(f"[SCHED] pruned {len(rows)} external-gig flyer(s) older than 30 days")
+        _run(_prune_ext_flyers, "prune_ext_gig_flyers")
 
     except Exception as e:
         logger.error(f"[SCHED] Fatal error in run_scheduled_emails: {e}", exc_info=True)

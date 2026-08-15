@@ -263,7 +263,22 @@ async function executeDeleteAccount() {
     });
 
     if (resp.ok) {
-      window.location.href = '/?deleted=1';
+      // 2026-08-13: give the user a branded confirmation instead of a
+      // silent redirect. Also fires the redirect on modal OK-click so
+      // impatient users don't wait the full 3s.
+      const _goHome = () => { window.location.href = '/?deleted=1'; };
+      let _redirected = false;
+      const _redirectOnce = () => { if (!_redirected) { _redirected = true; _goHome(); } };
+      if (typeof window.showSuccessModal === 'function') {
+        window.showSuccessModal(
+          'Account Deleted',
+          'Your account has been deleted. Redirecting to the homepage...',
+          _redirectOnce
+        );
+        setTimeout(_redirectOnce, 3000);
+      } else {
+        setTimeout(_goHome, 3000);
+      }
       return;
     }
 

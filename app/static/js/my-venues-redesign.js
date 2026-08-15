@@ -397,13 +397,20 @@ class MyVenuesRedesign {
       statusBadge = `<span style="background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.5); color: #a78bfa; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">⏳ Waitlisted (${pos} of ${total})</span>`;
     }
 
-    // Pay and frequency: use override if set, otherwise venue default.
-    // Only meaningful for actively-preferred ('approved') venues — for revoked/denied/
-    // banned/non-preferred, the per-artist terms don't apply, so we hide the chip.
-    const payD = (venue.pay_dollars_override != null) ? venue.pay_dollars_override : (venue.venue_default_pay_dollars || 0);
-    const payC = String((venue.pay_cents_override != null) ? venue.pay_cents_override : (venue.venue_default_pay_cents || 0)).padStart(2, '0');
-    const freqD = (venue.frequency_days_override != null) ? venue.frequency_days_override : (venue.venue_default_freq_days || 0);
-    const showPayChip = (status === 'approved');
+    // 2026-08-06: only surface an override chip when the venue has
+    // ACTUALLY set one. Zero counts as "not set" — a saved $0.00 pay
+    // override is functionally identical to no override at all (the
+    // artist can't be booked for $0), and a saved 0-day frequency is
+    // meaningless. Treating them as "no override" matches the venue
+    // user's mental model on the My Artists tab where the empty state
+    // is 0/0/0. Gated on approved-preferred status — the columns
+    // don't apply otherwise.
+    const payOverrideD = venue.pay_dollars_override || 0;
+    const payOverrideC = venue.pay_cents_override   || 0;
+    const freqOverrideD = venue.frequency_days_override || 0;
+    const hasPayOverride  = (status === 'approved') && (payOverrideD > 0 || payOverrideC > 0);
+    const hasFreqOverride = (status === 'approved') && (freqOverrideD > 0);
+    const payOverrideCStr = String(payOverrideC).padStart(2, '0');
 
     // Audit fix (May 2026 part 7): escape every user-controlled field.
     const _vid_safe = parseInt(venueId, 10) || 0;
@@ -422,16 +429,16 @@ class MyVenuesRedesign {
             </div>
             <span onclick="myVenuesRedesign.openPastGigsModal(${_vid_safe}, '${_mv_attr(venueName || 'Venue')}')" style="font-size: 0.68rem; color: #3b82f6; white-space: nowrap; cursor: pointer; width: fit-content;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'" title="View your past gigs at this venue">📅 Past Gigs ›</span>
           </div>
-          ${showPayChip ? `<div onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 12px; background: rgba(99,91,255,0.08); border: 1px solid rgba(99,91,255,0.2); border-radius: 6px; padding: 5px 12px; white-space: nowrap;">
-            <div style="display: flex; align-items: center; gap: 4px;">
+          ${(hasPayOverride || hasFreqOverride) ? `<div onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 12px; background: rgba(99,91,255,0.08); border: 1px solid rgba(99,91,255,0.2); border-radius: 6px; padding: 5px 12px; white-space: nowrap;">
+            ${hasPayOverride ? `<div title="Pay Override — a custom pay rate this venue set specifically for you. Replaces the venue's default pay for gigs you book here." style="display: flex; align-items: center; gap: 4px; cursor: help;">
               <span style="font-size: 0.75rem; color: var(--text-muted);">Pay:</span>
-              <span style="font-size: 0.8rem; color: #e2e8f0; font-weight: 500;">$${payD}.${payC}</span>
-            </div>
-            <div style="width: 1px; height: 16px; background: rgba(99,91,255,0.25);"></div>
-            <div style="display: flex; align-items: center; gap: 4px;">
+              <span style="font-size: 0.8rem; color: #e2e8f0; font-weight: 500;">$${payOverrideD}.${payOverrideCStr}</span>
+            </div>` : ''}
+            ${(hasPayOverride && hasFreqOverride) ? `<div style="width: 1px; height: 16px; background: rgba(99,91,255,0.25);"></div>` : ''}
+            ${hasFreqOverride ? `<div title="Frequency Override — how often this venue lets you book. Replaces the venue's default frequency limit (e.g. '1 per 28 days' means you can book once every 28 days at this venue)." style="display: flex; align-items: center; gap: 4px; cursor: help;">
               <span style="font-size: 0.75rem; color: var(--text-muted);">Frequency:</span>
-              <span style="font-size: 0.8rem; color: #e2e8f0; font-weight: 500;">1 per ${freqD} days</span>
-            </div>
+              <span style="font-size: 0.8rem; color: #e2e8f0; font-weight: 500;">1 per ${freqOverrideD} days</span>
+            </div>` : ''}
           </div>` : '<div></div>'}
           <div onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
             ${_buildRateVenueBtn(venue, venueId, venueName)}

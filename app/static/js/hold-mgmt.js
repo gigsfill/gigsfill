@@ -581,11 +581,26 @@
             return '$--';
           }
           // Count under-freq candidates so we can surface the summary
-          // note explaining the auto-waiver (Jun 2026).
+          // note explaining what happens when they're added (Jun 2026).
+          //
+          // 2026-08-07: branch on series membership. Single-gig holds
+          // auto-stamp `frequency_exempt=1` so the copy accurately
+          // reads "waive for this gig only". Series-mode holds
+          // (recurring_group_id present) intentionally do NOT waive —
+          // the artist's bundled-offer modal greys out dates that
+          // conflict with the venue's freq rule, so the rule stays in
+          // force across the series. Show a matching series message
+          // instead so the venue isn't misled.
           const _underFreqCount = candidates.filter(a => a.freq_status && a.freq_status.under_limit).length;
-          const _summaryNote = _underFreqCount > 0
-            ? `<div style="font-size:0.64rem;color:#fbbf24;margin:2px 4px 6px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.25);border-radius:4px;padding:5px 7px;line-height:1.35;"><strong>${_underFreqCount} artist${_underFreqCount!==1?'s':''}</strong> ${_underFreqCount===1?'is':'are'} under this venue's frequency policy. Adding them will waive the rule for this gig only.</div>`
-            : '';
+          const _isSeriesMode = !!(gigData && gigData.recurring_group_id);
+          let _summaryNote = '';
+          if (_underFreqCount > 0) {
+            const _who = `<strong>${_underFreqCount} artist${_underFreqCount!==1?'s':''}</strong> ${_underFreqCount===1?'is':'are'}`;
+            const _body = _isSeriesMode
+              ? `${_who} currently under this venue's frequency policy. They can still be invited — their bundled-offer modal will grey out dates that conflict with the rule.`
+              : `${_who} under this venue's frequency policy. Adding them will waive the rule for this gig only.`;
+            _summaryNote = `<div style="font-size:0.64rem;color:#fbbf24;margin:2px 4px 6px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.25);border-radius:4px;padding:5px 7px;line-height:1.35;">${_body}</div>`;
+          }
           function _freqChip(a) {
             const fs = a.freq_status;
             if (!fs || !fs.under_limit) return '';

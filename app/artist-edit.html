@@ -14,7 +14,7 @@
 
   
   
-  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
@@ -585,11 +585,11 @@
 <script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
   <script src="/app/static/js/auth.guard.js?v=3"></script>
-  <script src="/app/static/js/api-globals.js?v=11"></script>
+  <script src="/app/static/js/api-globals.js?v=12"></script>
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=22"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=23"></script>
   
 </head>
 
@@ -700,13 +700,17 @@
       </div>
     </div>
 
-    <!-- SECTION 4: BIO -->
+    <!-- SECTION 4: BIO — autosaves on blur (Aug 2026 change) so an
+         artist who navigates away without clicking the button doesn't
+         lose the edit. Manual button kept for discoverability + as an
+         explicit "save now" for users who prefer clicking. -->
     <div class="content-card">
       <h2>Bio</h2>
       <textarea id="bio" rows="3" style="width: 100%;"></textarea>
       <div style="display: flex; gap: 12px; margin-top: 12px; align-items: center;">
         <button id="saveBioBtn" class="btn primary">Save Bio</button>
         <span id="bioStatus" style="font-size: 0.8rem; color: var(--text-gray);"></span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: auto;">Auto-saves on blur.</span>
       </div>
     </div>
 
@@ -800,38 +804,11 @@
       <div id="videos" class="media-grid"></div>
     </div>
 
-  <!-- SECTION 7: AVAILABILITY / BLACKOUT DATES -->
-  <div class="content-card" id="availabilitySection" style="display:none;">
-    <h2>Artist Availability</h2>
-    <p style="color:var(--text-gray);font-size:0.85rem;margin:-4px 0 6px;">
-      Dates this <strong style="color:var(--text);">whole artist</strong> is unavailable — e.g. band on hiatus,
-      touring elsewhere, drummer's wedding, holiday break.
-    </p>
-    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 14px;">
-      🚫 <strong style="color:#ef4444;">Hard block</strong> — no warning, no override; the dates
-      are simply not offered as bookable. For a single member being unavailable
-      (rest of the band still plays), use
-      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Availability</a>
-      on that member's profile instead.
-    </p>
-    <div id="availabilityContainer"></div>
-  </div>
-
-  <!-- SECTION 8: MEMBER AVAILABILITY (read-only summary) -->
-  <div class="content-card" id="memberAvailabilitySection" style="display:none;">
-    <h2>Member Availability</h2>
-    <p style="color:var(--text-gray);font-size:0.85rem;margin:-4px 0 14px;">
-      Read-only view of the personal blackout dates each band member has
-      added on their own profile. These are <strong style="color:#f59e0b;">soft warnings</strong> —
-      bookings on these dates still go through, but the artist gets an
-      alert like "Jim is unavailable that night — play as a duo?" so the
-      band can decide. Members edit their own dates from
-      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Profile → My Availability</a>.
-    </p>
-    <div id="memberAvailabilityContainer">
-      <p style="color:var(--text-gray);">Loading…</p>
-    </div>
-  </div>
+  <!-- 2026-08-01: Artist Availability + Member Availability sections were
+       moved to the "Availability" tab on artist-book-gigs.html so both
+       kinds of blackout data live next to gig booking. The JS modules
+       (artist-availability.js, artist-member-availability.js) now load
+       and populate on that page instead. -->
 
   </main>
 
@@ -844,11 +821,10 @@
 <!-- Vanity URL editor: must load BEFORE the init scripts that want
      to use window.applyVanityToLinks for the header profile button. -->
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
-<script src="/app/static/js/artist-availability.js?v=5"></script>
-<script src="/app/static/js/artist-member-availability.js?v=4"></script>
-<script src="/app/static/js/messages.js?v=7"></script>
-<script src="/app/static/js/artist-edit-init.js?v=2"></script>
-<script src="/app/static/js/onboarding-checklist.js" defer></script>
+<!-- 2026-08-01: availability JS moved to artist-book-gigs.html (Availability tab). -->
+<script src="/app/static/js/messages.js?v=8"></script>
+<script src="/app/static/js/artist-edit-init.js?v=3"></script>
+<script src="/app/static/js/onboarding-checklist.js?v=7" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
 <script>
@@ -862,5 +838,6 @@
   })();
 </script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

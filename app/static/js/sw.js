@@ -10,7 +10,14 @@
 // pre-dates the audio-caption + audio-entry reorder changes.
 // v8 (2026-06-17): forces eviction of any cached venue-create-gigs.html
 // that pre-dates the templates-in-header relocation + door-pill restyle.
-const CACHE_NAME = 'gigsfill-v9';
+// v10 (2026-08-11): sticky-tabs work. Evicts stale gigsfill.css that the
+// SW was serving from cache with the old translucent header + tabs so
+// scrolling content ghosted through. New CSS is opaque + flush.
+// v11 (2026-08-11): CSS/JS switched to network-first — cache-first was
+// making every CSS edit require two reloads before it took effect.
+// v12 (2026-08-11): tabs switched to position:fixed for bulletproof
+// pinning. Bump to evict stale cached CSS in case v11 didn't take.
+const CACHE_NAME = 'gigsfill-v12';
 
 // App shell — core files needed to launch
 const APP_SHELL = [
@@ -64,11 +71,30 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Static assets (CSS, JS, images, fonts): cache-first
-  if (url.pathname.match(/\.(css|js|svg|png|jpg|jpeg|gif|webp|woff2?|ttf|eot)$/)) {
+  // CSS + JS: network-first (Aug 11 2026). Previously cache-first with
+  // background revalidate — that returned STALE CSS on every load and
+  // only updated the cache for the NEXT visit, so a CSS edit needed
+  // two reloads to take effect (and users often never scrolled that
+  // far). Switch to network-first: fetch fresh every time, fall back
+  // to cache only when offline. Small perf cost, huge deploy-freshness
+  // win. Images/fonts still cache-first below since they rarely change.
+  if (url.pathname.match(/\.(css|js)$/)) {
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return response;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Images / fonts: cache-first (rarely change; freshness cost > perf cost).
+  if (url.pathname.match(/\.(svg|png|jpg|jpeg|gif|webp|woff2?|ttf|eot)$/)) {
     event.respondWith(
       caches.match(event.request).then(cached => {
-        // Return cached version, but also update cache in background
         const fetchPromise = fetch(event.request).then(response => {
           if (response.ok) {
             const clone = response.clone();
@@ -76,7 +102,6 @@ self.addEventListener('fetch', event => {
           }
           return response;
         }).catch(() => cached);
-
         return cached || fetchPromise;
       })
     );

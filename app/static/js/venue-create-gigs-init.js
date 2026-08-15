@@ -389,8 +389,57 @@ async function loadVenueEmailNotifications(venueId) {
   } catch (e) {
     console.error('Error loading email notification settings:', e);
   }
+
+  // 2026-08-10: load the venue-level booking policy toggle
+  // (require_same_day_approval). Lives on the venue row itself, not
+  // in email_notifications, so it needs a separate GET.
+  try {
+    const vRes = await fetch(`/api/venues/${venueId}`, { credentials: 'include' });
+    if (vRes.ok) {
+      const v = await vRes.json();
+      const _sda = _el('venue_require_same_day_approval');
+      if (_sda) {
+        // Default 1 on new venues; explicit 0 = opted out.
+        _sda.checked = (v.require_same_day_approval == null)
+          ? true
+          : !!parseInt(v.require_same_day_approval, 10);
+      }
+    }
+  } catch (_) {}
+
   window._emailNotifLoaded = true; // allow saves now
 }
+
+// 2026-08-10: standalone save for the venue-level booking policy toggle
+// — not part of the per-window email-notifications payload, so it goes
+// through the general venue PUT.
+async function saveVenueRequireSameDayApproval() {
+  if (!window._emailNotifLoaded) return;
+  const vid = window.venueId || new URLSearchParams(window.location.search).get('venue_id');
+  if (!vid) return;
+  const el = _el('venue_require_same_day_approval');
+  if (!el) return;
+  try {
+    const res = await fetch(`/api/venues/${vid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ require_same_day_approval: el.checked ? 1 : 0 })
+    });
+    if (res.ok) {
+      const indicator = document.getElementById('emailNotifSaveIndicator');
+      if (indicator) {
+        indicator.style.opacity = '1';
+        setTimeout(() => { indicator.style.opacity = '0'; }, 2000);
+      }
+    } else {
+      console.error('Save require_same_day_approval failed:', res.status, await res.text());
+    }
+  } catch (e) {
+    console.error('Error saving require_same_day_approval:', e);
+  }
+}
+window.saveVenueRequireSameDayApproval = saveVenueRequireSameDayApproval;
 
 async function saveVenueEmailNotifications() {
   // Don't save while initial load is populating fields

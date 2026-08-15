@@ -851,9 +851,14 @@ function renderW9Status(data) {
     };
     
     const certDate = data.certified_at ? new Date(data.certified_at).toLocaleDateString() : 'N/A';
-    const tinDisplay = data.tin 
-      ? (data.tin_type === 'ein' ? `EIN: ${data.tin}` : `SSN: ${data.tin}`)
-      : (data.tin_type === 'ein' ? `EIN: ***-**${data.tin_last4}` : `SSN: ***-**-${data.tin_last4}`);
+    // Aug 2026 audit fix: always display the masked (last-4) form.
+    // Backend no longer returns the plaintext TIN via GET, so even if
+    // an entity-user team member has artist access they see only the
+    // last four digits — never the full SSN/EIN.
+    const _last4 = data.tin_last4 || '••••';
+    const tinDisplay = data.tin_type === 'ein'
+      ? `EIN: **-***${_last4}`
+      : `SSN: ***-**-${_last4}`;
     
     statusEl.innerHTML = `
       <div style="background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); border-radius: 8px; padding: 16px; margin-bottom: ${needsRecert ? '12px' : '0'};">
@@ -910,10 +915,14 @@ function editW9() {
     document.getElementById('w9Zip').value = w9Data.zip_code || '';
     document.getElementById('w9TinType').value = w9Data.tin_type || 'ssn';
     document.getElementById('w9TinLabel').textContent = w9Data.tin_type === 'ein' ? 'EIN' : 'SSN';
-    document.getElementById('w9Tin').value = w9Data.tin || '';
-    if (!w9Data.tin) {
-      document.getElementById('w9Tin').placeholder = 'Re-enter 9 digits to update';
-    }
+    // Aug 2026 audit fix: never prefill the TIN field on edit. Backend
+    // no longer returns the plaintext, and the save endpoint now
+    // preserves the stored TIN when this field is left blank — so an
+    // artist editing their address / name doesn't have to re-type SSN,
+    // but the plaintext never sits in the DOM either.
+    const _tinEl = document.getElementById('w9Tin');
+    _tinEl.value = '';
+    _tinEl.placeholder = `Leave blank to keep the SSN/EIN on file (ending ${w9Data.tin_last4 || '••••'})`;
   }
   document.getElementById('w9Certify').checked = false;
   document.getElementById('w9CancelBtn').style.display = 'inline-block';
@@ -935,11 +944,13 @@ async function saveW9() {
   const taxClass = document.getElementById('w9TaxClassification').value;
   const certified = document.getElementById('w9Certify').checked;
   
-  // Validation
+  // Validation. Blank TIN is allowed on EDIT (means "keep the one on
+  // file"); on first-time submission the backend rejects a blank TIN.
+  const _isEdit = !!(w9Data && w9Data.tin_last4);
   if (!taxName) { showW9Error('Please enter your legal name.'); return; }
   if (!taxClass) { showW9Error('Please select a tax classification.'); return; }
-  if (!tin) { showW9Error('Please enter your SSN or EIN.'); return; }
-  if (tin.length !== 9) { showW9Error('SSN/EIN must be exactly 9 digits (numbers only).'); return; }
+  if (!_isEdit && !tin) { showW9Error('Please enter your SSN or EIN.'); return; }
+  if (tin && tin.length !== 9) { showW9Error('SSN/EIN must be exactly 9 digits (numbers only).'); return; }
   if (!certified) { showW9Error('You must check the certification box to save.'); return; }
   
   const btn = document.getElementById('w9SaveBtn');
@@ -1040,4 +1051,66 @@ window.showRecentMessages = function() {
     const _aid = _p.get('artist_id');
     startUnreadBadgePolling(30000, _aid ? { artist_id: parseInt(_aid) } : {});
   }
+})();
+
+// ── AVAILABILITY TAB (2026-08-01) ───────────────────────────────────────────
+// Moved from artist-edit.html so the artist's team can manage blackout
+// dates alongside gig booking. When the page loads with ?artist_id=X we
+// reveal both sections and render into their containers — same targets
+// artist-availability.js + artist-member-availability.js already look for,
+// so no changes needed in those modules. Sections stay display:none until
+// we know we have an artist_id (matches the artist-edit behavior).
+(function initAvailabilityTab() {
+  const params = new URLSearchParams(window.location.search);
+  const artistId = params.get('artist_id');
+  if (!artistId) return;
+  const aid = parseInt(artistId);
+  const section = document.getElementById('availabilitySection');
+  if (section) section.style.display = '';
+  const memberSection = document.getElementById('memberAvailabilitySection');
+  if (memberSection) memberSection.style.display = '';
+  // Render the editable artist-wide blackout panel.
+  if (typeof renderAvailabilityPanel === 'function') {
+    renderAvailabilityPanel('availabilityContainer', aid);
+  }
+  // artist-member-availability.js auto-loads on DOMContentLoaded so we
+  // don't need to invoke it here — it finds #memberAvailabilityContainer.
+})();
+
+
+// ── EXTERNAL GIGS (2026-08-01) ──────────────────────────────────────────────
+// Kick the artist-external-gigs module — loads the artist's non-GigsFill
+// gigs from POST-authorized /api/artists/{id}/external-gigs and injects
+// them as muted bubbles onto the calendar. Also enables the "Add External
+// Gig" modal that opens when the user clicks empty space on a day cell.
+(function initExternalGigsForArtist() {
+  const params = new URLSearchParams(window.location.search);
+  const artistId = params.get('artist_id');
+  if (!artistId) return;
+  // We need the artist name to show in the modal ("Artist: Fridays Past").
+  // Fetch it once — artist-book-gigs already has this info in _artistInfo
+  // but the timing is unreliable. A dedicated fetch is cheap.
+  fetch(`/api/artists/${artistId}`, { credentials: 'include' })
+    .then(r => r.ok ? r.json() : null)
+    .then(a => {
+      const name = (a && (a.name || a.artist_name)) || 'This artist';
+      // Pass the artist's saved profile defaults so the "Add Gig" modal
+      // pre-fills Artist Type / Lineup / Styles from what the artist
+      // configured on their Edit Artist page. band_formats + styles are
+      // stored as comma-separated strings in the artists table.
+      const _split = s => (s ? String(s).split(',').map(x => x.trim()).filter(Boolean) : []);
+      const defaults = a ? {
+        artist_type: a.artist_type || null,
+        lineup: _split(a.band_formats),
+        styles: _split(a.styles),
+      } : null;
+      if (typeof window.initExternalGigs === 'function') {
+        window.initExternalGigs(artistId, name, defaults);
+      }
+    })
+    .catch(() => {
+      if (typeof window.initExternalGigs === 'function') {
+        window.initExternalGigs(artistId, 'This artist');
+      }
+    });
 })();

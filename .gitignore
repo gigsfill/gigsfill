@@ -38,6 +38,10 @@ env/
 
 # ─── User-uploaded media (lives on disk, will move to object storage later) ─
 app/static/uploads/
+uploads/
+
+# ─── Working data files (not source) ───────────────────────────────────────
+gigsfill_scouting_list.xlsx
 
 # ─── Editor / OS noise ─────────────────────────────────────────────────────
 .vscode/

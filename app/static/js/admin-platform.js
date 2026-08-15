@@ -967,18 +967,26 @@ window._adminConfirm = function(opts) {
     el._t = setTimeout(() => { el.style.opacity = '0'; }, 2000);
   }
 
-  // ── Init on platform tab open ──────────────────────────────────────────────
-  // Hook into switchTab
+  // ── Init on platform / serverstats tab open ────────────────────────────────
+  // Hook into switchTab. As of 2026-08-13 the Server Health metrics and
+  // Site Status toggle strip live under their own "Server Stats" tab
+  // (see admin.html #serverstats-tab). loadServerHealth() only paints
+  // when Server Stats is opened; loadSiteStatusToggles() still fires on
+  // Platform Settings too because it also pre-populates the Payment
+  // Settings form fields (avoids the blank-fields-wipe-DB bug).
   const _origSwitchTab = window.switchTab;
   if (typeof _origSwitchTab === 'function') {
     window.switchTab = function (tab) {
       _origSwitchTab(tab);
       if (tab === 'platform') {
         loadDashboardStats();
-        loadServerHealth();
         loadEmailSettings();
         loadSiteStatusToggles();
         // Payment settings load when user clicks Payment subtab (via switchPsTab)
+      }
+      if (tab === 'serverstats') {
+        loadServerHealth();
+        loadSiteStatusToggles();
       }
     };
   }

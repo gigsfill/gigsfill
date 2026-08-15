@@ -153,6 +153,7 @@ from backend.routes import (
     analytics, tax, contracts, stripe_connect, flyers, onboarding,
     reviews, messages, availability, waitlist, affiliate, vanity,
     unsubscribe, demo_requests, contact,
+    artist_external_gigs, pricing,
 )
 
 def ensure_database():
@@ -287,6 +288,7 @@ app.include_router(notifications.router)
 app.include_router(cities.router)
 app.include_router(admin.router)
 app.include_router(admin_payments.router)
+app.include_router(pricing.router)
 app.include_router(emails.router)
 app.include_router(venue_emails.router)
 app.include_router(entity_users.router)
@@ -513,6 +515,85 @@ class MaintenanceModeMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 app.add_middleware(MaintenanceModeMiddleware)
+
+# 2026-08-15: enforce email verification at the HTTP layer.
+# The frontend already redirects unverified users to /app/verify-email.html
+# (see app/static/js/auth.guard.js:102) — but that's client-side only.
+# Anyone with a valid session cookie could hit backend endpoints directly
+# and mutate the platform before verifying. This middleware is the real
+# lock: authenticated + unverified users get 403 on any state-changing
+# API call. Read-only calls (GET/HEAD) and the small set of endpoints the
+# user actually needs while unverified (view own profile, resend verify,
+# change email, delete account, verify link, logout) stay open. Admins
+# bypass entirely so they can never be locked out.
+class EmailVerificationMiddleware(BaseHTTPMiddleware):
+    # Exact paths that stay open while unverified.
+    # PUT /api/me handles email-change (there is no separate change-email
+    # endpoint — see me.py:76), DELETE /api/me/delete removes the account,
+    # POST /api/resend-verification-email refires the verify link, etc.
+    EXEMPT_EXACT = frozenset({
+        '/api/me',
+        '/api/me/delete',
+        '/api/me/delete-preview',
+        '/api/logout',
+        '/api/verify-email',
+        '/api/resend-verification-email',
+    })
+    # Prefixes: notification polling has path params (/api/notifications/{id}/read).
+    EXEMPT_PREFIX = ('/api/notifications',)
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        # Non-API traffic and read-only methods bypass entirely — this
+        # middleware only blocks WRITES from unverified sessions.
+        if not path.startswith('/api/'):
+            return await call_next(request)
+        if request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return await call_next(request)
+        if path in self.EXEMPT_EXACT or any(path.startswith(p) for p in self.EXEMPT_PREFIX):
+            return await call_next(request)
+        # No session cookie? Downstream handlers will 401 on auth-required
+        # endpoints; public POST endpoints (login, signup, forgot-password,
+        # reset-password, demo-request) reach their handlers unhindered.
+        session_token = request.cookies.get('session_token')
+        if not session_token:
+            return await call_next(request)
+        try:
+            from backend.routes.auth import verify_session_token_with_iat
+            from backend.db import SessionLocal
+            from sqlalchemy import text as _sa_text
+            user_id, _ = verify_session_token_with_iat(session_token)
+            _db = SessionLocal()
+            try:
+                row = _db.execute(
+                    _sa_text("SELECT is_admin, COALESCE(email_verified,0) AS email_verified FROM users WHERE id = :uid"),
+                    {"uid": user_id},
+                ).mappings().first()
+            finally:
+                _db.close()
+            if not row:
+                return await call_next(request)  # invalid session → let handler 401
+            # Admins bypass — canonical check per CLAUDE.md handles both
+            # legacy 'true'/'false' TEXT and current '0'/'1' TEXT.
+            if str(row.get('is_admin', '')).lower() in ('true', '1'):
+                return await call_next(request)
+            if not row.get('email_verified'):
+                from starlette.responses import JSONResponse
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": "EMAIL_NOT_VERIFIED",
+                        "message": "Please verify your email address to continue. Check your inbox for the verification link, or request a new one from your profile.",
+                    },
+                )
+        except Exception:
+            # Never invent new failure modes here — a bad token or DB blip
+            # falls through to the normal handler chain, which handles 401
+            # on its own.
+            pass
+        return await call_next(request)
+
+app.add_middleware(EmailVerificationMiddleware)
 # Request-ID — registered LAST so it runs FIRST (Starlette inverts
 # middleware order). Every other middleware then sees the contextvar
 # populated.
@@ -602,6 +683,22 @@ def root():
     """Redirect to main application"""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/app/index.html")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """Serve the brand PNG for the well-known /favicon.ico path. Every page
+    already declares <link rel="icon"> pointing at the SVG + PNG, but a lot
+    of browsers/tabs/bots still hit /favicon.ico unconditionally regardless
+    of the declared link, producing ~10 404s/hour in the access log. Route
+    resolves those to the existing small brandmark PNG (104x78, RGBA).
+    Browsers accept PNG data at any filename. Added 2026-07-29."""
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        "app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png",
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 @app.get("/health")
 def health():
@@ -1527,3 +1624,4 @@ app.include_router(vanity.router)
 app.include_router(unsubscribe.router)
 app.include_router(demo_requests.router)
 app.include_router(contact.router)
+app.include_router(artist_external_gigs.router)

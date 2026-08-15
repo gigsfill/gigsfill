@@ -35,8 +35,6 @@ async function renderAvailabilityPanel(containerId, artistId) {
 }
 
 function _renderAvailabilityUI(container, artistId, blackouts) {
-  const today = new Date().toISOString().slice(0, 10);
-
   container.innerHTML = `
     <div style="margin-bottom:16px;">
       <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">
@@ -46,17 +44,20 @@ function _renderAvailabilityUI(container, artistId, blackouts) {
         Add date ranges when you're unavailable to perform. Dates with your existing bookings cannot be blocked.
       </p>
 
-      <!-- Add form -->
+      <!-- Add form. 2026-08-07: native <input type=date> replaced with
+           the branded GfDatePicker (dark popup + purple accents to
+           match the rest of the site). _bindDatePickers() below wires
+           the picker instances + From→To month sync. -->
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:16px;">
         <div class="field" style="flex:1;min-width:130px;margin-bottom:0;">
           <label style="font-size:0.7rem;">From</label>
-          <input type="date" id="blackoutStart_${artistId}" min="${today}"
-            style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+          <input type="text" readonly class="gf-date-input" id="blackoutStart_${artistId}" placeholder="mm/dd/yyyy"
+            style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);cursor:pointer;">
         </div>
         <div class="field" style="flex:1;min-width:130px;margin-bottom:0;">
           <label style="font-size:0.7rem;">To</label>
-          <input type="date" id="blackoutEnd_${artistId}" min="${today}"
-            style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
+          <input type="text" readonly class="gf-date-input" id="blackoutEnd_${artistId}" placeholder="mm/dd/yyyy"
+            style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);cursor:pointer;">
         </div>
         <div class="field" style="flex:2;min-width:160px;margin-bottom:0;">
           <label style="font-size:0.7rem;">Reason (optional)</label>
@@ -75,6 +76,47 @@ function _renderAvailabilityUI(container, artistId, blackouts) {
       </div>
     </div>
   `;
+  _bindDatePickers(artistId, blackouts);
+}
+
+// Convert display value (mm/dd/yyyy from GfDatePicker or legacy
+// yyyy-mm-dd from a plain input) into ISO. Returns '' when empty
+// or unparseable.
+function _isoFromDateEl(el) {
+  const v = (el && el.value || '').trim();
+  let m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  return v.match(/^\d{4}-\d{2}-\d{2}$/) ? v : '';
+}
+window._blackoutIsoFromEl = _isoFromDateEl;  // exposed for save/edit callers
+
+// Instantiate GfDatePicker on every blackout date input in the panel +
+// wire From→To month sync so picking a Start opens the End picker on
+// the same month. Runs after each render since the DOM is replaced.
+function _bindDatePickers(artistId, blackouts) {
+  if (typeof window.GfDatePicker !== 'function') return;
+  const bindPair = (startId, endId) => {
+    const s = document.getElementById(startId);
+    const e = document.getElementById(endId);
+    if (!s || !e) return;
+    if (!s._gfP) s._gfP = new window.GfDatePicker(s);
+    if (!e._gfP) e._gfP = new window.GfDatePicker(e);
+    if (!s._syncBound) {
+      s._syncBound = true;
+      s.addEventListener('change', () => {
+        const iso = s._gfP.getISO();
+        if (!iso) return;
+        const endIso = e._gfP.getISO();
+        if (!endIso || endIso < iso) e._gfP.setISO(iso);
+        const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) e._gfP.viewDate = new Date(+m[1], +m[2] - 1, 1);
+      });
+    }
+  };
+  bindPair(`blackoutStart_${artistId}`, `blackoutEnd_${artistId}`);
+  // Per-row edit forms are hidden by default; instantiating pickers
+  // now is fine since they lazy-render their popup on click.
+  (blackouts || []).forEach(b => bindPair(`editStart_${b.id}`, `editEnd_${b.id}`));
 }
 
 function _renderBlackoutList(blackouts, artistId) {
@@ -108,13 +150,13 @@ function _renderBlackoutList(blackouts, artistId) {
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
           <div>
             <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Start</label>
-            <input type="date" id="editStart_${b.id}"
-              style="background:var(--input-bg,#1a1f2e);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;">
+            <input type="text" readonly class="gf-date-input" id="editStart_${b.id}" placeholder="mm/dd/yyyy"
+              style="background:var(--input-bg,#1a1f2e);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;cursor:pointer;">
           </div>
           <div>
             <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">End</label>
-            <input type="date" id="editEnd_${b.id}"
-              style="background:var(--input-bg,#1a1f2e);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;">
+            <input type="text" readonly class="gf-date-input" id="editEnd_${b.id}" placeholder="mm/dd/yyyy"
+              style="background:var(--input-bg,#1a1f2e);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;cursor:pointer;">
           </div>
           <div style="flex:1;min-width:140px;">
             <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Reason (optional)</label>
@@ -140,8 +182,8 @@ function _renderBlackoutList(blackouts, artistId) {
 // ── ADD BLACKOUT ──────────────────────────────────────────────────────────
 
 window.addBlackout = async function(artistId, force = false) {
-  const start = document.getElementById(`blackoutStart_${artistId}`)?.value;
-  const end = document.getElementById(`blackoutEnd_${artistId}`)?.value;
+  const start = _isoFromDateEl(document.getElementById(`blackoutStart_${artistId}`));
+  const end = _isoFromDateEl(document.getElementById(`blackoutEnd_${artistId}`));
   const reason = document.getElementById(`blackoutReason_${artistId}`)?.value?.trim() || '';
   const msgEl = document.getElementById(`blackoutMsg_${artistId}`);
 
@@ -183,11 +225,14 @@ window.addBlackout = async function(artistId, force = false) {
     if (msgEl) { msgEl.textContent = successMsg; msgEl.style.color = '#22c55e'; }
     setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000);
 
-    // Clear inputs
+    // Clear inputs (via GfDatePicker when present so the picker
+    // instance's internal state also resets).
     const s = document.getElementById(`blackoutStart_${artistId}`);
     const e = document.getElementById(`blackoutEnd_${artistId}`);
     const r = document.getElementById(`blackoutReason_${artistId}`);
-    if (s) s.value = ''; if (e) e.value = ''; if (r) r.value = '';
+    if (s) { if (s._gfP && s._gfP.setISO) s._gfP.setISO(''); else s.value = ''; }
+    if (e) { if (e._gfP && e._gfP.setISO) e._gfP.setISO(''); else e.value = ''; }
+    if (r) r.value = '';
 
     // Refresh list
     await _refreshBlackoutList(artistId);
@@ -278,14 +323,17 @@ window.editBlackout = function(artistId, blackoutId, start, end, reason) {
   const sEl = document.getElementById(`editStart_${blackoutId}`);
   const eEl = document.getElementById(`editEnd_${blackoutId}`);
   const rEl = document.getElementById(`editReason_${blackoutId}`);
-  if (sEl) sEl.value = start;
-  if (eEl) eEl.value = end;
+  // Values from DB are ISO (yyyy-mm-dd). Route through GfDatePicker's
+  // setISO() so the display shows mm/dd/yyyy in the branded picker
+  // instead of falling back to the raw ISO string.
+  if (sEl) { if (sEl._gfP && sEl._gfP.setISO) sEl._gfP.setISO(start || ''); else sEl.value = start; }
+  if (eEl) { if (eEl._gfP && eEl._gfP.setISO) eEl._gfP.setISO(end || ''); else eEl.value = end; }
   if (rEl) rEl.value = reason;
 };
 
 window.saveBlackoutEdit = async function(artistId, blackoutId) {
-  const start = document.getElementById(`editStart_${blackoutId}`)?.value;
-  const end = document.getElementById(`editEnd_${blackoutId}`)?.value;
+  const start = _isoFromDateEl(document.getElementById(`editStart_${blackoutId}`));
+  const end = _isoFromDateEl(document.getElementById(`editEnd_${blackoutId}`));
   const reason = document.getElementById(`editReason_${blackoutId}`)?.value?.trim() || '';
   const msgEl = document.getElementById(`editMsg_${blackoutId}`);
 
@@ -342,7 +390,30 @@ async function _refreshBlackoutList(artistId) {
     const res = await fetch(`/api/artists/${artistId}/availability`, { credentials: 'include' });
     const data = await res.json();
     const list = document.getElementById(`blackoutList_${artistId}`);
-    if (list) list.innerHTML = _renderBlackoutList(data.blackouts || [], artistId);
+    if (list) {
+      list.innerHTML = _renderBlackoutList(data.blackouts || [], artistId);
+      // Rebind pickers on the newly-rendered edit rows. The add-form
+      // pickers persist since only the list is replaced.
+      (data.blackouts || []).forEach(b => {
+        const s = document.getElementById(`editStart_${b.id}`);
+        const e = document.getElementById(`editEnd_${b.id}`);
+        if (typeof window.GfDatePicker === 'function' && s && e) {
+          if (!s._gfP) s._gfP = new window.GfDatePicker(s);
+          if (!e._gfP) e._gfP = new window.GfDatePicker(e);
+          if (!s._syncBound) {
+            s._syncBound = true;
+            s.addEventListener('change', () => {
+              const iso = s._gfP.getISO();
+              if (!iso) return;
+              const endIso = e._gfP.getISO();
+              if (!endIso || endIso < iso) e._gfP.setISO(iso);
+              const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+              if (m) e._gfP.viewDate = new Date(+m[1], +m[2] - 1, 1);
+            });
+          }
+        }
+      });
+    }
   } catch (e) {}
 }
 

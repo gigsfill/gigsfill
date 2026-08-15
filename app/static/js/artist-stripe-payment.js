@@ -105,30 +105,37 @@ async function artistOpenDashboard() {
   } catch (e) { console.error('Dashboard link error:', e); }
 }
 
+// 2026-08-15: one popup surface. Previously this had its own separate
+// "Setup Required Before Booking" modal which stacked on top of the
+// Artist Setup Checklist popup that shows on every page load — two
+// competing popups saying the same thing. Now this just re-triggers
+// the checklist (via window.showOnboardingChecklist, exposed from
+// onboarding-checklist.js) so the artist sees the same familiar list
+// they already see everywhere else. The checklist's subtitle already
+// spells out that these items must be complete before booking.
+// Kept sync so the caller in artist.book-gigs.js stays sync too.
 function checkArtistPaymentMethod() {
   var payoutReady = window._artistConnectReady || false;
   var w9Ready = window._artistW9Ready || false;
-  
-  // Also check DOM as fallback for payout
   if (!payoutReady) {
     var complete = document.getElementById('artistConnectComplete');
     payoutReady = complete && complete.style.display !== 'none';
   }
-  
-  if (payoutReady && w9Ready) {
-    return true;
+  if (payoutReady && w9Ready) return true;
+  // 2026-08-15: close the gig-detail modal underneath so the checklist
+  // popup isn't buried under a stacked modal. Both entry points (Book
+  // slot button + Ask Venue for Preferred Status button) live inside
+  // that modal — hiding it here means every caller benefits without
+  // repeating the class-toggle in each callback. #modalOverlay is the
+  // shared gig-modal container on artist-book-gigs.html.
+  var _gm = document.getElementById('modalOverlay');
+  if (_gm) _gm.classList.add('hidden');
+  // Re-fire the checklist. If it's already open from page load, showModal
+  // inside onboarding-checklist.js removes the prior instance before
+  // rebuilding — no double-render.
+  if (typeof window.showOnboardingChecklist === 'function') {
+    window.showOnboardingChecklist();
   }
-  
-  // Build message with links to the right pages
-  var params = new URLSearchParams(window.location.search);
-  var artistIdParam = params.get('artist_id') || '';
-  var missing = [];
-  if (!payoutReady) missing.push('<li style="margin-bottom:8px;"><strong>Payout Account</strong> — Set up your Stripe Connect account to receive payments.<br><a href="javascript:void(0)" onclick="var m=document.getElementById(\'paymentModal\'); if(m)m.remove(); var t=document.querySelector(\'.tab[onclick*=payments]\'); if(t)t.click();" style="color:#a78bfa;">Go to Payments Tab →</a></li>');
-  if (!w9Ready) missing.push('<li style="margin-bottom:8px;"><strong>W9 Tax Information</strong> — Complete your W9 form for tax compliance.<br><a href="javascript:void(0)" onclick="var m=document.getElementById(\'paymentModal\'); if(m)m.remove(); var t=document.querySelector(\'.tab[onclick*=taxes]\'); if(t)t.click();" style="color:#a78bfa;">Go to Tax Information Tab →</a></li>');
-  
-  showPaymentModal('Setup Required Before Booking', 
-    '<p style="margin-bottom:12px;">Please complete the following before booking gigs:</p><ul style="text-align:left;padding-left:20px;margin:0;">' + missing.join('') + '</ul>', 
-    'warning');
   return false;
 }
 window.checkArtistPaymentMethod = checkArtistPaymentMethod;

@@ -945,40 +945,35 @@ def _is_same_day_booking(gig_date_str: str, gig_start_time: str = None,
 
 
 def _venue_requires_same_day_approval(db, venue_id: int) -> bool:
-    """Return True if the venue OWNER wants to gatekeep same-day bookings
+    """Return True if the venue wants to gatekeep same-day bookings
     (i.e. force a pending_venue_approval hold before the artist is confirmed).
 
-    Jul 21 2026 fix — the `venue_booking_approval_request` notification
-    preference was previously used ONLY to gate the venue's email; the
-    approval hold ALWAYS fired. That silently trapped same-day bookings
-    for venue users who had turned the pref off (they never got notified
-    and the booking sat pending forever).
+    2026-08-10 rewrite — moved from user-level to venue-level. Previously
+    this read the venue OWNER's `email_preferences.venue_booking_approval_request`
+    row, which conflated "does the gate fire" (policy) with "does the
+    owner want an email" (notification) and forced multi-venue owners
+    into a single global setting. Now:
 
-    Now the preference actually controls the gate:
-      • Owner's row missing OR enabled=1 → require approval (safe default).
-      • Owner's row explicitly enabled=0 → skip the gate, auto-confirm.
+      • POLICY (does the gate fire?) → venues.require_same_day_approval,
+        editable per-venue by any authorized team member on the venue's
+        Email Notifications tab.
+      • NOTIFICATION (does THIS user want an email when the gate fires?) →
+        email_preferences.venue_booking_approval_request, per-user opt-out.
 
-    Checking only the OWNER (not every entity user) keeps behavior
-    deterministic — the owner is the primary decision-maker. Staff users
-    can still opt out of the email individually via their own preference.
+    A one-shot backfill on deploy copies each venue owner's old email
+    pref into the new column so existing behavior is preserved.
+
+    Defaults to True (safe): venue not found OR column NULL → require approval.
     """
     try:
         row = db.execute(text("""
-            SELECT ep.enabled
-              FROM venues v
-              LEFT JOIN email_preferences ep
-                ON ep.user_id = v.user_id
-               AND ep.notification_type = 'venue_booking_approval_request'
-             WHERE v.id = :vid
+            SELECT COALESCE(require_same_day_approval, 1) as req
+              FROM venues
+             WHERE id = :vid
         """), {"vid": venue_id}).first()
         if not row:
             return True  # Venue not found → default to safer behavior
-        enabled = row[0]
-        # NULL (no explicit preference row) → default True (require).
-        # 0 → explicitly opted out → skip the hold.
-        if enabled is None:
-            return True
-        return bool(int(enabled))
+        return bool(int(row[0] or 0))
     except Exception:
         # If anything goes wrong reading the pref, default to the pre-fix
         # behavior (require approval) so we never silently lose the gate.
@@ -1305,9 +1300,18 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
         logger.error(f"create_gig error for venue {venue_id}: {e}", exc_info=True)
         raise HTTPException(500, f"Failed to create gig: {str(e)}")
 
-# LIST ALL GIGS (PUBLIC / ARTIST)
+# LIST ALL GIGS (AUTHENTICATED — used by artist book-gigs calendar and
+# venue create-gigs countersign lookup). Historically anonymous — the
+# 2026-08-08 audit surfaced that anonymous callers could scrape the
+# entire gig catalog including venue notes and per-slot door-deal
+# economics. Both frontend callers are authenticated pages, so
+# requiring get_current_user closes the exposure without changing the
+# UI. Rate-limited (100/min) as defense-in-depth against authenticated
+# enumeration. The hardened anonymous-safe view lives at
+# /api/gigs/public (30/min, 7d…+90d window, notes/door-terms stripped).
 @router.get("/gigs")
-def list_gigs(db=Depends(get_db)):
+@limiter.limit("100/minute")
+def list_gigs(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
     try:
         rows = db.execute(
             text("""
@@ -2260,10 +2264,15 @@ def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
         if freq and (freq["freq_days"] or 0) > 0:
             # Jul 2026 refactor: dropped `g.artist_id=:aid OR` leg — slot-
             # only covers both shapes post-backfill.
+            # 2026-08-08 audit fix (same class as #5-7): outer `g.status IN`
+            # excluded partial multi-slot gigs at this venue where the
+            # artist held a booked slot but the parent was still 'open'.
+            # An artist could then book too frequently. Slot-side status
+            # filter alone is correct — a booked slot at the venue counts
+            # against the freq policy regardless of parent status.
             close = db.execute(_t("""SELECT g.date FROM gigs g
                                      JOIN gig_slots gs ON gs.gig_id=g.id AND gs.artist_id=:aid
                                      WHERE g.venue_id=:vid AND g.id!=:gid
-                                       AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                        AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                      ORDER BY ABS(JULIANDAY(g.date)-JULIANDAY(:d)) LIMIT 1"""),
                                {"vid": venue_id, "aid": artist_id, "gid": gig_id, "d": gig_date}).mappings().first()
@@ -2398,7 +2407,7 @@ def book_gig(
     # below can run without a second SELECT.
     gig = db.execute(
         text("""
-            SELECT id, venue_id, status, date, artist_id, artist_type, band_formats,
+            SELECT id, venue_id, status, hold_status, date, artist_id, artist_type, band_formats,
                    COALESCE(frequency_exempt, 0) as frequency_exempt
             FROM gigs
             WHERE id = :gid
@@ -2408,6 +2417,20 @@ def book_gig(
 
     if not gig:
         raise HTTPException(404, "Gig not found")
+
+    # 2026-08-08 audit fix (finding #12): mirror book_slot's hold_status
+    # guard (routes/gigs.py:5003). The current frontend routes all
+    # held-gig bookings through /book-with-contract with a hold_token,
+    # so this is not reachable via the UI — but a curl-direct call by
+    # the currently-offered artist would claim the slot AND freeze the
+    # hold rotation (no re-offer to the next artist, hold_status stays
+    # 'active', gig hidden from public search). Defense-in-depth.
+    _hold_token = (request.query_params.get("hold_token") or "").strip()
+    if gig.get("hold_status") in ("active", "exhausted") and not _hold_token:
+        raise HTTPException(
+            403,
+            "This gig is currently held for another artist and cannot be booked directly."
+        )
 
     # Artist type + lineup match gate — see _check_artist_matches_gig
     # docstring. Hard 400 on mismatch. Mirrors the frontend's "blocked"
@@ -5185,10 +5208,12 @@ def book_slot(
         if freq and (freq["freq_days"] or 0) > 0:
             # Jul 2026 refactor: dropped `g.artist_id=:aid OR` leg — slot-
             # only covers both shapes post-backfill.
+            # 2026-08-08 audit fix (same class as #5-7): see gigs.py:2275
+            # comment. Outer g.status filter dropped partial multi-slot
+            # gigs from the freq check.
             close = db.execute(text("""SELECT g.date FROM gigs g
                                        JOIN gig_slots gs ON gs.gig_id=g.id AND gs.artist_id=:aid
                                        WHERE g.venue_id=:vid AND g.id!=:gid
-                                         AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                          AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                        ORDER BY ABS(JULIANDAY(g.date)-JULIANDAY(:d)) LIMIT 1"""),
                               {"vid": gig["venue_id"], "aid": artist_id, "gid": gig_id, "d": gig_date_str}).mappings().first()
@@ -7085,6 +7110,54 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
             return False
         return True
 
+    # 2026-08-10: when the owning window has waive_frequency=OFF,
+    # preferred artists currently inside their frequency window at this
+    # venue CANNOT book this gig anyway (the freq gate would reject
+    # them). Filtering them out here means they don't get an email they
+    # can't act on. When waive_frequency=ON, everyone can book, so no
+    # filter needed. Pre-load the venue default once; per-artist
+    # override still checked in the loop.
+    _venue_default_freq_days = 0
+    if not waive_freq_own:
+        _vfd_row = db.execute(
+            text("SELECT COALESCE(artist_frequency_days, 0) as fd FROM venues WHERE id = :vid"),
+            {"vid": venue_id}
+        ).mappings().first()
+        _venue_default_freq_days = int((_vfd_row or {}).get("fd") or 0)
+
+    def _artist_under_freq_limit(artist_id_local):
+        """Returns True when this artist has a booked slot at this
+        venue within the freq-days window of the gig's date, so they
+        should be filtered out when waive_frequency is OFF."""
+        # Per-artist override wins over venue default.
+        _fd_row = db.execute(
+            text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) as fd
+                    FROM preferred_artists pa
+                    JOIN venues v ON v.id = pa.venue_id
+                    WHERE pa.venue_id = :vid AND pa.artist_id = :aid"""),
+            {"vid": venue_id, "aid": artist_id_local}
+        ).mappings().first()
+        _fd = int((_fd_row or {}).get("fd") or _venue_default_freq_days or 0)
+        if _fd <= 0:
+            return False
+        _close = db.execute(text("""
+            SELECT g2.date FROM gigs g2
+            JOIN gig_slots gs2 ON gs2.gig_id = g2.id AND gs2.artist_id = :aid
+            WHERE g2.venue_id = :vid AND g2.id != :gid
+              AND gs2.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
+            ORDER BY ABS(JULIANDAY(g2.date) - JULIANDAY(:d)) LIMIT 1
+        """), {"vid": venue_id, "aid": artist_id_local, "gid": gig_id,
+               "d": str(gig["date"])[:10]}).mappings().first()
+        if not _close:
+            return False
+        try:
+            from datetime import datetime as _dt_fq
+            _d1 = _dt_fq.strptime(str(gig["date"])[:10], "%Y-%m-%d")
+            _d2 = _dt_fq.strptime(str(_close["date"])[:10], "%Y-%m-%d")
+            return abs((_d1 - _d2).days) <= _fd
+        except Exception:
+            return False
+
     sent_count = 0
     for artist in artists:
         # Match artist type — accepted types include gig-level + any
@@ -7114,6 +7187,15 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
                 logger.info(f"[BLAST] Skipping {artist['name']}: styles mismatch (gig-level)")
                 continue
 
+        # 2026-08-10: skip preferred artists who couldn't book anyway.
+        # When the owning window has waive_frequency=OFF and this artist
+        # is currently inside the venue's frequency window, they'd be
+        # rejected at the book gate — sending them an email they can't
+        # act on is worse than not sending. Skip silently.
+        if not waive_freq_own and _artist_under_freq_limit(artist["id"]):
+            logger.info(f"[BLAST] Skipping {artist['name']}: inside freq window at this venue and window's waive_frequency is off")
+            continue
+
         # Check email preference — only skip if explicitly disabled
         pref = db.execute(text(
             "SELECT enabled FROM email_preferences WHERE user_id = :uid AND notification_type = 'cancelled_gig_preferred_blast'"
@@ -7140,6 +7222,13 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
             "state": gig["state"] or "",
             "gig_id": str(gig_id),
             "blast_token": blast_token,
+            # 2026-08-10: template conditionally shows the "frequency waived"
+            # sentence only when the owning open-gig window actually has
+            # waive_frequency enabled. Previously the "no frequency
+            # limitation" language was hardcoded, which confused artists
+            # who wouldn't have hit a freq conflict anyway. "1" is truthy;
+            # empty string is falsy for render_template's {{#var}}...{{/var}}.
+            "waive_frequency": "1" if waive_freq_own else "",
             # Venue detail fields
             "venue_address":        _venue_address,
             "venue_address_link":   _venue_address_link,
@@ -8143,6 +8232,15 @@ def artist_ical(artist_id: int, user=Depends(get_current_user), db=Depends(get_d
     # ("$X guarantee + Y% of door") when the slot has deal_type='door'.
     # gs.* fields are NULL for single-slot legacy gigs that booked via
     # gigs.artist_id directly — the helper falls back to gigs.pay then.
+    # 2026-08-08 audit fix (finding #5): the previous outer-level
+    # `AND g.status IN ('booked','pending_contract','awaiting_venue_contract')`
+    # dropped every multi-slot booking whose parent gig still had open
+    # sibling slots (parent stays g.status='open' until the last slot
+    # fills — see book_slot). Move the status check inside each OR
+    # branch so single-slot uses g.status and multi-slot uses gs.status.
+    # Also add 'pending_venue_approval' for consistency with the digest
+    # renderer at open_gig_digest.py:204-224.
+    _BOOKED_STATUSES = ('booked', 'pending_contract', 'awaiting_venue_contract', 'pending_venue_approval')
     rows = db.execute(
         text("""
             SELECT DISTINCT
@@ -8156,12 +8254,14 @@ def artist_ical(artist_id: int, user=Depends(get_current_user), db=Depends(get_d
             FROM gigs g
             JOIN venues v ON v.id = g.venue_id
             LEFT JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
-            WHERE (g.artist_id = :aid OR gs.artist_id = :aid)
-              AND g.status IN ('booked', 'pending_contract', 'awaiting_venue_contract')
+            WHERE (
+                (g.artist_id = :aid AND g.status IN :booked)
+                OR (gs.artist_id = :aid AND gs.status IN :booked)
+            )
               AND g.date >= date('now', '-1 day')
             ORDER BY g.date ASC
-        """),
-        {"aid": artist_id}
+        """).bindparams(bindparam("booked", expanding=True)),
+        {"aid": artist_id, "booked": list(_BOOKED_STATUSES)}
     ).mappings().all()
 
     from backend.services.email_dispatch import format_pay_summary_with_sign
@@ -9061,6 +9161,12 @@ def get_hold_status(gig_id: int, user=Depends(get_current_user), db=Depends(get_
         # endpoint with for_gig_date and surface per-artist freq status
         # (Jun 2026 — Hold-Gig add-artist UX).
         "date": str(gig["date"])[:10] if gig.get("date") else None,
+        # Series membership so the post-create add-artist picker in
+        # hold-mgmt.js can render the correct freq disclaimer: in
+        # series mode the freq rule is NOT waived (bundled-offer modal
+        # greys out conflicting dates), so the "waive for this gig only"
+        # copy would be wrong. Truthy = part of a recurring series.
+        "recurring_group_id": gig.get("recurring_group_id") or None,
     }
 
 

@@ -12,6 +12,40 @@
   'use strict';
 
   let _uaMyArtists = [];
+  // ID of the blackout currently in edit mode (null when adding new).
+  let _uaEditingId = null;
+  // GfDatePicker instances — created lazily on first form open so
+  // gf-date-picker.js has time to define window.GfDatePicker.
+  let _uaStartPicker = null;
+  let _uaEndPicker = null;
+
+  function _uaBootPickers() {
+    if (typeof window.GfDatePicker !== 'function') return;
+    const s = document.getElementById('uaStartDate');
+    const e = document.getElementById('uaEndDate');
+    if (s && !_uaStartPicker) _uaStartPicker = new window.GfDatePicker(s);
+    if (e && !_uaEndPicker)   _uaEndPicker   = new window.GfDatePicker(e);
+    // 2026-08-07: when the user picks a From date, jump the To
+    // picker's initial month to the same month so they don't have to
+    // page forward from today.
+    if (s && !s._gfSyncBound) {
+      s._gfSyncBound = true;
+      s.addEventListener('change', () => {
+        const iso = _uaStartPicker && _uaStartPicker.getISO ? _uaStartPicker.getISO() : '';
+        if (!iso) return;
+        // Auto-default End to the same day when it's empty or before Start
+        const endIso = _uaEndPicker && _uaEndPicker.getISO ? _uaEndPicker.getISO() : '';
+        if (!endIso || endIso < iso) {
+          if (_uaEndPicker && _uaEndPicker.setISO) _uaEndPicker.setISO(iso);
+        }
+        // Force End picker to open on the From month next time.
+        if (_uaEndPicker) {
+          const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (m) _uaEndPicker.viewDate = new Date(+m[1], +m[2] - 1, 1);
+        }
+      });
+    }
+  }
 
   function _fmtDateUS(s) {
     if (!s) return '';
@@ -26,6 +60,7 @@
   }
 
   async function uaLoad() {
+    _uaBootPickers();
     try {
       const res = await fetch('/api/me/availability', { credentials: 'include' });
       if (!res.ok) throw new Error('Failed to load');
@@ -65,7 +100,12 @@
     }[c]));
   }
 
+  // Cache the last-fetched rows so the Edit button can find the source
+  // row by id without re-querying the DOM/backend.
+  let _uaRowsCache = [];
+
   function _renderUserBlackouts(rows) {
+    _uaRowsCache = rows.slice();
     const wrap = document.getElementById('uaUserBlackouts');
     if (!wrap) return;
     if (!rows.length) {
@@ -85,6 +125,10 @@
                 ${r.reason ? ' · ' + _esc(r.reason) : ''}
               </div>
             </div>
+            <button onclick="uaEdit(${r.id})"
+              style="background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);color:var(--cyan);border-radius:4px;padding:4px 10px;font-size:0.78rem;cursor:pointer;">
+              Edit
+            </button>
             <button onclick="uaDelete(${r.id})"
               style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:4px 10px;font-size:0.78rem;cursor:pointer;">
               Delete
@@ -116,15 +160,10 @@
     `;
   }
 
-  // Auto-default end date to start date when start changes (only
-  // when end is empty or already before start — preserves any later
-  // end the user picked manually).
-  window.uaSyncEndDate = function () {
-    const start = document.getElementById('uaStartDate');
-    const end   = document.getElementById('uaEndDate');
-    if (!start || !end || !start.value) return;
-    if (!end.value || end.value < start.value) end.value = start.value;
-  };
+  // Legacy hook kept for any inline onchange handler that still calls
+  // it. The GfDatePicker 'change' listener bound in _uaBootPickers now
+  // handles both the End auto-default and the To-picker month sync.
+  window.uaSyncEndDate = function () { /* handled by picker listener */ };
 
   // Two checkboxes acting as mutually-exclusive options (styled as
   // checkboxes per UI request — semantically a radio pair). Clicking
@@ -156,9 +195,21 @@
     else { other.value = ''; }
   };
 
+  // Read the current ISO value from either the GfDatePicker (preferred)
+  // or the raw input (fallback for tests / old code paths).
+  function _isoFrom(pickerRef, inputId) {
+    if (pickerRef && typeof pickerRef.getISO === 'function') return pickerRef.getISO();
+    const v = (document.getElementById(inputId)?.value || '').trim();
+    // Accept the mm/dd/yyyy display format the picker writes.
+    const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+    return v.match(/^\d{4}-\d{2}-\d{2}$/) ? v : '';
+  }
+
   window.uaAddBlackout = async function () {
-    const start = document.getElementById('uaStartDate').value;
-    const end   = document.getElementById('uaEndDate').value;
+    _uaBootPickers();  // idempotent — safe if pickers already exist
+    const start = _isoFrom(_uaStartPicker, 'uaStartDate');
+    const end   = _isoFrom(_uaEndPicker,   'uaEndDate');
     // Reason composed from the preset dropdown + optional freetext.
     // Backend stores it as a single reason string (unchanged schema).
     const preset = (document.getElementById('uaReasonPreset')?.value || '').trim();
@@ -186,31 +237,36 @@
     status.textContent = 'Saving…';
     status.style.color = 'var(--text-gray)';
     try {
-      const res = await fetch('/api/me/availability', {
-        method: 'POST', credentials: 'include',
+      // 2026-08-07: unified add/edit path. When _uaEditingId is set,
+      // PUT the update; otherwise POST a new blackout. Scope changes
+      // aren't part of the PUT contract (backend only takes dates +
+      // reason on edit) — that's an intentional narrowing: change the
+      // scope by deleting and re-adding. Keeps the edit UX simple.
+      const isEdit = !!_uaEditingId;
+      const url = isEdit
+        ? `/api/me/availability/${_uaEditingId}`
+        : '/api/me/availability';
+      const body = isEdit
+        ? { blackout_start: start, blackout_end: end || start, reason: reason }
+        : {
+            blackout_start: start,
+            blackout_end: end || start,
+            reason: reason,
+            artist_ids: artistIds,  // null = all my artists
+          };
+      const res = await fetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          blackout_start: start,
-          blackout_end: end || start,
-          reason: reason,
-          artist_ids: artistIds,  // null = all my artists
-        })
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
         throw new Error(e.detail || 'Save failed');
       }
-      status.textContent = '✓ Saved.';
+      status.textContent = isEdit ? '✓ Updated.' : '✓ Saved.';
       status.style.color = '#22c55e';
-      // Clear form
-      document.getElementById('uaStartDate').value = '';
-      document.getElementById('uaEndDate').value = '';
-      // Reset the reason preset dropdown + hide/clear the "Other" input.
-      const presetEl = document.getElementById('uaReasonPreset');
-      const otherEl  = document.getElementById('uaReasonOther');
-      if (presetEl) presetEl.value = '';
-      if (otherEl)  { otherEl.value = ''; otherEl.style.display = 'none'; }
-      window.uaSetScope('all');
+      _uaResetForm();
       await uaLoad();
       setTimeout(() => { status.textContent = ''; }, 2500);
     } catch (e) {
@@ -218,6 +274,78 @@
       status.style.color = '#ef4444';
     }
   };
+
+  // Populate the form with an existing row's values so the user can
+  // save changes in place. Editing scope (artist_ids) is intentionally
+  // not supported on the PUT contract — the note next to the button
+  // tells the user to delete + re-add if they want to change scope.
+  window.uaEdit = function (id) {
+    const row = _uaRowsCache.find(r => r.id === id);
+    if (!row) return;
+    _uaBootPickers();
+    _uaEditingId = id;
+    if (_uaStartPicker && _uaStartPicker.setISO) _uaStartPicker.setISO(row.blackout_start || '');
+    if (_uaEndPicker   && _uaEndPicker.setISO)   _uaEndPicker.setISO(row.blackout_end || row.blackout_start || '');
+    // Reason: try to match a preset; anything unknown → "Other" +
+    // populate the freetext so the user sees exactly what's stored.
+    const presetEl = document.getElementById('uaReasonPreset');
+    const otherEl  = document.getElementById('uaReasonOther');
+    const KNOWN = ['Out of Town','Family Commitment','Sick','Work Conflict','Other Gig','Vacation'];
+    if (presetEl) {
+      if (!row.reason) { presetEl.value = ''; }
+      else if (KNOWN.indexOf(row.reason) !== -1) { presetEl.value = row.reason; }
+      else { presetEl.value = 'Other'; }
+    }
+    if (otherEl) {
+      if (presetEl && presetEl.value === 'Other') {
+        otherEl.value = row.reason || '';
+        otherEl.style.display = '';
+      } else {
+        otherEl.value = '';
+        otherEl.style.display = 'none';
+      }
+    }
+    _uaUpdateEditChrome();
+    // Scroll form into view so user knows Edit populated it.
+    const form = document.getElementById('uaStartDate');
+    if (form && form.scrollIntoView) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  window.uaCancelEdit = function () {
+    _uaResetForm();
+  };
+
+  // Clears form + resets edit state. Called by cancel + after save.
+  function _uaResetForm() {
+    _uaEditingId = null;
+    if (_uaStartPicker && _uaStartPicker.setISO) _uaStartPicker.setISO('');
+    if (_uaEndPicker   && _uaEndPicker.setISO)   _uaEndPicker.setISO('');
+    const presetEl = document.getElementById('uaReasonPreset');
+    const otherEl  = document.getElementById('uaReasonOther');
+    if (presetEl) presetEl.value = '';
+    if (otherEl)  { otherEl.value = ''; otherEl.style.display = 'none'; }
+    if (typeof window.uaSetScope === 'function') window.uaSetScope('all');
+    _uaUpdateEditChrome();
+  }
+
+  // Swap the Add button label + show/hide the Cancel button depending
+  // on edit mode. Called after each state change.
+  function _uaUpdateEditChrome() {
+    const btn = document.querySelector('button[onclick="uaAddBlackout()"]');
+    if (btn) btn.textContent = _uaEditingId ? 'Save Changes' : 'Add Blackout Date';
+    let cancel = document.getElementById('uaCancelEditBtn');
+    if (_uaEditingId && !cancel) {
+      cancel = document.createElement('button');
+      cancel.id = 'uaCancelEditBtn';
+      cancel.className = 'btn ghost';
+      cancel.style.cssText = 'padding:8px 18px;';
+      cancel.textContent = 'Cancel';
+      cancel.onclick = window.uaCancelEdit;
+      btn?.after(cancel);
+    } else if (!_uaEditingId && cancel) {
+      cancel.remove();
+    }
+  }
 
   window.uaDelete = function (id) {
     const doDelete = async () => {

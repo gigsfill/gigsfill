@@ -215,13 +215,22 @@ def _fetch_venue_detail_vars(db, venue_id, gig_notes=None):
         else:
             arrival_info = 'Flexible'
 
-        # Stage
+        # Stage — 2026-08-06 rewrite: show dimensions AND description
+        # together when both are set (previously dropped the description
+        # when dimensions were present). Also stopped surfacing a stale
+        # setup description on the No branch — if there's no stage, the
+        # setup notes are irrelevant.
         if v.get('has_stage'):
-            w, d = v.get('stage_width_ft'), v.get('stage_depth_ft')
-            stage_info = f'Yes — {w}ft x {d}ft' if w and d else ('Yes — ' + v.get('setup_location_description', '')) if v.get('setup_location_description') else 'Yes'
+            _parts = ['Yes']
+            _w, _d = v.get('stage_width_ft'), v.get('stage_depth_ft')
+            if _w and _d:
+                _parts.append(f'{_w}ft x {_d}ft')
+            _desc = (v.get('setup_location_description') or '').strip()
+            if _desc:
+                _parts.append(_desc)
+            stage_info = ' — '.join(_parts) if len(_parts) > 1 else 'Yes'
         else:
-            desc = v.get('setup_location_description') or ''
-            stage_info = f'No — {desc}' if desc else 'No'
+            stage_info = 'No'
 
         # Sound equipment
         if v.get('has_sound_equipment'):

@@ -281,6 +281,56 @@ def _fetch_artist_booked_gigs_live(cursor, artist_id: int, window_days: int = 28
     return out
 
 
+def _fetch_artist_external_gigs_for_digest(cursor, artist_id: int,
+                                             window_days: int = 28) -> list[dict]:
+    """Return external (non-GigsFill) gigs the artist logged themselves,
+    shaped for the "Your upcoming gigs" digest section. Marked
+    `_is_external: True` so the renderer skips the venue link + pay
+    column (external venues aren't on GigsFill and external gigs never
+    carry pay in our DB).
+    2026-08-04: added so the artist's digest reflects their complete
+    schedule, not just GigsFill bookings.
+    """
+    rows = cursor.execute(f"""
+        SELECT id, venue_name, venue_city, venue_state,
+               date, start_time, end_time, artist_type
+        FROM artist_external_gigs
+        WHERE artist_id = ?
+          AND date >= date('now')
+          AND date <= date('now', '+{int(window_days)} days')
+        ORDER BY date ASC, start_time ASC
+    """, (artist_id,)).fetchall()
+    out = []
+    for r in rows:
+        (eid, v_name, v_city, v_state, gdate, gstart, gend, a_type) = r
+        out.append({
+            # gig_id None → renderer switches date to plain text (no link
+            # into the artist calendar since there's no real gig row).
+            "gig_id": None,
+            "venue_id": None,
+            "date": gdate, "start_time": gstart, "end_time": gend,
+            "pay": 0, "title": "", "artist_type": a_type,
+            "is_multi_slot": False,
+            "open_slot_count": 1,
+            "venue_name": v_name or "",
+            "city": v_city or "", "state": v_state or "",
+            "venue_lat": None, "venue_lon": None,
+            "distance_mi": None,
+            "urgent_36h": False,
+            "artist_id": artist_id,
+            "slots": [{
+                "slot_number": 1,
+                "start_time": gstart, "end_time": gend,
+                "status": "booked",
+                "artist_type": a_type,
+                "deal_type": "flat", "door_pct": 0,
+                "effective_pay": 0,
+            }],
+            "_is_external": True,
+        })
+    return out
+
+
 def _fetch_artist_open_gigs_live(cursor, artist_id: int, window_days: int = 28,
                                   mode: str = "eligible",
                                   nearby_radius_miles: int = 20) -> list[dict]:
@@ -825,16 +875,32 @@ def _render_digest_email_live(*, salutation: str, rows: list[dict],
         )
 
     def _fmt_line(g):
-        date_html = (
-            f"<a href='https://gigsfill.com/app/artist-book-gigs.html?gig={int(g['gig_id'])}' "
-            f"style='color:#111827;text-decoration:none;font-weight:600;'>"
-            f"{_esc(_fmt_date(g['date']))}</a>"
-        )
-        venue_html = (
-            f"<a href='https://gigsfill.com/app/venue-profile.html?venue_id={int(g['venue_id'])}' "
-            f"style='color:#111827;text-decoration:none;border-bottom:1px solid #d1d5db;'>"
-            f"{_esc(g['venue_name'])}</a>"
-        )
+        # External gigs (artist-logged, not on GigsFill) have no gig_id
+        # + no venue_id — render as plain text so we don't produce
+        # broken calendar/venue links. Pay column is also skipped in the
+        # slot lines below since external gigs don't carry pay.
+        is_external = bool(g.get("_is_external"))
+        if is_external or not g.get("gig_id"):
+            date_html = (
+                f"<span style='color:#111827;font-weight:600;'>"
+                f"{_esc(_fmt_date(g['date']))}</span>"
+            )
+        else:
+            date_html = (
+                f"<a href='https://gigsfill.com/app/artist-book-gigs.html?gig={int(g['gig_id'])}' "
+                f"style='color:#111827;text-decoration:none;font-weight:600;'>"
+                f"{_esc(_fmt_date(g['date']))}</a>"
+            )
+        if is_external or not g.get("venue_id"):
+            venue_html = (
+                f"<span style='color:#111827;'>{_esc(g['venue_name'])}</span>"
+            )
+        else:
+            venue_html = (
+                f"<a href='https://gigsfill.com/app/venue-profile.html?venue_id={int(g['venue_id'])}' "
+                f"style='color:#111827;text-decoration:none;border-bottom:1px solid #d1d5db;'>"
+                f"{_esc(g['venue_name'])}</a>"
+            )
         loc_parts = [g.get("city"), g.get("state")]
         loc = ", ".join(filter(None, [_esc(x) for x in loc_parts if x]))
         dist = ""
@@ -932,13 +998,16 @@ def _render_digest_email_live(*, salutation: str, rows: list[dict],
                     f"<span style='color:#111827;font-weight:600;'>{_esc(_slot_pay_html(s))}</span>"
                 )
 
+            # External gigs skip the pay segment — the artist didn't
+            # book them through GigsFill, we have no pay data to show.
+            pay_segment = ("" if is_external else
+                f" <span style='color:#9ca3af;'>·</span> {pay_html}")
             slot_lines.append(
                 "<div style='padding:3px 0 3px 18px;font-size:13.5px;color:#374151;'>"
                 f"<span style='color:#6b7280;font-weight:600;'>{_esc(slot_label)}</span>"
                 f" <span style='color:#9ca3af;'>·</span> "
                 f"<span>{_esc(time_str)}</span>"
-                f" <span style='color:#9ca3af;'>·</span> "
-                f"{pay_html}"
+                f"{pay_segment}"
                 f"{status_badge}"
                 "</div>"
             )
@@ -1437,6 +1506,7 @@ def build_digest_for_user(cursor, user_id: int) -> dict:
     opens_by_gig: dict[int, dict] = {}
     nearby_by_gig: dict[int, dict] = {}
     booked_by_gig: dict[int, dict] = {}
+    external_rows: list[dict] = []  # external gigs bypass variant-merge
     contributing_artist_names: list[str] = []
     _NEARBY_RADIUS_MI = 20
     for art_id, art_name in artists:
@@ -1447,23 +1517,29 @@ def build_digest_for_user(cursor, user_id: int) -> dict:
             mode="nearby_non_preferred",
             nearby_radius_miles=_NEARBY_RADIUS_MI,
         )
-        if opens or books or nearby:
+        exts = _fetch_artist_external_gigs_for_digest(cursor, int(art_id), window_days=28)
+        if opens or books or nearby or exts:
             contributing_artist_names.append(art_name)
         _merge_gig_variants(opens_by_gig, art_name or "", opens)
-        # nearby dedup: skip any gig that showed up in the "you can
-        # book" section under ANY of this user's artists — otherwise
-        # a user with two projects (one preferred, one not) would
-        # see the same gig in both sections.
         _merge_gig_variants(nearby_by_gig, art_name or "", nearby,
                             skip_ids=set(opens_by_gig.keys()))
-        # Booked section gets same treatment — a multi-slot gig where
-        # both artists hold different slots would otherwise drop one
-        # artist's slots via dedup-by-gig-id.
         _merge_gig_variants(booked_by_gig, art_name or "", books)
+        # External gigs don't have real gig_ids so they'd all collide
+        # on None if we merged them. They're already artist-scoped and
+        # never have per-artist variants, so append verbatim.
+        for e in exts:
+            e["_owner_artist_name"] = art_name or ""
+        external_rows.extend(exts)
 
     all_open = _finalize_variant_gigs(opens_by_gig)
     all_nearby = _finalize_variant_gigs(nearby_by_gig)
     all_booked = _finalize_variant_gigs(booked_by_gig)
+    # Merge external gigs into the booked section + re-sort by date.
+    if external_rows:
+        all_booked = sorted(
+            all_booked + external_rows,
+            key=lambda g: (str(g.get("date") or ""), str(g.get("start_time") or ""))
+        )
 
     if not all_open and not all_booked and not all_nearby:
         return {"ok": False, "reason": "nothing to send", "email": artist_email,
@@ -1529,6 +1605,26 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
 
     from backend.scheduler import send_email
 
+    # 2026-08-08 audit fix (finding #10): duplicate-send protection.
+    # `_scheduler_loop`'s `last_email_run` is an in-process variable
+    # initialized to 0, so the FIRST tick of any newly-started process
+    # trivially passes the `now - last_email_run >= 3600` gate. If
+    # `gigsfill-scheduler.service` is restarted (deploy, crash, admin
+    # kick) during the digest hour, every eligible user gets a second
+    # (identical) digest email. Guard here with a durable per-user
+    # per-day marker keyed off artist_email_digest_snapshot — its
+    # sent_at is set on successful send, so a user already emailed
+    # today is silently skipped. Uses the same platform timezone as
+    # the "due user" calc so day boundaries line up.
+    from backend.services.notification_service import get_platform_timezone
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _Zi
+    try:
+        _tz = _Zi(get_platform_timezone())
+    except Exception:
+        _tz = _Zi("UTC")
+    _today_local = _dt.now(_tz).strftime("%Y-%m-%d")
+
     sent = 0
     for user_id in due_user_ids:
         # Master toggle: user opt-out from the daily digest
@@ -1538,6 +1634,23 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
         ).fetchone()
         if _master and not _master[0]:
             continue
+
+        # Duplicate-send guard: skip when this user already got a
+        # digest today (platform local calendar date). Cheap indexed
+        # lookup — the snapshot table is indexed on (user_id, sent_at DESC).
+        try:
+            _dup = cursor.execute(
+                "SELECT 1 FROM artist_email_digest_snapshot "
+                "WHERE user_id = ? AND DATE(sent_at) = ? LIMIT 1",
+                (user_id, _today_local)
+            ).fetchone()
+            if _dup:
+                logger.info(f"[DIGEST] skip user={user_id} — already sent today ({_today_local})")
+                continue
+        except Exception as _dg:
+            # Table missing / query error: don't block the send — this
+            # is a safety net, not a hard gate.
+            logger.warning(f"[DIGEST] duplicate-send check failed user={user_id}: {_dg}")
 
         result = build_digest_for_user(cursor, user_id)
         if not result["ok"]:
@@ -1564,6 +1677,25 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
                 cursor.connection.commit()
             except Exception:
                 pass
+            # 2026-08-08 audit fix (finding #9): snapshot the exact
+            # subject + body we just sent so /api/me/digest-preview and
+            # /api/me/digest-resend can serve the true historical
+            # content instead of reconstructing against current (post-
+            # edit) gig fields with the legacy per-venue renderer.
+            try:
+                _counts = result.get("counts") or {}
+                cursor.execute(
+                    "INSERT INTO artist_email_digest_snapshot "
+                    "(user_id, subject, body_html, open_count, booked_count, nearby_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (user_id, result["subject"], result["body"],
+                     int(_counts.get("open") or 0),
+                     int(_counts.get("booked") or 0),
+                     int(_counts.get("nearby") or 0))
+                )
+                cursor.connection.commit()
+            except Exception as _se:
+                logger.warning(f"[DIGEST] snapshot insert failed user={user_id}: {_se}")
             logger.info(
                 f"[DIGEST] LIVE sent to user={user_id} email={result['email']} "
                 f"counts={result['counts']} venues={len(result.get('venue_ids') or set())}"

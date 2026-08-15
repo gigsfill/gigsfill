@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
   <title>Profile - GigsFill</title>
-  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
@@ -369,7 +369,7 @@
   </header>
 <script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/auth.guard.js?v=3"></script>
-<script src="/app/static/js/api-globals.js?v=11"></script>
+<script src="/app/static/js/api-globals.js?v=12"></script>
 <script src="/app/static/js/email-verify-banner.js"></script>
 <script src="/app/static/js/event-delegate.js"></script>
   <script src="/app/static/js/user-dropdown.js?v=11"></script>
@@ -869,11 +869,16 @@
             <!-- color-scheme:dark tells the browser to render the native date-picker
                  popup in dark mode (Chromium + Safari). Otherwise the popup renders
                  white and looks off against the rest of the dark UI. Added 2026-07-25. -->
-            <input type="date" id="uaStartDate" onchange="uaSyncEndDate()" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;color-scheme:dark;">
+            <!-- 2026-08-07: swapped native <input type=date> for the
+                 branded GfDatePicker so the calendar popup matches the
+                 rest of the site's dark theme. `uaStartDate` still owns
+                 the value; user-availability.js instantiates the picker
+                 on this input on load and wires the From→To month sync. -->
+            <input type="text" readonly class="gf-date-input" id="uaStartDate" placeholder="mm/dd/yyyy" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;cursor:pointer;">
           </label>
           <label style="display:block;">
             <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">End date</span>
-            <input type="date" id="uaEndDate" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;color-scheme:dark;">
+            <input type="text" readonly class="gf-date-input" id="uaEndDate" placeholder="mm/dd/yyyy" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;cursor:pointer;">
           </label>
         </div>
         <!-- Reason picker (2026-07-25): preset dropdown for the common cases +
@@ -1244,9 +1249,10 @@
   <script src="/app/static/js/modals.js"></script>
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script src="/app/static/js/user-profile.js?v=17"></script>
+  <script src="/app/static/js/gf-date-picker.js?v=1"></script>
+  <script src="/app/static/js/user-profile.js?v=20"></script>
   <script src="/app/static/js/user-affiliate.js?v=6"></script>
-  <script src="/app/static/js/user-availability.js?v=6"></script>
+  <script src="/app/static/js/user-availability.js?v=7"></script>
   
 
   <!-- Delete Account Modal -->
@@ -1285,8 +1291,9 @@
 
   
 
-<script src="/app/static/js/user-profile-init.js?v=9"></script>
+<script src="/app/static/js/user-profile-init.js?v=10"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>

@@ -146,24 +146,40 @@
       const reallyBooked = takenSlots.filter(s => s.status === 'booked');
       const pending      = takenSlots.filter(s => PENDING_STATUSES.has(s.status));
       openSlots = totalSlots - takenSlots.length;
-      // Multi-slot: header shows the STATE only — never the artist
-      // names. The per-slot breakdown below already lists each name
-      // next to its slot time, so repeating them in the header is
-      // redundant and crowds the card.
+      // 2026-08-02: multi-slot header now names the booked artists.
+      // Was "Booked" alone (comment said names crowd the card, "see
+      // per-slot breakdown below") — but users on the venue calendar
+      // saw "Booked — Fridays Past" via the trimmed single-slot code
+      // path and expected the same on artist/city/multi-slot views.
+      // Dedup: same artist in multiple slots renders once.
+      const _uniq = (slotList) => {
+        const seen = new Set();
+        const out = [];
+        for (const s of slotList) {
+          const key = String(s.artist_id || '') + '|' + String(s.artist_name || '');
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ id: s.artist_id || null, name: s.artist_name || '' });
+        }
+        return out.filter(c => c.name || c.id);
+      };
       if (takenSlots.length === 0) {
         header = `Open — ${totalSlots} slots`;
         isOpenHere = true;
+        artistChips = [];
       } else if (reallyBooked.length === takenSlots.length) {
-        header = 'Booked';
+        header = 'Booked — ';
+        artistChips = _uniq(reallyBooked);
       } else if (pending.length === takenSlots.length) {
-        header = 'Pending Venue Countersign';
+        header = 'Pending Venue Countersign — ';
+        artistChips = _uniq(pending);
       } else {
         const parts = [];
         if (reallyBooked.length) parts.push(`Booked — ${reallyBooked.length}`);
         if (pending.length)      parts.push(`Pending — ${pending.length}`);
-        header = parts.join(' · ');
+        header = parts.join(' · ') + ' — ';
+        artistChips = _uniq(takenSlots);
       }
-      artistChips = []; // names are in the per-slot breakdown below
     } else if ((parseInt(g.total_slots_count) || 0) > 1) {
       // Multi-slot gig whose .slots array hasn't been hydrated yet
       // (slot fetch failed, race condition, or an endpoint we missed).
@@ -185,21 +201,30 @@
       }
       artistChips = [];
     } else {
-      isOpenHere = (g.status === 'open' || !g.artist_id) && !g.artist_name;
+      // Single-slot path. If g.slots[0] is present, prefer its data
+      // over the parent row — multi-slot gigs with a lone slot store
+      // the booking on the slot (g.artist_id NULL on parent), and the
+      // parent's artist_name COALESCE only resolves for signed
+      // contracts. Without this preference, a fully-booked multi-slot
+      // gig whose contract hasn't been signed reads as "Open" here
+      // even though the slot is booked. (2026-08-02 fix — Aug 29 bug.)
+      const slot0 = Array.isArray(g.slots) && g.slots.length ? g.slots[0] : null;
+      const _artistId   = g.artist_id   || (slot0 && slot0.artist_id)   || null;
+      const _artistName = g.artist_name || g.artistName || (slot0 && slot0.artist_name) || '';
+      const _status     = (slot0 && slot0.status) || g.status;
+      isOpenHere = (_status === 'open' || !_artistId) && !_artistName;
       if (isOpenHere) {
         header = 'Open';
       } else {
-        // Single-slot: pick label by gig.status. The artist_id check
-        // above already routed us here, so we know a slot is taken.
-        if (g.status === 'awaiting_venue_contract' || g.status === 'pending_contract'
-            || g.status === 'pending_venue_approval') {
+        if (_status === 'awaiting_venue_contract' || _status === 'pending_contract'
+            || _status === 'pending_venue_approval') {
           header = 'Pending Venue Countersign — ';
         } else {
           header = 'Booked — ';
         }
         artistChips = [{
-          id: g.artist_id || null,
-          name: g.artist_name || g.artistName || '',
+          id: _artistId,
+          name: _artistName,
         }];
       }
     }

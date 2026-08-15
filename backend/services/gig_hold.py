@@ -430,11 +430,13 @@ def respond_to_hold_offer(db, token: str, action: str, slot_id: Optional[int] = 
                 _freq_days = _freq_row.get("freq_days") or 0
                 if _freq_days > 0:
                     # Jul 2026 refactor: dropped `g.artist_id = :aid` OR-leg.
+                    # 2026-08-08 audit fix (same class as #5-7): outer
+                    # `g.status IN` dropped partial multi-slot gigs from
+                    # the freq check inside the hold-offer accept gate.
                     _close = db.execute(
                         text("""SELECT g.date FROM gigs g
                                 JOIN gig_slots gs ON gs.gig_id = g.id AND gs.artist_id = :aid
                                 WHERE g.venue_id = :vid AND g.id != :gid
-                                  AND g.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                   AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')
                                 ORDER BY ABS(JULIANDAY(g.date) - JULIANDAY(:d)) LIMIT 1"""),
                         {"vid": gate_venue_id, "aid": row["artist_id"], "gid": row["gig_id"], "d": _gd_str}
@@ -1081,7 +1083,7 @@ def _send_hold_offer_email(db, gig_id: int, artist_id: int, token: str, is_remin
     Falls back silently if SMTP unconfigured (test/dev)."""
     from sqlalchemy import text
     gig = db.execute(
-        text("""SELECT g.id, g.date, g.title, g.venue_id, g.pay,
+        text("""SELECT g.id, g.date, g.title, g.venue_id, g.pay, g.notes,
                        g.is_multi_slot, g.start_time, g.end_time,
                        v.venue_name
                 FROM gigs g JOIN venues v ON v.id = g.venue_id
@@ -1245,6 +1247,24 @@ def _send_hold_offer_email(db, gig_id: int, artist_id: int, token: str, is_remin
         "slots_table_rows": slot_rows_html,
         "offer_expires_human": offer_expires_human,
     }
+    # 2026-08-12: pull venue detail vars (address, capacity, stage,
+    # sound, lighting, arrival, bar/food tabs, notes) so the private
+    # hold-offer email carries the same rig/logistics detail the
+    # cancellation-blast email already includes. Previously the offer
+    # was a bare "venue+date+pay" email while every random preferred
+    # artist on a cancel blast got the full picture — backwards, since
+    # the hold offer is the venue's PRIVATE first-look invitation and
+    # deserves MORE context, not less. Silent no-op on lookup failure
+    # so the offer still sends with the base vars if the fetch errors.
+    try:
+        from backend.services.email_dispatch import _fetch_venue_detail_vars
+        _venue_vars = _fetch_venue_detail_vars(
+            db, gig["venue_id"], gig_notes=gig.get("notes") or ""
+        )
+        if _venue_vars:
+            vars_dict.update(_venue_vars)
+    except Exception as _vve:
+        logger.warning(f"[HOLD] venue-detail lookup failed gig={gig_id}: {_vve}")
     # Fan out hold-offer email to every artist entity user (Jun 2026 audit).
     # Previously only the artist row's primary user got the email, so a
     # band where the secondary booker (not the original signup) handles
@@ -2610,6 +2630,21 @@ def _send_series_hold_offer_email(db, recurring_group_id: str, artist_id: int,
         "freq_note": freq_note,
         "window_label": _win_label,
     }
+    # 2026-08-12: same venue-detail treatment as _send_hold_offer_email.
+    # Series offers were the same bare "venue + dates" shape; artist
+    # deserves the full rig/logistics context to decide across N dates.
+    # Notes come from any one gig in the series (they all share the
+    # same venue and typically the same notes for recurring shows).
+    try:
+        from backend.services.email_dispatch import _fetch_venue_detail_vars
+        _vid = (venue_row or {}).get("id")
+        if _vid:
+            _series_notes = (any_gig or {}).get("notes") or ""
+            _vv = _fetch_venue_detail_vars(db, _vid, gig_notes=_series_notes)
+            if _vv:
+                vars_dict.update(_vv)
+    except Exception as _sve:
+        logger.warning(f"[SERIES_HOLD] venue-detail lookup failed rgid={recurring_group_id}: {_sve}")
     template_key = "hold_series_offer_artist"
     # Fan out to every artist entity user.
     try:

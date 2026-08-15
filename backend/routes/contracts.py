@@ -2630,12 +2630,31 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
     
     # Load gig
     gig = db.execute(
-        text("SELECT id, venue_id, status, date, title, start_time, end_time, pay FROM gigs WHERE id = :gid"),
+        text("SELECT id, venue_id, status, hold_status, date, title, start_time, end_time, pay FROM gigs WHERE id = :gid"),
         {"gid": gig_id}
     ).mappings().first()
     if not gig:
         raise HTTPException(404, "Gig not found")
-    
+
+    # 2026-08-08 audit fix (finding #4): match book_slot's hold_status
+    # guard (routes/gigs.py:5003). Previously book_with_contract had no
+    # such check; the waitlist_lock inside _run_prebooking_checks only
+    # catches "another artist has an unexpired in-flight offer" and
+    # misses (a) hold_status='exhausted' (queue done, venue hasn't
+    # triaged) and (b) the race window where the current offer just
+    # expired but the rotation scheduler hasn't advanced. A preferred
+    # artist could book without a hold_token, and
+    # _hold_cleanup_after_contract_book's 'source=hold' filter fails
+    # for a non-offered artist → hold_status left inconsistent.
+    # Exempt calls presenting a valid hold_token so the currently-
+    # offered artist's contract-flow path still works.
+    _hold_token = (data.get("hold_token") or "").strip()
+    if gig.get("hold_status") in ("active", "exhausted") and not _hold_token:
+        raise HTTPException(
+            403,
+            "This gig is currently held for another artist and cannot be booked directly."
+        )
+
     # Handle slot booking
     slot_id = data.get("slot_id")
     if slot_id:

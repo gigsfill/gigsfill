@@ -14,7 +14,7 @@
 
   
   
-  <link href="/app/static/css/gigsfill.css" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
   <style>
@@ -460,7 +460,7 @@
 <script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/event-delegate.js"></script>
   <script src="/app/static/js/auth.guard.js?v=3"></script>
-  <script src="/app/static/js/api-globals.js?v=11"></script>
+  <script src="/app/static/js/api-globals.js?v=12"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/gf-modals.js?v=8"></script>
@@ -559,6 +559,20 @@
       </div>
     </div>
 
+    <!-- SECTION 2b: DESCRIPTION — public-facing tagline shown on
+         venue-profile.html under the venue name. Autosave picks it up
+         through the same "description" id already in bindAllFields()
+         and the load loop, so no JS change is needed here. Mirrors the
+         Artist edit page's "Bio" section for consistency. -->
+    <div class="content-card">
+      <h2>Description</h2>
+      <div style="font-size: 0.85rem; color: var(--text-gray); margin-bottom: 8px;">
+        A short tagline shown to visitors on your public venue page.
+      </div>
+      <textarea id="description" rows="3" style="width: 100%;"
+        placeholder="e.g. Fun place to play games and have a drink!"></textarea>
+    </div>
+
     <!-- SECTION 3: VENUE CAPACITY -->
     <div class="content-card">
       <h2>Venue Capacity</h2>
@@ -602,7 +616,13 @@
       </div>
     </div>
 
-    <!-- SECTION 6: STAGE DETAILS -->
+    <!-- SECTION 6: STAGE DETAILS
+         Container #stage-details wraps width/depth + description
+         together. venue.edit.js:267 already toggles this container's
+         `hidden` class on the has_stage select, so the conditional
+         reveal wires itself the moment the container exists (the
+         earlier lookup returned null and did nothing). Matches the
+         Sound Equipment / Lighting reveal pattern. -->
     <div class="content-card">
       <div class="inline-row">
         <span class="toggle-label">Stage?</span>
@@ -611,7 +631,19 @@
           <option value="true">Yes</option>
         </select>
       </div>
-      <textarea id="setup_location_description" class="single-line conditional-textarea hidden" placeholder="Describe stage details and/or setup location for Artist..."></textarea>
+      <div id="stage-details" class="hidden" style="margin-top: 8px;">
+        <div class="inline-row" style="gap: 12px;">
+          <label style="font-size: 0.85rem; color: var(--text-gray); display: flex; align-items: center; gap: 6px;">
+            Width
+            <input type="text" id="stage_width_ft" inputmode="numeric" placeholder="feet" style="width: 80px;" />
+          </label>
+          <label style="font-size: 0.85rem; color: var(--text-gray); display: flex; align-items: center; gap: 6px;">
+            Depth
+            <input type="text" id="stage_depth_ft" inputmode="numeric" placeholder="feet" style="width: 80px;" />
+          </label>
+        </div>
+        <textarea id="setup_location_description" class="single-line" style="margin-top: 8px;" placeholder="Describe stage details, riser height, power outlets, any setup notes for the artist..."></textarea>
+      </div>
     </div>
 
     <!-- SECTION 7: SOUND EQUIPMENT -->
@@ -853,7 +885,7 @@
      to use window.applyVanityToLinks for the header profile button. -->
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/venue-edit-init.js"></script>
-<script src="/app/static/js/onboarding-checklist.js" defer></script>
+<script src="/app/static/js/onboarding-checklist.js?v=7" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
 <script>
@@ -867,5 +899,6 @@
   })();
 </script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

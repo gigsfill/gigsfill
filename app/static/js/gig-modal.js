@@ -138,7 +138,7 @@ async function renderGigModal(data, callbacks = {}) {
                <a href="/app/venue-profile.html?venue_id=${data.venue_id}" target="_blank"
                   style="color:var(--accent-cyan,#06b6d4);text-decoration:none;"
                   onmouseover="this.style.textDecoration='underline'"
-                  onmouseout="this.style.textDecoration='none'">${_esc(data.venue_name)}</a>
+                  onmouseout="this.style.textDecoration='none'">${_esc(data.venue_name)}</a><span class="vgd-link-slot" data-vgd-vid="${parseInt(data.venue_id,10)||0}" data-vgd-name="${_esc(data.venue_name||'')}"></span>
              </div>`;
     if (data.address_line_1 || data.city) {
       html += `<div style="font-weight:600;color:var(--text-primary);">Location:</div>
@@ -243,6 +243,24 @@ async function renderGigModal(data, callbacks = {}) {
       html += _banner('red', `⛔ Preferred Status ${label}`, msg);
       actionsHtml = `<div class="_gig-btn-row" style="justify-content:flex-end;">${_closeBtn(close)}</div>`;
       return _commit(html, actionsHtml);
+    }
+
+    // 2026-08-15: mirror the "Preferred Status Required" banner for the
+    // opposite case — the artist ISN'T preferred at this venue, but the
+    // gig is open-blasted (or the venue marked this specific gig freq-
+    // exempt), so the "Required" branch above was skipped and the Book
+    // button appears with no explanation of why. Without this banner
+    // artists were confused: "Am I preferred here? Why can I book?"
+    // Skipped when the Frequency Rule Lifted banner below already covers
+    // the same reason (freq_waiver.reason === 'blast' says essentially
+    // the same thing to an artist with prior history at this venue).
+    if (pref === null && isBlastOpen
+        && (!data.freq_waiver || data.freq_waiver.reason !== 'blast')) {
+      const _openTitle = '🎉 Open to All Artists';
+      const _openMsg = data.frequency_exempt
+        ? `${_esc(data.venue_name)} marked this gig frequency-exempt — you don't need Preferred Artist status to book it.`
+        : `${_esc(data.venue_name)} has opened this gig to all nearby artists — you don't need Preferred Artist status to book it.`;
+      html += _banner('green', _openTitle, _openMsg);
     }
 
     // Freq-waiver banner (Jun 2026): render BEFORE the Hold-feature
@@ -1140,6 +1158,12 @@ function mountGigModal(result, bodyEl, titleText) {
   if (ma) { ma.innerHTML = ''; ma.style.display = 'none'; }
   const titleEl = document.getElementById('modalTitle');
   if (titleEl && titleText) titleEl.textContent = titleText;
+  // 2026-08-07: fill the (Venue Gig Details) link slot when the viewer
+  // is an artist. venueGigDetails.mountLinks is idempotent + async;
+  // safe to no-op when the module isn't loaded on this page.
+  if (window.venueGigDetails && window.venueGigDetails.mountLinks) {
+    window.venueGigDetails.mountLinks(bodyEl);
+  }
 }
 
 /* ── Waitlist open-slot confirmation modal ────────────────────────────────── */

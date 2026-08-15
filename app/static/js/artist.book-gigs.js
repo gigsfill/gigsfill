@@ -65,7 +65,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             <h1 style="margin:0 0 12px;font-size:1.2rem;font-weight:600;color:#e5e7eb;">No Access to This Artist</h1>
             <p style="margin:0 0 20px;font-size:0.9rem;line-height:1.6;color:#9ca3af;">You’re logged in, but your account doesn’t have permission to manage this artist profile.</p>
             <div style="display:flex;gap:10px;justify-content:center;">
-            <button onclick="window.location.href='/app/login.html';" style="display:inline-block;padding:10px 28px;border-radius:8px;background:#635bff;color:white;font-weight:600;cursor:pointer;border:none;font-size:0.95rem;">Close</button>
+            <button onclick="window.location.href='/app/index.html';" style="display:inline-block;padding:10px 28px;border-radius:8px;background:#635bff;color:white;font-weight:600;cursor:pointer;border:none;font-size:0.95rem;">Close</button>
             </div>
           </div>
         </div>
@@ -199,7 +199,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               You’re logged in, but your account doesn’t have permission to manage this artist profile.
             </p>
             <div style="display:flex;gap:10px;justify-content:center;">
-            <button onclick="window.location.href='/app/login.html';" style="display:inline-block;padding:10px 28px;border-radius:8px;background:#635bff;color:white;font-weight:600;cursor:pointer;border:none;font-size:0.95rem;">Close</button>
+            <button onclick="window.location.href='/app/index.html';" style="display:inline-block;padding:10px 28px;border-radius:8px;background:#635bff;color:white;font-weight:600;cursor:pointer;border:none;font-size:0.95rem;">Close</button>
             </div>
           </div>
         </div>
@@ -1028,7 +1028,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     getMonthDays(year, month).forEach((day, _dayIdx) => {
       const iso = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
       const cell = document.createElement("div");
-      cell.className = "day";
+      cell.className = "day calendar-day";        // .calendar-day is the hook the external-gig injector looks for (2026-08-01)
+      cell.setAttribute("data-date", iso);        // date the ext-gig injector needs to target this cell
       
       // Check if day is in current month
       const isCurrentMonth = day.getMonth() === month;
@@ -1172,15 +1173,22 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
         
         cell.appendChild(gigsContainer);
-        
-        // Add click handler to day cell (but not on gigs or scrollbar)
-        cell.onclick = (e) => {
-          if (e.target === cell || e.target === dayNumber) {
-            openDayGigsModal(day, dayGigs);
-          }
-        };
-        
       }
+
+      // Day-click handler — 2026-08-01 fix: previously nested inside the
+      // "if (dayGigs.length > 0)" block above, so empty days never got a
+      // click handler. Moved out so any day cell (with or without gigs)
+      // opens the Add External Gig modal on background click. Real gig
+      // bubbles keep their own click handlers (openGigModal), and the
+      // e.target === cell || dayNumber guard makes sure a click on a
+      // bubble doesn't also fire this one.
+      cell.onclick = (e) => {
+        if (e.target === cell || e.target === dayNumber) {
+          if (typeof window.openAddExternalGigModal === 'function') {
+            window.openAddExternalGigModal(iso);
+          }
+        }
+      };
 
       calendarEl.appendChild(cell);
     });
@@ -1628,7 +1636,38 @@ document.addEventListener("DOMContentLoaded", async () => {
       onMessage:    (gigId, venueName, aid) => openMessageModal(gigId, venueName, aid),
       onJoinWaitlist:  (gigId, aid) => joinWaitlist(gigId, aid),
       onLeaveWaitlist: (gigId, aid) => leaveWaitlist(gigId, aid),
-      onRequestPreferred: (venueId, btnId) => { /* handled by #requestPreferred below */ },
+      onRequestPreferred: async (venueId, btnId) => {
+        // 2026-08-15: was a no-op stub — the old code path attached its
+        // handler to id="requestPreferred", but gig-modal.js renders the
+        // button as id="reqPref_${gigId}", so the handler never fired
+        // and the button did nothing. Also gate on setup-complete per
+        // the checklist copy ("Complete these items before requesting
+        // preferred artist status") — an incomplete artist should see
+        // the checklist popup, not a silent no-op API call.
+        if (typeof window.checkArtistPaymentMethod === 'function'
+            && !window.checkArtistPaymentMethod()) return;
+        const btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = 'Sending Request...';
+        try {
+          await apiPost(`/api/venues/${venueId}/preferred/request?artist_id=${artistId}`, {});
+          overlay.classList.add('hidden');
+          await loadPreferredVenues();
+          if (window.activityCenter) await window.activityCenter.loadNotifications();
+          if (window.myVenuesRedesign) { await myVenuesRedesign.loadVenues(); myVenuesRedesign.render(); }
+          showSuccessModal('Request Sent!', 'Preferred status request sent to venue!');
+          renderCalendar();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = 'Ask Venue for Preferred Status';
+          if (typeof window.showErrorModal === 'function') {
+            window.showErrorModal('Request Failed', (e && e.message) || 'Could not send request.');
+          } else {
+            alert('Request failed: ' + (e && e.message));
+          }
+        }
+      },
       onRate: null,  // handled via _rate-venue-btn delegation
       onCountersign: (contractId) => window._doCountersign && window._doCountersign(contractId),
     });
@@ -1680,35 +1719,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       }).catch(() => {});
 
     // ── Wire event handlers after DOM is set ──────────────────────────
-
-    // Request Preferred Status
-    const requestBtn = document.getElementById("requestPreferred");
-    if (requestBtn) {
-      requestBtn.onclick = async () => {
-        requestBtn.disabled = true;
-        requestBtn.textContent = 'Sending Request...';
-        try {
-          await apiPost(`/api/venues/${data.venue_id}/preferred/request?artist_id=${artistId}`, {});
-          overlay.classList.add("hidden");
-          await loadPreferredVenues();
-          if (window.activityCenter) await window.activityCenter.loadNotifications();
-          if (window.myVenuesRedesign) { await myVenuesRedesign.loadVenues(); myVenuesRedesign.render(); }
-          showSuccessModal("Request Sent!", "Preferred status request sent to venue!");
-          renderCalendar();
-        } catch (e) {
-          requestBtn.disabled = false;
-          requestBtn.textContent = 'Ask Venue for Preferred Status';
-          // BUG FIX (Jul 2026 audit): branded modal to match the rest of the
-          // page. The success path uses showSuccessModal; failure was using
-          // native alert().
-          if (typeof window.showErrorModal === 'function') {
-            window.showErrorModal('Request Failed', (e && e.message) || 'Could not send request.');
-          } else {
-            alert("Request failed: " + e.message);
-          }
-        }
-      };
-    }
+    // (Request Preferred Status is now handled via the onRequestPreferred
+    //  callback above — was pointing at id="requestPreferred" which the
+    //  shared gig-modal.js never renders; the button is reqPref_<gigId>.)
 
     // Book slot buttons (delegated — rendered per slot row)
     body.querySelectorAll('.book-slot-btn').forEach(btn => {

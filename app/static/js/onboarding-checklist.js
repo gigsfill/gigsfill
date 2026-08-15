@@ -123,13 +123,22 @@
         padding: 24px 28px 16px; border-bottom: 1px solid #2a3040;
         display: flex; align-items: flex-start; justify-content: space-between;
       `;
+      // 2026-08-15: subtitle spells out WHAT is blocked so the popup
+      // does double duty — the passive nudge on page load AND the "you
+      // have to complete these before booking" gate that fires from
+      // checkArtistPaymentMethod. Role-aware examples so an artist sees
+      // "booking gigs / requesting preferred status" and a venue sees
+      // "posting gigs / inviting artists."
+      const _blockedActions = entityType === 'artist'
+        ? 'booking gigs, requesting preferred artist status, or accepting invitations'
+        : 'posting gigs, inviting artists, or managing bookings';
       header.innerHTML = `
         <div>
           <h2 style="margin:0 0 4px; font-size:20px; font-weight:700; color:#f1f5f9; letter-spacing:-0.01em;">
             ${entityLabel} Setup Checklist
           </h2>
-          <p style="margin:0; font-size:13px; color:#64748b;">
-            Complete the following items to begin using GigsFill...
+          <p style="margin:0; font-size:13px; color:#94a3b8; line-height:1.5;">
+            Complete these items before ${_blockedActions}.
           </p>
         </div>
         <button id="obClose" style="
@@ -240,24 +249,34 @@
       overlay.appendChild(modal);
       document.body.appendChild(overlay);
       modalEl = overlay;
-  
-      // ─ Close handler (X button — temporarily hides, comes back on any click) ─
-      document.getElementById('obClose').addEventListener('click', () => {
-        closeModal();
-        // Re-show on next click anywhere on the page
-        function reshowOnClick() {
-          document.removeEventListener('click', reshowOnClick);
-          setTimeout(() => init(), 300);
-        }
-        setTimeout(() => {
-          document.addEventListener('click', reshowOnClick, { once: true });
-        }, 200);
+
+      // ─ Close handlers (2026-08-15 rewrite) ────────────────────────────
+      // Previously: X-click closed the modal AND attached a one-shot
+      // document-wide click listener that re-fired the popup on the next
+      // click anywhere. That "chase you around" behavior made the
+      // calendar feel frozen — click X → click a gig bubble → popup
+      // re-appears simultaneously with (or on top of) whatever else the
+      // click triggered, reads as broken.
+      // Also: the overlay had no backdrop-click dismiss, so clicking
+      // outside the card absorbed the click into a no-op void.
+      // Now: standard modal — X and backdrop both close cleanly. The
+      // checklist still re-fires on meaningful triggers (tab switches
+      // via setupRecheck, page refresh, and Book-button gate via
+      // checkArtistPaymentMethod → showOnboardingChecklist).
+      document.getElementById('obClose').addEventListener('click', closeModal);
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeModal();
       });
     }
-  
-  
+
+
     function closeModal() {
       if (modalEl) {
+        // Immediately disable pointer-events so clicks during the fade
+        // pass through to the underlying page — a click on the calendar
+        // that lands during the 150ms fade shouldn't be swallowed by
+        // the disappearing overlay.
+        modalEl.style.pointerEvents = 'none';
         modalEl.style.animation = 'obFadeIn 0.15s ease reverse';
         setTimeout(() => { if (modalEl) { modalEl.remove(); modalEl = null; } }, 150);
       }
@@ -308,16 +327,23 @@
   
   
     // ── Re-check after switching tabs (for mandatory items) ──────────
+    // 2026-08-15: made this persistent + debounced. Was one-shot (unwrapped
+    // itself on first tab click), which meant fast tab-clicking bypassed
+    // the checklist entirely — the first click scheduled init, subsequent
+    // clicks hit the already-restored switchTab and did nothing. Now the
+    // wrapper stays installed until all tasks complete, and rapid clicks
+    // collapse into a single trailing init call via clearTimeout debounce.
+    // Also idempotent: multiple setupRecheck() calls no-op if already wrapped.
     function setupRecheck() {
+      if (!window.switchTab || window.switchTab._obWrapped) return;
       const origSwitchTab = window.switchTab;
-      if (typeof origSwitchTab === 'function') {
-        window.switchTab = function(tabName, button) {
-          origSwitchTab(tabName, button);
-          // Restore original switchTab and re-show checklist
-          window.switchTab = origSwitchTab;
-          setTimeout(() => init(), 500);
-        };
-      }
+      const wrapped = function(tabName, button) {
+        origSwitchTab(tabName, button);
+        clearTimeout(wrapped._obTimer);
+        wrapped._obTimer = setTimeout(() => init(), 400);
+      };
+      wrapped._obWrapped = true;
+      window.switchTab = wrapped;
     }
   
   
@@ -361,13 +387,27 @@
   
       const data = await fetchChecklist();
       if (!data || data.all_complete) return;
-  
+
       checklistData = data;
-  
+
+      // 2026-08-15: install the tab-click recheck up front, not just after
+      // a task-row click. Previously if the user closed the modal with X
+      // and then navigated tabs, no wrapper was in place — the modal never
+      // reappeared until page refresh. Now the wrapper is always armed
+      // while the checklist has incomplete tasks, so every tab click
+      // re-fires init() (debounced).
+      setupRecheck();
+
       // Small delay to let page finish loading
       setTimeout(() => showModal(data), 600);
     }
   
+    // 2026-08-15: expose init so other flows can trigger the checklist
+    // popup on demand (e.g. checkArtistPaymentMethod in
+    // artist-stripe-payment.js when the user clicks Book without their
+    // setup complete). One popup surface — no more competing modals.
+    window.showOnboardingChecklist = init;
+
     // Wait for DOM + page scripts to load
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => setTimeout(() => { if (!window._artistAccessDenied) init(); }, 300));

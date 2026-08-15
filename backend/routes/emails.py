@@ -309,21 +309,43 @@ def update_user_sms_carrier(
 def my_digest_history(user=Depends(get_current_user), db=Depends(get_db)):
     """Return the current user's last 30 digest send batches plus a
     count of items currently queued (waiting for tomorrow's 9 AM tick).
-    Grouped by minute so multiple queue rows from one send-batch show
-    as a single row in the UI."""
+
+    2026-08-08: reads primarily from artist_email_digest_snapshot so
+    history rows match exactly one email each — the legacy queue-based
+    "group by minute" aggregation could split one send across two
+    minutes if it straddled a boundary, or merge two sends in the same
+    minute. Falls back to the queue when no snapshot exists (for
+    batches sent before this fix)."""
     recent = db.execute(
         text("""
-            SELECT COUNT(*) as gig_count,
-                   COUNT(DISTINCT venue_id) as venue_count,
-                   strftime('%Y-%m-%d %H:%M', MAX(sent_at)) as sent_at_minute
-            FROM artist_email_digest_queue
-            WHERE user_id = :uid AND sent_at IS NOT NULL
-            GROUP BY strftime('%Y-%m-%d %H:%M', sent_at)
-            ORDER BY MAX(sent_at) DESC
+            SELECT open_count + booked_count + nearby_count as gig_count,
+                   0 as venue_count,
+                   strftime('%Y-%m-%d %H:%M', sent_at) as sent_at_minute
+            FROM artist_email_digest_snapshot
+            WHERE user_id = :uid
+            ORDER BY sent_at DESC
             LIMIT 30
         """),
         {"uid": user.id}
     ).mappings().all()
+    recent = [dict(r) for r in recent]
+    if not recent:
+        # Fallback to the legacy queue-grouping for users whose most
+        # recent send predates the snapshot table.
+        legacy = db.execute(
+            text("""
+                SELECT COUNT(*) as gig_count,
+                       COUNT(DISTINCT venue_id) as venue_count,
+                       strftime('%Y-%m-%d %H:%M', MAX(sent_at)) as sent_at_minute
+                FROM artist_email_digest_queue
+                WHERE user_id = :uid AND sent_at IS NOT NULL
+                GROUP BY strftime('%Y-%m-%d %H:%M', sent_at)
+                ORDER BY MAX(sent_at) DESC
+                LIMIT 30
+            """),
+            {"uid": user.id}
+        ).mappings().all()
+        recent = [dict(r) for r in legacy]
     pending = db.execute(
         text("""SELECT COUNT(*) as gig_count,
                        COUNT(DISTINCT venue_id) as venue_count
@@ -332,7 +354,7 @@ def my_digest_history(user=Depends(get_current_user), db=Depends(get_db)):
         {"uid": user.id}
     ).mappings().first()
     return {
-        "recent_sends": [dict(r) for r in recent],
+        "recent_sends": recent,
         "pending_count": int((pending or {}).get("gig_count") or 0),
         "pending_venue_count": int((pending or {}).get("venue_count") or 0),
     }
@@ -341,70 +363,129 @@ def my_digest_history(user=Depends(get_current_user), db=Depends(get_db)):
 @router.post("/api/me/digest-resend")
 @limiter.limit("5/minute")
 def my_digest_resend(request: Request, data: dict, user=Depends(get_current_user), db=Depends(get_db)):
-    """Re-send the historical digest batch identified by sent_at_minute.
-    Scoped to the calling user — can only resend their own batches.
-    Subject prefixed [RESENT] so it's distinguishable from the
-    original. sent_at column isn't touched."""
-    import sqlite3
-    from backend.db import DB_PATH
-    from backend.services.open_gig_digest import _render_digest_email
+    """Re-send a previously-sent digest.
+
+    2026-08-08 audit fix (finding #9): the old flow reconstructed the
+    digest from queued gig rows via the LEGACY `_render_digest_email`
+    renderer — which was replaced months ago by `_render_digest_email_live`
+    on the actual send path. That meant users saw a layout / data shape
+    they never received. Now:
+      (1) Prefer the snapshot table — sends the exact HTML we sent
+          originally, with subject prefixed [RESENT]. No stale-gig
+          concern because the snapshot is what actually went out.
+      (2) Fallback (batch predates the snapshot table): re-run the
+          current live builder — same code path the scheduler uses.
+    Rate-limited to prevent abuse."""
     from backend.scheduler import get_smtp_settings, send_email
+    from backend.services.open_gig_digest import build_digest_for_user
+    from backend.db import get_db_connection
 
     minute = (data.get("sent_at_minute") or "").strip()
     if not minute:
         raise HTTPException(400, "sent_at_minute required")
 
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        # Try snapshot first — this is the exact content originally sent.
+        snap = c.execute(
+            "SELECT subject, body_html FROM artist_email_digest_snapshot "
+            "WHERE user_id = ? AND strftime('%Y-%m-%d %H:%M', sent_at) = ? "
+            "ORDER BY sent_at DESC LIMIT 1",
+            (user.id, minute)
+        ).fetchone()
+
+        email_row = c.execute("SELECT email FROM users WHERE id = ?", (user.id,)).fetchone()
+        if not email_row or not email_row[0]:
+            raise HTTPException(400, "No email on file")
+        artist_email = email_row[0]
+
+        if snap and snap[0] and snap[1]:
+            subj = "[RESENT] " + snap[0]
+            body = snap[1]
+        else:
+            # Legacy path — no snapshot, so rebuild live. This is what
+            # the scheduler would produce today and is safer than the
+            # broken legacy reconstruction (post-edit values leaked in,
+            # booked-elsewhere sections couldn't be reproduced).
+            result = build_digest_for_user(c, user.id)
+            if not result["ok"]:
+                raise HTTPException(
+                    410,
+                    "Nothing to resend — every gig from that digest has been "
+                    "booked or cancelled. Check the open gigs calendar."
+                )
+            subj = "[RESENT] " + (result["subject"] or "")
+            body = result["body"] or ""
+
+        ok = send_email(get_smtp_settings(c), artist_email, subj, body)
+        if not ok:
+            raise HTTPException(502, "Email send failed — please try again or contact support")
+        return {"ok": True, "sent_at_minute": minute}
+    finally:
+        conn.close()
+
+
+@router.get("/api/me/digest-preview")
+@limiter.limit("30/minute")
+def my_digest_preview(request: Request, sent_at_minute: str = "",
+                        user=Depends(get_current_user), db=Depends(get_db)):
+    """Return the rendered subject + HTML body of a historical digest so
+    the user-profile Notifications tab can pop it up in a modal without
+    re-sending.
+
+    2026-08-08 audit fix (finding #9): serve the exact snapshot we
+    wrote at send time so the modal shows what the user actually
+    received, not a reconstruction against current gig fields with
+    the wrong renderer. Falls back to a live rebuild for pre-fix
+    batches so old rows still preview (with a `stale=True` flag so
+    the frontend can label them if it wants to)."""
+    from backend.services.open_gig_digest import build_digest_for_user
     from backend.db import get_db_connection
 
+    minute = (sent_at_minute or "").strip()
+    if not minute:
+        raise HTTPException(400, "sent_at_minute required")
 
     conn = get_db_connection()
     c = conn.cursor()
     try:
-        rows = c.execute("""
-            SELECT q.id as queue_id, q.gig_id, q.venue_id, q.notification_key, q.via_radius,
-                   q.artist_id, a.name as artist_name,
-                   g.date, g.start_time, g.end_time, g.pay, g.title, g.status,
-                   g.artist_type, g.band_formats, g.styles,
-                   COALESCE(g.is_multi_slot, 0) as is_multi_slot,
-                   (SELECT COUNT(*) FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.status = 'open') as open_slot_count,
-                   v.venue_name, v.city, v.state, v.latitude as venue_lat, v.longitude as venue_lon
-            FROM artist_email_digest_queue q
-            JOIN artists a ON a.id = q.artist_id
-            JOIN gigs g ON g.id = q.gig_id
-            JOIN venues v ON v.id = q.venue_id
-            WHERE q.user_id = ?
-              AND strftime('%Y-%m-%d %H:%M', q.sent_at) = ?
-            ORDER BY a.id ASC, g.date ASC, q.venue_id ASC
-        """, (user.id, minute)).fetchall()
-        if not rows:
-            raise HTTPException(404, f"No digest batch found for {minute}")
-        # Drop gigs that got booked between the original send and now.
-        # The original digest showed them as open; sending an identical
-        # email now would advertise an already-booked gig — confusing
-        # and potentially embarrassing. If every gig in the batch is
-        # gone, fail with a clear message.
-        all_rows = [dict(r) for r in rows]
-        rows = [r for r in all_rows if r["status"] == "open"]
-        if not rows:
-            raise HTTPException(
-                410,
-                "Every gig in that digest has since been booked or cancelled — "
-                "nothing to resend. Check your inbox for newer digests, or look "
-                "at the open gigs calendar for what's currently available."
-            )
-        meta = c.execute(
-            "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
-            (user.id,)
+        snap = c.execute(
+            "SELECT subject, body_html, open_count, booked_count, nearby_count "
+            "FROM artist_email_digest_snapshot "
+            "WHERE user_id = ? AND strftime('%Y-%m-%d %H:%M', sent_at) = ? "
+            "ORDER BY sent_at DESC LIMIT 1",
+            (user.id, minute)
         ).fetchone()
-        if not meta or not meta[0]:
-            raise HTTPException(400, "No email on file")
-        subj, body = _render_digest_email(
-            artist_name=meta[1] or "there", rows=rows,
-            artist_lat=meta[2], artist_lon=meta[3],
-        )
-        ok = send_email(get_smtp_settings(c), meta[0], "[RESENT] " + subj, body)
-        if not ok:
-            raise HTTPException(502, "Email send failed — please try again or contact support")
-        return {"ok": True, "sent_at_minute": minute, "rows_resent": len(rows)}
+        if snap and snap[0] and snap[1]:
+            _counts = {
+                "open": snap[2] or 0,
+                "booked": snap[3] or 0,
+                "nearby": snap[4] or 0,
+            }
+            return {
+                "ok": True,
+                "sent_at_minute": minute,
+                "subject": snap[0],
+                "body_html": snap[1],
+                "row_count": sum(_counts.values()),
+                "counts": _counts,
+                "stale": False,
+            }
+
+        # Legacy row — no snapshot. Rebuild live so at least the layout
+        # is correct and the data is a coherent (if current) view.
+        result = build_digest_for_user(c, user.id)
+        if not result["ok"]:
+            raise HTTPException(404, f"No digest batch found for {minute}")
+        return {
+            "ok": True,
+            "sent_at_minute": minute,
+            "subject": result["subject"],
+            "body_html": result["body"],
+            "row_count": sum((result.get("counts") or {}).values()),
+            "counts": result.get("counts") or {},
+            "stale": True,
+        }
     finally:
         conn.close()

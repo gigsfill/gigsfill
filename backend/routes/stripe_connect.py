@@ -1608,7 +1608,42 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
     if not txn:
         raise HTTPException(404, "No cancelled payment found")
     txn = dict(txn)
-    
+
+    # 2026-08-08 audit fix (finding #2): reject reinstate on a
+    # multi-slot venue_charge parent. On a multi-slot gig, the parent
+    # venue_charge row has artist_id=NULL and its gig has gigs.artist_id=NULL
+    # (artists live on gig_slots, not the parent). If we fall through
+    # to the charge below, aid=COALESCE(t.artist_id, g.artist_id)=NULL,
+    # Stripe charges the card, but the Transfer.create is silently
+    # skipped (entity_id=NULL matches no artist_settings) AND the
+    # notification INSERT with user_id=NULL raises IntegrityError,
+    # rolling back the DB while leaving the Stripe charge intact.
+    # The correct reinstate path for multi-slot gigs is per-slot via
+    # /api/stripe/reinstate-slot-payment — refuse here and tell the
+    # venue what to do.
+    is_venue_charge_parent = (
+        (txn.get("transaction_type") == "venue_charge")
+        and (txn.get("parent_transaction_id") is None)
+    )
+    if is_venue_charge_parent:
+        raise HTTPException(
+            400,
+            "This is a multi-slot gig's parent payment record — reinstate "
+            "each slot individually from the Payments panel."
+        )
+
+    # 2026-08-08 audit fix (finding #2, defense-in-depth): even in the
+    # single-artist branch, refuse to proceed if we somehow lack an
+    # artist to transfer to. Without this guard, a bad row shape (data
+    # migration leftover, cancelled artist row, etc.) would charge the
+    # venue and orphan the funds on the platform balance.
+    aid = txn.get("aid") or txn.get("artist_id")
+    if not aid:
+        raise HTTPException(
+            400,
+            "Cannot reinstate payment: no artist recipient on this transaction."
+        )
+
     venue_id = txn["venue_id"]
     venue_check = db.execute(
         text("""SELECT 1 FROM venues v WHERE v.id = :vid AND (
@@ -1625,7 +1660,7 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
     amount_cents = txn.get("amount_cents") or 0
     override_row = db.execute(
         text("SELECT pay_dollars_override, pay_cents_override FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid AND status = 'approved'"),
-        {"vid": venue_id, "aid": txn.get("aid") or txn.get("artist_id")}
+        {"vid": venue_id, "aid": aid}
     ).mappings().first()
     if override_row and override_row.get("pay_dollars_override") is not None:
         override_pay = float(override_row["pay_dollars_override"]) + float(override_row.get("pay_cents_override") or 0) / 100
@@ -1712,7 +1747,7 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
     artist_settings = db.execute(
         text("""SELECT eps.stripe_connect_account_id, eps.stripe_connect_onboarding_complete
             FROM entity_payment_settings eps WHERE eps.entity_type = 'artist' AND eps.entity_id = :aid"""),
-        {"aid": txn.get("aid")}
+        {"aid": aid}
     ).mappings().first()
 
     if artist_settings and artist_settings.get("stripe_connect_account_id") and artist_settings.get("stripe_connect_onboarding_complete"):

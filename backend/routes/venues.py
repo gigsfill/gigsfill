@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from backend.db import get_db
-from backend.routes.auth import get_current_user
+from backend.routes.auth import get_current_user, get_optional_user
 from datetime import datetime
 import logging
 from backend.utils import utcnow_naive
@@ -202,6 +202,7 @@ def list_public_venues(request: Request, db=Depends(get_db)):
                 id,
                 venue_name,
                 description,
+                address_line_1,
                 city,
                 state,
                 venue_size,
@@ -223,7 +224,8 @@ def list_public_venues(request: Request, db=Depends(get_db)):
 # v97: Public single venue endpoint for profile viewing
 @router.get("/api/venues/{venue_id}/public")
 @limiter.limit("60/minute")
-def get_venue_public(venue_id: int, request: Request, db=Depends(get_db)):
+def get_venue_public(venue_id: int, request: Request,
+                     user=Depends(get_optional_user), db=Depends(get_db)):
     """Public endpoint to view any venue profile.
 
     Audit fix (Jun 2026): `user_id` was exposed in the response,
@@ -233,6 +235,13 @@ def get_venue_public(venue_id: int, request: Request, db=Depends(get_db)):
 
     Rate-limited (Jul 1 2026 audit fix): 60/min per IP. Public profile
     views are common (one per navigation) but bulk enumeration is not.
+
+    2026-08-07: added `viewer_is_artist` flag so the profile page can
+    reveal the "Gig Details" tab (stage, sound, lighting, pay, tabs,
+    etc.) to logged-in artist users only. Anonymous and venue-only
+    visitors see the current lean public view. Uses `get_optional_user`
+    (returns None for anonymous) + a one-shot query that returns true
+    when the caller owns or is an entity_user of at least one artist.
     """
     row = db.execute(
         text("""
@@ -283,7 +292,51 @@ def get_venue_public(venue_id: int, request: Request, db=Depends(get_db)):
     if not row:
         raise HTTPException(404)
 
-    return dict(row)
+    viewer_is_artist = False
+    if user is not None:
+        _hit = db.execute(
+            text("""SELECT 1 FROM artists a
+                    WHERE a.deleted_at IS NULL
+                      AND (a.user_id = :uid OR EXISTS (
+                        SELECT 1 FROM entity_users eu
+                        WHERE eu.entity_type = 'artist'
+                          AND eu.entity_id = a.id
+                          AND eu.user_id = :uid
+                      ))
+                    LIMIT 1"""),
+            {"uid": user.id}
+        ).first()
+        viewer_is_artist = bool(_hit)
+
+    out = dict(row)
+    out["viewer_is_artist"] = viewer_is_artist
+    # 2026-08-08 audit fix (finding #11): the endpoint was returning the
+    # gated fields to every caller and only the UI hid them, defeating
+    # the whole "artist-only Gig Details" gate — an anonymous scraper
+    # could enumerate /api/venues/{id}/public and harvest the full
+    # venue-ops catalog (rig / pay / bar-food tabs / arrival policy).
+    # Enforce server-side: when the caller is NOT an artist, strip the
+    # sensitive fields. Non-artist authenticated users and anonymous
+    # visitors still get the lean public view (name / address / bio /
+    # social / PRO flag / capacity) — nothing new is hidden that the
+    # site had public before we added viewer_is_artist.
+    if not viewer_is_artist:
+        for _gated in (
+            "has_stage", "stage_width_ft", "stage_depth_ft",
+            "setup_location_description",
+            "has_sound_equipment", "sound_equipment_description",
+            "has_sound_engineer", "sound_engineer_details",
+            "has_lighting", "lighting_description",
+            "load_in_out_details",
+            "arrival_time_type",
+            "arrival_no_earlier_than_hour",
+            "arrival_no_earlier_than_period",
+            "default_pay_dollars", "default_pay_cents",
+            "bar_tab_details", "food_tab_details",
+            "artist_frequency_days",
+        ):
+            out.pop(_gated, None)
+    return out
 
 # LIST (PROFILE PAGE) - MOVED TO me.py (supports display_order and entity_users)
 # @router.get("/api/my/venues")
@@ -465,6 +518,10 @@ def update_venue(venue_id: int, data: dict, request: Request,
         "pro_certified_at": data.get("pro_certified_at"),
         "auto_flyers": data.get("auto_flyers"),
         "default_flyer_template_id": data.get("default_flyer_template_id"),
+        # 2026-08-10: same-day booking approval gate — moved from
+        # per-user email pref to per-venue policy. Editable on the
+        # venue's Email Notifications tab.
+        "require_same_day_approval": data.get("require_same_day_approval"),
     }
     
     # Geocode city to get coordinates
@@ -535,7 +592,8 @@ def update_venue(venue_id: int, data: dict, request: Request,
             pro_certified = COALESCE(:pro_certified, pro_certified),
             pro_certified_at = COALESCE(:pro_certified_at, pro_certified_at),
             auto_flyers = COALESCE(:auto_flyers, auto_flyers),
-            default_flyer_template_id = COALESCE(:default_flyer_template_id, default_flyer_template_id)
+            default_flyer_template_id = COALESCE(:default_flyer_template_id, default_flyer_template_id),
+            require_same_day_approval = COALESCE(:require_same_day_approval, require_same_day_approval)
         WHERE id = :id
     """),
     {
@@ -968,6 +1026,11 @@ def delete_venue_preview(venue_id: int, user=Depends(get_current_user), db=Depen
             "other_users_count": 0, "upcoming_gigs": [], "live_txns": [],
         }
 
+    # 2026-08-08 audit fix (same class as #5-7): outer `g.status IN (...)`
+    # excluded partial multi-slot gigs (parent 'open' until last slot
+    # books), so the venue's delete-preview undercounted future gigs
+    # with any booked slot. Filter to gigs with at least one active
+    # slot via an EXISTS instead.
     upcoming = db.execute(text("""
         SELECT DISTINCT g.id as gig_id, g.date,
                (SELECT GROUP_CONCAT(a.name, ', ')
@@ -978,8 +1041,12 @@ def delete_venue_preview(venue_id: int, user=Depends(get_current_user), db=Depen
                     AND gs2.artist_id IS NOT NULL) as artist_names
         FROM gigs g
         WHERE g.venue_id = :vid
-          AND g.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
           AND g.date >= :today
+          AND EXISTS (
+              SELECT 1 FROM gig_slots gs
+              WHERE gs.gig_id = g.id
+                AND gs.status IN ('booked','awaiting_venue_contract','pending_contract','pending_venue_approval')
+          )
         ORDER BY g.date ASC
     """), {"vid": venue_id, "today": utcnow_naive().date().isoformat()}).mappings().all()
 

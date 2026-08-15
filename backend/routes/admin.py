@@ -163,20 +163,32 @@ def get_system_health(admin=Depends(check_admin), db=Depends(get_db)):
         if swap_total > 0:
             result["swap_pct"] = round((swap_used / swap_total) * 100)
 
+        # 2026-08-09: softened alert copy. The previous "server is
+        # about to crash" wording was alarmist — it reads total system
+        # RAM without knowing what's driving it. On a droplet where the
+        # operator SSHes in with VSCode Remote / language servers /
+        # dev tools, those tools can dwarf the app's footprint. Now
+        # points at the diagnostic step (top consumers via ps) so the
+        # operator can distinguish "app under real pressure" from "dev
+        # tools consuming RAM on the same host."
         if result["memory_pct"] >= 90:
             result["alerts"].append(
-                f"🔴 CRITICAL: RAM at {result['memory_pct']}% ({result['memory_used_mb']}MB / {result['memory_total_mb']}MB). "
-                "Upgrade your droplet immediately — the server is about to crash."
+                f"🔴 RAM at {result['memory_pct']}% ({result['memory_used_mb']}MB / {result['memory_total_mb']}MB). "
+                "Check top RAM consumers first (`ps aux --sort=-rss | head`) — dev tooling "
+                "on the same host (VSCode Remote, language servers) can dominate. "
+                "If it's the app itself, resize to a larger droplet."
             )
         elif result["memory_pct"] >= 75:
             result["warnings"].append(
-                f"🟡 WARNING: RAM at {result['memory_pct']}% ({result['memory_used_mb']}MB / {result['memory_total_mb']}MB). "
-                "Consider upgrading to a 2GB droplet soon."
+                f"🟡 RAM at {result['memory_pct']}% ({result['memory_used_mb']}MB / {result['memory_total_mb']}MB). "
+                "Approaching capacity — check top consumers to see whether it's the app or "
+                "dev tools running on this droplet."
             )
         if result["swap_pct"] is not None and result["swap_pct"] >= 50:
             result["warnings"].append(
-                f"🟡 WARNING: Swap at {result['swap_pct']}% — server is under memory pressure. "
-                "Upgrade your droplet."
+                f"🟡 Swap at {result['swap_pct']}%. Linux uses swap freely for cold pages "
+                "and this isn't automatically bad — check `vmstat 1 5` to see whether "
+                "swap-in/out is sustained (thrashing) or a one-time cold-page park."
             )
     except Exception as e:
         result["warnings"].append(f"Could not read memory stats: {e}")
@@ -275,21 +287,31 @@ def get_system_health(admin=Depends(check_admin), db=Depends(get_db)):
         pass
 
     # ── Upgrade recommendation ───────────────────────────────────────────────
+    # 2026-08-09: only recommend an upgrade when the app itself is the
+    # dominant consumer — i.e. sustained high memory AND meaningful
+    # swap usage. Prevents nagging when the operator is just running
+    # dev tools on the droplet during a session.
     total_mb = result.get("memory_total_mb") or 0
-    if total_mb > 0 and total_mb <= 1100:  # 1GB droplet
-        result["upgrade_recommended"] = (
-            result["memory_pct"] is not None and result["memory_pct"] >= 70
-        ) or (
-            result["swap_pct"] is not None and result["swap_pct"] >= 25
-        )
+    if total_mb > 0 and total_mb <= 1100:
         result["droplet_size"] = "1GB"
-        result["upgrade_path"] = (
-            "Resize to $12/mo 2GB droplet + add $15/mo DigitalOcean Managed PostgreSQL = $27/mo total. "
-            "Handles 1,000+ venues and 20,000+ artists."
-        )
+    elif total_mb <= 2200:
+        result["droplet_size"] = "2GB"
+    elif total_mb <= 4400:
+        result["droplet_size"] = "4GB"
     else:
-        result["upgrade_recommended"] = False
         result["droplet_size"] = f"{total_mb}MB"
+
+    # Recommend upgrade only when BOTH RAM and swap are high — a
+    # transient dev-tool spike shows up as high RAM but low sustained
+    # swap; a genuinely under-provisioned app shows up as both.
+    _mem_high = result["memory_pct"] is not None and result["memory_pct"] >= 80
+    _swap_high = result["swap_pct"] is not None and result["swap_pct"] >= 50
+    result["upgrade_recommended"] = _mem_high and _swap_high
+    if result["upgrade_recommended"] and total_mb <= 1100:
+        result["upgrade_path"] = "Resize to a 2GB droplet in the DigitalOcean control panel."
+    elif result["upgrade_recommended"] and total_mb <= 2200:
+        result["upgrade_path"] = "Resize to a 4GB droplet in the DigitalOcean control panel."
+    else:
         result["upgrade_path"] = None
 
     return result

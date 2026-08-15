@@ -22,7 +22,7 @@
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Find Live Music Near You – GigsFill">
 <meta name="twitter:description" content="Browse upcoming live music events at local venues.">
-<link href="/app/static/css/gigsfill.css" rel="stylesheet">
+<link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
 <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
@@ -775,6 +775,15 @@
 <h2 id="monthLabel">Month YYYY</h2>
 <button class="btn ghost" id="nextMonth">Next ▶</button>
 </div>
+<!-- "Show All Gigs" — flatten currently-visible calendar into a
+     sortable list with CSV / PDF export. Reflects active filters
+     (city, radius, artist type, etc.). Public-safe: no pay column. -->
+<div style="display:flex; justify-content:flex-end; margin-top:8px;">
+  <button type="button" onclick="openCityPublicGigsList()"
+    style="font-size:0.75rem; color:var(--text-muted); background:transparent; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; cursor:pointer;"
+    onmouseover="this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#22c55e'"
+    onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📋 Show All Gigs</button>
+</div>
 <div class="calendar-header">
 <div>Sun</div><div>Mon</div><div>Tue</div>
 <div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
@@ -802,13 +811,78 @@
 </div>
 
 <script src="/app/static/js/city-autocomplete.js"></script>
-<script src="/app/static/js/public-gigs.js?v=12"></script>
+<script src="/app/static/js/gf-analytics.js?v=1"></script>
+<script src="/app/static/js/public-gigs.js?v=14"></script>
 
 <script src="/app/static/js/gf-modals.js?v=8"></script>
+<script src="/app/static/js/venue-gig-details-modal.js?v=1"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
-<script src="/app/static/js/gig-hover-card.js?v=21"></script>
-<script src="/app/static/js/sw-register.js"></script>
+<script src="/app/static/js/gig-hover-card.js?v=23"></script>
+<script src="/app/static/js/public-gigs-list-modal.js?v=6"></script>
+<script>
+  // "Show All Gigs" launcher for the city public calendar. Uses the
+  // currently-filtered gig set (window._pgFilteredGigs, exposed from
+  // public-gigs.js) so active city / radius / type filters apply to
+  // the list too. Expands multi-slot gigs into one row per slot the
+  // viewer would see on the calendar; no pay column exposed.
+  window.openCityPublicGigsList = function () {
+    const source = (typeof window._pgFilteredGigs === 'function')
+      ? window._pgFilteredGigs() : [];
+    const rows = [];
+    (source || []).forEach(g => {
+      const slots = Array.isArray(g.slots) ? g.slots : [];
+      const isReallyMulti = slots.length > 1;
+      if (isReallyMulti) {
+        slots.forEach(s => {
+          rows.push({
+            date: g.date,
+            venue_id: g.venue_id,
+            venue_name: g.venue_name || '',
+            address_line_1: g.address_line_1 || '',
+            address_line_2: g.address_line_2 || '',
+            city: g.city || '',
+            state: g.state || '',
+            start_time: s.start_time || g.start_time,
+            end_time:   s.end_time   || g.end_time,
+            title: g.title || '',
+            is_multi_slot: true,
+            slot_number: s.slot_number,
+            artist_name: s.artist_name || '',
+            artist_id:   s.artist_id   || null,
+          });
+        });
+      } else {
+        rows.push({
+          date: g.date,
+          venue_id: g.venue_id,
+          venue_name: g.venue_name || '',
+          address_line_1: g.address_line_1 || '',
+          address_line_2: g.address_line_2 || '',
+          city: g.city || '',
+          state: g.state || '',
+          start_time: g.start_time,
+          end_time: g.end_time,
+          title: g.title || '',
+          is_multi_slot: false,
+          slot_number: null,
+          artist_name: g.artist_name || '',
+          artist_id:   g.artist_id   || null,
+        });
+      }
+    });
+    window.openPublicGigsListModal({
+      title: '📅 All Gigs',
+      rows: rows,
+      exportBasename: 'gigsfill_gigs',
+      // City-wide list: Venue first (headline of the row), then Address
+      // + Artist so a visitor scans Venue names then reads location
+      // and who's playing. Time is one combined column.
+      columns: ['date', 'venue', 'address', 'artist', 'time'],
+    });
+  };
+</script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

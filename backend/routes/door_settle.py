@@ -267,6 +267,103 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
         final_pay_cents, txn_updated_count, settled_via_platform, delta_cents,
     )
 
+    # 2026-08-12: settlement summary emails to both parties. Best-effort;
+    # a mail failure never fails the settle itself. Both sides get the
+    # same math — guarantee, door pct, receipts, share, final — so there's
+    # a written trail of how pay was calculated. Off-platform path (payout
+    # already fired) carries a different closing note so both sides know
+    # the door delta needs to be paid in person, not through GigsFill.
+    try:
+        _settle_dollars = final_pay_cents / 100.0
+        _guarantee_dollars = int(slot["guarantee_cents"] or 0) / 100.0
+        _receipts_dollars = int(receipts) / 100.0
+        _door_share_cents = (int(receipts) * int(slot["door_pct"] or 0)) // 100
+        _door_share_dollars = _door_share_cents / 100.0
+        _floor_won = final_pay_cents == int(slot["guarantee_cents"] or 0)
+        _settlement_narrative = (
+            f"In this case the guarantee (${_guarantee_dollars:,.2f}) was higher, so that&#39;s what the artist earns."
+            if _floor_won else
+            f"In this case the door share brought the total above the guarantee, so the artist earns ${_settle_dollars:,.2f}."
+        )
+        if settled_via_platform:
+            _platform_note = (
+                "This amount will process through GigsFill on the normal payout schedule."
+            )
+        else:
+            _platform_note = (
+                f"NOTE: Payout for this gig had already been processed at the "
+                f"guarantee amount. Please pay the door bonus of "
+                f"${delta_cents/100:,.2f} directly (off-platform)."
+            )
+
+        # Fetch venue name + artist name + emails for both sides.
+        _meta = db.execute(
+            text("""SELECT v.venue_name, v.user_id as venue_user_id,
+                           a.name as artist_name, a.user_id as artist_user_id
+                    FROM gig_slots gs
+                    JOIN gigs g ON g.id = gs.gig_id
+                    JOIN venues v ON v.id = g.venue_id
+                    LEFT JOIN artists a ON a.id = gs.artist_id
+                    WHERE gs.id = :sid"""),
+            {"sid": slot_id}
+        ).mappings().first()
+        _venue_name = (_meta or {}).get("venue_name") or "the venue"
+        _artist_name = (_meta or {}).get("artist_name") or "artist"
+
+        from backend.email_service import EmailService
+        from backend.utils import get_all_entity_users
+        from backend.services.email_dispatch import format_email_date
+        _email_svc = EmailService(db)
+        _date_display = format_email_date(slot["date"])
+
+        _common_vars = {
+            "venue_name": _venue_name,
+            "artist_name": _artist_name,
+            "date": _date_display,
+            "door_receipts_dollars": f"{_receipts_dollars:,.2f}",
+            "door_share_dollars": f"{_door_share_dollars:,.2f}",
+            "guarantee_dollars": f"{_guarantee_dollars:,.2f}",
+            "door_pct": str(int(slot["door_pct"] or 0)),
+            "final_pay_dollars": f"{_settle_dollars:,.2f}",
+            "settlement_narrative": _settlement_narrative,
+            "platform_note": _platform_note,
+        }
+
+        # Fan out to every venue team member.
+        try:
+            _venue_users = get_all_entity_users(db, "venue", slot["venue_id"]) or []
+            for _vu in _venue_users:
+                _email_svc.send_notification_email(
+                    user_email=_vu["email"],
+                    user_id=_vu["user_id"],
+                    notification_type="door_settlement_summary_venue",
+                    variables={
+                        **_common_vars,
+                        "user_name": _vu.get("first_name") or "there",
+                        "venue_id": str(slot["venue_id"]),
+                    },
+                )
+        except Exception as _ve:
+            logger.warning(f"[SETTLE] venue-side settlement email failed: {_ve}")
+
+        # Fan out to every artist team member.
+        try:
+            _artist_users = get_all_entity_users(db, "artist", slot["artist_id"]) or []
+            for _au in _artist_users:
+                _email_svc.send_notification_email(
+                    user_email=_au["email"],
+                    user_id=_au["user_id"],
+                    notification_type="door_settlement_summary_artist",
+                    variables={
+                        **_common_vars,
+                        "artist_id": str(slot["artist_id"]),
+                    },
+                )
+        except Exception as _ae:
+            logger.warning(f"[SETTLE] artist-side settlement email failed: {_ae}")
+    except Exception as _se:
+        logger.warning(f"[SETTLE] summary emails skipped due to error: {_se}")
+
     response = {
         "ok": True,
         "settled_pay_cents": final_pay_cents,

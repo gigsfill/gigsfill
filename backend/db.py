@@ -211,7 +211,17 @@ def _sqlite_to_pg(sql: str) -> str:
     )
     # last_insert_rowid()
     s = _re.sub(r'\blast_insert_rowid\(\s*\)', 'lastval()', s, flags=_re.IGNORECASE)
-    # strftime('%Y', x), strftime('%Y-%m', x), strftime('%Y-%m-%d', x)
+    # strftime('%Y', x), strftime('%Y-%m', x), strftime('%Y-%m-%d', x),
+    # strftime('%Y-%m-%d %H:%M', x)
+    # 2026-08-08 audit fix (finding #14): the minute-bucket format is
+    # used by my_digest_history / _preview / _resend to group sends by
+    # minute. Without this rule the query passed through untranslated
+    # to Postgres and every request against those endpoints 500'd
+    # (Postgres has no strftime function).
+    s = _re.sub(
+        r"strftime\(\s*'%Y-%m-%d %H:%M'\s*,\s*([^)]+)\)",
+        r"to_char((\1)::timestamp, 'YYYY-MM-DD HH24:MI')", s, flags=_re.IGNORECASE
+    )
     s = _re.sub(
         r"strftime\(\s*'%Y'\s*,\s*([^)]+)\)",
         r"to_char((\1)::timestamp, 'YYYY')", s, flags=_re.IGNORECASE
@@ -345,12 +355,23 @@ class _PgCompatCursor:
         return iter(self._cur)
 
 def _setup_conn():
-    """Return a raw connection for schema setup — routes to SQLite or PostgreSQL."""
+    """Return a raw connection for schema setup — routes to SQLite or PostgreSQL.
+
+    2026-08-08 audit fix (finding #8): the previous Postgres branch
+    returned a raw psycopg2 connection with NO _sqlite_to_pg translation,
+    so setup_database()'s 27+ `CREATE TABLE ... INTEGER PRIMARY KEY
+    AUTOINCREMENT` DDLs and `?`-placeholder INSERTs raised syntax errors
+    on the first CREATE and the service failed to boot. Wrap the Postgres
+    connection in the same _PgCompatConn that get_db_connection() uses so
+    every cursor.execute() gets translated (AUTOINCREMENT → SERIAL, ? → %s,
+    datetime('now') → CURRENT_TIMESTAMP, etc). The dead _setup_placeholder
+    helper below can go now — the wrapper handles this automatically.
+    """
     if _IS_POSTGRES:
         import psycopg2
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = False
-        return conn
+        return _PgCompatConn(conn)
     else:
         # Jul 2026 full-site audit: enable FK enforcement per-connection.
         conn = sqlite3.connect(str(DB_PATH))
@@ -660,7 +681,89 @@ def setup_database():
         # history at other venues, artist's payment history, etc. all keep
         # showing the correct (now "[Deleted] X") name.
         "deleted_at TIMESTAMP DEFAULT NULL",
+        # 2026-08-10: same-day booking approval gate, now per-venue.
+        # Previously read from the OWNER's email_preferences
+        # 'venue_booking_approval_request' row, which meant a user with
+        # multiple venues had one global setting. This column moves the
+        # POLICY to the venue where it belongs; the email_preferences
+        # row now controls only whether the venue user gets an EMAIL
+        # when the gate fires. Default 1 (require approval) matches the
+        # previous safe default in _venue_requires_same_day_approval.
+        "require_same_day_approval INTEGER DEFAULT 1",
     ])
+
+    # 2026-08-10: one-shot backfill for require_same_day_approval — copy
+    # each venue's owner email_preferences row into the new column so
+    # existing behavior is preserved on deploy. Guarded by a marker in
+    # platform_settings so it only runs once per install. New venues
+    # created after this migration inherit the DEFAULT (1 = require).
+    try:
+        _marker = cursor.execute(
+            "SELECT setting_value FROM platform_settings WHERE setting_key = 'backfill_require_same_day_approval_done'"
+        ).fetchone()
+        if not _marker:
+            # Owner's explicit opt-out (enabled=0) → 0. Anyone else (no row / enabled=1) → 1.
+            cursor.execute("""
+                UPDATE venues
+                SET require_same_day_approval = COALESCE(
+                    (SELECT ep.enabled FROM email_preferences ep
+                     WHERE ep.user_id = venues.user_id
+                       AND ep.notification_type = 'venue_booking_approval_request'
+                     LIMIT 1),
+                    1
+                )
+                WHERE deleted_at IS NULL
+            """)
+            _n = cursor.rowcount or 0
+            cursor.execute(
+                "INSERT INTO platform_settings (setting_key, setting_value) VALUES ('backfill_require_same_day_approval_done', 'true')"
+            )
+            # Commit here so the marker sticks even if a later step in
+            # setup_database raises. Without this the marker was rolled
+            # back on the first deploy and the backfill would rerun on
+            # every restart — idempotent for the UPDATE, but noisy.
+            conn.commit()
+            import logging as _lg
+            _lg.getLogger("gigsfill.db").info(
+                f"[MIGRATION] backfilled require_same_day_approval on {_n} venues from owner email prefs"
+            )
+    except Exception as _mig_err:
+        import logging as _lg
+        _lg.getLogger("gigsfill.db").warning(
+            f"[MIGRATION] require_same_day_approval backfill skipped: {_mig_err}"
+        )
+
+    # 2026-08-10: retire the per-user opt-out for the approval-request
+    # email. It's now fully venue-scoped — the venue-level
+    # require_same_day_approval toggle is the only control. Stale
+    # email_preferences rows for this notification_type would otherwise
+    # silently suppress the email for users who had opted out under the
+    # old model, with no way to opt back in (since the UI row is gone).
+    # One-shot delete, guarded by its own marker so the DELETE runs
+    # exactly once.
+    try:
+        _marker2 = cursor.execute(
+            "SELECT setting_value FROM platform_settings WHERE setting_key = 'retire_venue_booking_approval_request_pref_done'"
+        ).fetchone()
+        if not _marker2:
+            cursor.execute(
+                "DELETE FROM email_preferences WHERE notification_type = 'venue_booking_approval_request'"
+            )
+            _dn = cursor.rowcount or 0
+            cursor.execute(
+                "INSERT INTO platform_settings (setting_key, setting_value) VALUES ('retire_venue_booking_approval_request_pref_done', 'true')"
+            )
+            conn.commit()
+            import logging as _lg
+            _lg.getLogger("gigsfill.db").info(
+                f"[MIGRATION] deleted {_dn} stale venue_booking_approval_request email prefs "
+                "(notification is now fully venue-scoped)"
+            )
+    except Exception as _mig2_err:
+        import logging as _lg
+        _lg.getLogger("gigsfill.db").warning(
+            f"[MIGRATION] retire_venue_booking_approval_request skipped: {_mig2_err}"
+        )
     
     # ==========================================
     # GIG_SLOTS — every gig has one or more slots
@@ -1242,7 +1345,10 @@ def setup_database():
             entity_id INTEGER NOT NULL,
             entity_name TEXT NOT NULL,
             invited_email TEXT NOT NULL,
-            invited_by_user_id INTEGER NOT NULL,
+            -- 2026-08-07: nullable so delete_account can NULL the FK on
+            -- an inviter who's leaving without wiping the invitation
+            -- history that other members still see.
+            invited_by_user_id INTEGER,
             inviter_first_name TEXT,
             inviter_last_name TEXT,
             token TEXT NOT NULL UNIQUE,
@@ -1334,7 +1440,9 @@ def setup_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             venue_id INTEGER NOT NULL,
             venue_name TEXT NOT NULL,
-            user_id INTEGER NOT NULL,
+            -- 2026-08-07: nullable so delete_account NULLs the sender
+            -- without wiping the venue's outbound-email audit log.
+            user_id INTEGER,
             subject TEXT NOT NULL,
             body TEXT NOT NULL,
             recipient_count INTEGER NOT NULL,
@@ -1411,8 +1519,11 @@ def setup_database():
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             gig_id INTEGER NOT NULL,
-            from_user_id INTEGER NOT NULL,
-            to_user_id INTEGER NOT NULL,
+            -- 2026-08-07: from/to nullable so account-delete can NULL
+            -- the FK and preserve the financial audit trail (same policy
+            -- as artist_reviews.reviewer_user_id / venue_reviews).
+            from_user_id INTEGER,
+            to_user_id INTEGER,
             artist_id INTEGER,
             amount_cents INTEGER NOT NULL,
             venue_charge_cents INTEGER NOT NULL,
@@ -1667,6 +1778,27 @@ def setup_database():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_digest_queue_unsent ON artist_email_digest_queue(sent_at) WHERE sent_at IS NULL")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_digest_queue_user ON artist_email_digest_queue(user_id, sent_at)")
+
+    # 2026-08-08 audit fix (finding #9): rendered digest snapshots so
+    # the user-profile Notifications tab's preview/resend show what
+    # was actually sent, not a re-computed reconstruction against
+    # current gig fields. `send_daily_artist_digest` writes one row
+    # per user per send batch; my_digest_preview / my_digest_resend
+    # read from here. Kept separate from the per-gig queue since the
+    # subject/body_html are per-batch, not per-row.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS artist_email_digest_snapshot (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            subject TEXT,
+            body_html TEXT,
+            open_count INTEGER DEFAULT 0,
+            booked_count INTEGER DEFAULT 0,
+            nearby_count INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_digest_snapshot_user ON artist_email_digest_snapshot(user_id, sent_at DESC)")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS venue_payment_overrides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1759,7 +1891,9 @@ def setup_database():
             venue_id INTEGER NOT NULL,
             venue_name TEXT NOT NULL,
             invited_email TEXT NOT NULL,
-            invited_by_user_id INTEGER NOT NULL,
+            -- 2026-08-07: nullable so delete_account can NULL the FK
+            -- while preserving the invitation record for other users.
+            invited_by_user_id INTEGER,
             inviter_name TEXT,
             message TEXT,
             -- Status state machine:
@@ -2245,6 +2379,50 @@ def setup_database():
     # opaque to the backend — the FE serializes the same shape it sends
     # into POST /api/venues/{id}/gigs (start_time/end_time/pay/
     # artist_type/band_formats/styles per slot).
+    # 2026-08-01: artist-owned external gigs (gigs at venues NOT on
+    # GigsFill). Artist adds these from their own calendar so their public
+    # profile reflects a complete schedule and prospective bookers see
+    # they're active. Not surfaced on venue calendars or the city public
+    # calendar — those stay GigsFill-native. No pay/status/booking fields;
+    # this is a "record what I'm doing" tool, not a booking transaction.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS artist_external_gigs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_id INTEGER NOT NULL,
+            venue_name TEXT NOT NULL,
+            venue_city TEXT,
+            venue_state TEXT,
+            venue_address TEXT,
+            date TEXT NOT NULL,
+            start_time TEXT,
+            end_time TEXT,
+            notes TEXT,
+            created_by_user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (artist_id) REFERENCES artists(id)
+        )
+    """)
+    try: c4.execute("CREATE INDEX IF NOT EXISTS idx_artist_external_gigs_artist_date ON artist_external_gigs(artist_id, date)")
+    except Exception: pass
+    # 2026-08-01: Artist Type / Lineup / Styles tags so the modal can mirror
+    # the venue Create Gig visual language and the public calendar can show
+    # what kind of gig it was. Stored as scalar text (Artist Type — one of
+    # 'Live Band', 'DJ', etc.) + JSON arrays of strings (lineup, styles).
+    _add_columns(c4, "artist_external_gigs", [
+        "artist_type TEXT",
+        "lineup_json TEXT",
+        "styles_json TEXT",
+        # 2026-08-02: optional flyer upload. Path is relative to
+        # /opt/gigsfill/uploads/ext_flyers/. `flyer_public` gates
+        # exposure via /api/public/... (artist opts out by unchecking
+        # "visible to the public" on the upload — defaults ON). Cron
+        # sweep prunes rows where date < now-30d and clears the columns.
+        "flyer_path TEXT",
+        "flyer_public INTEGER DEFAULT 1",
+        "flyer_uploaded_at TIMESTAMP",
+    ])
+
     c4.execute("""
         CREATE TABLE IF NOT EXISTS gig_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
