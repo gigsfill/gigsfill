@@ -181,6 +181,20 @@ async function renderGigModal(data, callbacks = {}) {
     return _commit(html, actionsHtml);
   }
 
+  // 2026-08-21: Free Trial venue banner. Rendered for BOTH artist +
+  // venue viewers on any non-past gig so both parties know before an
+  // action fires that GigsFill won't process payment. Placed above the
+  // preferred-status gates so an artist requesting preferred at a
+  // free-trial venue still sees the trial context. Skipped on past /
+  // in-progress gigs since it's history at that point (post-facto is
+  // covered by the "🎟 Free Trial" pill in the Payments dashboards).
+  if (data.is_free_trial && !isPast && !isInProgress) {
+    const _ftMsg = (vType === 'artist')
+      ? `<strong>${_esc(data.venue_name)}</strong> is on GigsFill Free Trial. If you book this gig, <strong>${_esc(data.venue_name)}</strong> will pay you directly &mdash; GigsFill won't process the payment or send anything to your Stripe account.`
+      : `You're on GigsFill Free Trial. If an artist books this gig, your card will not be charged &mdash; please arrange payment directly with them.`;
+    html += _banner('yellow', '🎟 Free Trial Venue', _ftMsg);
+  }
+
   // PAST GIG
   if (isPast) {
     html += _slotsSection(data, vType, {isPast: true, isInProgress: false, close, callbacks});

@@ -26,6 +26,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #059669;">You&#39;re Booked!</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, your booking at <strong>{{venue_name}}</strong> is confirmed. Here are the full details:</p>
+{{#is_free_trial}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#92400e;">&#127903; <strong>Free Trial venue:</strong> GigsFill is not processing payment for this gig. <strong>{{venue_name}}</strong> will pay you the ${{pay}} directly. No Stripe payout will appear in your GigsFill account for this booking.</td></tr></table>{{/is_free_trial}}
 {{far_notice_artist}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
 <tbody>
@@ -147,6 +148,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Gig Cancelled</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, unfortunately your gig has been cancelled.</p>
+{{#is_free_trial}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#92400e;">&#127903; <strong>Free Trial venue:</strong> This was a Free Trial booking &mdash; no payment was scheduled and there is nothing to refund. If <strong>{{venue_name}}</strong> had already promised to pay you, please follow up with them directly.</td></tr></table>{{/is_free_trial}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fef2f2; border-radius: 6px; margin-bottom: 24px;">
 <tbody>
 <tr>
@@ -339,6 +341,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Gig Booked</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> has booked a gig at <strong>{{venue_name}}</strong>.</p>
+{{#is_free_trial}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#92400e;">&#127903; <strong>Free Trial venue:</strong> Your GigsFill card will not be charged for this booking. Please arrange payment directly with <strong>{{artist_name}}</strong> for the amount shown below.</td></tr></table>{{/is_free_trial}}
 {{far_notice_venue}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
 <tr><td style="padding: 20px;">
@@ -609,6 +612,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Gig Cancelled</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">A gig at <strong>{{venue_name}}</strong> has been cancelled.</p>
+{{#is_free_trial}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#92400e;">&#127903; <strong>Free Trial venue:</strong> This was a Free Trial booking &mdash; your card was not charged and there is nothing to refund.</td></tr></table>{{/is_free_trial}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fef2f2; border-radius: 6px; margin-bottom: 24px;">
 <tr><td style="padding: 20px;">
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">

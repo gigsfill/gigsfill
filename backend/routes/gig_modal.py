@@ -871,6 +871,21 @@ def get_gig_modal_data(
         """), {"gid": gig_id}).scalar()
         blast_info["last_notification_key"] = last_notif
 
+    # 2026-08-21: expose Free Trial state on the modal payload so the
+    # gig-modal banner can tell the artist BEFORE they book that GigsFill
+    # isn't processing payment. Reads the same venue_payment_overrides
+    # source as _create_booking_transaction / payout_scheduler / the
+    # email dispatch helper — single source of truth.
+    _is_free_trial = False
+    try:
+        _ft = db.execute(
+            text("SELECT payments_suspended FROM venue_payment_overrides WHERE venue_id = :vid"),
+            {"vid": gig["venue_id"]}
+        ).mappings().first()
+        _is_free_trial = bool(_ft and _ft.get("payments_suspended"))
+    except Exception:
+        pass
+
     return {
         # Gig header
         "id":            gig["id"],
@@ -895,6 +910,7 @@ def get_gig_modal_data(
         # Venue info
         "venue_id":      gig["venue_id"],
         "venue_name":    gig["venue_name"],
+        "is_free_trial": _is_free_trial,
         "address_line_1": gig.get("address_line_1"),
         "address_line_2": gig.get("address_line_2"),
         "city":          gig.get("city"),

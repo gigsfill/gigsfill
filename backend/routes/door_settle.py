@@ -285,7 +285,30 @@ def settle_door_deal(gig_id: int, slot_id: int, data: dict,
             if _floor_won else
             f"In this case the door share brought the total above the guarantee, so the artist earns ${_settle_dollars:,.2f}."
         )
-        if settled_via_platform:
+        # 2026-08-21: three-way branch. The old code assumed
+        # txn_updated_count == 0 meant "payout already fired" and told the
+        # venue to pay only the door DELTA off-platform. That was wrong for
+        # Free Trial venues: no scheduled txn ever existed, so nothing fired,
+        # and the venue owes the FULL settled amount off-platform (not just
+        # the delta). Detect trial explicitly so both parties get honest copy.
+        _is_ft_settle = False
+        try:
+            _ft_row = db.execute(
+                text("SELECT payments_suspended FROM venue_payment_overrides WHERE venue_id = :vid"),
+                {"vid": slot["venue_id"]}
+            ).mappings().first()
+            _is_ft_settle = bool(_ft_row and _ft_row.get("payments_suspended"))
+        except Exception:
+            pass
+        if _is_ft_settle:
+            _platform_note = (
+                f"&#127903; <strong>Free Trial venue:</strong> GigsFill is not processing "
+                f"payment for this gig. Please arrange payment of "
+                f"<strong>${_settle_dollars:,.2f}</strong> directly with the "
+                f"artist &mdash; nothing will be charged to the venue's card or "
+                f"transferred through Stripe."
+            )
+        elif settled_via_platform:
             _platform_note = (
                 "This amount will process through GigsFill on the normal payout schedule."
             )

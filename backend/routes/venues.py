@@ -310,6 +310,18 @@ def get_venue_public(venue_id: int, request: Request,
 
     out = dict(row)
     out["viewer_is_artist"] = viewer_is_artist
+    # 2026-08-21: expose Free Trial state so the gig modal can render a
+    # "GigsFill isn't processing payment — arrange directly with venue"
+    # banner BEFORE the artist books, not just in Payments history after.
+    # Safe to leak publicly: it's a binary flag, no PII.
+    try:
+        _ft = db.execute(
+            text("SELECT payments_suspended FROM venue_payment_overrides WHERE venue_id = :vid"),
+            {"vid": venue_id}
+        ).mappings().first()
+        out["is_free_trial"] = bool(_ft and _ft.get("payments_suspended"))
+    except Exception:
+        out["is_free_trial"] = False
     # 2026-08-08 audit fix (finding #11): the endpoint was returning the
     # gated fields to every caller and only the UI hid them, defeating
     # the whole "artist-only Gig Details" gate — an anonymous scraper

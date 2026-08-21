@@ -1707,6 +1707,62 @@ def run_scheduled_emails():
         # past. Long enough for fans to have gone + a buffer for the
         # artist's calendar view. Deletes the file on disk and clears the
         # DB pointer — the gig row itself stays so the artist's history
+        # 2026-08-21: prune truly-expired unbooked open gigs so the DB
+        # doesn't accumulate them forever. Historic problem: a venue
+        # posts a gig, no artist books, the date passes, gig sits at
+        # status='open' indefinitely — cluttering public calendars,
+        # digest queues, activity counters. Safe to hard-delete because
+        # by the time this fires:
+        #   • date is >= 2 days in the past (venue-local tz)
+        #   • status is still 'open' (never advanced past that)
+        #   • ZERO slots reached a booked/contracted state
+        #   • ZERO transactions of any kind exist (money never moved)
+        # 2-day buffer prevents tz-edge accidental deletion of gigs
+        # posted for "tonight." delete_gig_completely handles all the
+        # ancillary cleanup (waitlist, notifications, flyers, contracts,
+        # message threads, digest queue rows via FK cascade).
+        def _prune_expired_unbooked_gigs():
+            from backend.db import SessionLocal as _EPSL
+            from backend.services.gig_cleanup import delete_gig_completely as _epdel
+            from sqlalchemy import text as _ep_text
+            _epdb = _EPSL()
+            try:
+                # Cutoff: today (platform-local) minus 2 days. Venue-local
+                # would be more precise but requires per-venue tz lookup;
+                # 2-day buffer absorbs the max tz offset (~14h) comfortably.
+                _cutoff_local = datetime.now(get_platform_timezone()).strftime("%Y-%m-%d")
+                targets = _epdb.execute(_ep_text("""
+                    SELECT g.id FROM gigs g
+                    WHERE g.status = 'open'
+                      AND date(g.date) < date(:today, '-2 days')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM gig_slots gs
+                          WHERE gs.gig_id = g.id
+                            AND gs.status IN ('booked', 'pending_contract',
+                                              'awaiting_venue_contract',
+                                              'pending_venue_approval')
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM transactions t WHERE t.gig_id = g.id
+                      )
+                """), {"today": _cutoff_local}).fetchall()
+                pruned = 0
+                for row in targets:
+                    _gid = row[0]
+                    try:
+                        _epdel(_epdb, _gid)
+                        _epdb.execute(_ep_text("DELETE FROM gigs WHERE id = :gid"), {"gid": _gid})
+                        _epdb.commit()
+                        pruned += 1
+                    except Exception as _e_del:
+                        _epdb.rollback()
+                        logger.warning(f"[SCHED] expired-gig prune: failed to delete gig {_gid}: {_e_del}")
+                if pruned:
+                    logger.info(f"[SCHED] pruned {pruned} expired unbooked open gig(s) (cutoff {_cutoff_local} -2 days)")
+            finally:
+                _epdb.close()
+        _run(_prune_expired_unbooked_gigs, "prune_expired_unbooked_gigs")
+
         # is preserved. Runs once per tick; idempotent (rows already
         # cleared are skipped by the WHERE flyer_path IS NOT NULL guard).
         def _prune_ext_flyers():

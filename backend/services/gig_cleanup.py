@@ -203,14 +203,30 @@ def cleanup_gig_records(db, gig_id: int, artist_id: int = None):
                     logger.info(f"Deleted single/venue_charge txn for gig {gig_id} (artist {artist_id} cancelled)")
 
             db.execute(
-                text("""DELETE FROM payment_cancellations 
+                text("""DELETE FROM payment_cancellations
                         WHERE transaction_id IN (
                             SELECT id FROM transactions WHERE gig_id = :gid AND artist_id = :aid
                         )"""),
                 {"gid": gig_id, "aid": artist_id}
             )
+            # 2026-08-21: preserve free_trial audit rows on cancel — they
+            # carry no money but they DO carry the record that this booking
+            # existed under a Free Trial. Losing them means we can't later
+            # prove "yes, that artist was booked here under trial" for
+            # dispute or support. Just stamp the notes column and leave the
+            # row; if the gig itself gets hard-deleted, the row goes with
+            # it via FK (acceptable — the gig is gone too).
             db.execute(
-                text("DELETE FROM transactions WHERE gig_id = :gid AND artist_id = :aid"),
+                text("""UPDATE transactions
+                           SET notes = COALESCE(notes || ' | ', '') || 'Booking cancelled'
+                         WHERE gig_id = :gid AND artist_id = :aid
+                           AND status = 'free_trial'"""),
+                {"gid": gig_id, "aid": artist_id}
+            )
+            db.execute(
+                text("""DELETE FROM transactions
+                         WHERE gig_id = :gid AND artist_id = :aid
+                           AND status != 'free_trial'"""),
                 {"gid": gig_id, "aid": artist_id}
             )
             # Delete signed PDF files for this artist's contracts
@@ -251,14 +267,22 @@ def cleanup_gig_records(db, gig_id: int, artist_id: int = None):
         else:
             # Full gig cleanup: all artists
             db.execute(
-                text("""DELETE FROM payment_cancellations 
+                text("""DELETE FROM payment_cancellations
                         WHERE transaction_id IN (
                             SELECT id FROM transactions WHERE gig_id = :gid
                         )"""),
                 {"gid": gig_id}
             )
+            # 2026-08-21: same free-trial-audit-preservation policy as the
+            # artist-scoped branch above — see comment there for rationale.
             db.execute(
-                text("DELETE FROM transactions WHERE gig_id = :gid"),
+                text("""UPDATE transactions
+                           SET notes = COALESCE(notes || ' | ', '') || 'Gig cancelled'
+                         WHERE gig_id = :gid AND status = 'free_trial'"""),
+                {"gid": gig_id}
+            )
+            db.execute(
+                text("DELETE FROM transactions WHERE gig_id = :gid AND status != 'free_trial'"),
                 {"gid": gig_id}
             )
             # Delete signed PDF files for all contracts

@@ -1442,54 +1442,106 @@ async def toggle_venue_payment_override(request: Request, admin=Depends(check_ad
 
 
 def _convert_upcoming_free_trial_bookings(db, venue_id):
-    """Toggle-off helper: convert free-trial audit rows on UPCOMING gigs into
+    """Toggle-off helper: convert free-trial audit rows on FUTURE gigs into
     real venue_charge / artist_payout transactions, so the venue starts getting
     billed for bookings that were created while on free trial.
 
     Strategy:
-      1. Find every (gig_id, artist_id) pair with a 'free_trial' transaction
-         row where the gig date is today-or-later in the venue's local tz.
-      2. Resolve the artist's slot (for multi-slot) and the effective pay.
-      3. Delete the audit row.
-      4. Call _create_booking_transaction(...) — the override row was already
+      1. Compute now-in-venue-local-tz.
+      2. Find every (gig_id, artist_id) pair with a 'free_trial' transaction
+         row where the gig HAS NOT STARTED YET (combined date + earliest-slot
+         start_time in venue-local tz is strictly in the future).
+      3. Resolve the artist's slot (for multi-slot) and the effective pay.
+      4. Delete the audit row.
+      5. Call _create_booking_transaction(...) — the override row was already
          deleted by the caller, so this takes the normal billing path and
          creates a proper venue_charge + artist_payout with the right
          scheduled_process_at (5pm venue-local on day-after-gig).
 
+    Gigs that have ALREADY STARTED (even by a minute) stay on trial: they
+    were booked and (partially) performed under the trial promise, so
+    retroactively charging the venue for them would break that promise.
+    Per user spec 2026-08-21: "a gig that just happened and the payment
+    process is happening (like before 5pm the day after the gig happened),
+    that gig should continue in Trial mode."
+
     Past free-trial rows are left intact — they're audit history and the venue
     has presumably already paid the artist directly outside the platform.
     """
-    from datetime import datetime
+    from datetime import datetime, time as _dt_time
     from backend.utils import get_venue_timezone
     from backend.routes.gigs import _create_booking_transaction
     log = logging.getLogger("gigsfill.admin")
     try:
         venue_tz = get_venue_timezone(db, venue_id)
-        today_local = datetime.now(venue_tz).date().isoformat()
+        now_local = datetime.now(venue_tz).replace(tzinfo=None)
     except Exception as _tze:
         log.warning(f"free-trial convert: tz lookup failed for venue {venue_id}: {_tze}")
-        # Fall back to UTC date — slight risk of missing/extra row near
-        # midnight, but better than failing the whole conversion.
-        from datetime import date as _date
-        today_local = _date.today().isoformat()
+        # Fall back to naive UTC now — slight risk of tz-edge miscount near
+        # boundaries, but better than failing the whole conversion.
+        now_local = datetime.utcnow()
 
+    # Pull every free-trial row for this venue on or after today (venue-local
+    # date); apply the precise start-time comparison in Python because SQLite
+    # can't easily combine date + time into a comparable datetime.
     rows = db.execute(text("""
         SELECT t.id as txn_id, t.gig_id, t.artist_id, t.amount_cents,
-               g.date as gig_date
+               g.date as gig_date, g.start_time as gig_start_time,
+               (SELECT MIN(gs.start_time) FROM gig_slots gs
+                 WHERE gs.gig_id = g.id AND gs.artist_id = t.artist_id
+                   AND gs.status IN ('booked','pending_contract','pending_venue_approval')
+               ) AS slot_start_time
         FROM transactions t
         JOIN gigs g ON g.id = t.gig_id
         WHERE g.venue_id = :vid
           AND t.transaction_type = 'free_trial'
           AND t.status = 'free_trial'
           AND date(g.date) >= date(:today)
-    """), {"vid": venue_id, "today": today_local}).mappings().all()
+    """), {"vid": venue_id, "today": now_local.date().isoformat()}).mappings().all()
+
+    def _parse_gig_start(gig_date_val, start_time_val):
+        """Combine gig date + start_time into a naive datetime (venue-local
+        clock). Returns None if either piece is missing / unparseable so the
+        caller can fall back to end-of-day (keeping the gig on trial rather
+        than accidentally cutting over)."""
+        try:
+            _d_str = str(gig_date_val or "")[:10]
+            if not _d_str:
+                return None
+            _t_raw = str(start_time_val or "").strip()
+            if not _t_raw:
+                return None
+            # start_time in this DB is stored as HH:MM (24h) or HH:MM:SS
+            _parts = _t_raw.split(":")
+            _h = int(_parts[0]) if _parts and _parts[0].isdigit() else None
+            _m = int(_parts[1]) if len(_parts) > 1 and _parts[1].isdigit() else 0
+            if _h is None or not (0 <= _h <= 23) or not (0 <= _m <= 59):
+                return None
+            _y, _mo, _da = _d_str.split("-")
+            return datetime(int(_y), int(_mo), int(_da), _h, _m)
+        except Exception:
+            return None
 
     converted = 0
+    skipped_started = 0
     for r in rows:
         gig_id = r["gig_id"]
         artist_id = r["artist_id"]
         if not artist_id:
             continue
+
+        # Precise cutover: convert ONLY if the gig's start time (venue-local)
+        # is strictly in the future. Prefer the slot's start_time (multi-slot
+        # correctness); fall back to the gig-level start_time; if both are
+        # missing / unparseable, default to keeping the row on trial.
+        _gig_start_dt = _parse_gig_start(
+            r["gig_date"],
+            r.get("slot_start_time") or r.get("gig_start_time")
+        )
+        if _gig_start_dt is None or _gig_start_dt <= now_local:
+            skipped_started += 1
+            continue
+
         # Resolve slot_id (NULL for single-slot gigs)
         slot_row = db.execute(text("""
             SELECT id, pay FROM gig_slots
@@ -1535,8 +1587,10 @@ def _convert_upcoming_free_trial_bookings(db, venue_id):
 
     db.commit()
     log.info(
-        f"Free trial OFF for venue {venue_id}: converted {converted} upcoming "
-        f"booking(s) (out of {len(rows)} free-trial audit rows on/after {today_local})"
+        f"Free trial OFF for venue {venue_id}: converted {converted} future "
+        f"booking(s), skipped {skipped_started} already-started gig(s) "
+        f"(examined {len(rows)} free-trial audit rows on/after "
+        f"{now_local.date().isoformat()} venue-local)"
     )
 
 

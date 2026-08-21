@@ -12,6 +12,26 @@ from backend.services.notification_service import format_time_12hr
 logger = logging.getLogger("gigsfill.services.email_dispatch")
 
 
+def _venue_on_free_trial(db, venue_id) -> bool:
+    """Check if a venue is currently on Free Trial (payments suspended).
+    Used to inject `is_free_trial` into email template variables so the
+    booking / cancellation / edit / approval templates can render a
+    "This is a Free Trial venue — no card charge, arrange payment
+    directly" note. Silent-false on any error (defensive: emails should
+    never fail because the trial-check couldn't run).
+    """
+    if not venue_id:
+        return False
+    try:
+        row = db.execute(
+            text("SELECT payments_suspended FROM venue_payment_overrides WHERE venue_id = :vid"),
+            {"vid": venue_id}
+        ).mappings().first()
+        return bool(row and row.get("payments_suspended"))
+    except Exception:
+        return False
+
+
 def format_slot_pay_summary(slot_or_gig, fallback_pay=None):
     """Render a pay description for use INSIDE an email template that
     already prepends "$" before the {pay} placeholder (the convention
@@ -339,6 +359,11 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
 
         email_service = EmailService(db)
         venue_vars = _fetch_venue_detail_vars(db, gig["venue_id"], gig_notes=gig.get("notes", ""))
+        # 2026-08-21: pass Free Trial status through so booking-confirmation
+        # templates can render a "no card charge — arrange payment directly"
+        # note. Empty string when NOT on trial so {{#is_free_trial}} blocks
+        # evaluate to falsy per the Mustache render at email_service.py:229.
+        _is_free_trial = '1' if _venue_on_free_trial(db, gig["venue_id"]) else ''
 
         # Far-away-booking detection (May 2026 part 10h). The blast email
         # radius (20mi default) only limits who gets NOTIFIED — any artist on
@@ -400,6 +425,7 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
                 'styles':       ", ".join(x.strip() for x in (slot.get("styles") or gig.get("styles") or "").split(",") if x.strip()),
                 'far_notice_artist': '',
                 'far_notice_venue': '',
+                'is_free_trial': _is_free_trial,
                 **venue_vars,
             }
 
@@ -645,6 +671,11 @@ def send_cancellation_emails(db, gig_details: dict, cancellation_reason: str = "
                 "and/or artists within your configured radius depending on your Email Center settings."
             )
 
+        # 2026-08-21: propagate Free Trial status into cancellation copy so
+        # both parties see "cancelled — nothing to refund (Free Trial)"
+        # instead of the standard cancellation language that implies money
+        # was in flight.
+        _cx_is_free_trial = '1' if _venue_on_free_trial(db, gig_details.get('venue_id')) else ''
         cancel_vars = {
             'user_name': gig_details.get('artist_name', 'Artist'),
             'venue_name': gig_details.get('venue_name', ''),
@@ -653,6 +684,7 @@ def send_cancellation_emails(db, gig_details: dict, cancellation_reason: str = "
             'venue_id': str(gig_details.get('venue_id', '')),
             'gig_id': str(gig_id or ''),
             'date': format_email_date(gig_details.get('date', '')),
+            'is_free_trial': _cx_is_free_trial,
             # FIX (May 2026): include time fields so cancellation emails can show
             # the slot/gig time. format_time_12hr returns '' for empty input.
             'start_time': format_time_12hr(gig_details.get('start_time', '')),

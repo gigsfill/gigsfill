@@ -1616,11 +1616,20 @@ def send_daily_artist_digest(cursor, smtp_config) -> int:
     # sent_at is set on successful send, so a user already emailed
     # today is silently skipped. Uses the same platform timezone as
     # the "due user" calc so day boundaries line up.
-    from backend.services.notification_service import get_platform_timezone
+    # 2026-08-21: was `from backend.services.notification_service import
+    # get_platform_timezone` — that helper doesn't exist in
+    # notification_service; the real one lives in backend/utils.py and
+    # takes a `db` session, not a raw cursor. The scheduler passes a
+    # sqlite3 cursor here (not SQLAlchemy), so read the setting directly.
+    # Silent-broken since Aug 18 — no digest emails went out for 3+ days.
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo as _Zi
     try:
-        _tz = _Zi(get_platform_timezone())
+        _tz_row = cursor.execute(
+            "SELECT setting_value FROM platform_settings WHERE setting_key = 'platform_timezone'"
+        ).fetchone()
+        _tz_name = (_tz_row[0] if _tz_row else None) or "America/Los_Angeles"
+        _tz = _Zi(_tz_name)
     except Exception:
         _tz = _Zi("UTC")
     _today_local = _dt.now(_tz).strftime("%Y-%m-%d")
