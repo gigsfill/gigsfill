@@ -336,14 +336,6 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
     account_id = settings["stripe_connect_account_id"] if settings and settings.get("stripe_connect_account_id") else None
 
     if not account_id:
-        # Audit fix (May 2026 part 8): pass an idempotency key to Stripe so
-        # two concurrent "Connect" clicks (multi-tab, double-click) don't
-        # create two Express accounts (KYC-quota-burning + orphan in Stripe
-        # if only one gets persisted). The key is artist-scoped so the
-        # second click reuses the first call's account.
-        import uuid as _uuid_acct
-        _acct_idem = f"artist_connect_create_{artist_id}"
-
         # Jul 2026: if the artist filed a W-9 BEFORE clicking Connect (venue-
         # required-W-9 flow), pre-fill Stripe's individual.* fields so they
         # don't have to re-enter the same legal name + address + SSN during
@@ -359,7 +351,6 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
             },
             business_type="individual",
             metadata={"artist_id": str(artist_id), "platform": "gigsfill"},
-            idempotency_key=_acct_idem,
         )
         try:
             from backend.routes.tax import build_stripe_individual_from_w9
@@ -374,6 +365,28 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
             logging.getLogger("gigsfill.stripe_connect").warning(
                 f"W-9 pre-fill assembly failed for artist {artist_id}: {_ind_e}"
             )
+
+        # Audit fix (May 2026 part 8) + retry fix (2026-08-23): pass an
+        # idempotency key to Stripe so two concurrent "Connect" clicks
+        # (multi-tab, double-click) don't create two Express accounts
+        # (KYC-quota-burning + orphan in Stripe if only one persists).
+        # The KEY used to be `artist_connect_create_{artist_id}` — pure
+        # artist-scoped, which meant a first attempt that failed at Stripe
+        # (e.g. Invalid Tax ID from a placeholder SSN) poisoned the key.
+        # The retry with corrected data hit the same key + different
+        # params → Stripe returned "Keys for idempotent requests can only
+        # be used with the same parameters they were first used with."
+        # Now: hash the params that actually vary between attempts
+        # (individual — legal name / dob / address / SSN — plus email)
+        # into the key so a data-corrected retry gets a fresh key while
+        # a double-click with identical data still shares the key.
+        import hashlib as _hash_lib, json as _json_lib
+        _idem_source = _json_lib.dumps({
+            "individual": _create_params.get("individual") or {},
+            "email":      _create_params.get("email") or "",
+        }, sort_keys=True, default=str)
+        _idem_hash = _hash_lib.sha1(_idem_source.encode("utf-8")).hexdigest()[:12]
+        _create_params["idempotency_key"] = f"artist_connect_create_{artist_id}_{_idem_hash}"
 
         # 2026-08-23: catch Stripe API errors and surface the real reason.
         # Previously any Stripe.Account.create failure (e.g. "Invalid Tax
