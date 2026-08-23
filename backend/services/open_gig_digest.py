@@ -969,6 +969,15 @@ def _render_digest_email_live(*, salutation: str, rows: list[dict],
         # qualifying artist — "Slot 1 · time · Fridays Past $10.00 ·
         # Fifty Proof $15.00". Single-artist users see the unchanged
         # single-pay format.
+        # 2026-08-21: booked section on multi-artist users now also
+        # surfaces WHICH of the user's artists holds the slot (or logged
+        # the external gig). Was silent — Fridays Past + Fifty Proof
+        # owner couldn't tell which band the "Sat 6:30 PM · BOOKED" line
+        # was for. Two data sources:
+        #   • Regular GigsFill bookings → variants[0].artist_name
+        #     (single variant per booked slot via _merge_gig_variants)
+        #   • External artist-logged gigs → g["_owner_artist_name"]
+        #     (bypasses variant-merge, attached at fetch time)
         slot_lines = []
         for s in slots:
             time_str = _fmt_time(s.get("start_time"))
@@ -979,6 +988,19 @@ def _render_digest_email_live(*, salutation: str, rows: list[dict],
             status_badge = _status_badge_html(s.get("status") or "") if is_booked_section else ""
 
             variants = s.get("variants") or []
+
+            booked_artist_segment = ""
+            if is_booked_section and multi_artist_user:
+                _which_artist = None
+                if variants:
+                    _which_artist = variants[0].get("artist_name")
+                elif g.get("_owner_artist_name"):
+                    _which_artist = g["_owner_artist_name"]
+                if _which_artist:
+                    booked_artist_segment = (
+                        " <span style='color:#9ca3af;'>·</span> "
+                        f"<b style='color:#0f172a;'>{_esc(_which_artist)}</b>"
+                    )
             if multi_artist_user and variants:
                 # In the booked section a slot has exactly one variant
                 # (one artist per booked slot), so this renders a single
@@ -1007,6 +1029,7 @@ def _render_digest_email_live(*, salutation: str, rows: list[dict],
                 f"<span style='color:#6b7280;font-weight:600;'>{_esc(slot_label)}</span>"
                 f" <span style='color:#9ca3af;'>·</span> "
                 f"<span>{_esc(time_str)}</span>"
+                f"{booked_artist_segment}"
                 f"{pay_segment}"
                 f"{status_badge}"
                 "</div>"
