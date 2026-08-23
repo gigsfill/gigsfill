@@ -531,6 +531,16 @@ class EmailVerificationMiddleware(BaseHTTPMiddleware):
     # PUT /api/me handles email-change (there is no separate change-email
     # endpoint — see me.py:76), DELETE /api/me/delete removes the account,
     # POST /api/resend-verification-email refires the verify link, etc.
+    # 2026-08-23: added the AUTH-FLOW endpoints — signup / login /
+    # forgot-password / reset-password / check-duplicate / request-access.
+    # Bug: an unverified user (say, an artist who just signed up but
+    # hasn't clicked verify yet) trying to CREATE A DIFFERENT ACCOUNT
+    # (a venue) was blocked with EMAIL_NOT_VERIFIED because their session
+    # cookie identified them as unverified — but /api/signup creates a
+    # NEW user and about to replace the session, and login/forgot are
+    # auth-flow endpoints that shouldn't ever care about the current
+    # session's verify state. Same rationale for the pre-signup helpers
+    # (check-duplicate, validate-city, request-access).
     EXEMPT_EXACT = frozenset({
         '/api/me',
         '/api/me/delete',
@@ -538,6 +548,13 @@ class EmailVerificationMiddleware(BaseHTTPMiddleware):
         '/api/logout',
         '/api/verify-email',
         '/api/resend-verification-email',
+        # Auth flow — never gate on the current session's verify state.
+        '/api/signup',
+        '/api/login',
+        '/api/forgot-password',
+        '/api/reset-password',
+        '/api/check-duplicate',
+        '/api/request-access',
     })
     # Prefixes: notification polling has path params (/api/notifications/{id}/read).
     EXEMPT_PREFIX = ('/api/notifications',)
