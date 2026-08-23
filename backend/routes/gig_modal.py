@@ -886,6 +886,24 @@ def get_gig_modal_data(
     except Exception:
         pass
 
+    # 2026-08-23: expose same-day booking context so the modal can render
+    # a banner explaining that today's bookings need venue approval (or
+    # just "heads up — gig is today"). Reuses the existing helpers so
+    # this stays the single source of truth for what counts as same-day.
+    _is_same_day = False
+    _same_day_requires_approval = False
+    try:
+        from backend.routes.gigs import _is_same_day_booking, _venue_requires_same_day_approval
+        _is_same_day = bool(_is_same_day_booking(
+            str(gig.get("date") or ""),
+            gig.get("start_time") or None,
+            venue_id=gig["venue_id"],
+        ))
+        if _is_same_day:
+            _same_day_requires_approval = bool(_venue_requires_same_day_approval(db, gig["venue_id"]))
+    except Exception:
+        pass
+
     return {
         # Gig header
         "id":            gig["id"],
@@ -911,6 +929,8 @@ def get_gig_modal_data(
         "venue_id":      gig["venue_id"],
         "venue_name":    gig["venue_name"],
         "is_free_trial": _is_free_trial,
+        "is_same_day":                  _is_same_day,
+        "same_day_requires_approval":   _same_day_requires_approval,
         "address_line_1": gig.get("address_line_1"),
         "address_line_2": gig.get("address_line_2"),
         "city":          gig.get("city"),

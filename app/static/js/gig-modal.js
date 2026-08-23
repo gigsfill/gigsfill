@@ -277,6 +277,26 @@ async function renderGigModal(data, callbacks = {}) {
       html += _banner('green', _openTitle, _openMsg);
     }
 
+    // 2026-08-23: same-day booking banner. Fires for any artist viewing
+    // a gig whose start is within 36h (venue-local, per _is_same_day_
+    // booking on the backend). Two copies: one when the venue REQUIRES
+    // approval for same-day (booking becomes pending_venue_approval —
+    // artist should know they'll wait on the venue), one when it's just
+    // a "heads up, this is tonight" context. Skipped for the artist's
+    // own booked slot (they've already booked, no new context needed).
+    if (data.is_same_day && !isPast && !isInProgress) {
+      const _mySlot = (data.slots || []).find(s => s && s.is_my_slot);
+      if (!_mySlot) {
+        if (data.same_day_requires_approval) {
+          html += _banner('yellow', '🕐 Same-Day Booking Requires Approval',
+            `This gig is <strong>today</strong>. <strong>${_esc(data.venue_name)}</strong> requires venue approval for same-day bookings — if you book, your slot will be marked <em>pending venue approval</em> and you'll be notified once the venue accepts or declines.`);
+        } else {
+          html += _banner('yellow', '🕐 Same-Day Booking',
+            `Heads up — this gig is <strong>today</strong>. Book now if you can perform on this short notice.`);
+        }
+      }
+    }
+
     // Freq-waiver banner (Jun 2026): render BEFORE the Hold-feature
     // panel so artists with an active hold offer (or queued / declined
     // state) still see the "Frequency Rule Lifted" notice. The same
