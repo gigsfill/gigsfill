@@ -341,7 +341,7 @@ TEMPLATES = {
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Gig Booked</h1>
 <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> has booked a gig at <strong>{{venue_name}}</strong>.</p>
-{{#is_free_trial}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#92400e;">&#127903; <strong>Free Trial venue:</strong> Your GigsFill card will not be charged for this booking. Please arrange payment directly with <strong>{{artist_name}}</strong> for the amount shown below.</td></tr></table>{{/is_free_trial}}
+{{#is_free_trial}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;"><tr><td style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.5;color:#92400e;">&#127903; <strong>Free Trial venue:</strong> Your credit card on file will not be charged for this booking. Please arrange payment directly with <strong>{{artist_name}}</strong> for the amount shown below.</td></tr></table>{{/is_free_trial}}
 {{far_notice_venue}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
 <tr><td style="padding: 20px;">
