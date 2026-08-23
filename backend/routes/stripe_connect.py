@@ -375,7 +375,28 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
                 f"W-9 pre-fill assembly failed for artist {artist_id}: {_ind_e}"
             )
 
-        account = stripe.Account.create(**_create_params)
+        # 2026-08-23: catch Stripe API errors and surface the real reason.
+        # Previously any Stripe.Account.create failure (e.g. "Invalid Tax
+        # ID. 123123123 is not an allowed value" from a placeholder SSN
+        # on the W-9) bubbled as a raw 500 with body {"detail":"Internal
+        # Server Error"} — the frontend then aggressively rewrote it to
+        # "Stripe is not configured yet," which sent people down a
+        # false-positive path debugging admin keys.
+        try:
+            account = stripe.Account.create(**_create_params)
+        except Exception as _sc_e:
+            _msg = str(getattr(_sc_e, "user_message", None) or _sc_e or "").strip()
+            import logging as _sc_log
+            _sc_log.getLogger("gigsfill.stripe_connect").warning(
+                f"[STRIPE CONNECT] Account.create failed for artist {artist_id}: {_msg}"
+            )
+            # Strip the noisy "Request req_xxx: " prefix Stripe adds so the
+            # user just sees the actionable reason.
+            import re as _sc_re
+            _clean = _sc_re.sub(r"^Request req_[A-Za-z0-9]+:\s*", "", _msg)
+            if not _clean:
+                _clean = "Stripe rejected the account creation request. Please check your W-9 fields and try again."
+            raise HTTPException(400, f"Could not create Stripe account: {_clean}")
         account_id = account.id
 
         # Upsert entity_payment_settings

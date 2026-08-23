@@ -46,7 +46,13 @@ async function artistStartConnect() {
     if (!res.ok) {
       var err = await res.json().catch(function() { return {}; });
       var msg = err.detail || 'Failed to start Stripe onboarding.';
-      if (msg.indexOf('not configured') > -1 || msg.indexOf('Stripe') > -1) {
+      // 2026-08-23: was `msg.indexOf('Stripe') > -1` — that matched
+      // basically ANY error containing the word "Stripe" and rewrote
+      // it to the "keys missing" copy, sending users down a false
+      // debug path when the real cause was e.g. an invalid Tax ID.
+      // Tightened to only fire on the specific "not configured" text
+      // (from init_stripe's HTTPException at stripe_connect.py:57).
+      if (msg.indexOf('not configured') > -1) {
         msg = 'Stripe is not configured yet. The platform admin needs to add Stripe API keys in Admin → Payments before onboarding can begin.';
       }
       showPaymentModal('Setup Error', msg, 'error');
