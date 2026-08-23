@@ -478,18 +478,45 @@ async function loadArtistPaymentSettings() {
 }
 
 // Handle return from Stripe onboarding
+// 2026-08-23: also actively poll /connect-status which live-fetches from
+// Stripe and writes stripe_connect_onboarding_complete=1 into our DB when
+// charges_enabled+payouts_enabled. Previously we relied on the Stripe
+// webhook (account.updated) to update the DB, but the webhook can lag
+// behind the user's browser redirect by a few seconds — during that
+// window the onboarding checklist popup still showed Payments as
+// "Need To Do" even though the artist had just finished onboarding.
+// After the sync completes, re-fire the checklist so its display reflects
+// the newly-complete status without requiring a page refresh.
 function checkStripeReturn() {
   var params = new URLSearchParams(window.location.search);
-  if (params.get('stripe_return') === '1' || params.get('stripe_refresh') === '1') {
-    var url = new URL(window.location);
-    url.searchParams.delete('stripe_return');
-    url.searchParams.delete('stripe_refresh');
-    url.searchParams.set('tab', 'payments');
-    window.history.replaceState({}, '', url);
-    if (typeof switchTab === 'function') {
-      setTimeout(function() { switchTab('payments'); }, 100);
-    }
+  if (params.get('stripe_return') !== '1' && params.get('stripe_refresh') !== '1') return;
+
+  var url = new URL(window.location);
+  url.searchParams.delete('stripe_return');
+  url.searchParams.delete('stripe_refresh');
+  url.searchParams.set('tab', 'payments');
+  window.history.replaceState({}, '', url);
+  if (typeof switchTab === 'function') {
+    setTimeout(function() { switchTab('payments'); }, 100);
   }
+
+  // Active sync: hit /connect-status → Stripe API → DB write. Then
+  // re-render the checklist so Payments shows as ✓ Completed.
+  var artistId = getArtistId();
+  if (!artistId) return;
+  fetch('/api/stripe/artist/' + artistId + '/connect-status', { credentials: 'include' })
+    .then(function(res) { return res.ok ? res.json() : null; })
+    .then(function() {
+      // Re-render the checklist (showModal removes any prior instance
+      // before rebuilding — safe even if the popup was already open).
+      if (typeof window.showOnboardingChecklist === 'function') {
+        window.showOnboardingChecklist();
+      }
+      // Refresh the on-page Payments panel so the Stripe Connect status
+      // block reflects the newly-complete state too.
+      if (typeof loadArtistConnectStatus === 'function') loadArtistConnectStatus();
+    })
+    .catch(function() { /* silent — popup will still refresh on next tab click */ });
 }
 
 window.artistStartConnect = artistStartConnect;
