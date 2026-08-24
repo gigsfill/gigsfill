@@ -296,12 +296,20 @@
       closeModal();
   
       if (nav.action === 'tab') {
-        // Switch to the correct tab on this page
+        // Switch to the correct tab on this page.
+        // 2026-08-23: set a suppress flag BEFORE calling switchTab so
+        // the setupRecheck wrapper (installed by init on page load)
+        // doesn't re-fire the popup 400ms later on top of the tab we
+        // just navigated TO because of the user's task click. Only the
+        // user's EXPLICIT tab clicks should trigger the recheck; the
+        // programmatic click that comes from the popup itself is
+        // "already handled — you're where you asked to be."
         const tabBtn = document.querySelector(`.tab[onclick*="'${nav.tab}'"]`);
         if (tabBtn && typeof switchTab === 'function') {
+          window._obSuppressNextRecheck = true;
           switchTab(nav.tab, tabBtn);
         }
-  
+
         // Also switch subtab if specified
         if (nav.subtab) {
           setTimeout(() => {
@@ -314,10 +322,10 @@
             }
           }, 100);
         }
-  
+
         // Re-show checklist when user switches back to calendar tab
         setupRecheck();
-  
+
       } else if (nav.action === 'url') {
         // Navigate to another page — store return URL
         sessionStorage.setItem('onboarding_return', window.location.href);
@@ -339,6 +347,15 @@
       const origSwitchTab = window.switchTab;
       const wrapped = function(tabName, button) {
         origSwitchTab(tabName, button);
+        // 2026-08-23: a task-click inside the popup sets this flag right
+        // before calling switchTab — swallow this one recheck so the
+        // popup doesn't immediately re-render on the tab the user just
+        // navigated to. Reset the flag after so any FOLLOW-ON tab click
+        // (real user navigation) re-fires the popup normally.
+        if (window._obSuppressNextRecheck) {
+          window._obSuppressNextRecheck = false;
+          return;
+        }
         clearTimeout(wrapped._obTimer);
         wrapped._obTimer = setTimeout(() => init(), 400);
       };
