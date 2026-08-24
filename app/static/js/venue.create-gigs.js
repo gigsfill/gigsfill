@@ -1054,7 +1054,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         <span aria-hidden="true" style="visibility:hidden; font-size:0.68rem; flex-shrink:0;">to</span>
         <span aria-hidden="true" style="width:96px; flex-shrink:0; visibility:hidden;">&nbsp;</span>
         <label class="slot-door-apply-override-label" style="display:flex; flex-direction:row; align-items:center; gap:6px; margin:0; padding:0; font-size:0.72rem; font-weight:500; color:var(--text-muted); cursor:pointer; white-space:nowrap;"
-          title="When checked, an artist with an override, pay set by you under &quot;My Artists&quot;, will be paid that amount as a guaranteed payment instead of the amount entered above.">
+          title="When checked, an artist with an override pay, set by you under &quot;My Artists&quot;, will be paid that amount as a guaranteed payment instead of the amount entered above.">
           <input type="checkbox" class="slot-door-apply-override" ${applyOverride ? 'checked' : ''} style="margin:0; flex-shrink:0; vertical-align:middle;">
           <span style="white-space:nowrap;">Use Artist Override Pay For Guarantee Pay</span>
         </label>

@@ -509,13 +509,17 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None, skip_artist:
                     logger.info(f"[BOOKING EMAIL] artist result={result} to={au['email']}")
 
             # Venue email — bypass preferences, venue must always know about bookings
+            # 2026-08-24: removed the "shared user" skip. When one person owns
+            # both the artist and the venue on a booking, they still need
+            # BOTH emails: the artist email says "You're booked at X!" (pay,
+            # venue details for the performer), the venue email says
+            # "{{artist}} booked your gig" (artist info, venue-side recap).
+            # Distinct subjects + perspectives — not real duplicates. The
+            # skip was a May 2026 fix aimed at literal-duplicate suppression
+            # that turned out too aggressive.
             _booked_sent_venues = set()
             for vu in venue_users:
                 if vu["email"] in _booked_sent_venues:
-                    continue
-                # Skip if the same user already got the artist-side email above.
-                if vu["email"] in _booked_sent_artists:
-                    logger.info(f"[BOOKING EMAIL] skipping venue email to {vu['email']} — already got artist-side email (shared user)")
                     continue
                 _booked_sent_venues.add(vu["email"])
                 try:

@@ -1417,6 +1417,15 @@ async def toggle_venue_payment_override(request: Request, admin=Depends(check_ad
         # normal billing path. Past free-trial gigs are LEFT AS-IS — we
         # don't retroactively bill for gigs that already happened.
         _convert_upcoming_free_trial_bookings(db, venue_id)
+    else:
+        # 2026-08-24 (symmetric): trial JUST turned ON. Convert existing
+        # future scheduled txns → free_trial audit rows so the venue
+        # isn't charged for gigs that haven't happened yet. Past +
+        # in-flight-payout gigs stay on the normal payout track — same
+        # precise gig-start-time cutoff as the OFF path. Matches user
+        # spec: "All gigs that haven't happened yet are affected by
+        # the Trial Mode option."
+        _convert_upcoming_scheduled_to_free_trial(db, venue_id)
 
     # Recalculate all pending transactions for this venue's gigs
     _recalculate_venue_pending_transactions(db, venue_id, suspend)
@@ -1591,6 +1600,155 @@ def _convert_upcoming_free_trial_bookings(db, venue_id):
         f"booking(s), skipped {skipped_started} already-started gig(s) "
         f"(examined {len(rows)} free-trial audit rows on/after "
         f"{now_local.date().isoformat()} venue-local)"
+    )
+
+
+def _convert_upcoming_scheduled_to_free_trial(db, venue_id):
+    """Toggle-ON symmetric helper (2026-08-24): when admin flips a venue
+    INTO free trial, convert any existing `scheduled` transactions for
+    FUTURE gigs at that venue into free_trial audit rows. Symmetric with
+    _convert_upcoming_free_trial_bookings.
+
+    Boundary matches toggle-off: gig start (venue-local) must be strictly
+    in the future. Gigs already begun (even by a minute) stay on the
+    normal payout track — the artist was booked under the normal-billing
+    promise for that show and shouldn't have their payout unilaterally
+    swapped out mid-performance / mid-payout-window.
+
+    Also flips any `pending_transfer` / `charge_retry` rows for future
+    gigs since those are ancillary states of the same billing pipeline
+    (a payout that was about to retry shouldn't fire after trial flips ON).
+    """
+    from datetime import datetime
+    from backend.utils import get_venue_timezone
+    log = logging.getLogger("gigsfill.admin")
+    try:
+        venue_tz = get_venue_timezone(db, venue_id)
+        now_local = datetime.now(venue_tz).replace(tzinfo=None)
+    except Exception as _tze:
+        log.warning(f"free-trial ON convert: tz lookup failed for venue {venue_id}: {_tze}")
+        now_local = datetime.utcnow()
+
+    rows = db.execute(text("""
+        SELECT t.id as txn_id, t.gig_id, t.artist_id, t.amount_cents,
+               t.transaction_type, t.status,
+               g.date as gig_date, g.start_time as gig_start_time,
+               (SELECT MIN(gs.start_time) FROM gig_slots gs
+                 WHERE gs.gig_id = g.id AND gs.artist_id = t.artist_id
+                   AND gs.status IN ('booked','pending_contract','pending_venue_approval')
+               ) AS slot_start_time
+        FROM transactions t
+        JOIN gigs g ON g.id = t.gig_id
+        WHERE g.venue_id = :vid
+          AND t.status IN ('scheduled', 'pending_transfer', 'charge_retry')
+          AND date(g.date) >= date(:today)
+    """), {"vid": venue_id, "today": now_local.date().isoformat()}).mappings().all()
+
+    def _parse_gig_start(gig_date_val, start_time_val):
+        try:
+            _d_str = str(gig_date_val or "")[:10]
+            _t_raw = str(start_time_val or "").strip()
+            if not _d_str or not _t_raw:
+                return None
+            _parts = _t_raw.split(":")
+            _h = int(_parts[0]) if _parts and _parts[0].isdigit() else None
+            _m = int(_parts[1]) if len(_parts) > 1 and _parts[1].isdigit() else 0
+            if _h is None or not (0 <= _h <= 23) or not (0 <= _m <= 59):
+                return None
+            _y, _mo, _da = _d_str.split("-")
+            return datetime(int(_y), int(_mo), int(_da), _h, _m)
+        except Exception:
+            return None
+
+    # Group txn rows by (gig_id, artist_id) so we handle parent + child pair
+    # atomically. The venue_charge parent gets DELETEd, the artist_payout
+    # child gets rewritten to a free_trial audit row.
+    grouped = {}
+    for r in rows:
+        key = (r["gig_id"], r["artist_id"])
+        grouped.setdefault(key, []).append(r)
+
+    converted = 0
+    skipped_started = 0
+    for (gig_id, artist_id), txn_rows in grouped.items():
+        # Precise cutover — use slot start if available, else gig-level.
+        _first = txn_rows[0]
+        _gig_start_dt = _parse_gig_start(
+            _first["gig_date"],
+            _first.get("slot_start_time") or _first.get("gig_start_time")
+        )
+        if _gig_start_dt is None or _gig_start_dt <= now_local:
+            skipped_started += 1
+            continue
+
+        # Amount for the audit row: prefer the artist_payout child's
+        # amount_cents (equals the artist's pay). Fall back to whatever
+        # first row has.
+        _amt = 0
+        for tr in txn_rows:
+            if tr.get("transaction_type") in ("artist_payout", "single"):
+                _amt = int(tr.get("amount_cents") or 0)
+                break
+        if not _amt:
+            _amt = int(_first.get("amount_cents") or 0)
+
+        # Wipe ALL existing transaction rows for this (gig, artist) —
+        # parent venue_charge + artist_payout child(ren). Same as if the
+        # booking had happened under trial from the start.
+        try:
+            db.execute(
+                text("DELETE FROM transactions WHERE gig_id = :gid AND artist_id = :aid AND status IN ('scheduled','pending_transfer','charge_retry')"),
+                {"gid": gig_id, "aid": artist_id}
+            )
+            # Also delete the venue_charge parent (has artist_id=NULL)
+            # if this was the last payout for the parent.
+            _remaining = db.execute(text("""
+                SELECT COUNT(*) FROM transactions
+                WHERE gig_id = :gid AND transaction_type = 'artist_payout' AND status = 'scheduled'
+            """), {"gid": gig_id}).scalar() or 0
+            if _remaining == 0:
+                db.execute(text("""
+                    DELETE FROM transactions
+                    WHERE gig_id = :gid AND transaction_type = 'venue_charge'
+                      AND status IN ('scheduled','pending_transfer','charge_retry')
+                """), {"gid": gig_id})
+
+            # Insert the free_trial audit row (same shape as
+            # _create_booking_transaction's trial branch).
+            _venue_user = db.execute(text("SELECT user_id FROM venues WHERE id = :vid"),
+                                     {"vid": venue_id}).mappings().first()
+            _artist_user = db.execute(text("SELECT user_id FROM artists WHERE id = :aid"),
+                                      {"aid": artist_id}).mappings().first()
+            if _venue_user and _artist_user:
+                db.execute(text("""
+                    INSERT INTO transactions
+                        (gig_id, from_user_id, to_user_id, artist_id,
+                         amount_cents, venue_charge_cents, artist_payout_cents, commission_cents,
+                         credit_card_fee_cents, payment_method_type, status,
+                         created_at, notes, transaction_type)
+                    VALUES
+                        (:gig_id, :from_uid, :to_uid, :artist_id,
+                         :amount, 0, :amount, 0,
+                         0, 'free_trial', 'free_trial',
+                         :now, :notes, 'free_trial')
+                """), {
+                    "gig_id": gig_id,
+                    "from_uid": _venue_user["user_id"],
+                    "to_uid": _artist_user["user_id"],
+                    "artist_id": artist_id,
+                    "amount": _amt,
+                    "now": utcnow_naive(),
+                    "notes": f"Converted from scheduled — venue {venue_id} flipped to Free Trial (venue pays artist directly)",
+                })
+            converted += 1
+        except Exception as _cve:
+            log.error(f"free-trial ON convert FAILED gig {gig_id} artist {artist_id}: {_cve}")
+
+    db.commit()
+    log.info(
+        f"Free trial ON for venue {venue_id}: converted {converted} future "
+        f"booking(s) to free_trial audit rows, skipped {skipped_started} "
+        f"already-started gig(s)"
     )
 
 
