@@ -588,6 +588,13 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
         _digest_mode = bool(_flag and (_flag[0] or "").strip().lower() in ("true", "1"))
     except Exception:
         _digest_mode = True  # safe default — bundle by default if flag missing
+
+    # 2026-08-24: force immediate-send for open_gig_36h regardless of digest
+    # mode. The daily digest fires at 6 AM artist-local — useless for a gig
+    # that's happening within 36h (e.g. tonight). Same-day windows must
+    # hit inboxes now, not tomorrow morning after the show is done.
+    if notification_key == 'open_gig_36h':
+        _digest_mode = False
     """Process open gig notifications — email all preferred artists"""
     logger.info(f"[SCHED] process_open_gig_notifications: {notification_key}")
     template_key = TEMPLATE_MAP.get(notification_key)
@@ -718,14 +725,29 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
             # waive_frequency. When ON (default), the email lifts frequency limits
             # so preferred artists can book even inside their frequency window.
             # When OFF, we still fire the reminder email but limits stay in place.
-            # Do NOT set radius_blast_token here — that field sets is_blast_open on
-            # the calendar and must only be set by radius_blast (cancelled-gig blast).
-            if waive_freq:
+            # 2026-08-24: when blast_all_en=1 for this window (venue has opened
+            # the gig to non-preferred artists in radius), ALSO set
+            # radius_blast_token so is_blast_open evaluates True and non-preferred
+            # artists can actually book from the calendar / their email link.
+            # Without this, the email said "open to all in radius" but the gig
+            # modal still showed "Preferred Status Required" and blocked them.
+            import secrets as _secrets_ogn
+            blast_token = _secrets_ogn.token_urlsafe(32) if blast_all_en else ''
+            if blast_all_en and waive_freq:
+                cursor.execute(
+                    "UPDATE gigs SET frequency_exempt = 1, radius_blast_token = ? WHERE id = ?",
+                    (blast_token, gig_id)
+                )
+            elif blast_all_en:
+                cursor.execute(
+                    "UPDATE gigs SET radius_blast_token = ? WHERE id = ?",
+                    (blast_token, gig_id)
+                )
+            elif waive_freq:
                 cursor.execute(
                     "UPDATE gigs SET frequency_exempt = 1 WHERE id = ?",
                     (gig_id,)
                 )
-            blast_token = ''  # not a radius blast — no token needed
             venue_vars = _build_venue_detail_vars(cursor, venue_id, gig_notes=gig_notes)
             sent_count = 0
 

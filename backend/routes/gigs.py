@@ -1243,7 +1243,11 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                         _cup_today = _date.today()
                     days_until = (_dt.strptime(gig_row["date"], "%Y-%m-%d").date() - _cup_today).days
                     # For each window that has already closed, fire now if not already sent
-                    for notif_key, window_days in [("open_gig_4w",28),("open_gig_2w",14),("open_gig_1w",7)]:
+                    # 2026-08-24: added open_gig_36h to the catch-up. A venue creating a
+                    # gig for tonight (or tomorrow) was missing the same-day blast until
+                    # the next hourly scheduler tick — up to 60 min of dead air on a gig
+                    # the venue clearly wants filled now. 36h window = today or tomorrow.
+                    for notif_key, window_days in [("open_gig_4w",28),("open_gig_2w",14),("open_gig_1w",7),("open_gig_36h",1)]:
                         if days_until <= window_days:
                             already = conn.execute(
                                 "SELECT 1 FROM gig_email_log WHERE gig_id=? AND notification_key=?",
