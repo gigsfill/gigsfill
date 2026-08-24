@@ -426,13 +426,25 @@
           <td style="padding:6px 8px;">${statusPill(r)}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${venue}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${artist}</td>
+          <td style="padding:6px 8px;font-size:0.78rem;font-weight:600;text-align:right;white-space:nowrap;">${_flowCell}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:#06b6d4;text-align:right;white-space:nowrap;">${_gigPay}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:#a78bfa;text-align:right;white-space:nowrap;">${_gfFee}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:#f59e0b;text-align:right;white-space:nowrap;">${_stripeFee}</td>
-          <td style="padding:6px 8px;font-size:0.78rem;font-weight:600;text-align:right;white-space:nowrap;">${_flowCell}</td>
-          <td style="padding:6px 8px;font-size:0.7rem;color:var(--text-gray);white-space:nowrap;">${fmtDateTime(r.processed_at || r.scheduled_process_at || r.created_at)}</td>
+          <td style="padding:6px 8px 6px 24px;font-size:0.7rem;color:var(--text-gray);white-space:nowrap;">${fmtDateTime(r.processed_at || r.scheduled_process_at || r.created_at)}</td>
         </tr>`;
     }).join('');
+    // 2026-08-24: header refresh.
+    //   • Unified all column-header text to var(--text-gray) so the
+    //     money columns (Gig Pay / GigsFill Fee / Stripe Fee / Venue
+    //     Charge / Artist Paid) don't visually shout compared to
+    //     Gig Date / ID / Type. Cell VALUES keep their color coding
+    //     for at-a-glance scanning of the money flow.
+    //   • "Venue Charge / Artist Paid" moved to the LEFT of the money
+    //     breakdown (right after Artist) so the total flow reads first,
+    //     then the breakdown that explains it. Also kills the dead
+    //     space that used to sit right of Stripe Fee's dashes.
+    //   • Extra padding on the Processed column so it breathes clear
+    //     of the Stripe Fee column.
     $('apTable').innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:0.72rem;">
         <thead>
@@ -446,11 +458,11 @@
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Status</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Venue</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Artist</th>
-            <th title="The gig's actual pay — same on both the venue_charge parent and the artist_payout child (both rows are two sides of the same $10 gig)." style="padding:7px 8px;text-align:right;font-weight:600;color:#06b6d4;cursor:help;">Gig Pay</th>
-            <th title="GigsFill's fee for THIS side of the split. On the venue_charge row: the amount added on top of Gig Pay to reach Venue Charge. On the artist_payout row: the amount deducted from Gig Pay to reach Artist Paid. Both add up to the total platform commission." style="padding:7px 8px;text-align:right;font-weight:600;color:#a78bfa;cursor:help;">GigsFill Fee</th>
-            <th title="Stripe's processing cost we paid on this charge (typically 2.9% + $0.30). Only appears on the venue_charge row — Stripe bills per charge, not per payout." style="padding:7px 8px;text-align:right;font-weight:600;color:#f59e0b;cursor:help;">Stripe Fee</th>
-            <th title="Money flow: venue_charge row shows what's charged TO the venue's card (green, IN). artist_payout row shows what's paid OUT to the artist (red, OUT). Trial rows show dashes — nothing moved through GigsFill." style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text);cursor:help;">Venue Charge / Artist Paid</th>
-            <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Processed</th>
+            <th title="Money flow: venue_charge row shows what's charged TO the venue's card (green, IN). artist_payout row shows what's paid OUT to the artist (red, OUT). Trial rows show dashes — nothing moved through GigsFill." style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text-gray);cursor:help;">Venue Charge / Artist Paid</th>
+            <th title="The gig's actual pay — same on both the venue_charge parent and the artist_payout child (both rows are two sides of the same $10 gig)." style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text-gray);cursor:help;">Gig Pay</th>
+            <th title="GigsFill's fee for THIS side of the split. On the venue_charge row: the amount added on top of Gig Pay to reach Venue Charge. On the artist_payout row: the amount deducted from Gig Pay to reach Artist Paid. Both add up to the total platform commission." style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text-gray);cursor:help;">GigsFill Fee</th>
+            <th title="Stripe's processing cost we paid on this charge (typically 2.9% + $0.30). Only appears on the venue_charge row — Stripe bills per charge, not per payout." style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text-gray);cursor:help;">Stripe Fee</th>
+            <th style="padding:7px 8px 7px 24px;text-align:left;font-weight:600;color:var(--text-gray);">Processed</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
