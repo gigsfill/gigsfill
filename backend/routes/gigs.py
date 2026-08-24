@@ -6181,9 +6181,16 @@ def cancel_slot(
     # so the CASE-WHEN is a real no-op and `last_cancelled_artist_id`
     # only records real artist cancellations.
     _cancel_aid = slot.get("artist_id")
+    # 2026-08-24: no longer clearing radius_blast_token on slot-cancel.
+    # A gig that was blasted stays "in the blast zone" — the whole
+    # point of the blast is that this gig is open to non-preferred
+    # artists. An artist booking + cancelling shouldn't undo the venue's
+    # blast decision. fire_cancelled_gig_blast below will re-blast (or
+    # skip if already covered by the window logic) but the underlying
+    # blast context on the gig row survives.
     # Re-open parent gig if it was fully booked OR pending_contract/awaiting_venue_contract/pending_venue_approval
     db.execute(
-        text("""UPDATE gigs SET status = 'open', radius_blast_token = NULL,
+        text("""UPDATE gigs SET status = 'open',
                     artist_id = CASE WHEN artist_id = :aid THEN NULL ELSE artist_id END,
                     contract_hold_artist_id = NULL, contract_hold_expires_at = NULL,
                     approval_token = NULL, approval_requested_at = NULL,
@@ -6192,11 +6199,11 @@ def cancel_slot(
         {"gid": gig_id, "aid": _cancel_aid}
     )
     # For multi-slot gigs: gig.status stays 'open' so above WHERE won't match.
-    # Clear contract_hold, radius_blast_token, and artist_id for the cancelling artist.
+    # Clear contract_hold and artist_id for the cancelling artist. Blast
+    # token intentionally preserved (see 2026-08-24 comment above).
     db.execute(
         text("""UPDATE gigs SET
                     contract_hold_artist_id = NULL, contract_hold_expires_at = NULL,
-                    radius_blast_token = NULL,
                     artist_id = CASE WHEN artist_id = :aid THEN NULL ELSE artist_id END
                 WHERE id = :gid AND status = 'open'"""),
         {"gid": gig_id, "aid": _cancel_aid}
@@ -7459,6 +7466,24 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
             logger.error(f"[BLAST] ❌ Radius failed to send to {ra['email']}: {e}")
 
     logger.info(f"[BLAST] Done (radius) — sent to {radius_sent} non-preferred artists within {radius_miles}mi for gig {gig_id}")
+
+    # 2026-08-24: log a cancelled_blast row so the startup DB cleanup at
+    # db.py:2081 doesn't wipe the blast token+frequency_exempt on the
+    # next API restart. That cleanup treats "no radius_blast / cancelled_
+    # blast log row = not a blast gig" and would nuke perfectly valid
+    # blast state — which is exactly what happened for gig 591 today.
+    # Idempotent: unique(gig_id, notification_key) means the second call
+    # for the same gig collides harmlessly (caught in except below).
+    try:
+        db.execute(text("""
+            INSERT INTO gig_email_log (gig_id, venue_id, notification_key, sent_at, recipient_count)
+            VALUES (:gid, :vid, 'cancelled_blast', CURRENT_TIMESTAMP, :rc)
+        """), {"gid": gig_id, "vid": venue_id, "rc": (sent_count + radius_sent)})
+        db.commit()
+    except Exception:
+        # unique(gig_id, key) collision → row already there, safe to ignore
+        try: db.rollback()
+        except Exception: pass
 
 
 @router.post("/api/gigs/{gig_id}/new-gig-blast")

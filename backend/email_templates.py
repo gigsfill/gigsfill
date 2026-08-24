@@ -432,6 +432,14 @@ TEMPLATES = {
 </td>
 </tr>
 </table>
+<div style="margin:18px 0 0 0;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;font-size:12.5px;color:#9a3412;line-height:1.5;">
+&#9200; <strong>Time-sensitive:</strong> if you don&#39;t Approve or Deny in time, GigsFill will <strong>auto-approve</strong> so the artist isn&#39;t left in limbo. Deadline depends on how close the gig is:
+<ul style="margin:6px 0 0 18px;padding:0;color:#9a3412;">
+<li>Gig within 4 hours &rarr; <strong>30 minutes</strong></li>
+<li>Gig 4&ndash;12 hours out &rarr; <strong>2 hours</strong></li>
+<li>Gig 12&ndash;36 hours out &rarr; <strong>6 hours</strong></li>
+</ul>
+</div>
 <p style="margin: 16px 0 0 0; font-size: 12px; color: #9ca3af; text-align: center;">Or manage this from your <a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="color:#6b7280;">GigsFill calendar</a>.</p>
 </td></tr>
 <tr><td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">

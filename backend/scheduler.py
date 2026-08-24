@@ -1763,6 +1763,146 @@ def run_scheduled_emails():
                 _epdb.close()
         _run(_prune_expired_unbooked_gigs, "prune_expired_unbooked_gigs")
 
+        # 2026-08-24: auto-approve stale same-day booking requests. When
+        # a non-preferred artist books a same-day gig at a venue with
+        # require_same_day_approval=1, the slot goes to
+        # pending_venue_approval and the venue gets an approval-request
+        # email. If the venue doesn't act, the artist is in limbo until
+        # the gig starts. This task auto-approves after a tiered
+        # deadline (chosen so the artist gets an answer before gig
+        # start — venue silence is treated as consent since they set up
+        # the same-day-blast + approval-required themselves):
+        #
+        #   Gig starts in… → Venue has… → After timeout: auto-approve
+        #   0–4h            30 minutes
+        #   4–12h           2 hours
+        #   12–36h          6 hours
+        #
+        # Auto-approved bookings: slot → 'booked', txn created, both
+        # parties get the standard booking-confirmation emails + a
+        # separate "auto-approved (no venue response)" notification.
+        def _auto_approve_stale_bookings():
+            from backend.db import SessionLocal as _AASL
+            from sqlalchemy import text as _aa_text
+            from datetime import datetime as _aa_dt
+            from backend.utils import get_venue_timezone
+            _aadb = _AASL()
+            try:
+                rows = _aadb.execute(_aa_text("""
+                    SELECT pt.token, pt.gig_id, pt.artist_id, pt.created_at,
+                           g.date as gig_date, g.start_time as gig_start,
+                           g.venue_id
+                    FROM pending_approval_tokens pt
+                    JOIN gigs g ON g.id = pt.gig_id
+                    WHERE g.status IN ('pending_venue_approval', 'open', 'booked')
+                """)).mappings().all()
+                approved = 0
+                for r in rows:
+                    try:
+                        # Compute gig start in venue-local; skip if we can't parse.
+                        _tz = get_venue_timezone(_aadb, r["venue_id"])
+                        _now_local = _aa_dt.now(_tz).replace(tzinfo=None)
+                        _d = str(r["gig_date"])[:10]
+                        _t = str(r["gig_start"] or "00:00")[:5]
+                        try:
+                            _gs = _aa_dt.fromisoformat(f"{_d}T{_t}")
+                        except Exception:
+                            continue
+                        _hours_until_gig = (_gs - _now_local).total_seconds() / 3600.0
+                        # Match tier → deadline (in hours since request).
+                        if _hours_until_gig <= 4:
+                            _deadline_h = 0.5
+                        elif _hours_until_gig <= 12:
+                            _deadline_h = 2.0
+                        elif _hours_until_gig <= 36:
+                            _deadline_h = 6.0
+                        else:
+                            # >36h — no same-day pressure; keep waiting on venue.
+                            continue
+                        # Requested at is stored as UTC-naive. Compare against
+                        # UTC-naive now to avoid tz-arithmetic bugs.
+                        _created = r["created_at"]
+                        if isinstance(_created, str):
+                            _created = _aa_dt.fromisoformat(_created.replace("Z", ""))
+                        _now_utc = _aa_dt.utcnow()
+                        _hours_pending = (_now_utc - _created).total_seconds() / 3600.0
+                        if _hours_pending < _deadline_h:
+                            continue
+
+                        # Timeout hit — auto-approve. Same state changes as
+                        # approve_booking (gigs.py:5729-5779).
+                        _slot = _aadb.execute(_aa_text("""
+                            SELECT id, slot_number, start_time, end_time, pay
+                            FROM gig_slots
+                            WHERE gig_id = :gid AND artist_id = :aid AND status = 'pending_venue_approval'
+                            LIMIT 1
+                        """), {"gid": r["gig_id"], "aid": r["artist_id"]}).mappings().first()
+                        if not _slot:
+                            # No pending slot — pending token is stale, drop it.
+                            _aadb.execute(_aa_text(
+                                "DELETE FROM pending_approval_tokens WHERE token = :tok"
+                            ), {"tok": r["token"]})
+                            _aadb.commit()
+                            continue
+
+                        _aadb.execute(_aa_text("""
+                            UPDATE gig_slots SET status='booked', approval_requested_at=NULL
+                            WHERE id=:sid AND status='pending_venue_approval'
+                        """), {"sid": _slot["id"]})
+                        _open_left = _aadb.execute(_aa_text(
+                            "SELECT COUNT(*) FROM gig_slots WHERE gig_id=:gid AND status='open'"
+                        ), {"gid": r["gig_id"]}).scalar()
+                        if not _open_left:
+                            _aadb.execute(_aa_text(
+                                "UPDATE gigs SET status='booked', approval_token=NULL, approval_requested_at=NULL WHERE id=:gid AND status='pending_venue_approval'"
+                            ), {"gid": r["gig_id"]})
+                        else:
+                            _aadb.execute(_aa_text(
+                                "UPDATE gigs SET status='open', approval_token=NULL, approval_requested_at=NULL WHERE id=:gid AND status='pending_venue_approval'"
+                            ), {"gid": r["gig_id"]})
+                        _aadb.execute(_aa_text(
+                            "DELETE FROM pending_approval_tokens WHERE token = :tok"
+                        ), {"tok": r["token"]})
+                        _aadb.commit()
+
+                        # Create the payment transaction.
+                        try:
+                            from backend.routes.gigs import _create_booking_transaction
+                            _create_booking_transaction(
+                                _aadb, r["gig_id"], r["venue_id"], r["artist_id"],
+                                float(_slot["pay"] or 0), r["gig_date"], slot_id=_slot["id"]
+                            )
+                            _aadb.commit()
+                        except Exception as _txn_e:
+                            logger.warning(f"[AUTO_APPROVE] txn create failed gig={r['gig_id']}: {_txn_e}")
+
+                        # Standard booking-confirmation emails + auto-approve
+                        # notice — carries an `auto_approved` template flag
+                        # that the artist_gig_booked / venue_gig_booked
+                        # templates render as an amber "auto-confirmed (no
+                        # venue response)" banner.
+                        try:
+                            from backend.services.email_dispatch import send_booking_emails
+                            send_booking_emails(_aadb, r["gig_id"], slot_id=_slot["id"])
+                        except Exception as _be:
+                            logger.warning(f"[AUTO_APPROVE] booking email failed gig={r['gig_id']}: {_be}")
+
+                        approved += 1
+                        logger.info(
+                            f"[AUTO_APPROVE] gig={r['gig_id']} artist={r['artist_id']} — "
+                            f"auto-approved after {_hours_pending:.1f}h "
+                            f"(deadline={_deadline_h}h, gig starts in {_hours_until_gig:.1f}h)"
+                        )
+                    except Exception as _row_e:
+                        logger.warning(f"[AUTO_APPROVE] row error gig={r.get('gig_id')}: {_row_e}")
+                        try: _aadb.rollback()
+                        except Exception: pass
+                if approved:
+                    logger.info(f"[AUTO_APPROVE] processed {approved} stale approval(s) this tick")
+            finally:
+                _aadb.close()
+        _run(_auto_approve_stale_bookings, "auto_approve_stale_bookings")
+
         # is preserved. Runs once per tick; idempotent (rows already
         # cleared are skipped by the WHERE flyer_path IS NOT NULL guard).
         def _prune_ext_flyers():
