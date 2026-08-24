@@ -57,8 +57,9 @@
   // Row builder shared between this modal and venue-profile.html's Gig
   // Details tab. Consumes the /api/venues/{id}/public payload shape
   // (same field names as backend/routes/venues.py:get_venue_public).
-  function buildRowsHTML(v) {
+  function buildRowsHTML(v, opts) {
     v = v || {};
+    opts = opts || {};
     const yn = b => (String(b).toLowerCase() === 'true' || b === 1 || b === true) ? 'Yes' : 'No';
     const has = x => x != null && String(x).trim() !== '';
     const isTrue = x => String(x).toLowerCase() === 'true' || x === 1 || x === true;
@@ -85,8 +86,17 @@
     const rows = [];
 
     if (has(v.venue_size)) rows.push(line('Capacity', `${_esc(v.venue_size)} guests`));
-    const payTxt = fmtPay();
-    if (payTxt) rows.push(line('Default Pay', `${payTxt} <span style="color:var(--text-muted);font-size:0.78rem;">(per gig — actual pay varies)</span>`));
+    // 2026-08-24: skip the Default Pay row when this modal is opened
+    // from a specific-gig context (opts.hideDefaultPay=true). The parent
+    // gig modal already shows THIS gig's actual pay right above; the
+    // venue's default is meta-info that confused artists comparing the
+    // two numbers ("Gig says $10 but Venue Gig Details says $200?").
+    // Standalone venue-profile Gig Details tab keeps the row since
+    // there's no gig context there.
+    if (!opts.hideDefaultPay) {
+      const payTxt = fmtPay();
+      if (payTxt) rows.push(line('Default Pay', `${payTxt} <span style="color:var(--text-muted);font-size:0.78rem;">(per gig — actual pay varies)</span>`));
+    }
     if (Number(v.artist_frequency_days) > 0) {
       rows.push(line('Artist Frequency', `1 performance every ${Number(v.artist_frequency_days)} days`));
     }
@@ -186,7 +196,11 @@
         shell.querySelector('#vgdBody').innerHTML = `<div style="color:var(--text-muted);font-style:italic;padding:14px 0;">Sign in with an artist account to view gig details for this venue.</div>`;
         return;
       }
-      shell.querySelector('#vgdBody').innerHTML = buildRowsHTML(v);
+      // Opened from a gig modal (via mountLinks) — skip the "Default
+      // Pay" row since the parent gig modal already shows THIS gig's
+      // actual pay right above. venue-profile.html calls buildRowsHTML
+      // directly without opts and still gets the row.
+      shell.querySelector('#vgdBody').innerHTML = buildRowsHTML(v, { hideDefaultPay: true });
     } catch (e) {
       shell.querySelector('#vgdBody').innerHTML = `<div style="color:#ef4444;padding:14px 0;">Could not load venue details.</div>`;
     }
