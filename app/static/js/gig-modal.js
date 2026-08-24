@@ -279,17 +279,20 @@ async function renderGigModal(data, callbacks = {}) {
 
     // 2026-08-23: same-day booking banner. Fires for any artist viewing
     // a gig whose start is within 36h (venue-local, per _is_same_day_
-    // booking on the backend). Two copies: one when the venue REQUIRES
-    // approval for same-day (booking becomes pending_venue_approval —
-    // artist should know they'll wait on the venue), one when it's just
-    // a "heads up, this is tonight" context. Skipped for the artist's
+    // booking on the backend). Copy varies by (a) whether the venue
+    // requires approval for same-day bookings, and (b) whether THIS
+    // artist bypasses that gate (preferred artists always do — see
+    // gigs.py:5288 `not _is_preferred_slot`). Skipped for the artist's
     // own booked slot (they've already booked, no new context needed).
+    // 2026-08-24 fix: was showing "Requires Approval" to preferred
+    // artists too, but their bookings actually go straight to `booked`.
     if (data.is_same_day && !isPast && !isInProgress) {
       const _mySlot = (data.slots || []).find(s => s && s.is_my_slot);
+      const _isPreferred = pref === 'approved';
       if (!_mySlot) {
-        if (data.same_day_requires_approval) {
+        if (data.same_day_requires_approval && !_isPreferred) {
           html += _banner('yellow', '🕐 Same-Day Booking Requires Approval',
-            `This gig is <strong>today</strong>. <strong>${_esc(data.venue_name)}</strong> requires venue approval for same-day bookings — if you book, your slot will be marked <em>pending venue approval</em> and you'll be notified once the venue accepts or declines.`);
+            `This gig is <strong>today</strong>. <strong>${_esc(data.venue_name)}</strong> requires venue approval for same-day bookings by non-preferred artists — if you book, your slot will be marked <em>pending venue approval</em> and you'll be notified once the venue accepts or declines.`);
         } else {
           html += _banner('yellow', '🕐 Same-Day Booking',
             `Heads up — this gig is <strong>today</strong>. Book now if you can perform on this short notice.`);
