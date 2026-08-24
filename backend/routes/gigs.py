@@ -5836,9 +5836,13 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
         return {"ok": False, "message": "No pending approval found for this artist"}
 
     # Fetch names for emails
+    # 2026-08-24: added g.id + g.notes so send_approval_decision_emails'
+    # enrichment guard (`if approved and gig_id:`) actually fires and
+    # populates venue_address_link, capacity, arrival, tabs, stage, etc.
+    # Without g.id the guard was False, leaving all placeholders unreplaced.
     names = db.execute(
         text("""
-            SELECT g.date, g.start_time, g.end_time, g.pay, g.title,
+            SELECT g.id, g.date, g.start_time, g.end_time, g.pay, g.title, g.notes,
                    g.venue_id, v.venue_name, a.name as artist_name
             FROM gigs g JOIN venues v ON g.venue_id=v.id JOIN artists a ON a.id=:aid
             WHERE g.id=:gid

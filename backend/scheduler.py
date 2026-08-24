@@ -1907,7 +1907,7 @@ def run_scheduled_emails():
                                 send_approval_decision_emails, send_booking_emails
                             )
                             _names = _aadb.execute(_aa_text("""
-                                SELECT g.date, g.start_time, g.end_time, g.pay, g.title,
+                                SELECT g.id, g.date, g.start_time, g.end_time, g.pay, g.title, g.notes,
                                        g.venue_id, v.venue_name, a.name as artist_name
                                 FROM gigs g
                                 JOIN venues v ON v.id = g.venue_id
