@@ -2407,7 +2407,7 @@ def book_gig(
     # below can run without a second SELECT.
     gig = db.execute(
         text("""
-            SELECT id, venue_id, status, hold_status, date, artist_id, artist_type, band_formats,
+            SELECT id, venue_id, status, hold_status, date, start_time, artist_id, artist_type, band_formats,
                    COALESCE(frequency_exempt, 0) as frequency_exempt
             FROM gigs
             WHERE id = :gid
@@ -5287,7 +5287,18 @@ def book_slot(
     # gig-level book path above.
     _is_preferred_slot = pref and pref.get("status") == "approved"
     _ensure_approval_columns(db)
-    if (_is_same_day_booking(gig["date"], gig.get("start_time"), venue_id=gig.get("venue_id"))
+    # 2026-08-24: use SLOT start_time, not gig.start_time. The gig SELECT
+    # at line ~5011 doesn't fetch start_time (only id/venue_id/date/
+    # status/hold_status), so gig.get("start_time") returned None →
+    # _is_same_day_booking defaulted the time to 00:00, computed the gig
+    # as ~17h in the PAST (venue-local), returned False, and the whole
+    # approval gate silently skipped. Every same-day non-preferred
+    # booking went straight to 'booked' with normal booking emails
+    # instead of pending_venue_approval. Also more correct for multi-
+    # slot gigs where the slot's start_time can differ from the gig
+    # umbrella.
+    _slot_start_for_check = slot.get("start_time") if hasattr(slot, "get") else None
+    if (_is_same_day_booking(gig["date"], _slot_start_for_check, venue_id=gig.get("venue_id"))
             and not _is_preferred_slot
             and _venue_requires_same_day_approval(db, gig.get("venue_id"))):
         # Audit fix (May 2026 part 5): atomic claim guard — without
