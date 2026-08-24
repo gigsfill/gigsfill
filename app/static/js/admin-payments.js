@@ -197,8 +197,13 @@
   function renderStats(stats) {
     if (!stats) { $('apStats').innerHTML = ''; return; }
     // Main bubble (colored to distinguish counts vs money).
-    const bubble = (label, val, color) =>
-      `<div style="padding:12px 16px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;min-width:130px;flex:1;">
+    // 2026-08-24: added tooltip explaining what each metric represents.
+    // The 6 bubbles follow the money flow left-to-right: how many txns,
+    // how much came IN from venues, how much went OUT to artists, what
+    // GigsFill kept as commission, what Stripe took, what's left as
+    // actual profit (commission − Stripe cost).
+    const bubble = (label, val, color, tip) =>
+      `<div title="${esc(tip || '')}" style="padding:12px 16px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;min-width:130px;flex:1;cursor:help;">
          <div style="font-size:0.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:6px;">${esc(label)}</div>
          <div style="font-size:1.15rem;font-weight:700;color:${color};">${esc(val)}</div>
        </div>`;
@@ -211,12 +216,18 @@
 
     const s = stats.by_status || {};
     const money = [
-      bubble('Transactions',  String(stats.count || 0),                'var(--text-white)'),
-      bubble('Revenue',       dollars(stats.revenue_cents || 0),       '#10b981'),
-      bubble('Artist Payouts', dollars(stats.payouts_cents || 0),      '#06b6d4'),
-      bubble('Commission',    dollars(stats.commission_cents || 0),    '#a78bfa'),
-      bubble('Stripe Fees',   dollars(stats.stripe_fees_cents || 0),   '#f59e0b'),
-      bubble('Net Profit',    dollars(stats.net_profit_cents || 0),    '#10b981'),
+      bubble('Transactions',   String(stats.count || 0),                'var(--text-white)',
+        'Total parent transactions matching the current filters (excludes payout children to avoid double-counting multi-slot gigs).'),
+      bubble('Revenue',        dollars(stats.revenue_cents || 0),       '#10b981',
+        'Total money charged to venues on all completed bookings (paid + transferred + charged). This is gross INFLOW from venues before anything else.'),
+      bubble('Artist Payouts', dollars(stats.payouts_cents || 0),       '#06b6d4',
+        'Total money paid OUT to artists via Stripe Connect on all completed bookings.'),
+      bubble('Commission',     dollars(stats.commission_cents || 0),    '#a78bfa',
+        'GigsFill’s platform commission — the difference between what the venue paid and what the artist received (before Stripe took their cut). Cancelled txns contribute their platform_fee_charged_cents.'),
+      bubble('Stripe Fees',    dollars(stats.stripe_fees_cents || 0),   '#f59e0b',
+        'Total Stripe processing fees GigsFill paid on completed bookings (typically 2.9% + $0.30 per charge). This comes out of the Commission bubble.'),
+      bubble('Net Profit',     dollars(stats.net_profit_cents || 0),    '#10b981',
+        'GigsFill’s actual take-home: Commission minus Stripe Fees. This is what the platform keeps after processing costs.'),
     ].join('');
 
     const alerts = [
@@ -339,6 +350,32 @@
       const amount = r.venue_charge_cents || r.amount_cents || 0;
       const isChild = r.parent_transaction_id != null;
       const indent = isChild ? '↳&nbsp;' : '';
+      // 2026-08-24: money breakdown cells so admin sees where each
+      // dollar goes without opening the row-detail modal. Semantics
+      // per txn type:
+      //   • venue_charge parent: shows Venue Charge (gross in),
+      //     GigsFill Fee, Stripe Fee. Gig Pay = artist-side amount
+      //     (child's amount) if a single artist, or the sum for
+      //     multi-slot — pulled from artist_payout_cents which the
+      //     parent row also carries (aggregated).
+      //   • artist_payout child: shows Gig Pay (artist_payout_cents).
+      //     Fees live on the parent so show '—' here to avoid
+      //     double-counting when scanning down the column.
+      //   • single/legacy: same shape as parent.
+      //   • free_trial audit row: no money moved — dashes across the
+      //     money columns except Gig Pay (the amount venue promised
+      //     to pay off-platform).
+      const _ttype = r.transaction_type || 'single';
+      const _dash = '<span style="color:var(--text-muted);">—</span>';
+      const _gigPay      = (r.artist_payout_cents != null)
+                            ? dollars(r.artist_payout_cents)
+                            : (r.amount_cents ? dollars(r.amount_cents) : _dash);
+      const _venueCharge = (_ttype === 'artist_payout') ? _dash
+                            : (r.venue_charge_cents ? dollars(r.venue_charge_cents) : _dash);
+      const _gfFee       = (_ttype === 'artist_payout') ? _dash
+                            : (r.commission_cents ? dollars(r.commission_cents) : _dash);
+      const _stripeFee   = (_ttype === 'artist_payout') ? _dash
+                            : (r.credit_card_fee_cents ? dollars(r.credit_card_fee_cents) : _dash);
       // Audit fix (May 2026 part 7): also escape backslashes — a trailing `\`
       // in a venue/artist name would otherwise escape the inline JS string's
       // closing apostrophe and let attacker code follow. Wrap with both
@@ -367,7 +404,10 @@
           <td style="padding:6px 8px;">${statusPill(r)}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${venue}</td>
           <td style="padding:6px 8px;font-size:0.72rem;">${artist}</td>
-          <td style="padding:6px 8px;font-size:0.78rem;font-weight:600;color:var(--text);text-align:right;white-space:nowrap;">${dollars(amount)}</td>
+          <td style="padding:6px 8px;font-size:0.72rem;color:#06b6d4;text-align:right;white-space:nowrap;">${_gigPay}</td>
+          <td style="padding:6px 8px;font-size:0.72rem;color:#a78bfa;text-align:right;white-space:nowrap;">${_gfFee}</td>
+          <td style="padding:6px 8px;font-size:0.72rem;color:#f59e0b;text-align:right;white-space:nowrap;">${_stripeFee}</td>
+          <td style="padding:6px 8px;font-size:0.78rem;font-weight:600;color:#10b981;text-align:right;white-space:nowrap;">${_venueCharge}</td>
           <td style="padding:6px 8px;font-size:0.7rem;color:var(--text-gray);white-space:nowrap;">${fmtDateTime(r.processed_at || r.scheduled_process_at || r.created_at)}</td>
         </tr>`;
     }).join('');
@@ -384,7 +424,10 @@
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Status</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Venue</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Artist</th>
-            <th style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text-gray);">Amount</th>
+            <th title="Artist's take-home for this gig (their pay). For venue_charge parent rows this reflects the artist_payout aggregated on the parent." style="padding:7px 8px;text-align:right;font-weight:600;color:#06b6d4;cursor:help;">Gig Pay</th>
+            <th title="GigsFill's platform commission on this booking (before Stripe fees). '—' on artist_payout child rows — the commission lives on the venue_charge parent." style="padding:7px 8px;text-align:right;font-weight:600;color:#a78bfa;cursor:help;">GigsFill Fee</th>
+            <th title="Stripe's processing cost we paid on this charge (typically 2.9% + $0.30). Comes out of the GigsFill Fee." style="padding:7px 8px;text-align:right;font-weight:600;color:#f59e0b;cursor:help;">Stripe Fee</th>
+            <th title="Total charged to the venue's card = Gig Pay + GigsFill Fee. The 'Amount' column from the pre-2026-08-24 layout." style="padding:7px 8px;text-align:right;font-weight:600;color:#10b981;cursor:help;">Venue Charge</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Processed</th>
           </tr>
         </thead>

@@ -1058,12 +1058,14 @@
 
       <!-- ── Sub-tab: Payment Settings ── -->
       <div class="ps-subtab-content" id="ps-payment">
-        <!-- Live Payments toggle banner -->
-        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:6px;margin-bottom:8px;font-size:0.72rem;color:var(--text-gray);">
-          <span style="font-size:1rem;">⚡</span>
-          <span>The <strong style="color:var(--text);">Live Payments</strong> on/off switch has moved to the <strong style="color:var(--cyan);">Site Status</strong> strip at the top of this page.</span>
-          <span id="paymentStatusMirror" style="margin-left:auto;font-weight:700;font-size:0.75rem;"></span>
-        </div>
+        <!-- 2026-08-24: removed the "Live Payments switch moved to the
+             Site Status strip at the top of this page" banner. It was
+             doubly stale: (a) the switch it referenced was removed when
+             Test Mode was retired Jul 2026 — payments are always live now,
+             no toggle; (b) the Site Status strip moved off Platform
+             Settings to the new "Server Stats" tab this session, so
+             "top of this page" is wrong anyway. A permanent LIVE label
+             already lives on Server Stats; no need for a duplicate here. -->
 
         <!-- Stripe Connect -->
         <div class="content-card" style="padding:12px;margin-top:8px;">
@@ -2399,7 +2401,7 @@ function switchTemplatesSubTab(tab) {
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=4"></script>
 <script src="/app/static/js/admin-platform.js?v=13"></script>
-<script src="/app/static/js/admin-payments.js?v=32"></script>
+<script src="/app/static/js/admin-payments.js?v=33"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=3"></script>
 <script src="/app/static/js/admin-flags.js?v=3"></script>
