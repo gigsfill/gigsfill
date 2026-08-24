@@ -5857,7 +5857,13 @@ def approve_booking(gig_id: int, request: Request, db=Depends(get_db), user=Depe
                 # a definite answer inside the function scope.
                 _bs = locals().get("_backstop_open_slot")
                 _approved_slot_id = slot["id"] if slot else (_bs["id"] if _bs else None)
-                send_booking_emails(db, gig_id, slot_id=_approved_slot_id)
+                # 2026-08-24: skip artist recipient — the artist just
+                # received the enriched artist_booking_approved email
+                # (via send_approval_decision_emails a few lines above)
+                # which now carries the full venue+gig detail bag. Venue
+                # still gets venue_gig_booked so they have a permanent
+                # inbox record of the confirmed booking.
+                send_booking_emails(db, gig_id, slot_id=_approved_slot_id, skip_artist=True)
             except Exception as _be:
                 logger.error(f"[APPROVE_BOOKING] send_booking_emails error: {_be}")
         except Exception as e:

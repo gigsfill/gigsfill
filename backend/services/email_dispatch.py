@@ -303,11 +303,16 @@ def _fetch_venue_detail_vars(db, venue_id, gig_notes=None):
         return {}
 
 
-def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
+def send_booking_emails(db, gig_id_or_details, slot_id: int = None, skip_artist: bool = False):
     """
     Send booking confirmation emails for a specific slot booking.
     If slot_id is provided, only emails for that slot (not all booked slots).
     Accepts either a gig_id (int) or a dict with 'id'. Always queries DB fresh.
+
+    skip_artist=True (2026-08-24): only send to venue-side, skip artist.
+    Used by approve_booking so the artist doesn't get two emails (the
+    enriched artist_booking_approved template already carries all the
+    details the standard booked email would provide).
     """
     try:
         from backend.email_service import EmailService
@@ -478,17 +483,30 @@ def send_booking_emails(db, gig_id_or_details, slot_id: int = None):
             # email if the same user owns both sides. Previously a user
             # who owned both the artist and the venue got two emails for
             # the same booking.
+            # 2026-08-24: skip_artist=True caller (approve_booking) wants
+            # only venue-side to fire because the artist already got the
+            # enriched artist_booking_approved email with all the same
+            # detail.
             artist_users = get_all_entity_users(db, 'artist', aid)
             _booked_sent_artists = set()
-            for au in artist_users:
-                if au["email"] in _booked_sent_artists:
-                    continue
-                _booked_sent_artists.add(au["email"])
-                result = email_service.send_notification_email(
-                    user_email=au["email"], user_id=au["user_id"],
-                    notification_type='artist_gig_booked', variables=email_vars
-                )
-                logger.info(f"[BOOKING EMAIL] artist result={result} to={au['email']}")
+            if skip_artist:
+                # Still track artist_users' emails so the venue-side loop
+                # below can skip a shared owner (same-user-owns-both), which
+                # is why we populate _booked_sent_artists rather than
+                # returning early.
+                for au in artist_users:
+                    _booked_sent_artists.add(au["email"])
+                logger.info(f"[BOOKING EMAIL] skip_artist=True — skipping {len(artist_users)} artist recipient(s) for gig {gig_id}")
+            else:
+                for au in artist_users:
+                    if au["email"] in _booked_sent_artists:
+                        continue
+                    _booked_sent_artists.add(au["email"])
+                    result = email_service.send_notification_email(
+                        user_email=au["email"], user_id=au["user_id"],
+                        notification_type='artist_gig_booked', variables=email_vars
+                    )
+                    logger.info(f"[BOOKING EMAIL] artist result={result} to={au['email']}")
 
             # Venue email — bypass preferences, venue must always know about bookings
             _booked_sent_venues = set()
@@ -1295,13 +1313,44 @@ def send_approval_decision_emails(db, gig_details: dict, artist_id: int,
 
         slot_vars = {"slot_info": slot_info} if slot_info else {}
 
+        # 2026-08-24: enrich the approval email with the same venue/gig
+        # detail bag the standard artist_gig_booked template uses, so
+        # the artist gets ONE email (approval) with everything instead
+        # of two (approval + standard booked). approve_booking now skips
+        # the artist side of send_booking_emails.
+        _gig_extras = {}
+        _venue_extras = {}
+        if approved and gig_id:
+            try:
+                _g = db.execute(text("""
+                    SELECT g.title, g.notes as gig_notes, g.artist_type, g.band_formats, g.styles
+                    FROM gigs g WHERE g.id = :gid
+                """), {"gid": gig_id}).mappings().first()
+                if _g:
+                    _gig_extras = {
+                        'title':        _g.get('title') or '',
+                        'artist_type':  _g.get('artist_type') or '',
+                        'band_formats': ", ".join(x.strip() for x in (_g.get('band_formats') or '').split(',') if x.strip()),
+                        'styles':       ", ".join(x.strip() for x in (_g.get('styles') or '').split(',') if x.strip()),
+                    }
+                    if venue_id:
+                        _venue_extras = _fetch_venue_detail_vars(db, venue_id, gig_notes=_g.get('gig_notes') or '')
+            except Exception as _xe:
+                logger.warning(f"[APPROVAL_DECISION_EMAIL] enrichment fetch failed: {_xe}")
+
         email_vars = {
             'artist_name': gig_details.get('artist_name', ''),
             'venue_name':  gig_details.get('venue_name', ''),
+            'artist_id':   str(artist_id),
+            'venue_id':    str(venue_id) if venue_id else '',
+            'gig_id':      str(gig_id) if gig_id else '',
             'date':        format_email_date(gig_details.get('date', '')),
             'start_time':  format_time_12hr(_slot_start),
             'end_time':    format_time_12hr(_slot_end),
             'pay':         pay_display,
+            'far_notice_artist': '',
+            **_gig_extras,
+            **_venue_extras,
             **slot_vars,
         }
 

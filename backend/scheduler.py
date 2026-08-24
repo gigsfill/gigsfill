@@ -1876,14 +1876,29 @@ def run_scheduled_emails():
                         except Exception as _txn_e:
                             logger.warning(f"[AUTO_APPROVE] txn create failed gig={r['gig_id']}: {_txn_e}")
 
-                        # Standard booking-confirmation emails + auto-approve
-                        # notice — carries an `auto_approved` template flag
-                        # that the artist_gig_booked / venue_gig_booked
-                        # templates render as an amber "auto-confirmed (no
-                        # venue response)" banner.
+                        # Send the artist the enriched approved email +
+                        # the venue the standard booked email. skip_artist
+                        # avoids the double-email that manual approve had
+                        # (2026-08-24 fix).
                         try:
-                            from backend.services.email_dispatch import send_booking_emails
-                            send_booking_emails(_aadb, r["gig_id"], slot_id=_slot["id"])
+                            from backend.services.email_dispatch import (
+                                send_approval_decision_emails, send_booking_emails
+                            )
+                            _names = _aadb.execute(_aa_text("""
+                                SELECT g.date, g.start_time, g.end_time, g.pay, g.title,
+                                       g.venue_id, v.venue_name, a.name as artist_name
+                                FROM gigs g
+                                JOIN venues v ON v.id = g.venue_id
+                                JOIN artists a ON a.id = :aid
+                                WHERE g.id = :gid
+                            """), {"gid": r["gig_id"], "aid": r["artist_id"]}).mappings().first()
+                            if _names:
+                                _slot_info_s = f"Slot {_slot['slot_number']}: {_slot['start_time']} – {_slot['end_time']}"
+                                send_approval_decision_emails(
+                                    _aadb, dict(_names), r["artist_id"],
+                                    approved=True, slot_info=_slot_info_s
+                                )
+                            send_booking_emails(_aadb, r["gig_id"], slot_id=_slot["id"], skip_artist=True)
                         except Exception as _be:
                             logger.warning(f"[AUTO_APPROVE] booking email failed gig={r['gig_id']}: {_be}")
 
