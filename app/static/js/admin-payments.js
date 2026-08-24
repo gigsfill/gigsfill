@@ -350,32 +350,54 @@
       const amount = r.venue_charge_cents || r.amount_cents || 0;
       const isChild = r.parent_transaction_id != null;
       const indent = isChild ? '↳&nbsp;' : '';
-      // 2026-08-24: money breakdown cells so admin sees where each
-      // dollar goes without opening the row-detail modal. Semantics
-      // per txn type:
-      //   • venue_charge parent: shows Venue Charge (gross in),
-      //     GigsFill Fee, Stripe Fee. Gig Pay = artist-side amount
-      //     (child's amount) if a single artist, or the sum for
-      //     multi-slot — pulled from artist_payout_cents which the
-      //     parent row also carries (aggregated).
-      //   • artist_payout child: shows Gig Pay (artist_payout_cents).
-      //     Fees live on the parent so show '—' here to avoid
-      //     double-counting when scanning down the column.
-      //   • single/legacy: same shape as parent.
-      //   • free_trial audit row: no money moved — dashes across the
-      //     money columns except Gig Pay (the amount venue promised
-      //     to pay off-platform).
+      // 2026-08-24: money breakdown cells. Every row shows the SAME
+      // Gig Pay ($10 gig = $10 on both parent + child rows) and the
+      // per-side fee. Derived from stored fields:
+      //   Gig Pay       = amount_cents (both rows carry the gig's pay)
+      //   GigsFill Fee  = per-side portion of the split:
+      //                    • venue_charge parent: venue_charge_cents − amount_cents
+      //                      (the fee added on top of gig pay to charge the venue)
+      //                    • artist_payout child: amount_cents − artist_payout_cents
+      //                      (the fee deducted from gig pay for the artist)
+      //                    For a $10 gig with $10 min platform fee split 50/50,
+      //                    both rows show $5.
+      //   Venue Charge/Artist Paid combined column:
+      //                    • parent: venue_charge_cents (green, money IN)
+      //                    • child : artist_payout_cents (red, money OUT)
+      //                    • trial : dashes (no money moved)
+      //   Stripe Fee    = credit_card_fee_cents (parent only — Stripe bills
+      //                    once per venue charge, not per artist payout).
       const _ttype = r.transaction_type || 'single';
       const _dash = '<span style="color:var(--text-muted);">—</span>';
-      const _gigPay      = (r.artist_payout_cents != null)
-                            ? dollars(r.artist_payout_cents)
-                            : (r.amount_cents ? dollars(r.amount_cents) : _dash);
-      const _venueCharge = (_ttype === 'artist_payout') ? _dash
-                            : (r.venue_charge_cents ? dollars(r.venue_charge_cents) : _dash);
-      const _gfFee       = (_ttype === 'artist_payout') ? _dash
-                            : (r.commission_cents ? dollars(r.commission_cents) : _dash);
-      const _stripeFee   = (_ttype === 'artist_payout') ? _dash
-                            : (r.credit_card_fee_cents ? dollars(r.credit_card_fee_cents) : _dash);
+      const _isChild = _ttype === 'artist_payout';
+      const _isTrial = _ttype === 'free_trial' || r.status === 'free_trial';
+      // Gig Pay — same on all rows for a given (gig, artist).
+      const _gigPay = r.amount_cents ? dollars(r.amount_cents) : _dash;
+      // Per-side GigsFill fee. Trial rows have no fee.
+      let _gfFee = _dash;
+      if (!_isTrial) {
+        if (_isChild && r.amount_cents != null && r.artist_payout_cents != null) {
+          const _artistFee = (r.amount_cents || 0) - (r.artist_payout_cents || 0);
+          if (_artistFee > 0) _gfFee = dollars(_artistFee);
+        } else if (!_isChild && r.venue_charge_cents != null && r.amount_cents != null) {
+          const _venueFee = (r.venue_charge_cents || 0) - (r.amount_cents || 0);
+          if (_venueFee > 0) _gfFee = dollars(_venueFee);
+        }
+      }
+      // Combined Venue Charge / Artist Paid — money IN (green) on
+      // parent, money OUT (red) on child so admin scanning the column
+      // sees where the money flowed at a glance.
+      let _flowCell = _dash;
+      if (!_isTrial) {
+        if (_isChild && r.artist_payout_cents) {
+          _flowCell = `<span style="color:#ef4444;">-${dollars(r.artist_payout_cents).slice(1)}</span>`;
+        } else if (!_isChild && r.venue_charge_cents) {
+          _flowCell = `<span style="color:#10b981;">+${dollars(r.venue_charge_cents).slice(1)}</span>`;
+        }
+      }
+      // Stripe fee only on parent (Stripe bills per venue charge).
+      const _stripeFee = (_isChild || _isTrial) ? _dash
+                          : (r.credit_card_fee_cents ? dollars(r.credit_card_fee_cents) : _dash);
       // Audit fix (May 2026 part 7): also escape backslashes — a trailing `\`
       // in a venue/artist name would otherwise escape the inline JS string's
       // closing apostrophe and let attacker code follow. Wrap with both
@@ -407,7 +429,7 @@
           <td style="padding:6px 8px;font-size:0.72rem;color:#06b6d4;text-align:right;white-space:nowrap;">${_gigPay}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:#a78bfa;text-align:right;white-space:nowrap;">${_gfFee}</td>
           <td style="padding:6px 8px;font-size:0.72rem;color:#f59e0b;text-align:right;white-space:nowrap;">${_stripeFee}</td>
-          <td style="padding:6px 8px;font-size:0.78rem;font-weight:600;color:#10b981;text-align:right;white-space:nowrap;">${_venueCharge}</td>
+          <td style="padding:6px 8px;font-size:0.78rem;font-weight:600;text-align:right;white-space:nowrap;">${_flowCell}</td>
           <td style="padding:6px 8px;font-size:0.7rem;color:var(--text-gray);white-space:nowrap;">${fmtDateTime(r.processed_at || r.scheduled_process_at || r.created_at)}</td>
         </tr>`;
     }).join('');
@@ -424,10 +446,10 @@
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Status</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Venue</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Artist</th>
-            <th title="Artist's take-home for this gig (their pay). For venue_charge parent rows this reflects the artist_payout aggregated on the parent." style="padding:7px 8px;text-align:right;font-weight:600;color:#06b6d4;cursor:help;">Gig Pay</th>
-            <th title="GigsFill's platform commission on this booking (before Stripe fees). '—' on artist_payout child rows — the commission lives on the venue_charge parent." style="padding:7px 8px;text-align:right;font-weight:600;color:#a78bfa;cursor:help;">GigsFill Fee</th>
-            <th title="Stripe's processing cost we paid on this charge (typically 2.9% + $0.30). Comes out of the GigsFill Fee." style="padding:7px 8px;text-align:right;font-weight:600;color:#f59e0b;cursor:help;">Stripe Fee</th>
-            <th title="Total charged to the venue's card = Gig Pay + GigsFill Fee. The 'Amount' column from the pre-2026-08-24 layout." style="padding:7px 8px;text-align:right;font-weight:600;color:#10b981;cursor:help;">Venue Charge</th>
+            <th title="The gig's actual pay — same on both the venue_charge parent and the artist_payout child (both rows are two sides of the same $10 gig)." style="padding:7px 8px;text-align:right;font-weight:600;color:#06b6d4;cursor:help;">Gig Pay</th>
+            <th title="GigsFill's fee for THIS side of the split. On the venue_charge row: the amount added on top of Gig Pay to reach Venue Charge. On the artist_payout row: the amount deducted from Gig Pay to reach Artist Paid. Both add up to the total platform commission." style="padding:7px 8px;text-align:right;font-weight:600;color:#a78bfa;cursor:help;">GigsFill Fee</th>
+            <th title="Stripe's processing cost we paid on this charge (typically 2.9% + $0.30). Only appears on the venue_charge row — Stripe bills per charge, not per payout." style="padding:7px 8px;text-align:right;font-weight:600;color:#f59e0b;cursor:help;">Stripe Fee</th>
+            <th title="Money flow: venue_charge row shows what's charged TO the venue's card (green, IN). artist_payout row shows what's paid OUT to the artist (red, OUT). Trial rows show dashes — nothing moved through GigsFill." style="padding:7px 8px;text-align:right;font-weight:600;color:var(--text);cursor:help;">Venue Charge / Artist Paid</th>
             <th style="padding:7px 8px;text-align:left;font-weight:600;color:var(--text-gray);">Processed</th>
           </tr>
         </thead>

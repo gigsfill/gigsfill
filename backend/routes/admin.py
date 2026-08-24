@@ -3249,10 +3249,8 @@ def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_d
 
     Body: {user_id: int, sent_at_minute: 'YYYY-MM-DD HH:MM'}
     """
-    import sqlite3
-    from backend.db import DB_PATH
-    from backend.services.open_gig_digest import _render_digest_email
     from backend.scheduler import get_smtp_settings, send_email
+    from backend.services.open_gig_digest import build_digest_for_user
 
     user_id = int(data.get("user_id") or 0)
     minute = (data.get("sent_at_minute") or "").strip()
@@ -3265,49 +3263,37 @@ def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_d
     conn = get_db_connection()
     c = conn.cursor()
     try:
-        # Pull queue rows that share user_id + sent_at minute. These ARE
-        # already marked sent — we treat them as a historical batch to
-        # re-render. Reuse the same JOIN-rich shape _fetch_user_queue
-        # builds; can't reuse the function itself because it filters
-        # to sent_at IS NULL.
-        rows = c.execute("""
-            SELECT q.id as queue_id, q.gig_id, q.venue_id, q.notification_key, q.via_radius,
-                   q.artist_id, a.name as artist_name,
-                   g.date, g.start_time, g.end_time, g.pay, g.title, g.status,
-                   g.artist_type, g.band_formats, g.styles,
-                   COALESCE(g.is_multi_slot, 0) as is_multi_slot,
-                   (SELECT COUNT(*) FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.status = 'open') as open_slot_count,
-                   v.venue_name, v.city, v.state, v.latitude as venue_lat, v.longitude as venue_lon
-            FROM artist_email_digest_queue q
-            JOIN artists a ON a.id = q.artist_id
-            JOIN gigs g ON g.id = q.gig_id
-            JOIN venues v ON v.id = q.venue_id
-            WHERE q.user_id = ?
-              AND strftime('%Y-%m-%d %H:%M', q.sent_at) = ?
-            ORDER BY a.id ASC, g.date ASC, q.venue_id ASC
-        """, (user_id, minute)).fetchall()
-        if not rows:
-            return {"ok": False, "error": f"No batch found for user={user_id} at {minute}"}
-        # Drop gigs that were booked between the original send and now —
-        # resending an identical email would advertise an already-booked
-        # gig. If everything's gone, report so admin knows there's
-        # nothing to send.
-        all_rows = [dict(r) for r in rows]
-        rows = [r for r in all_rows if r["status"] == "open"]
-        if not rows:
-            return {"ok": False, "user_id": user_id,
-                    "error": f"All {len(all_rows)} gigs in that batch have since been booked or cancelled — nothing live to resend"}
-        meta = c.execute(
-            "SELECT u.email, a.name, a.latitude, a.longitude FROM users u JOIN artists a ON a.user_id=u.id WHERE u.id=? ORDER BY a.id LIMIT 1",
-            (user_id,)
+        # 2026-08-24: switched from _render_digest_email (legacy, queue-only
+        # rows) to build_digest_for_user — the same path the daily digest
+        # uses. Two bugs the legacy path had:
+        #   1. External artist-logged gigs (artist_external_gigs) were
+        #      completely absent — the queue only holds GigsFill open gigs,
+        #      so a user's own manual bookings never showed.
+        #   2. Subject "0 Venues" for multi-artist users: the legacy
+        #      renderer set by_venue={} for multi_artist and used
+        #      len(by_venue) as venue_count. A user with two artist
+        #      profiles always saw "N Open Gigs at 0 Venues."
+        # build_digest_for_user rebuilds fresh (external + booked + open),
+        # handles multi-artist correctly, and uses the enriched
+        # _render_digest_email_live subject format ("N Open + M Bookings").
+        # Verify the batch actually existed before rendering, so admin
+        # gets a helpful error if they clicked resend on a stale row.
+        _batch_exists = c.execute(
+            "SELECT COUNT(*) FROM artist_email_digest_queue WHERE user_id=? "
+            "AND strftime('%Y-%m-%d %H:%M', sent_at) = ?",
+            (user_id, minute)
         ).fetchone()
-        if not meta or not meta[0]:
-            return {"ok": False, "error": "user has no email"}
-        subj, body = _render_digest_email(
-            artist_name=meta[1] or "there", rows=rows,
-            artist_lat=meta[2], artist_lon=meta[3],
-        )
-        ok = send_email(get_smtp_settings(c), meta[0], "[ADMIN-RESEND] " + subj, body)
+        if not _batch_exists or not _batch_exists[0]:
+            return {"ok": False, "error": f"No batch found for user={user_id} at {minute}"}
+
+        # build_digest_for_user takes a sqlite3 cursor (same as scheduler).
+        digest = build_digest_for_user(c, user_id)
+        if not digest.get("ok"):
+            return {"ok": False, "user_id": user_id,
+                    "error": digest.get("reason") or "Nothing live to send"}
+
+        ok = send_email(get_smtp_settings(c), digest["email"],
+                        "[ADMIN-RESEND] " + digest["subject"], digest["body"])
         if ok:
             try:
                 from backend.utils import log_admin_action
@@ -3315,13 +3301,14 @@ def admin_resend_digest(data: dict, admin=Depends(check_admin), db=Depends(get_d
                     db, admin, "digest_resend",
                     target_table="artist_email_digest_queue",
                     target_id=user_id,
-                    metadata={"sent_at_minute": minute, "rows_resent": len(rows),
-                              "email": meta[0], "filtered_booked": len(all_rows) - len(rows)},
+                    metadata={"sent_at_minute": minute,
+                              "counts": digest.get("counts"),
+                              "email": digest["email"]},
                 )
             except Exception:
                 pass
             return {"ok": True, "user_id": user_id, "sent_at_minute": minute,
-                    "rows_resent": len(rows), "email": meta[0]}
+                    "counts": digest.get("counts"), "email": digest["email"]}
         return {"ok": False, "user_id": user_id, "error": "send_email returned False"}
     finally:
         conn.close()

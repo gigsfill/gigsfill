@@ -1202,8 +1202,14 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
         v["gigs"].sort(key=lambda g: (str(g["date"] or ""), str(g["start_time"] or "")))
 
     # Subject — title-cased per user preference, no trailing CTA.
+    # 2026-08-24: compute venue_count from raw rows regardless of
+    # multi_artist. Was `len(by_venue)`, but the multi_artist branch
+    # sets by_venue = {} (rendering path fans out by artist instead of
+    # venue), producing "N Open Gigs at 0 Venues" for any user who
+    # owns 2+ artist profiles. Now: distinct venue_ids across all
+    # source rows — works for both single- and multi-artist users.
     gig_count = len(rows)
-    venue_count = len(by_venue)
+    venue_count = len({int(r["venue_id"]) for r in rows if r.get("venue_id")})
     subj = (
         f"{gig_count} Open Gig{'s' if gig_count != 1 else ''} "
         f"at {venue_count} Venue{'s' if venue_count != 1 else ''}"
