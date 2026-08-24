@@ -415,10 +415,6 @@ TEMPLATES = {
 <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Pay</td>
 <td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">${{pay}}</td>
 </tr>
-{{#slot_info}}<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Slot</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{slot_info}}</td>
-</tr>{{/slot_info}}
 </table>
 </td></tr>
 </table>
@@ -486,10 +482,6 @@ TEMPLATES = {
 <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Pay</td>
 <td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">${{pay}}</td>
 </tr>
-{{#slot_info}}<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Slot</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{slot_info}}</td>
-</tr>{{/slot_info}}
 </table>
 </td></tr>
 </table>
@@ -3102,10 +3094,6 @@ You're receiving this because you're a preferred artist at {{venue_name}} or wit
 <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td>
 <td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
 </tr>
-{{#slot_info}}<tr>
-<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Slot</td>
-<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{slot_info}}</td>
-</tr>{{/slot_info}}
 <tr>
 <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Pay</td>
 <td style="padding: 6px 0; font-size: 14px; color: #059669; font-weight: 600;">{{pay_display}}</td>

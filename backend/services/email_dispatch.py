@@ -1234,6 +1234,14 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
         approve_url = f"{base_url}/api/gigs/{gig_id}/approve-booking?token={approval_token}&artist_id={artist_id}"
         deny_url    = f"{base_url}/api/gigs/{gig_id}/deny-booking?token={approval_token}&artist_id={artist_id}"
 
+        # 2026-08-24: auto-populate slot_info from the fetched slot when
+        # the caller didn't pass one (book_gig single-slot path). Templates
+        # dropped the redundant "Time" row and rely solely on Slot for
+        # time display — an empty slot_info would leave the artist with
+        # no time info in the email.
+        if not slot_info and _slot_row:
+            _sn = _slot_row.get("slot_number") or 1
+            slot_info = f"Slot {_sn}: {format_time_12hr(_slot_start)} – {format_time_12hr(_slot_end)}"
         slot_vars = {"slot_info": slot_info} if slot_info else {}
 
         email_vars = {
@@ -1311,6 +1319,12 @@ def send_approval_decision_emails(db, gig_details: dict, artist_id: int,
         _slot_start = (_slot_row.get('start_time') if _slot_row else None) or gig_details.get('start_time')
         _slot_end   = (_slot_row.get('end_time')   if _slot_row else None) or gig_details.get('end_time')
 
+        # 2026-08-24: auto-populate slot_info from the fetched slot when
+        # caller didn't pass one. Templates dropped the redundant Time
+        # row and rely on Slot for time display.
+        if not slot_info and _slot_row:
+            _sn2 = _slot_row.get("slot_number") or 1
+            slot_info = f"Slot {_sn2}: {format_time_12hr(_slot_start)} – {format_time_12hr(_slot_end)}"
         slot_vars = {"slot_info": slot_info} if slot_info else {}
 
         # 2026-08-24: enrich the approval email with the same venue/gig
