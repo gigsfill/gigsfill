@@ -1694,7 +1694,6 @@ TEMPLATES = {
 </tr>
 </tbody>
 </table>
-<p style="margin: 0; font-size: 14px; color: #6b7280;">Funds typically appear in your connected bank account 5&ndash;7 business days after the gig.</p>
 </td>
 </tr>
 <tr>
