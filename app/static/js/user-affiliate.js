@@ -717,10 +717,15 @@ async function loadAffVenueEarnings(venueId, page) {
       return;
     }
 
-    // Quarter label helper: "2026-Q1" → "2026-Q1 (4-1-2026)"
+    // Formats the ACTUAL paid quarter: "2026-Q3" → "2026-Q3 (10-1-2026)".
+    // Blank until the earning is linked to a paid affiliate_payouts row,
+    // so the column reflects reality (when the money moved) rather than
+    // the anticipated pay date for the accrual quarter — which is
+    // misleading when earnings roll over multiple quarters below the
+    // $50 threshold.
     const quarterPayDate = q => {
       const m = q && q.match(/^(\d{4})-Q([1-4])$/);
-      if (!m) return q || '';
+      if (!m) return '';
       const payMap = {'1':'4-1','2':'7-1','3':'10-1','4':'12-31'};
       return `${q} (${payMap[m[2]]}-${m[1]})`;
     };
@@ -742,7 +747,7 @@ async function loadAffVenueEarnings(venueId, page) {
         <th style="padding:6px 8px;text-align:right;color:var(--text-gray);font-size:0.68rem;font-weight:600;">Gig Fee</th>
         <th style="padding:6px 8px;text-align:center;color:var(--text-gray);font-size:0.68rem;font-weight:600;">Rate</th>
         <th style="padding:6px 8px;text-align:right;color:var(--text-gray);font-size:0.68rem;font-weight:600;">Earned</th>
-        <th style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.68rem;font-weight:600;">Quarter (Pays)</th>
+        <th style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.68rem;font-weight:600;">Paid</th>
         <th style="padding:6px 8px;text-align:center;color:var(--text-gray);font-size:0.68rem;font-weight:600;">Status</th>
       </tr></thead>
       <tbody>`;
@@ -759,7 +764,7 @@ async function loadAffVenueEarnings(venueId, page) {
         ${_td('$'+((e.gig_fee_cents||0)/100).toFixed(2), 'right', 'var(--text)')}
         ${_td(e.rate_percent+'%', 'center', 'var(--text-gray)')}
         ${_td('$'+((e.earned_cents||0)/100).toFixed(2), 'right', '#10b981', 'font-weight:600;')}
-        ${_td(quarterPayDate(e.quarter), 'left', 'var(--text-gray)', 'font-size:0.68rem;')}
+        ${_td(quarterPayDate(e.paid_quarter), 'left', 'var(--text-gray)', 'font-size:0.68rem;')}
         ${_td(statusLabel, 'center', statusColor, 'font-weight:600;')}
       </tr>`;
     });
@@ -800,14 +805,23 @@ async function exportAffEarnings(fmt) {
 
   if (!allRows.length) { alert('No earnings to export.'); return; }
 
-  const headers = ['Venue','City','State','Date','Gig Title','Artist','Gig Fee','Rate %','Earned','Quarter','Status'];
+  // "Paid" column mirrors the on-screen table: blank until an earning
+  // is linked to a paid affiliate_payouts row, then shows the actual
+  // quarter + payout date it went out.
+  const _paidFmt = q => {
+    const m = q && q.match(/^(\d{4})-Q([1-4])$/);
+    if (!m) return '';
+    const payMap = {'1':'4-1','2':'7-1','3':'10-1','4':'12-31'};
+    return `${q} (${payMap[m[2]]}-${m[1]})`;
+  };
+  const headers = ['Venue','City','State','Date','Gig Title','Artist','Gig Fee','Rate %','Earned','Paid','Status'];
   const rows = allRows.map(e => [
     e.venue_name||'', e.city||'', e.state||'',
     e.gig_date||'', e.gig_title||'', e.artist_name||'',
     ((e.gig_fee_cents||0)/100).toFixed(2),
     e.rate_percent||'',
     ((e.earned_cents||0)/100).toFixed(2),
-    e.quarter||'',
+    _paidFmt(e.paid_quarter),
     e.payout_status || (e.payout_id ? 'Processing' : 'Unpaid'),
   ]);
 

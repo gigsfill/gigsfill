@@ -1815,7 +1815,9 @@ def get_my_venue_earnings(
                ae.quarter, ae.accrued_at, ae.payout_id,
                g.date as gig_date, g.start_time, g.end_time, g.title as gig_title,
                a.name as artist_name,
-               ap.status as payout_status
+               ap.status as payout_status,
+               ap.quarter as paid_quarter,
+               ap.paid_at as paid_at
         FROM affiliate_earnings ae
         JOIN transactions t ON t.id = ae.transaction_id
         JOIN gigs g ON g.id = t.gig_id
