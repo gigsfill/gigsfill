@@ -12,10 +12,10 @@
   'use strict';
 
   let _uaMyArtists = [];
-  // ID of the blackout currently in edit mode (null when adding new).
-  let _uaEditingId = null;
   // GfDatePicker instances — created lazily on first form open so
   // gf-date-picker.js has time to define window.GfDatePicker.
+  // These are for the ADD form at the top only. Each row's inline
+  // edit panel manages its own pickers (attached to elements by id).
   let _uaStartPicker = null;
   let _uaEndPicker = null;
 
@@ -100,43 +100,105 @@
     }[c]));
   }
 
-  // Cache the last-fetched rows so the Edit button can find the source
-  // row by id without re-querying the DOM/backend.
-  let _uaRowsCache = [];
-
+  // 2026-08-26: switched to inline row-expand editing (matches the
+  // sibling artist-availability.js pattern) so Edit visibly opens a
+  // form UNDER the row instead of silently repurposing the top
+  // "Add a Blackout Date" form.
   function _renderUserBlackouts(rows) {
-    _uaRowsCache = rows.slice();
     const wrap = document.getElementById('uaUserBlackouts');
     if (!wrap) return;
     if (!rows.length) {
       wrap.innerHTML = '<p style="color:var(--text-gray);">No personal blackouts yet.</p>';
       return;
     }
+    const jsA = window.jsAttr || JSON.stringify;
     wrap.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:6px;">
         ${rows.map(r => `
-          <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;color:var(--text);">${_esc(_rangeLabel(r.blackout_start, r.blackout_end))}</div>
-              <div style="font-size:0.78rem;color:var(--text-gray);">
-                ${r.artist_id
-                  ? '🎸 ' + _esc(r.artist_name || 'Artist #' + r.artist_id)
-                  : 'All My Artists'}
-                ${r.reason ? ' · ' + _esc(r.reason) : ''}
+          <div id="uaBlackoutRow_${r.id}" style="padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:600;color:var(--text);">${_esc(_rangeLabel(r.blackout_start, r.blackout_end))}</div>
+                <div style="font-size:0.78rem;color:var(--text-gray);">
+                  ${r.artist_id
+                    ? '🎸 ' + _esc(r.artist_name || 'Artist #' + r.artist_id)
+                    : 'All My Artists'}
+                  ${r.reason ? ' · ' + _esc(r.reason) : ''}
+                </div>
               </div>
+              <button onclick="uaEdit(${r.id}, ${jsA(r.blackout_start||'')}, ${jsA(r.blackout_end||'')}, ${jsA(r.reason||'')})"
+                style="background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);color:var(--cyan);border-radius:4px;padding:4px 10px;font-size:0.78rem;cursor:pointer;">
+                Edit
+              </button>
+              <button onclick="uaDelete(${r.id})"
+                style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:4px 10px;font-size:0.78rem;cursor:pointer;">
+                Delete
+              </button>
             </div>
-            <button onclick="uaEdit(${r.id})"
-              style="background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.35);color:var(--cyan);border-radius:4px;padding:4px 10px;font-size:0.78rem;cursor:pointer;">
-              Edit
-            </button>
-            <button onclick="uaDelete(${r.id})"
-              style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:4px;padding:4px 10px;font-size:0.78rem;cursor:pointer;">
-              Delete
-            </button>
+            <div id="uaBlackoutEdit_${r.id}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+              <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+                <div>
+                  <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Start</label>
+                  <input type="text" readonly class="gf-date-input" id="uaEditStart_${r.id}" placeholder="mm/dd/yyyy"
+                    style="background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">End</label>
+                  <input type="text" readonly class="gf-date-input" id="uaEditEnd_${r.id}" placeholder="mm/dd/yyyy"
+                    style="background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">
+                </div>
+                <div style="flex:1;min-width:180px;">
+                  <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Reason (optional)</label>
+                  <input type="text" id="uaEditReason_${r.id}" maxlength="200"
+                    style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;">
+                </div>
+                <button onclick="uaSaveEdit(${r.id})"
+                  style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:6px 14px;font-size:0.8rem;cursor:pointer;">
+                  Save
+                </button>
+                <button onclick="uaCancelEdit(${r.id})"
+                  style="background:none;border:1px solid var(--border);color:var(--text-gray);border-radius:6px;padding:6px 12px;font-size:0.8rem;cursor:pointer;">
+                  Cancel
+                </button>
+              </div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:8px;line-height:1.4;">
+                Scope (All My Artists vs. specific artists) can't be changed here —
+                to change scope, Delete this blackout and add a new one above.
+              </div>
+              <div id="uaEditMsg_${r.id}" style="font-size:0.75rem;margin-top:6px;"></div>
+            </div>
           </div>
         `).join('')}
       </div>
     `;
+    // Boot per-row date pickers now. They lazy-render their popup on
+    // click, so instantiating on hidden inputs is fine — no wasted DOM.
+    _uaBootRowPickers(rows);
+  }
+
+  // Instantiate a GfDatePicker on each row's Start/End inputs (once).
+  // Wires a From→To auto-fill listener so choosing Start pushes End to
+  // the same day when End is empty or behind Start.
+  function _uaBootRowPickers(rows) {
+    if (typeof window.GfDatePicker !== 'function') return;
+    (rows || []).forEach(r => {
+      const s = document.getElementById(`uaEditStart_${r.id}`);
+      const e = document.getElementById(`uaEditEnd_${r.id}`);
+      if (!s || !e) return;
+      if (!s._gfP) s._gfP = new window.GfDatePicker(s);
+      if (!e._gfP) e._gfP = new window.GfDatePicker(e);
+      if (!s._syncBound) {
+        s._syncBound = true;
+        s.addEventListener('change', () => {
+          const iso = s._gfP.getISO();
+          if (!iso) return;
+          const endIso = e._gfP.getISO();
+          if (!endIso || endIso < iso) e._gfP.setISO(iso);
+          const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (m) e._gfP.viewDate = new Date(+m[1], +m[2] - 1, 1);
+        });
+      }
+    });
   }
 
   function _renderBandBlackouts(rows) {
@@ -237,36 +299,24 @@
     status.textContent = 'Saving…';
     status.style.color = 'var(--text-gray)';
     try {
-      // 2026-08-07: unified add/edit path. When _uaEditingId is set,
-      // PUT the update; otherwise POST a new blackout. Scope changes
-      // aren't part of the PUT contract (backend only takes dates +
-      // reason on edit) — that's an intentional narrowing: change the
-      // scope by deleting and re-adding. Keeps the edit UX simple.
-      const isEdit = !!_uaEditingId;
-      const url = isEdit
-        ? `/api/me/availability/${_uaEditingId}`
-        : '/api/me/availability';
-      const body = isEdit
-        ? { blackout_start: start, blackout_end: end || start, reason: reason }
-        : {
-            blackout_start: start,
-            blackout_end: end || start,
-            reason: reason,
-            artist_ids: artistIds,  // null = all my artists
-          };
-      const res = await fetch(url, {
-        method: isEdit ? 'PUT' : 'POST',
+      const res = await fetch('/api/me/availability', {
+        method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          blackout_start: start,
+          blackout_end: end || start,
+          reason: reason,
+          artist_ids: artistIds,  // null = all my artists
+        }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
         throw new Error(e.detail || 'Save failed');
       }
-      status.textContent = isEdit ? '✓ Updated.' : '✓ Saved.';
+      status.textContent = '✓ Saved.';
       status.style.color = '#22c55e';
-      _uaResetForm();
+      _uaResetAddForm();
       await uaLoad();
       setTimeout(() => { status.textContent = ''; }, 2500);
     } catch (e) {
@@ -275,82 +325,9 @@
     }
   };
 
-  // Populate the form with an existing row's values so the user can
-  // save changes in place. Editing scope (artist_ids) is intentionally
-  // not supported on the PUT contract — the note next to the button
-  // tells the user to delete + re-add if they want to change scope.
-  window.uaEdit = function (id) {
-    // 2026-08-26: defensive lookup + visible feedback so the Edit
-    // button is never a silent no-op. Common failure modes:
-    //   • row cache empty because the initial fetch is still in flight
-    //     when the user clicks Edit → surface a message instead of dying
-    //   • id type drift (JSON string vs number) → compare via Number()
-    //   • date pickers not yet booted (GfDatePicker script race) →
-    //     bail out with a message rather than a picker no-op
-    _uaBootPickers();
-    const row = _uaRowsCache.find(r => Number(r.id) === Number(id));
-    const status = document.getElementById('uaAddStatus');
-    if (!row) {
-      if (status) {
-        status.textContent = 'Blackout not loaded yet — try again in a moment.';
-        status.style.color = '#ef4444';
-      }
-      console.warn('[user-availability] uaEdit: row not found for id', id, '— cache size', _uaRowsCache.length);
-      return;
-    }
-    _uaEditingId = Number(id);
-    if (_uaStartPicker && _uaStartPicker.setISO) {
-      _uaStartPicker.setISO(row.blackout_start || '');
-    } else {
-      const s = document.getElementById('uaStartDate');
-      if (s) s.value = _fmtDateUS(row.blackout_start || '');
-    }
-    if (_uaEndPicker && _uaEndPicker.setISO) {
-      _uaEndPicker.setISO(row.blackout_end || row.blackout_start || '');
-    } else {
-      const e = document.getElementById('uaEndDate');
-      if (e) e.value = _fmtDateUS(row.blackout_end || row.blackout_start || '');
-    }
-    // Reason: try to match a preset; anything unknown → "Other" +
-    // populate the freetext so the user sees exactly what's stored.
-    const presetEl = document.getElementById('uaReasonPreset');
-    const otherEl  = document.getElementById('uaReasonOther');
-    const KNOWN = ['Out of Town','Family Commitment','Sick','Work Conflict','Other Gig','Vacation'];
-    if (presetEl) {
-      if (!row.reason) { presetEl.value = ''; }
-      else if (KNOWN.indexOf(row.reason) !== -1) { presetEl.value = row.reason; }
-      else { presetEl.value = 'Other'; }
-    }
-    if (otherEl) {
-      if (presetEl && presetEl.value === 'Other') {
-        otherEl.value = row.reason || '';
-        otherEl.style.display = '';
-      } else {
-        otherEl.value = '';
-        otherEl.style.display = 'none';
-      }
-    }
-    _uaUpdateEditChrome();
-    if (status) {
-      status.textContent = `Editing ${_rangeLabel(row.blackout_start, row.blackout_end)} — change dates or reason above and click Save Changes.`;
-      status.style.color = 'var(--cyan)';
-    }
-    // Scroll the whole Add-a-Blackout form card into view (not just
-    // the input) so the user sees both the populated pickers AND the
-    // Save Changes button in one glance — using `block: 'start'`
-    // instead of 'center' so the header + fields stay visible.
-    const card = document.getElementById('uaStartDate')?.closest('div[style*="padding:18px"]')
-              || document.getElementById('uaStartDate');
-    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  window.uaCancelEdit = function () {
-    _uaResetForm();
-  };
-
-  // Clears form + resets edit state. Called by cancel + after save.
-  function _uaResetForm() {
-    _uaEditingId = null;
+  // Clear the top Add form after a successful POST. (Inline edit uses
+  // its own per-row inputs — nothing to reset here for edit.)
+  function _uaResetAddForm() {
     if (_uaStartPicker && _uaStartPicker.setISO) _uaStartPicker.setISO('');
     if (_uaEndPicker   && _uaEndPicker.setISO)   _uaEndPicker.setISO('');
     const presetEl = document.getElementById('uaReasonPreset');
@@ -358,27 +335,73 @@
     if (presetEl) presetEl.value = '';
     if (otherEl)  { otherEl.value = ''; otherEl.style.display = 'none'; }
     if (typeof window.uaSetScope === 'function') window.uaSetScope('all');
-    _uaUpdateEditChrome();
   }
 
-  // Swap the Add button label + show/hide the Cancel button depending
-  // on edit mode. Called after each state change.
-  function _uaUpdateEditChrome() {
-    const btn = document.querySelector('button[onclick="uaAddBlackout()"]');
-    if (btn) btn.textContent = _uaEditingId ? 'Save Changes' : 'Add Blackout Date';
-    let cancel = document.getElementById('uaCancelEditBtn');
-    if (_uaEditingId && !cancel) {
-      cancel = document.createElement('button');
-      cancel.id = 'uaCancelEditBtn';
-      cancel.className = 'btn ghost';
-      cancel.style.cssText = 'padding:8px 18px;';
-      cancel.textContent = 'Cancel';
-      cancel.onclick = window.uaCancelEdit;
-      btn?.after(cancel);
-    } else if (!_uaEditingId && cancel) {
-      cancel.remove();
+  // Expand the inline edit panel under a row and pre-fill its inputs.
+  // The row's Start/End/Reason values are passed straight from the
+  // render (attribute-escaped via jsAttr) so this never needs to
+  // consult a cache or re-fetch — click-time is deterministic.
+  window.uaEdit = function (id, startIso, endIso, reason) {
+    // Collapse any other open edit panel so only one is open at a time.
+    document.querySelectorAll('[id^="uaBlackoutEdit_"]').forEach(el => {
+      if (el.id !== `uaBlackoutEdit_${id}`) el.style.display = 'none';
+    });
+    const panel = document.getElementById(`uaBlackoutEdit_${id}`);
+    if (!panel) return;
+    panel.style.display = 'block';
+    const sEl = document.getElementById(`uaEditStart_${id}`);
+    const eEl = document.getElementById(`uaEditEnd_${id}`);
+    const rEl = document.getElementById(`uaEditReason_${id}`);
+    if (sEl) { if (sEl._gfP && sEl._gfP.setISO) sEl._gfP.setISO(startIso || ''); else sEl.value = startIso || ''; }
+    if (eEl) { if (eEl._gfP && eEl._gfP.setISO) eEl._gfP.setISO(endIso || startIso || ''); else eEl.value = endIso || startIso || ''; }
+    if (rEl) rEl.value = reason || '';
+    const msg = document.getElementById(`uaEditMsg_${id}`);
+    if (msg) { msg.textContent = ''; msg.style.color = ''; }
+    // Bring the panel into view so the user sees the inputs + Save
+    // button without having to scroll.
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+
+  // Collapse the inline edit panel for this row without saving.
+  window.uaCancelEdit = function (id) {
+    const panel = document.getElementById(`uaBlackoutEdit_${id}`);
+    if (panel) panel.style.display = 'none';
+  };
+
+  // PUT the row's dates + reason and re-render on success.
+  window.uaSaveEdit = async function (id) {
+    const sEl = document.getElementById(`uaEditStart_${id}`);
+    const eEl = document.getElementById(`uaEditEnd_${id}`);
+    const rEl = document.getElementById(`uaEditReason_${id}`);
+    const msg = document.getElementById(`uaEditMsg_${id}`);
+    const start = _isoFrom(sEl && sEl._gfP, `uaEditStart_${id}`);
+    const end   = _isoFrom(eEl && eEl._gfP, `uaEditEnd_${id}`) || start;
+    const reason = (rEl?.value || '').trim();
+    if (!start) {
+      if (msg) { msg.textContent = 'Pick a start date.'; msg.style.color = '#ef4444'; }
+      return;
     }
-  }
+    if (end < start) {
+      if (msg) { msg.textContent = 'End must be on or after Start.'; msg.style.color = '#ef4444'; }
+      return;
+    }
+    if (msg) { msg.textContent = 'Saving…'; msg.style.color = 'var(--text-gray)'; }
+    try {
+      const res = await fetch(`/api/me/availability/${id}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blackout_start: start, blackout_end: end, reason }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Save failed');
+      }
+      await uaLoad();
+    } catch (e) {
+      if (msg) { msg.textContent = '✗ ' + e.message; msg.style.color = '#ef4444'; }
+    }
+  };
 
   window.uaDelete = function (id) {
     const doDelete = async () => {
