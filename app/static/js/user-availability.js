@@ -280,12 +280,37 @@
   // not supported on the PUT contract — the note next to the button
   // tells the user to delete + re-add if they want to change scope.
   window.uaEdit = function (id) {
-    const row = _uaRowsCache.find(r => r.id === id);
-    if (!row) return;
+    // 2026-08-26: defensive lookup + visible feedback so the Edit
+    // button is never a silent no-op. Common failure modes:
+    //   • row cache empty because the initial fetch is still in flight
+    //     when the user clicks Edit → surface a message instead of dying
+    //   • id type drift (JSON string vs number) → compare via Number()
+    //   • date pickers not yet booted (GfDatePicker script race) →
+    //     bail out with a message rather than a picker no-op
     _uaBootPickers();
-    _uaEditingId = id;
-    if (_uaStartPicker && _uaStartPicker.setISO) _uaStartPicker.setISO(row.blackout_start || '');
-    if (_uaEndPicker   && _uaEndPicker.setISO)   _uaEndPicker.setISO(row.blackout_end || row.blackout_start || '');
+    const row = _uaRowsCache.find(r => Number(r.id) === Number(id));
+    const status = document.getElementById('uaAddStatus');
+    if (!row) {
+      if (status) {
+        status.textContent = 'Blackout not loaded yet — try again in a moment.';
+        status.style.color = '#ef4444';
+      }
+      console.warn('[user-availability] uaEdit: row not found for id', id, '— cache size', _uaRowsCache.length);
+      return;
+    }
+    _uaEditingId = Number(id);
+    if (_uaStartPicker && _uaStartPicker.setISO) {
+      _uaStartPicker.setISO(row.blackout_start || '');
+    } else {
+      const s = document.getElementById('uaStartDate');
+      if (s) s.value = _fmtDateUS(row.blackout_start || '');
+    }
+    if (_uaEndPicker && _uaEndPicker.setISO) {
+      _uaEndPicker.setISO(row.blackout_end || row.blackout_start || '');
+    } else {
+      const e = document.getElementById('uaEndDate');
+      if (e) e.value = _fmtDateUS(row.blackout_end || row.blackout_start || '');
+    }
     // Reason: try to match a preset; anything unknown → "Other" +
     // populate the freetext so the user sees exactly what's stored.
     const presetEl = document.getElementById('uaReasonPreset');
@@ -306,9 +331,17 @@
       }
     }
     _uaUpdateEditChrome();
-    // Scroll form into view so user knows Edit populated it.
-    const form = document.getElementById('uaStartDate');
-    if (form && form.scrollIntoView) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (status) {
+      status.textContent = `Editing ${_rangeLabel(row.blackout_start, row.blackout_end)} — change dates or reason above and click Save Changes.`;
+      status.style.color = 'var(--cyan)';
+    }
+    // Scroll the whole Add-a-Blackout form card into view (not just
+    // the input) so the user sees both the populated pickers AND the
+    // Save Changes button in one glance — using `block: 'start'`
+    // instead of 'center' so the header + fields stay visible.
+    const card = document.getElementById('uaStartDate')?.closest('div[style*="padding:18px"]')
+              || document.getElementById('uaStartDate');
+    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   window.uaCancelEdit = function () {
