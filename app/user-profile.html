@@ -861,62 +861,60 @@
       </p>
 
       <!-- Add Blackout Form -->
-      <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:24px;">
-        <h3 style="font-size:0.95rem;margin:0 0 14px;color:var(--text);">Add a Blackout Date</h3>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
-          <label style="display:block;">
-            <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">Start date</span>
-            <!-- color-scheme:dark tells the browser to render the native date-picker
-                 popup in dark mode (Chromium + Safari). Otherwise the popup renders
-                 white and looks off against the rest of the dark UI. Added 2026-07-25. -->
-            <!-- 2026-08-07: swapped native <input type=date> for the
-                 branded GfDatePicker so the calendar popup matches the
-                 rest of the site's dark theme. `uaStartDate` still owns
-                 the value; user-availability.js instantiates the picker
-                 on this input on load and wires the From→To month sync. -->
-            <input type="text" readonly class="gf-date-input" id="uaStartDate" placeholder="mm/dd/yyyy" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;cursor:pointer;">
-          </label>
-          <label style="display:block;">
-            <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">End date</span>
-            <input type="text" readonly class="gf-date-input" id="uaEndDate" placeholder="mm/dd/yyyy" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;cursor:pointer;">
-          </label>
+      <!-- 2026-08-26: restyled to match the compact inline edit look
+           (dates + reason in a flex row, scope selector below, save
+           button on its own row). Same fields, less vertical space
+           and matching visual rhythm with the row-edit panels. -->
+      <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:24px;">
+        <h3 style="font-size:0.9rem;margin:0 0 10px;color:var(--text);">Add a Blackout Date</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px;">
+          <div>
+            <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Start</label>
+            <input type="text" readonly class="gf-date-input" id="uaStartDate" placeholder="mm/dd/yyyy"
+              style="background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">
+          </div>
+          <div>
+            <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">End</label>
+            <input type="text" readonly class="gf-date-input" id="uaEndDate" placeholder="mm/dd/yyyy"
+              style="background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">
+          </div>
+          <div style="flex:1;min-width:200px;">
+            <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Reason <span style="color:var(--text-muted);font-weight:400;">(optional, visible to bandmates)</span></label>
+            <select id="uaReasonPreset" onchange="uaReasonChanged()"
+              style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;">
+              <option value="">— No reason —</option>
+              <option value="Out of Town">Out of Town</option>
+              <option value="Family Commitment">Family Commitment</option>
+              <option value="Sick">Sick</option>
+              <option value="Work Conflict">Work Conflict</option>
+              <option value="Other Gig">Other Gig</option>
+              <option value="Vacation">Vacation</option>
+              <option value="Other">Other (type your own)</option>
+            </select>
+            <input type="text" id="uaReasonOther" maxlength="300" placeholder="What's the reason?"
+              style="display:none;width:100%;box-sizing:border-box;padding:6px 10px;margin-top:6px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.82rem;">
+          </div>
         </div>
-        <!-- Reason picker (2026-07-25): preset dropdown for the common cases +
-             free-text "Other" that reveals a companion input. `uaAddBlackout`
-             in user-availability.js reads uaReasonPreset + uaReasonOther and
-             stores the composed string in the DB reason column. -->
-        <div style="margin-bottom:12px;">
-          <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:4px;">Reason <span style="font-weight:400;color:var(--text-muted);">(optional, visible to bandmates)</span></span>
-          <select id="uaReasonPreset" onchange="uaReasonChanged()" style="width:100%;padding:8px 10px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
-            <option value="">— No reason —</option>
-            <option value="Out of Town">Out of Town</option>
-            <option value="Family Commitment">Family Commitment</option>
-            <option value="Sick">Sick</option>
-            <option value="Work Conflict">Work Conflict</option>
-            <option value="Other Gig">Other Gig</option>
-            <option value="Vacation">Vacation</option>
-            <option value="Other">Other (type your own)</option>
-          </select>
-          <input type="text" id="uaReasonOther" maxlength="300" placeholder="What's the reason?"
-            style="display:none;width:100%;padding:8px 10px;margin-top:8px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.85rem;">
-        </div>
-        <div style="margin-bottom:14px;">
-          <span style="font-size:0.78rem;color:var(--text-gray);display:block;margin-bottom:6px;font-weight:600;">Applies to</span>
-          <label style="display:flex;align-items:center;gap:10px;margin-bottom:6px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-bottom:10px;">
+          <span style="font-size:0.72rem;color:var(--text-gray);font-weight:600;">Applies to:</span>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;color:var(--text);">
             <input type="checkbox" id="uaScopeAll" checked onchange="uaSetScope('all')">
             All My Artists
           </label>
-          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:0.85rem;color:var(--text);">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;color:var(--text);">
             <input type="checkbox" id="uaScopeSpecific" onchange="uaSetScope('specific')">
             Specific Artists Only
           </label>
-          <div id="uaArtistChecks" style="display:none;margin-top:8px;margin-left:28px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
-            <div style="color:var(--text-gray);font-size:0.78rem;">Loading your artists…</div>
-          </div>
+        </div>
+        <div id="uaArtistChecks" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
+          <div style="color:var(--text-gray);font-size:0.78rem;">Loading your artists…</div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
-          <button onclick="uaAddBlackout()" class="btn primary" style="padding:8px 18px;">Add Blackout Date</button>
-          <span id="uaAddStatus" style="font-size:0.82rem;"></span>
+          <button onclick="uaAddBlackout()"
+            style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:6px 14px;font-size:0.82rem;cursor:pointer;font-weight:600;">
+            Add Blackout Date
+          </button>
+          <span id="uaAddStatus" style="font-size:0.78rem;"></span>
         </div>
       </div>
 
@@ -1252,7 +1250,7 @@
   <script src="/app/static/js/gf-date-picker.js?v=1"></script>
   <script src="/app/static/js/user-profile.js?v=20"></script>
   <script src="/app/static/js/user-affiliate.js?v=7"></script>
-  <script src="/app/static/js/user-availability.js?v=9"></script>
+  <script src="/app/static/js/user-availability.js?v=10"></script>
   
 
   <!-- Delete Account Modal -->

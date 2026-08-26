@@ -66,6 +66,13 @@
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       _uaMyArtists = data.my_artists || [];
+      // Cache the last-loaded row set so uaSaveEdit can compare the
+      // current scope (row.artist_id) against the user's new scope
+      // pick without re-fetching. Rendered rows carry dates + reason
+      // inline via jsAttr, but scope isn't safe to embed in the
+      // onclick attribute (int/null distinction), so we look it up
+      // here instead.
+      window._uaLastRows = data.user_blackouts || [];
       _renderArtistChecks();
       _renderUserBlackouts(data.user_blackouts || []);
       _renderBandBlackouts(data.band_blackouts || []);
@@ -161,9 +168,24 @@
                   Cancel
                 </button>
               </div>
-              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:8px;line-height:1.4;">
-                Scope (All My Artists vs. specific artists) can't be changed here —
-                to change scope, Delete this blackout and add a new one above.
+              <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:10px;">
+                <span style="font-size:0.72rem;color:var(--text-gray);font-weight:600;">Applies to:</span>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.8rem;color:var(--text);">
+                  <input type="radio" name="uaEditScope_${r.id}" value="all" ${!r.artist_id ? 'checked' : ''} onchange="uaEditScopeChange(${r.id})">
+                  All My Artists
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.8rem;color:var(--text);">
+                  <input type="radio" name="uaEditScope_${r.id}" value="specific" ${r.artist_id ? 'checked' : ''} onchange="uaEditScopeChange(${r.id})">
+                  Specific Artist:
+                </label>
+                <select id="uaEditArtist_${r.id}"
+                  style="background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:4px 8px;font-size:0.78rem;${r.artist_id ? '' : 'opacity:0.5;'}"
+                  ${r.artist_id ? '' : 'disabled'}>
+                  ${_uaMyArtists.map(a => `<option value="${a.id}" ${Number(r.artist_id) === Number(a.id) ? 'selected' : ''}>${_esc(a.name)}</option>`).join('')}
+                </select>
+              </div>
+              <div style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;line-height:1.4;">
+                To spread a blackout across multiple specific artists, use the Add form above (it supports multi-select).
               </div>
               <div id="uaEditMsg_${r.id}" style="font-size:0.75rem;margin-top:6px;"></div>
             </div>
@@ -368,7 +390,28 @@
     if (panel) panel.style.display = 'none';
   };
 
-  // PUT the row's dates + reason and re-render on success.
+  // Enable / disable the per-row artist <select> based on which scope
+  // radio was picked. When "All My Artists" is selected the select is
+  // greyed out; when "Specific Artist" is selected the select becomes
+  // active. Keeps the intent obvious visually.
+  window.uaEditScopeChange = function (id) {
+    const radios = document.getElementsByName(`uaEditScope_${id}`);
+    const specific = Array.from(radios).find(r => r.value === 'specific' && r.checked);
+    const sel = document.getElementById(`uaEditArtist_${id}`);
+    if (!sel) return;
+    if (specific) {
+      sel.disabled = false;
+      sel.style.opacity = '1';
+    } else {
+      sel.disabled = true;
+      sel.style.opacity = '0.5';
+    }
+  };
+
+  // Save the row's dates + reason + scope. Scope changes require a
+  // delete + re-post since the DB row's artist_id is part of the key
+  // ("All My Artists" = NULL, "specific" = artist id). If scope hasn't
+  // changed we just PUT dates + reason, preserving the row id.
   window.uaSaveEdit = async function (id) {
     const sEl = document.getElementById(`uaEditStart_${id}`);
     const eEl = document.getElementById(`uaEditEnd_${id}`);
@@ -385,17 +428,68 @@
       if (msg) { msg.textContent = 'End must be on or after Start.'; msg.style.color = '#ef4444'; }
       return;
     }
+
+    // Read the new scope from the radio + select.
+    const scopeRadio = Array.from(document.getElementsByName(`uaEditScope_${id}`)).find(r => r.checked);
+    const scope = scopeRadio ? scopeRadio.value : 'all';
+    const newArtistId = scope === 'specific'
+      ? parseInt(document.getElementById(`uaEditArtist_${id}`)?.value || '', 10) || null
+      : null;
+    if (scope === 'specific' && !newArtistId) {
+      if (msg) { msg.textContent = 'Pick a specific artist.'; msg.style.color = '#ef4444'; }
+      return;
+    }
+
+    // Look up the row's current artist_id in the last-loaded snapshot
+    // (we have `_uaMyArtists` for names; the actual scope came in via
+    // the API response, which uaLoad() cached on window as _uaLastRows).
+    const cur = (window._uaLastRows || []).find(x => Number(x.id) === Number(id));
+    const curArtistId = cur ? (cur.artist_id || null) : null;
+    const scopeChanged = Number(curArtistId || 0) !== Number(newArtistId || 0);
+
     if (msg) { msg.textContent = 'Saving…'; msg.style.color = 'var(--text-gray)'; }
     try {
-      const res = await fetch(`/api/me/availability/${id}`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ blackout_start: start, blackout_end: end, reason }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Save failed');
+      if (!scopeChanged) {
+        // Dates + reason only — one PUT.
+        const res = await fetch(`/api/me/availability/${id}`, {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ blackout_start: start, blackout_end: end, reason }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || 'Save failed');
+        }
+      } else {
+        // Scope switched — the backend PUT can't move a row across
+        // (NULL ↔ specific) or between specific artists because
+        // artist_id is set at INSERT time. DELETE + POST atomically
+        // from the user's perspective: if the DELETE succeeds and the
+        // POST fails, we surface the error and the user can retry
+        // (they'll see the row gone and can re-add via the top form).
+        const del = await fetch(`/api/me/availability/${id}`, {
+          method: 'DELETE', credentials: 'include',
+        });
+        if (!del.ok) {
+          const err = await del.json().catch(() => ({}));
+          throw new Error(err.detail || 'Delete step failed');
+        }
+        const post = await fetch('/api/me/availability', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            blackout_start: start,
+            blackout_end: end,
+            reason,
+            artist_ids: newArtistId ? [newArtistId] : null,
+          }),
+        });
+        if (!post.ok) {
+          const err = await post.json().catch(() => ({}));
+          throw new Error(err.detail || 'Save step failed (scope changed; original row already removed — please re-add)');
+        }
       }
       await uaLoad();
     } catch (e) {
