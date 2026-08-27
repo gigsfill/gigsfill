@@ -17,7 +17,14 @@
 // making every CSS edit require two reloads before it took effect.
 // v12 (2026-08-11): tabs switched to position:fixed for bulletproof
 // pinning. Bump to evict stale cached CSS in case v11 didn't take.
-const CACHE_NAME = 'gigsfill-v12';
+// v13 (2026-08-27): eviction sweep. A user reported logging in
+// successfully (200) but landing back on the login page every time
+// — /api/geo/suggest-city firing in the log after every /api/login
+// pins the browser to index.html, which matches a stale cached shell
+// on the profile page overriding the fresh HTML the server sent. Bump
+// forces every PWA client's SW to re-install + drop the whole
+// gigsfill-v12 cache on next visit.
+const CACHE_NAME = 'gigsfill-v13';
 
 // App shell — core files needed to launch
 const APP_SHELL = [
