@@ -18,13 +18,16 @@
 // v12 (2026-08-11): tabs switched to position:fixed for bulletproof
 // pinning. Bump to evict stale cached CSS in case v11 didn't take.
 // v13 (2026-08-27): eviction sweep. A user reported logging in
-// successfully (200) but landing back on the login page every time
-// — /api/geo/suggest-city firing in the log after every /api/login
-// pins the browser to index.html, which matches a stale cached shell
-// on the profile page overriding the fresh HTML the server sent. Bump
-// forces every PWA client's SW to re-install + drop the whole
-// gigsfill-v12 cache on next visit.
-const CACHE_NAME = 'gigsfill-v13';
+// successfully (200) but landing back on the login page every time.
+// v14 (2026-08-27): stop intercepting /api/ entirely and repair
+// the CSS/JS + HTML handlers so a fetch failure with no cached
+// entry no longer resolves respondWith(undefined), which the browser
+// surfaces as a bare TypeError: NetworkError. The auth guard treated
+// that as an auth failure and bounced the user to login → exact
+// symptom the user was seeing. Not returning from /api/ means the
+// browser handles the request directly, no SW involvement, so the
+// SW can never break the auth-critical fetch path again.
+const CACHE_NAME = 'gigsfill-v14';
 
 // App shell — core files needed to launch
 const APP_SHELL = [
@@ -69,14 +72,15 @@ self.addEventListener('fetch', event => {
   // Skip cross-origin requests (CDNs, Google Fonts, Stripe, etc.)
   if (url.origin !== self.location.origin) return;
 
-  // API calls: network-first (never serve stale API data)
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(event.request)
-        .catch(() => caches.match(event.request))
-    );
-    return;
-  }
+  // API calls: DO NOT intercept. Let the browser make the request
+  // directly. There is no useful offline behavior for API data (a
+  // cached /api/me stamped on install would return the wrong user
+  // for anyone else on the machine), and the previous handler could
+  // resolve respondWith(undefined) when both network AND cache
+  // missed, which the browser surfaces as `TypeError: NetworkError
+  // when attempting to fetch resource`. auth.guard.js caught that,
+  // treated it as an auth failure, and bounced the user to login.
+  if (url.pathname.startsWith('/api/')) return;
 
   // CSS + JS: network-first (Aug 11 2026). Previously cache-first with
   // background revalidate — that returned STALE CSS on every load and
@@ -93,7 +97,14 @@ self.addEventListener('fetch', event => {
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
         }
         return response;
-      }).catch(() => caches.match(event.request))
+      }).catch(async () => {
+        // Aug 27 fix: fall through to a real network error Response
+        // rather than resolving respondWith(undefined) when the cache
+        // misses — undefined trips the browser into `NetworkError` and
+        // the page can't tell "actually offline" from "SW broke".
+        const cached = await caches.match(event.request);
+        return cached || Response.error();
+      })
     );
     return;
   }
@@ -125,8 +136,14 @@ self.addEventListener('fetch', event => {
         }
         return response;
       })
-      .catch(() => caches.match(event.request).then(cached =>
-        cached || caches.match('/app/index.html')
-      ))
+      .catch(async () => {
+        // Aug 27 fix: same defensive fallthrough as CSS/JS. Never
+        // resolve with undefined — that's what surfaces as
+        // TypeError: NetworkError on the calling page.
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        const shell = await caches.match('/app/index.html');
+        return shell || Response.error();
+      })
   );
 });
