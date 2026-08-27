@@ -27,7 +27,10 @@
 // symptom the user was seeing. Not returning from /api/ means the
 // browser handles the request directly, no SW involvement, so the
 // SW can never break the auth-critical fetch path again.
-const CACHE_NAME = 'gigsfill-v14';
+// v15 (2026-08-27): SKIP_WAITING message handler so a fresh SW
+// can be promoted the moment sw-register.js asks — no more
+// waiting for every controlled tab to close.
+const CACHE_NAME = 'gigsfill-v15';
 
 // App shell — core files needed to launch
 const APP_SHELL = [
@@ -60,6 +63,18 @@ self.addEventListener('activate', event => {
       )
     ).then(() => self.clients.claim())
   );
+});
+
+// Aug 27 2026: sw-register.js can post {type: 'SKIP_WAITING'} to
+// force a newly-installed SW to take over immediately, bypassing
+// the default "wait until all controlled clients close" behavior.
+// Needed so users hit by a broken older SW (respondWith(undefined))
+// self-heal on their next visit instead of being stuck until they
+// visit DevTools and unregister manually.
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // Fetch strategy
