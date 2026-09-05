@@ -56,6 +56,31 @@ class ReorderIn(BaseModel):
 _SEPARATORS = ["\t", " — ", " – ", " -- ", " by ", " | ", " - ", ", ", ","]
 
 
+# Common header labels for a "Songs" column and an "Artist" column in
+# spreadsheets. If the FIRST non-blank pasted line parses to
+# {title in _HEADER_TITLE_WORDS, artist in _HEADER_ARTIST_WORDS} it's
+# almost certainly a header row copied along with the data — skip it
+# silently rather than adding a bogus song named "Song" by "Artist".
+# Kept narrow (both cells must be a known header word) so we don't
+# ever eat a real song that happens to be titled "Song" or "Track".
+_HEADER_TITLE_WORDS = {
+    "song", "songs", "title", "titles", "track", "tracks",
+    "name", "song title", "song name", "tune",
+}
+_HEADER_ARTIST_WORDS = {
+    "artist", "artists", "band", "bands", "musician", "musicians",
+    "performer", "performers", "original artist", "original", "by",
+    "cover", "cover of", "author", "composer", "writer",
+}
+
+
+def _looks_like_header(title: str, artist: str) -> bool:
+    if not title or not artist:
+        return False
+    return title.strip().lower() in _HEADER_TITLE_WORDS \
+       and artist.strip().lower() in _HEADER_ARTIST_WORDS
+
+
 def _parse_bulk_line(line: str) -> Optional[dict]:
     """Turn one pasted line into {song_title, original_artist} or None
     if the line is blank / a comment."""
@@ -164,10 +189,22 @@ def add_bulk(artist_id: int, data: BulkIn,
         raise HTTPException(400, f"Setlist is at the {_MAX_SONGS_PER_ARTIST}-song cap.")
 
     parsed = []
+    header_skipped = False
+    seen_first = False
     for line in data.text.splitlines():
         song = _parse_bulk_line(line)
-        if song:
-            parsed.append(song)
+        if not song:
+            continue
+        # If the very first parsed row looks like a spreadsheet header
+        # (e.g. "Song\tArtist", "Title\tBand", "Track\tPerformer"),
+        # drop it silently. Only the FIRST row is eligible so mid-list
+        # accidents never eat real songs.
+        if not seen_first:
+            seen_first = True
+            if _looks_like_header(song.get("song_title", ""), song.get("original_artist", "")):
+                header_skipped = True
+                continue
+        parsed.append(song)
         if len(parsed) >= room:
             break
 
@@ -194,6 +231,7 @@ def add_bulk(artist_id: int, data: BulkIn,
         "added": len(parsed),
         "total": existing + len(parsed),
         "truncated_at_cap": truncated,
+        "header_row_skipped": header_skipped,
     }
 
 

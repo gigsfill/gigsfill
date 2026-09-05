@@ -252,7 +252,7 @@
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.detail || 'Bulk add failed');
-          status.textContent = `✓ Added ${data.added} song${data.added === 1 ? '' : 's'} (total ${data.total})${data.truncated_at_cap ? ' — hit the 1000-song cap' : ''}.`;
+          status.textContent = `✓ Added ${data.added} song${data.added === 1 ? '' : 's'} (total ${data.total})${data.header_row_skipped ? ' — header row skipped' : ''}${data.truncated_at_cap ? ' — hit the 1000-song cap' : ''}.`;
           status.style.color = '#10b981';
           if (ta) ta.value = '';
           await _fetchSetlist();
