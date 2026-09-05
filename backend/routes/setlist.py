@@ -67,8 +67,28 @@ def _parse_bulk_line(line: str) -> Optional[dict]:
     s = re.sub(r"^\s*(?:\d+[.)]|[-*•])\s+", "", s)
     if not s:
         return None
-    # Try each separator in order. First hit wins.
+    # Tab is the special case: Excel copies use tab between cells, and
+    # a spreadsheet row with 3+ columns (Title | Artist | Year | Genre)
+    # should still land as {title, artist} — extra columns dropped, not
+    # concatenated into the artist field. partition() would only cut
+    # the FIRST tab and jam the rest into the artist. So split fully
+    # on tab and take the first two cells.
+    if "\t" in s:
+        parts = [p.strip().strip('"').strip("'") for p in s.split("\t")]
+        title = parts[0]
+        artist = parts[1] if len(parts) > 1 else ""
+        if title:
+            return {
+                "song_title": title[:_MAX_TITLE_LEN],
+                "original_artist": artist[:_MAX_ARTIST_LEN],
+            }
+        return None
+    # Non-tab separators: partition on first hit (they're likely to
+    # appear inside titles too — e.g. a comma in "Man, I Feel Like a
+    # Woman" — so we only cut at the FIRST occurrence).
     for sep in _SEPARATORS:
+        if sep == "\t":
+            continue  # already handled above
         if sep in s:
             title, _, artist = s.partition(sep)
             title = title.strip().strip('"').strip("'")

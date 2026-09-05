@@ -99,7 +99,7 @@
             <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall - Oasis</code> (any dash works),
             <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall by Oasis</code>,
             <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall, Oasis</code>,
-            tab-separated (from Excel), or just <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall</code> (title only).
+            copy-pasted straight from Excel (extra columns are dropped), or just <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall</code> (title only).
             Numbered lists (<code style="color:var(--cyan);font-size:0.68rem;">1. Wonderwall - Oasis</code>) work too.
           </p>
           <textarea id="setlistBulkText" rows="6" placeholder="Wonderwall - Oasis&#10;Sweet Caroline - Neil Diamond&#10;Purple Rain - Prince"
