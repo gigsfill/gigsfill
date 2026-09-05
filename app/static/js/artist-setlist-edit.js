@@ -96,8 +96,7 @@
         <div id="setlistBulkBody" style="display:none;">
           <p style="color:var(--text-gray);font-size:0.7rem;margin:4px 0 6px;line-height:1.5;">
             Paste one song per line. Accepted formats:
-            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall - Oasis</code>,
-            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall — Oasis</code>,
+            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall - Oasis</code> (any dash works),
             <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall by Oasis</code>,
             <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall, Oasis</code>,
             tab-separated (from Excel), or just <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall</code> (title only).
