@@ -87,30 +87,30 @@
       <!-- Bulk paste — pasting a copied list is the fastest way to seed a
            big setlist. Backend /bulk splits on tab, hyphen, em/en-dash,
            " by ", " | ", and "," so most formats work as-is. -->
-      <div style="background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;padding:12px 14px;margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-          <strong style="font-size:0.85rem;color:var(--cyan);">Bulk paste</strong>
+      <div style="background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;padding:10px 12px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
+          <strong style="font-size:0.78rem;color:var(--cyan);">Bulk paste</strong>
           <button id="setlistBulkToggle"
-            style="background:none;border:none;color:var(--text-gray);font-size:0.75rem;cursor:pointer;text-decoration:underline;">Show / hide</button>
+            style="background:none;border:none;color:var(--text-gray);font-size:0.7rem;cursor:pointer;text-decoration:underline;">Show / hide</button>
         </div>
         <div id="setlistBulkBody" style="display:none;">
-          <p style="color:var(--text-gray);font-size:0.75rem;margin:6px 0 8px;line-height:1.5;">
+          <p style="color:var(--text-gray);font-size:0.7rem;margin:4px 0 6px;line-height:1.5;">
             Paste one song per line. Accepted formats:
-            <code style="color:var(--cyan);">Wonderwall - Oasis</code>,
-            <code style="color:var(--cyan);">Wonderwall — Oasis</code>,
-            <code style="color:var(--cyan);">Wonderwall by Oasis</code>,
-            <code style="color:var(--cyan);">Wonderwall, Oasis</code>,
-            tab-separated (from Excel), or just <code style="color:var(--cyan);">Wonderwall</code> (title only).
-            Numbered lists (<code style="color:var(--cyan);">1. Wonderwall - Oasis</code>) work too.
+            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall - Oasis</code>,
+            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall — Oasis</code>,
+            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall by Oasis</code>,
+            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall, Oasis</code>,
+            tab-separated (from Excel), or just <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall</code> (title only).
+            Numbered lists (<code style="color:var(--cyan);font-size:0.68rem;">1. Wonderwall - Oasis</code>) work too.
           </p>
           <textarea id="setlistBulkText" rows="6" placeholder="Wonderwall - Oasis&#10;Sweet Caroline - Neil Diamond&#10;Purple Rain - Prince"
-            style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:8px 10px;font-size:0.82rem;font-family:monospace;resize:vertical;"></textarea>
+            style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:8px 10px;font-size:0.8rem;font-family:monospace;resize:vertical;"></textarea>
           <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
             <button id="setlistBulkGo"
-              style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:6px 14px;font-size:0.82rem;cursor:pointer;font-weight:600;">
+              style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:5px 12px;font-size:0.78rem;cursor:pointer;font-weight:600;">
               Parse & Add
             </button>
-            <span id="setlistBulkStatus" style="font-size:0.78rem;color:var(--text-gray);"></span>
+            <span id="setlistBulkStatus" style="font-size:0.72rem;color:var(--text-gray);"></span>
           </div>
         </div>
       </div>
