@@ -2543,6 +2543,24 @@ def setup_database():
     c4.execute("CREATE INDEX IF NOT EXISTS idx_user_availability_artist ON user_availability(artist_id)")
     c4.execute("CREATE INDEX IF NOT EXISTS idx_user_availability_dates ON user_availability(blackout_start, blackout_end)")
 
+    # ── Setlist (2026-09-05) ───────────────────────────────────────────────
+    # Per-artist song list shown as a public tab on artist-profile.html and
+    # editable from artist-edit.html. One row per song. `display_order` drives
+    # the artist's custom sort; public view lets the visitor pick song A-Z /
+    # artist A-Z / custom.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS artist_setlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_id INTEGER NOT NULL,
+            song_title TEXT NOT NULL,
+            original_artist TEXT,
+            display_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE
+        )
+    """)
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_setlist_artist ON artist_setlist(artist_id, display_order)")
+
     try:
         c4.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_gig_artist_unique

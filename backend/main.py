@@ -153,7 +153,7 @@ from backend.routes import (
     analytics, tax, contracts, stripe_connect, flyers, onboarding,
     reviews, messages, availability, waitlist, affiliate, vanity,
     unsubscribe, demo_requests, contact,
-    artist_external_gigs, pricing,
+    artist_external_gigs, pricing, setlist,
 )
 
 def ensure_database():
@@ -297,6 +297,7 @@ app.include_router(tax.router)
 app.include_router(contracts.router)
 app.include_router(stripe_connect.router)
 app.include_router(flyers.router)
+app.include_router(setlist.router)
 app.include_router(onboarding.router)
 app.include_router(reviews.router)
 from backend.routes import review_links

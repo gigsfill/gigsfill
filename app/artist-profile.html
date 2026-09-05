@@ -417,6 +417,7 @@
       <button onclick="switchTab('pictures')">Pictures</button>
       <button onclick="switchTab('videos')">Videos</button>
       <button onclick="switchTab('audio')">Audio</button>
+      <button onclick="switchTab('setlist')">Setlist <span id="setlistBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
       <button onclick="switchTab('social')">Social Media</button>
       <button onclick="switchTab('reviews')">Reviews <span id="reviewsBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
     </div>
@@ -450,6 +451,15 @@
     </div>
     <div class="tab-panel" id="tab-audio">
       <div class="content-card"><div class="audio-container" id="audio"></div><div class="empty-msg" id="audioEmpty" style="display:none;">No audio uploaded yet.</div></div>
+    </div>
+    <div class="tab-panel" id="tab-setlist">
+      <div class="content-card" id="setlistCard">
+        <!-- Rendered by artist-setlist-public.js on first activation of
+             this tab (lazy-loaded via switchTab). Header row (count +
+             sort dropdown + search when the list is long) then a
+             multi-column song grid + pager. -->
+        <div id="setlistRoot" style="min-height:120px;"></div>
+      </div>
     </div>
     <div class="tab-panel" id="tab-social">
       <div class="content-card"><div class="social-links" id="socialMedia"></div><div class="empty-msg" id="socialEmpty" style="display:none;">No social media links added yet.</div></div>
@@ -543,6 +553,14 @@
           renderRatingSummary('ratingSummaryContainer', parseInt(aid));
           renderReviews('reviewsListContainer', parseInt(aid));
         }
+      }
+      // Lazy-load setlist tab. Rendered by artist-setlist-public.js
+      // which exposes window.renderSetlistPublic(rootId, artistId).
+      if (name === 'setlist' && typeof window.renderSetlistPublic === 'function') {
+        const params = new URLSearchParams(window.location.search);
+        const aid = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
+                  || params.get('artist_id');
+        if (aid) window.renderSetlistPublic('setlistRoot', parseInt(aid));
       }
     }
 
@@ -1709,6 +1727,7 @@
     function escAttr(s) { return String(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   </script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
+<script src="/app/static/js/artist-setlist-public.js?v=1"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/venue-gig-details-modal.js?v=2"></script>
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>
