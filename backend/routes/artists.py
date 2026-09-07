@@ -628,6 +628,58 @@ def get_artist_venues(artist_id: int, user=Depends(get_current_user), db=Depends
 
     return list(venue_dict.values())
 
+
+@router.get("/api/artists/{artist_id}/venues-played")
+def get_venues_played(artist_id: int, db=Depends(get_db)):
+    """PUBLIC — venues this artist has performed at (past booked gigs).
+
+    Backs the "Venues" tab on artist-profile.html. Returns one row per
+    unique venue with gig count + most-recent-gig date + a hero image
+    when available. Ordered by most recent play first so fresh activity
+    surfaces at the top.
+
+    Filters:
+      • gig_slots.artist_id = this artist AND status = 'booked'
+        (post-backfill this covers both single- and multi-slot; see
+        the /venues endpoint refactor note above for why the old
+        two-query merge was collapsed).
+      • gigs.date < today — future-dated bookings are "upcoming",
+        not "played". Keeps the tab honest: what viewers see happened.
+      • venues.deleted_at IS NULL — don't surface tombstoned venues.
+
+    Anonymous access is intentional — this is public social proof.
+    """
+    rows = db.execute(text("""
+        SELECT
+            v.id                                             AS venue_id,
+            v.venue_name,
+            v.city,
+            v.state,
+            COUNT(DISTINCT g.id)                             AS gig_count,
+            MAX(g.date)                                      AS last_played_date,
+            (SELECT vu.slug FROM vanity_urls vu
+              WHERE vu.entity_type = 'venue' AND vu.entity_id = v.id
+              LIMIT 1)                                       AS vanity_slug,
+            (SELECT vm.file_path FROM venue_media vm
+              WHERE vm.venue_id = v.id
+                AND vm.media_type = 'picture'
+                AND vm.file_path IS NOT NULL
+                AND vm.file_path != ''
+              ORDER BY vm.display_order ASC, vm.id ASC
+              LIMIT 1)                                       AS hero_image
+        FROM gig_slots gs
+        JOIN gigs   g ON g.id = gs.gig_id
+        JOIN venues v ON v.id = g.venue_id
+        WHERE gs.artist_id = :aid
+          AND gs.status = 'booked'
+          AND g.date < date('now')
+          AND v.deleted_at IS NULL
+        GROUP BY v.id, v.venue_name, v.city, v.state
+        ORDER BY last_played_date DESC
+    """), {"aid": artist_id}).mappings().all()
+    return {"venues": [dict(r) for r in rows], "total": len(rows)}
+
+
 @router.get("/api/artists/{artist_id}/venues/{venue_id}/gigs")
 def get_artist_venue_gigs(artist_id: int, venue_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     """Get all booked gigs for an artist at a specific venue (including slot bookings)"""

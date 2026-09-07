@@ -418,6 +418,7 @@
       <button onclick="switchTab('videos')">Videos</button>
       <button onclick="switchTab('audio')">Audio</button>
       <button onclick="switchTab('setlist')">Setlist <span id="setlistBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
+      <button onclick="switchTab('venues')">Venues <span id="venuesPlayedBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
       <button onclick="switchTab('social')">Social Media</button>
       <button onclick="switchTab('reviews')">Reviews <span id="reviewsBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
     </div>
@@ -459,6 +460,15 @@
              sort dropdown + search when the list is long) then a
              multi-column song grid + pager. -->
         <div id="setlistRoot" style="min-height:120px;"></div>
+      </div>
+    </div>
+    <div class="tab-panel" id="tab-venues">
+      <div class="content-card" id="venuesPlayedCard">
+        <!-- Rendered by artist-venues-played.js on first activation of
+             this tab. Grid of venue cards showing hero image + name +
+             city + gig count, ordered most-recent-first, each linking
+             to that venue's public profile. -->
+        <div id="venuesPlayedRoot" style="min-height:120px;"></div>
       </div>
     </div>
     <div class="tab-panel" id="tab-social">
@@ -561,6 +571,15 @@
         const aid = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
                   || params.get('artist_id');
         if (aid) window.renderSetlistPublic('setlistRoot', parseInt(aid));
+      }
+      // Lazy-load "Venues I've Played" tab. Rendered by
+      // artist-venues-played.js which exposes
+      // window.renderVenuesPlayed(rootId, artistId).
+      if (name === 'venues' && typeof window.renderVenuesPlayed === 'function') {
+        const params = new URLSearchParams(window.location.search);
+        const aid = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
+                  || params.get('artist_id');
+        if (aid) window.renderVenuesPlayed('venuesPlayedRoot', parseInt(aid));
       }
     }
 
@@ -1728,6 +1747,7 @@
   </script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/artist-setlist-public.js?v=1"></script>
+<script src="/app/static/js/artist-venues-played.js?v=1"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/venue-gig-details-modal.js?v=2"></script>
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>
