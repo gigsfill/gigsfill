@@ -63,9 +63,13 @@
       ? `<div style="width:100%;aspect-ratio:16/9;background:#0d1220 center/cover no-repeat url('${hero}');"></div>`
       : `<div style="width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,rgba(124,107,255,0.15),rgba(6,182,212,0.15));color:rgba(255,255,255,0.55);font-size:2.2rem;font-weight:700;letter-spacing:0.02em;">${initial}</div>`;
 
+    // Cards open the venue in a new tab (visitor keeps their spot on
+    // the artist's profile). rel="noopener noreferrer" prevents the
+    // opened page from reaching back to window.opener and cuts a
+    // referrer-leak vector.
     return `
-      <a href="${_venueHref(v)}"
-        style="display:flex;flex-direction:column;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;overflow:hidden;text-decoration:none;color:inherit;transition:transform 0.15s, border-color 0.15s, box-shadow 0.15s;"
+      <a href="${_venueHref(v)}" target="_blank" rel="noopener noreferrer"
+        style="display:flex;flex-direction:column;width:200px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;overflow:hidden;text-decoration:none;color:inherit;transition:transform 0.15s, border-color 0.15s, box-shadow 0.15s;"
         onmouseenter="this.style.transform='translateY(-2px)';this.style.borderColor='var(--cyan)';this.style.boxShadow='0 6px 18px rgba(6,182,212,0.15)';"
         onmouseleave="this.style.transform='';this.style.borderColor='var(--border)';this.style.boxShadow='';">
         ${heroBlock}
@@ -103,7 +107,13 @@
         </div>
         <div style="font-size:0.72rem;color:var(--text-muted);">Most recent first</div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;">
+      <!-- Flex-wrap + justify-content:center fills the row from the
+           middle outward: 1 venue lands centered, 2 sit side-by-side
+           centered, 3 form a centered triple, etc. Cards have a fixed
+           200px width so alignment is predictable at all counts —
+           doing this with grid auto-fill instead would left-anchor
+           the row and small counts would look off-center. -->
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:12px;">
         ${data.venues.map(_card).join('')}
       </div>
     `;
