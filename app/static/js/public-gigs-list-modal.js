@@ -260,13 +260,17 @@
     // Combined start–end time cell.
     const _cellTimeRange = (r) =>
       `<td style="padding:9px 10px;width:1%;min-width:150px;font-size:0.8rem;color:#cbd5e1;white-space:nowrap;vertical-align:top;">${esc(_timeRange(r))}</td>`;
+    // 2026-09-09: artist link matches the venue-link visibility fix —
+    // real text-decoration:underline (not a subtle border-bottom) with
+    // a distinct link color on both past and future rows so it's
+    // obviously clickable. Green tone (matches booking-status green
+    // used elsewhere) contrasts with the purple venue link.
     const _cellArtist = (r, past) => {
-      const openColor = past ? '#94a3b8' : '#22c55e';
       let inner;
       if (r.artist_name) {
         inner = r.artist_id
-          ? `<a href="/app/artist-profile.html?artist_id=${r.artist_id}" target="_blank" rel="noopener" style="color:${openColor};text-decoration:none;font-weight:600;border-bottom:1px solid rgba(34,197,94,0.35);">${esc(r.artist_name)}</a>`
-          : `<span style="color:${openColor};font-weight:600;">${esc(r.artist_name)}</span>`;
+          ? `<a href="/app/artist-profile.html?artist_id=${r.artist_id}" target="_blank" rel="noopener" style="color:${past ? '#86efac' : '#22c55e'};text-decoration:underline;text-underline-offset:3px;text-decoration-color:rgba(34,197,94,0.55);font-weight:600;">${esc(r.artist_name)}</a>`
+          : `<span style="color:${past ? '#94a3b8' : '#22c55e'};font-weight:600;">${esc(r.artist_name)}</span>`;
       } else {
         inner = `<span style="color:#64748b;">—</span>`;
       }
