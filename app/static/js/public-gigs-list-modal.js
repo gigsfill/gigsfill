@@ -231,9 +231,24 @@
     // Venue + Artist have room to grow. word-break lets long addresses
     // wrap to a second line inside the cell rather than pushing the
     // table wider.
+    //
+    // 2026-09-09: address hyperlinked to Google Maps in a new tab.
+    // Uses the canonical Google-recommended universal search URL
+    // (https://www.google.com/maps/search/?api=1&query=...) so it
+    // works cross-platform: desktop opens web Maps, iOS/Android
+    // dispatch to the native Maps app when installed. Query is the
+    // full address including city + state for accurate placement
+    // even when the venue is on a common street name.
     const _cellAddress = (r) => {
       const s = _fullAddress(r) || '';
-      return `<td style="padding:9px 10px;max-width:220px;font-size:0.8rem;color:#cbd5e1;vertical-align:top;line-height:1.35;word-break:break-word;">${esc(s)}</td>`;
+      if (!s) {
+        return `<td style="padding:9px 10px;max-width:220px;font-size:0.8rem;color:#cbd5e1;vertical-align:top;line-height:1.35;word-break:break-word;"></td>`;
+      }
+      const query = encodeURIComponent(s);
+      const href = `https://www.google.com/maps/search/?api=1&query=${query}`;
+      return `<td style="padding:9px 10px;max-width:220px;font-size:0.8rem;vertical-align:top;line-height:1.35;word-break:break-word;">`
+           + `<a href="${href}" target="_blank" rel="noopener noreferrer" title="Open in Google Maps" style="color:#7dd3fc;text-decoration:none;border-bottom:1px solid rgba(125,211,252,0.35);">${esc(s)}</a>`
+           + `</td>`;
     };
     // Combined start–end time cell.
     const _cellTimeRange = (r) =>
