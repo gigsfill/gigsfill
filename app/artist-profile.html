@@ -1057,9 +1057,13 @@
         title: '📅 All Booked Gigs' + (artist && artist.name ? ' — ' + artist.name : ''),
         rows: rows,
         exportBasename: `${artistSlug}_booked_gigs`,
-        // Venue first (headline of the row), Address next, then Time.
-        // No Artist column since every row is this profile's artist.
-        columns: ['date', 'venue', 'address', 'time'],
+        // 2026-09-09: reordered to Date · Time · Venue · Address —
+        // matches the sibling venue-profile modal, which now uses
+        // Date · Time · Artist · Address. Both put the identifying
+        // party (venue on the artist page, artist on the venue page)
+        // in the same slot, and Address at the end since it's the
+        // longest field.
+        columns: ['date', 'time', 'venue', 'address'],
       });
     };
     function fmtDate(d) { if (!d) return ''; const [y,mo,dy] = d.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[parseInt(mo)-1]} ${parseInt(dy)}, ${y}`; }
@@ -1773,7 +1777,7 @@
 <script src="/app/static/js/venue-gig-details-modal.js?v=2"></script>
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
-<script src="/app/static/js/public-gigs-list-modal.js?v=9"></script>
+<script src="/app/static/js/public-gigs-list-modal.js?v=10"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>

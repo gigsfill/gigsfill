@@ -207,13 +207,14 @@
     const _cellVenue = (r, past) => {
       // 2026-09-09: link styling made obviously clickable on both past
       // AND future rows. Old past-row style was muted gray with a
-      // faint border-bottom, which read as plain text — a user
-      // reported "the venue name isn't hyperlinked" on an all-past-
-      // gigs profile. Now both states use a purple hue (dimmer for
-      // past) with a real text-decoration:underline so it looks like
-      // a link regardless of the row's past/future state.
+      // faint border-bottom, which read as plain text. `text-decoration:
+      // underline !important` is required to defeat a global
+      // `a { text-decoration: none; }` in gigsfill-modern.css that was
+      // silently stripping the underline (inline styles normally win but
+      // this one turned out to be authored somewhere with matching
+      // specificity in practice — !important settles it once and for all).
       const venueLink = (r.venue_id && !r._no_venue_link)
-        ? `<a href="/app/venue-profile.html?venue_id=${r.venue_id}" target="_blank" rel="noopener" style="color:${past ? '#a99bff' : '#7c6bff'};text-decoration:underline;text-underline-offset:3px;text-decoration-color:rgba(124,107,255,0.55);font-weight:600;">${esc(r.venue_name || '')}</a>`
+        ? `<a href="/app/venue-profile.html?venue_id=${r.venue_id}" target="_blank" rel="noopener" style="color:${past ? '#a99bff' : '#7c6bff'} !important;text-decoration:underline !important;text-underline-offset:3px;text-decoration-color:${past ? '#a99bff' : '#7c6bff'} !important;text-decoration-thickness:1.5px;font-weight:600;">${esc(r.venue_name || '')}</a>`
         : `<span style="color:${past ? '#94a3b8' : '#e2e8f0'};font-weight:600;">${esc(r.venue_name || '')}</span>`;
       const slotChip = r.is_multi_slot
         ? `<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:rgba(139,92,246,0.18);border:1px solid rgba(139,92,246,0.35);border-radius:4px;font-size:0.65rem;color:#c4b5fd;vertical-align:middle;">Slot ${esc(r.slot_number)}</span>`
@@ -254,22 +255,22 @@
       const query = encodeURIComponent(s);
       const href = `https://www.google.com/maps/search/?api=1&query=${query}`;
       return `<td style="padding:9px 10px;max-width:220px;font-size:0.8rem;vertical-align:top;line-height:1.35;word-break:break-word;">`
-           + `<a href="${href}" target="_blank" rel="noopener noreferrer" title="Open in Google Maps" style="color:#7dd3fc;text-decoration:none;border-bottom:1px solid rgba(125,211,252,0.35);">${esc(s)}</a>`
+           + `<a href="${href}" target="_blank" rel="noopener noreferrer" title="Open in Google Maps" style="color:#7dd3fc !important;text-decoration:underline !important;text-underline-offset:3px;text-decoration-color:#7dd3fc !important;text-decoration-thickness:1.5px;">${esc(s)}</a>`
            + `</td>`;
     };
     // Combined start–end time cell.
     const _cellTimeRange = (r) =>
       `<td style="padding:9px 10px;width:1%;min-width:150px;font-size:0.8rem;color:#cbd5e1;white-space:nowrap;vertical-align:top;">${esc(_timeRange(r))}</td>`;
-    // 2026-09-09: artist link matches the venue-link visibility fix —
-    // real text-decoration:underline (not a subtle border-bottom) with
-    // a distinct link color on both past and future rows so it's
-    // obviously clickable. Green tone (matches booking-status green
-    // used elsewhere) contrasts with the purple venue link.
+    // 2026-09-09: artist link matches the venue-link visibility fix.
+    // Same `!important` treatment on the underline to defeat the
+    // global `a { text-decoration: none; }` rule in gigsfill-modern.css.
+    // Green tone contrasts with the purple venue link so the two
+    // clickable cells are visually distinguishable.
     const _cellArtist = (r, past) => {
       let inner;
       if (r.artist_name) {
         inner = r.artist_id
-          ? `<a href="/app/artist-profile.html?artist_id=${r.artist_id}" target="_blank" rel="noopener" style="color:${past ? '#86efac' : '#22c55e'};text-decoration:underline;text-underline-offset:3px;text-decoration-color:rgba(34,197,94,0.55);font-weight:600;">${esc(r.artist_name)}</a>`
+          ? `<a href="/app/artist-profile.html?artist_id=${r.artist_id}" target="_blank" rel="noopener" style="color:${past ? '#86efac' : '#22c55e'} !important;text-decoration:underline !important;text-underline-offset:3px;text-decoration-color:${past ? '#86efac' : '#22c55e'} !important;text-decoration-thickness:1.5px;font-weight:600;">${esc(r.artist_name)}</a>`
           : `<span style="color:${past ? '#94a3b8' : '#22c55e'};font-weight:600;">${esc(r.artist_name)}</span>`;
       } else {
         inner = `<span style="color:#64748b;">—</span>`;

@@ -878,12 +878,14 @@
         title: '📅 All Gigs' + (venueData && venueData.venue_name ? ' — ' + venueData.venue_name : ''),
         rows: rows,
         exportBasename: `${venueSlug}_gigs`,
-        // 2026-09-09: dropped the Venue column — visitor is already
-        // on that venue's page, so a column repeating the same venue
-        // name on every row is dead space. Artist is the headline
-        // (hyperlinked to the artist's profile when booked, "—" when
-        // unfilled). Order: Date · Address · Artist · Time.
-        columns: ['date', 'address', 'artist', 'time'],
+        // 2026-09-09: dropped the Venue column — visitor is already on
+        // that venue's page, so a column repeating the same venue name
+        // on every row is dead space. Artist is the headline (hyper-
+        // linked to the artist's profile when booked, "—" when
+        // unfilled). Order: Date · Time · Artist · Address — matches
+        // the sibling artist-profile modal (Date · Time · Venue ·
+        // Address). Address goes at the end since it's the longest.
+        columns: ['date', 'time', 'artist', 'address'],
       });
     };
 
@@ -1651,7 +1653,7 @@ window.loadVenueReviews = loadVenueReviews;
 <script src="/app/static/js/venue-gig-details-modal.js?v=2"></script>
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
-<script src="/app/static/js/public-gigs-list-modal.js?v=9"></script>
+<script src="/app/static/js/public-gigs-list-modal.js?v=10"></script>
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
