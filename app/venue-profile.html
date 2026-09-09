@@ -294,13 +294,18 @@
     /* Video + Picture grid: bigger cards (4 per row on desktop, wraps to 3/2/1
        as viewport narrows), centered when a row is partially full.
        Mirror of artist-profile.html rule. See comments there. */
+    /* 2026-09-09: mirror of artist-profile.html — flex-wrap so cards
+       always fill center-out at every viewport width. See the note
+       there for why the grid auto-fit approach was replaced. */
     #videos.media-grid,
     #pictures.media-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, 210px);
+      display: flex;
+      flex-wrap: wrap;
       justify-content: center;
       gap: 14px;
     }
+    #videos .media-card,
+    #pictures .media-card { width: 210px; flex: 0 0 210px; max-width: 100%; }
     #videos .media-card img,
     #pictures .media-card img { height: 130px; }
     #videos .media-title-label,
@@ -324,9 +329,11 @@
       color: var(--text-gray);
     }
     @media (max-width: 480px) {
-      #videos.media-grid,
-      #pictures.media-grid {
-        grid-template-columns: minmax(0, 360px);
+      #videos .media-card,
+      #pictures .media-card {
+        width: 100%;
+        max-width: 360px;
+        flex: 0 0 100%;
       }
       #videos .media-card img,
       #pictures .media-card img { height: 180px; }
@@ -1345,9 +1352,17 @@
           const capHtml = cap ? `<div class="media-caption-label">${esc(cap)}</div>` : "";
           const d = document.createElement("div");
           d.className = "media-card";
-          d.innerHTML = `<img src="${escAttr(ytThumb(m.video_url))}"><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
+          d.innerHTML = `<img alt=""><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
           d.onclick = () => openModal(m.video_url, "video");
           videos.appendChild(d);
+          // Shared thumbnail helper (see /app/static/js/video-thumbnail.js):
+          // YouTube maxres + hqdefault fallback, Vimeo oEmbed, branded
+          // fallbacks for IG/TikTok/FB, play-triangle overlay.
+          if (typeof window.attachVideoThumb === 'function') {
+            window.attachVideoThumb(d.querySelector('img'), m.video_url);
+          } else {
+            d.querySelector('img').src = ytThumb(m.video_url);
+          }
           // Only inline-embeddable videos join the navigable list —
           // Instagram / TikTok / Facebook click straight to a new tab.
           if (!/instagram\.com|tiktok\.com|facebook\.com|fb\.watch/.test(m.video_url || '')) {
@@ -1634,6 +1649,7 @@ window.loadVenueReviews = loadVenueReviews;
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/public-gigs-list-modal.js?v=7"></script>
+<script src="/app/static/js/video-thumbnail.js?v=1"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=2"></script>

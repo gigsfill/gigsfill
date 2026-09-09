@@ -205,8 +205,15 @@
     const _cellDate = (r, past, dateColor) =>
       `<td style="padding:9px 10px;width:1%;min-width:150px;font-size:0.82rem;color:${dateColor};white-space:nowrap;vertical-align:top;font-weight:600;">${esc(fmtDate(r.date))}</td>`;
     const _cellVenue = (r, past) => {
+      // 2026-09-09: link styling made obviously clickable on both past
+      // AND future rows. Old past-row style was muted gray with a
+      // faint border-bottom, which read as plain text — a user
+      // reported "the venue name isn't hyperlinked" on an all-past-
+      // gigs profile. Now both states use a purple hue (dimmer for
+      // past) with a real text-decoration:underline so it looks like
+      // a link regardless of the row's past/future state.
       const venueLink = (r.venue_id && !r._no_venue_link)
-        ? `<a href="/app/venue-profile.html?venue_id=${r.venue_id}" target="_blank" rel="noopener" style="color:${past ? '#94a3b8' : '#7c6bff'};text-decoration:none;font-weight:600;border-bottom:1px solid rgba(124,107,255,0.35);">${esc(r.venue_name || '')}</a>`
+        ? `<a href="/app/venue-profile.html?venue_id=${r.venue_id}" target="_blank" rel="noopener" style="color:${past ? '#a99bff' : '#7c6bff'};text-decoration:underline;text-underline-offset:3px;text-decoration-color:rgba(124,107,255,0.55);font-weight:600;">${esc(r.venue_name || '')}</a>`
         : `<span style="color:${past ? '#94a3b8' : '#e2e8f0'};font-weight:600;">${esc(r.venue_name || '')}</span>`;
       const slotChip = r.is_multi_slot
         ? `<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:rgba(139,92,246,0.18);border:1px solid rgba(139,92,246,0.35);border-radius:4px;font-size:0.65rem;color:#c4b5fd;vertical-align:middle;">Slot ${esc(r.slot_number)}</span>`

@@ -305,7 +305,8 @@ function closeGigModal() { document.getElementById('gigModal').classList.add('hi
 document.getElementById('gigModal').addEventListener('click', function(e) { if (e.target === this) closeGigModal(); });
 
 // ========== MEDIA ==========
-function ytThumb(url) { const m = url.match(/(?:youtube\.com.*v=|youtu\.be\/)([^&]+)/); return m ? `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg` : "/app/static/img/video-placeholder.svg"; }
+// See artist-profile-init.js for the video-thumbnail helper strategy.
+function ytThumb(url) { const m = String(url||'').match(/(?:youtube\.com.*v=|youtu\.be\/)([^&]+)/); return m ? `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg` : "/app/static/img/video-placeholder.svg"; }
 async function loadMedia() {
   const res = await fetch(`/api/venues/${venueId}/media`, { credentials: "include" }); if (!res.ok) return;
   const items = await res.json();
@@ -314,7 +315,17 @@ async function loadMedia() {
   items.forEach(m => {
     if (m.media_type === "profile" || m.media_type === "logo") document.getElementById("venueLogo").src = m.file_path;
     if (m.media_type === "picture") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(m.file_path)}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.file_path, "image"); pics.appendChild(d); }
-    if (m.media_type === "video") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(ytThumb(m.video_url))}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.video_url, "video"); videos.appendChild(d); }
+    if (m.media_type === "video") {
+      const d = document.createElement("div"); d.className = "media-card";
+      d.innerHTML = `<img alt=""><div class="media-title-label">${esc(m.title||"")}</div>`;
+      d.onclick = () => openModal(m.video_url, "video");
+      videos.appendChild(d);
+      if (typeof window.attachVideoThumb === 'function') {
+        window.attachVideoThumb(d.querySelector('img'), m.video_url);
+      } else {
+        d.querySelector('img').src = ytThumb(m.video_url);
+      }
+    }
   });
   if (!pics.children.length) document.getElementById('picturesEmpty').style.display = 'block';
   if (!videos.children.length) document.getElementById('videosEmpty').style.display = 'block';

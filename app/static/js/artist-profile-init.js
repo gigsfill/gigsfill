@@ -252,7 +252,12 @@ function closeGigModal() { document.getElementById('gigModal').classList.add('hi
 document.getElementById('gigModal').addEventListener('click', function(e) { if (e.target === this) closeGigModal(); });
 
 // ========== MEDIA ==========
-function ytThumb(url) { const m = url.match(/(?:youtube\.com.*v=|youtu\.be\/)([^&]+)/); return m ? `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg` : "/app/static/img/video-placeholder.svg"; }
+// Video thumbnails: window.attachVideoThumb from video-thumbnail.js
+// handles YouTube maxres+fallback, Vimeo oEmbed, branded fallbacks
+// for Instagram/TikTok/Facebook, and injects the play-triangle
+// overlay. Keep a local ytThumb() as a defensive fallback for the
+// edge case where video-thumbnail.js hasn't loaded yet.
+function ytThumb(url) { const m = String(url||'').match(/(?:youtube\.com.*v=|youtu\.be\/)([^&]+)/); return m ? `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg` : "/app/static/img/video-placeholder.svg"; }
 async function loadMedia() {
   const res = await fetch(`/api/artists/${artistId}/media`, { credentials: "include" }); if (!res.ok) return;
   const items = await res.json();
@@ -262,7 +267,20 @@ async function loadMedia() {
     if (m.media_type === "logo" || m.media_type === "profile") document.getElementById("artistLogo").src = m.file_path;
     if (m.media_type === "picture") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(m.file_path)}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.file_path, "image"); pics.appendChild(d); }
     if (m.media_type === "audio") { const d = document.createElement("div"); d.className = "audio-row"; d.innerHTML = `<strong>${esc((m.title||"").substring(0,50))}</strong><audio controls src="${escAttr(m.file_path)}"></audio>`; audio.appendChild(d); d.querySelector("audio").addEventListener("play", function(){ document.querySelectorAll("#audio audio").forEach(a => { if(a!==this) a.pause(); }); }); }
-    if (m.media_type === "video") { const d = document.createElement("div"); d.className = "media-card"; d.innerHTML = `<img src="${escAttr(ytThumb(m.video_url))}"><div class="media-title-label">${esc(m.title||"")}</div>`; d.onclick = () => openModal(m.video_url, "video"); videos.appendChild(d); }
+    if (m.media_type === "video") {
+      const d = document.createElement("div"); d.className = "media-card";
+      d.innerHTML = `<img alt=""><div class="media-title-label">${esc(m.title||"")}</div>`;
+      d.onclick = () => openModal(m.video_url, "video");
+      videos.appendChild(d);
+      // Prefer the shared helper (maxres YouTube + Vimeo oEmbed +
+      // branded platform fallbacks + play overlay); fall back to
+      // local ytThumb() if the helper hasn't loaded.
+      if (typeof window.attachVideoThumb === 'function') {
+        window.attachVideoThumb(d.querySelector('img'), m.video_url);
+      } else {
+        d.querySelector('img').src = ytThumb(m.video_url);
+      }
+    }
   });
   if (!pics.children.length) document.getElementById('picturesEmpty').style.display = 'block';
   if (!audio.children.length) document.getElementById('audioEmpty').style.display = 'block';
