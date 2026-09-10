@@ -1106,7 +1106,11 @@ def _send_hold_offer_email(db, gig_id: int, artist_id: int, token: str, is_remin
     # artist offered a multi-type gig — they'd see a Live Band slot
     # they can't book.
     open_slots = _list_matching_open_slots(db, gig_id, artist_id)
-    is_multi = bool(gig.get("is_multi_slot"))
+    # 2026-09-10: removed the `is_multi = bool(gig.get("is_multi_slot"))`
+    # local — post-backfill every gig is slot-shaped, so the two downstream
+    # `if is_multi and len(open_slots) > 1` checks collapse to just the
+    # slot-count check (the actual semantic: "should we render a slot
+    # picker vs a single-accept button?").
 
     # If no slots match this artist's type, don't send a useless offer.
     # Mark the waitlist row declined and advance to the next artist.
@@ -1132,7 +1136,7 @@ def _send_hold_offer_email(db, gig_id: int, artist_id: int, token: str, is_remin
     decline_url = f"{base_url}/hold/decline/{token}"
 
     # Compose the slot/pitch text variants
-    if is_multi and len(open_slots) > 1:
+    if len(open_slots) > 1:
         slots_pitch = f"This gig has {len(open_slots)} open slots — pick the one you want."
         accept_label = "Pick a slot →"
         multi_slot_pick_note = ""
@@ -1155,7 +1159,7 @@ def _send_hold_offer_email(db, gig_id: int, artist_id: int, token: str, is_remin
         return eff_fmt
 
     # Build the slots table rows for the offer card
-    if is_multi and len(open_slots) > 1:
+    if len(open_slots) > 1:
         slot_rows_html = ""
         for s in open_slots:
             time_str = f"{_fmt_time(s['start_time'])} – {_fmt_time(s['end_time'])}"

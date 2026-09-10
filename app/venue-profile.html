@@ -730,7 +730,7 @@
           html += '<div class="cal-gigs-container">';
           let gigIdx = 0;
           dayGigs.forEach((g) => {
-            if (g.is_multi_slot && g.slots && g.slots.length > 0) {
+            if (g.slots && g.slots.length > 0) {
               // Expand multi-slot gigs into individual slot bubbles
               g.slots.slice().sort((a,b) => (a.start_time||'').localeCompare(b.start_time||'')).forEach((slot, slotIdx) => {
                 const isBooked = slot.status === 'booked';
@@ -759,7 +759,7 @@
               // Single gig or non-multi-slot
               const cls = g.status === 'cancelled' ? 'cancelled' : g.status === 'booked' ? 'booked' : 'open';
               const t = fmtTime(g.start_time);
-              const icon = g.is_multi_slot ? (icons[g.artist_type] || '🎵') + ' ' : '';
+              const icon = (g.total_slots_count > 0) ? (icons[g.artist_type] || '🎵') + ' ' : '';
               const label = g.status === 'cancelled'
                 ? `${icon}${t} · Cancelled`
                 : (g.status === 'booked' && g.artist_name ? `${icon}${t} · ${g.artist_name}` : `${icon}${t} · ${g.title || 'Open'}`);
@@ -929,7 +929,7 @@
       let formats = g.artist_band_formats || g.band_formats || '';
       if (formats) formats = formats.replace(/,/g, ', ');
 
-      const isMultiSlot = g.is_multi_slot && g.total_slots_count > 0;
+      const isMultiSlot = g.total_slots_count > 0;
       const addr1 = venueData?.address_line_1 || '';
       const addr2 = venueData?.address_line_2 || '';
       const city = venueData?.city || '';
@@ -986,7 +986,7 @@
         window.venueGigDetails.mountLinks(document.getElementById('gigModalBody'));
       }
       // Only show flyer button for booked gigs
-      const gigIsBooked = g.status === 'booked' || (g.is_multi_slot && g.booked_slots_count > 0);
+      const gigIsBooked = g.status === 'booked' || g.booked_slots_count > 0;
       if (gigIsBooked) {
         fetch(`/api/gigs/${g.id}/flyer/public`).then(r=>r.json()).then(data=>{
           if (!data.exists) return;
@@ -1307,7 +1307,7 @@
       const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
 
       let rows = dayGigs.map(g => {
-        const isBooked = g.status === 'booked' || (g.is_multi_slot && g.booked_slots_count > 0);
+        const isBooked = g.status === 'booked' || g.booked_slots_count > 0;
         const gigBg    = isBooked ? 'linear-gradient(135deg,#ef4444,#b91c1c)' : 'linear-gradient(135deg,#10b981,#059669)';
         const gigBorder= isBooked ? '#b91c1c' : '#059669';
         const gigColor = isBooked ? '#ffffff' : '#000000';

@@ -1275,8 +1275,11 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
                     f"<span style='color:#374151;font-style:italic;'>"
                     f"\"{_esc(g['title'])}\"</span>"
                 )
-            if g.get("is_multi_slot") and g.get("open_slot_count"):
-                _n = int(g["open_slot_count"])
+            # 2026-09-10: dropped the is_multi_slot guard — every gig is
+            # slot-shaped post-backfill, so this now fires for any gig
+            # with open slots (which is what the digest cares about).
+            _n = int(g.get("open_slot_count") or 0)
+            if _n:
                 right_parts.append(
                     f"<span style='color:#6b7280;'>"
                     f"{_n} open slot{'s' if _n != 1 else ''}</span>"

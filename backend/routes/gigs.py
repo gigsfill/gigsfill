@@ -1454,10 +1454,13 @@ def list_artist_gigs_public(artist_id: int, request: Request, db=Depends(get_db)
         # the artist-profile hover card / day modal can render per-slot
         # breakdowns without an N+1 fan-out. Same redacted shape as
         # /api/gigs/{id}/slots/public.
-        multi_ids = [r["id"] for r in result if r.get("is_multi_slot")]
-        if multi_ids:
-            placeholders = ",".join([f":id{i}" for i, _ in enumerate(multi_ids)])
-            params = {f"id{i}": gid for i, gid in enumerate(multi_ids)}
+        # 2026-09-10: dropped the `if r.get("is_multi_slot")` filter —
+        # post-backfill every gig is slot-shaped, so the guard was a
+        # no-op and just made the code look conditional.
+        gig_ids = [r["id"] for r in result]
+        if gig_ids:
+            placeholders = ",".join([f":id{i}" for i, _ in enumerate(gig_ids)])
+            params = {f"id{i}": gid for i, gid in enumerate(gig_ids)}
             slot_rows = db.execute(
                 text(f"""
                     SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
@@ -1476,8 +1479,7 @@ def list_artist_gigs_public(artist_id: int, request: Request, db=Depends(get_db)
             for s in slot_rows:
                 by_gig.setdefault(s["gig_id"], []).append(dict(s))
             for r in result:
-                if r.get("is_multi_slot"):
-                    r["slots"] = by_gig.get(r["id"], [])
+                r["slots"] = by_gig.get(r["id"], [])
 
         return result
     except Exception as e:
@@ -1555,15 +1557,17 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
         # venue dashboards return for door-less slots.
         rows = _enrich_pay_summary([dict(r) for r in rows])
 
-        # Attach per-slot data to multi-slot gigs in ONE batched query so
+        # Attach per-slot data to every gig in ONE batched query so
         # public calendar consumers (venue-profile, artist-profile, public-
         # gigs) can render per-slot bubble colors + hover breakdowns without
         # an N+1 fan-out. Financial fields are excluded — same redaction as
-        # /api/gigs/{id}/slots/public above.
-        multi_ids = [r["id"] for r in rows if r.get("is_multi_slot")]
-        if multi_ids:
-            placeholders = ",".join([f":id{i}" for i, _ in enumerate(multi_ids)])
-            params = {f"id{i}": gid for i, gid in enumerate(multi_ids)}
+        # /api/gigs/{id}/slots/public above. (2026-09-10 cleanup: dropped
+        # the `if r.get('is_multi_slot')` filter; post-backfill every gig
+        # is slot-shaped.)
+        gig_ids = [r["id"] for r in rows]
+        if gig_ids:
+            placeholders = ",".join([f":id{i}" for i, _ in enumerate(gig_ids)])
+            params = {f"id{i}": gid for i, gid in enumerate(gig_ids)}
             slot_rows = db.execute(
                 text(f"""
                     SELECT gs.id, gs.gig_id, gs.slot_number, gs.start_time, gs.end_time,
@@ -1582,8 +1586,7 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
             for s in slot_rows:
                 by_gig.setdefault(s["gig_id"], []).append(dict(s))
             for r in rows:
-                if r.get("is_multi_slot"):
-                    r["slots"] = by_gig.get(r["id"], [])
+                r["slots"] = by_gig.get(r["id"], [])
 
         return rows
 
@@ -3408,9 +3411,11 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
                     _details["artist_name"] = _a["name"]
             except Exception:
                 pass
-        # For multi-slot gigs: use the cancelled SLOT's time, not parent gig time
-        # Parent gig start/end spans ALL slots (e.g. 7pm-11pm for two slots)
-        if request_artist_id and effective_result.get("is_multi_slot"):
+        # For gigs with per-slot times: use the cancelled SLOT's time, not
+        # parent gig time — parent gig start/end spans ALL slots
+        # (e.g. 7pm-11pm for two slots). Every gig has slots post-backfill
+        # so this fires whenever we know which artist was on which slot.
+        if request_artist_id:
             try:
                 _slot = db.execute(
                     text("""SELECT start_time, end_time, pay FROM gig_slots
@@ -8129,7 +8134,6 @@ def get_public_flyer(gig_id: int, db=Depends(get_db)):
                    f.venue_id, v.default_flyer_template_id,
                    COALESCE(v.auto_flyers, 0) as auto_flyers,
                    g.status as gig_status,
-                   COALESCE(g.is_multi_slot, 0) as is_multi_slot,
                    (SELECT COUNT(*) FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')) as booked_slots_count
             FROM flyers f
             JOIN venues v ON f.venue_id = v.id
@@ -8148,7 +8152,6 @@ def get_public_flyer(gig_id: int, db=Depends(get_db)):
         f = dict(flyer_row._mapping)
         gig_status = f.get("gig_status", "")
         booked_slots = f.get("booked_slots_count", 0)
-        is_multi_slot = f.get("is_multi_slot", 0)
         gig_is_booked = (gig_status == "booked") or (booked_slots > 0)
 
         # Best case: manually saved thumbnail — always show regardless of open/booked
@@ -8173,7 +8176,6 @@ def get_public_flyer(gig_id: int, db=Depends(get_db)):
         venue_row = db.execute(text("""
             SELECT v.id as venue_id, COALESCE(v.auto_flyers, 0) as auto_flyers,
                    v.default_flyer_template_id, g.status as gig_status,
-                   COALESCE(g.is_multi_slot, 0) as is_multi_slot,
                    (SELECT COUNT(*) FROM gig_slots gs WHERE gs.gig_id = g.id AND gs.status IN ('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')) as booked_slots_count
             FROM gigs g JOIN venues v ON g.venue_id = v.id
             WHERE g.id = :gid
@@ -8182,7 +8184,6 @@ def get_public_flyer(gig_id: int, db=Depends(get_db)):
             v = venue_row._mapping
             gig_status = v.get("gig_status", "")
             booked_slots = v.get("booked_slots_count", 0)
-            is_multi_slot = v.get("is_multi_slot", 0)
             gig_is_booked = (gig_status == "booked") or (booked_slots > 0)
             # Only show flyer for booked gigs
             if not gig_is_booked:
@@ -8509,7 +8510,11 @@ def venue_ical(venue_id: int, user=Depends(get_current_user), db=Depends(get_db)
         # $25.00 guarantee + 20% of door". Single-slot uses the gig.pay
         # fallback inside the helper.
         slots = slots_by_gig.get(r["id"]) or []
-        if slots and r.get("is_multi_slot"):
+        # 2026-09-10: switched the branch from is_multi_slot to the actual
+        # semantic — does this gig have multiple slots worth breaking out
+        # separately? Post-backfill every gig is is_multi_slot=1, so the
+        # old flag no longer distinguished "1 slot" from "2+ slots".
+        if len(slots) > 1:
             pay_lines = []
             for s in slots:
                 pay_str = format_pay_summary_with_sign(s)
