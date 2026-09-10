@@ -3855,6 +3855,49 @@ def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depen
     return {"ok": True}
 
 
+@router.post("/api/gigs/{gig_id}/restore")
+def restore_cancelled_gig(gig_id: int,
+                          user=Depends(get_current_user),
+                          db=Depends(get_db)):
+    """Un-cancel a gig — flip status='cancelled' back to 'open'.
+
+    Only meaningful for gigs the venue previously cancelled with
+    keep_cancelled=True (they appear on the calendar with the
+    CANCELLED marker). Slots reopen too. Money already refunded
+    stays refunded; venue re-collects when the gig is re-booked.
+    """
+    from backend.utils import check_venue_access
+    gig = db.execute(text(
+        "SELECT venue_id, status FROM gigs WHERE id = :gid"
+    ), {"gid": gig_id}).mappings().first()
+    if not gig:
+        raise HTTPException(404, "Gig not found")
+    check_venue_access(db, gig["venue_id"], user.id)
+    if gig["status"] != 'cancelled':
+        # Not an error state — the venue may have double-clicked or
+        # opened a stale modal. Just report the current state.
+        return {"ok": True, "already_active": True, "status": gig["status"]}
+    db.execute(text(
+        "UPDATE gigs SET status = 'open' WHERE id = :gid"
+    ), {"gid": gig_id})
+    db.execute(text(
+        "UPDATE gig_slots SET status = 'open' WHERE gig_id = :gid AND status = 'cancelled'"
+    ), {"gid": gig_id})
+    db.commit()
+    # Audit trail so incident review can trace restores separately
+    # from creates (they're not the same thing operationally).
+    try:
+        from backend.utils import log_admin_action
+        log_admin_action(
+            db, user, "gig_restore",
+            target_table="gigs", target_id=gig_id,
+            metadata={"venue_id": int(gig["venue_id"])},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "status": "open"}
+
+
 @router.post("/api/gigs/{gig_id}/detach-series")
 def detach_from_series(gig_id: int, user=Depends(get_current_user), db=Depends(get_db)):
     """Remove a single gig from its recurring series, making it a standalone gig."""

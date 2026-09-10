@@ -954,6 +954,7 @@
         rows += modalRowRaw('Artist', artistLink);
       }
       if (!isMultiSlot && g.status === 'open') rows += modalRow('Status', 'Open – Looking for artist');
+      if (g.status === 'cancelled') rows += modalRowRaw('Status', '<span style="color:#f87171;font-weight:700;letter-spacing:0.1em;">🚫 CANCELLED</span>');
       if (artType) rows += modalRow('Artist Type', artType);
       if (artType === 'Live Band' && formats) rows += modalRow('Band Formats', formats);
       
@@ -996,6 +997,25 @@
           window._flyerCache = window._flyerCache || {};
           window._flyerCache[g.id] = data;
         }).catch(()=>{});
+      }
+      // 2026-09-10: overlay a big diagonal CANCELLED watermark on the
+      // modal for cancelled gigs. Purge any leftover watermark first
+      // so it doesn't leak between opens.
+      const _modalRoot = document.querySelector('#gigModal .gig-modal');
+      if (_modalRoot) {
+        _modalRoot.querySelectorAll('.gf-modal-cancelled-watermark').forEach(el => el.remove());
+        if (g.status === 'cancelled') {
+          _modalRoot.style.position = _modalRoot.style.position || 'relative';
+          const wm = document.createElement('div');
+          wm.className = 'gf-modal-cancelled-watermark';
+          wm.setAttribute('aria-hidden', 'true');
+          wm.style.cssText = 'position:absolute;inset:0;z-index:5;pointer-events:none;display:flex;align-items:center;justify-content:center;overflow:hidden;';
+          wm.innerHTML = `
+            <div style="transform:rotate(-18deg);border:6px solid rgba(239,68,68,0.7);border-radius:14px;padding:10px 34px;background:rgba(0,0,0,0.15);">
+              <div style="font-size:3rem;font-weight:900;letter-spacing:0.18em;color:rgba(239,68,68,0.85);text-shadow:0 2px 8px rgba(0,0,0,0.6);white-space:nowrap;">CANCELLED</div>
+            </div>`;
+          _modalRoot.appendChild(wm);
+        }
       }
       document.getElementById('gigModal').classList.remove('hidden');
     }

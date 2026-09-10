@@ -3104,6 +3104,10 @@ async function renderCalendar() {
     async function openGigModal(gig) {
     selectedGig = gig;
     selectedDate = gig.date;
+    // Purge any leftover CANCELLED watermark from a previous modal
+    // open — the cancelled-gig branch re-adds it below.
+    document.querySelectorAll('#modalOverlay .gf-modal-cancelled-watermark')
+            .forEach(el => el.remove());
     // Invalidate the Hold-picker freq cache: freq_status is per gig
     // date, and the modal can be opened for different dates in a
     // session. Re-fetch on next Hold-panel open (Jun 2026).
@@ -3267,7 +3271,10 @@ async function renderCalendar() {
     }
     
     if (gig.id && gig.status === "cancelled") {
-      // Cancelled gig — show read-only view
+      // Cancelled gig — show read-only view with a diagonal CANCELLED
+      // watermark overlaid on the modal so the state is unmissable,
+      // plus a Restore button that flips status back to 'open' via
+      // POST /api/gigs/{id}/restore.
       modalTitle.textContent = "🚫 Cancelled Gig";
       gigInputFields.forEach(field => field.style.display = "flex");
       if (gigDateInput) gigDateInput.textContent = formatDateForDisplay(gig.date);
@@ -3276,14 +3283,72 @@ async function renderCalendar() {
       if (deleteBtn) deleteBtn.classList.remove("hidden");
       const recurBlock = document.getElementById("recurringBlock");
       if (recurBlock) recurBlock.style.display = "none";
-      // Show cancelled notice banner
+      // Show cancelled notice banner + Restore button.
       const existingBanner = document.getElementById('venue-blast-banner');
       if (existingBanner) existingBanner.remove();
       const cancelledBanner = document.createElement('div');
       cancelledBanner.id = 'venue-blast-banner';
-      cancelledBanner.style.cssText = 'margin:0 0 16px 0;padding:12px 16px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;';
-      cancelledBanner.innerHTML = '<p style="margin:0;font-size:0.88rem;font-weight:700;color:#f87171;">🚫 This gig has been cancelled</p>';
+      cancelledBanner.style.cssText = 'margin:0 0 16px 0;padding:12px 16px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;';
+      cancelledBanner.innerHTML = `
+        <p style="margin:0;font-size:0.88rem;font-weight:700;color:#f87171;">🚫 This gig has been cancelled</p>
+        <button id="restoreCancelledGigBtn" type="button"
+          style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.5);color:#22c55e;border-radius:6px;padding:6px 14px;font-size:0.82rem;font-weight:600;cursor:pointer;">
+          ↺ Restore to Open
+        </button>`;
       modalSection.insertAdjacentElement('beforebegin', cancelledBanner);
+      // Wire the Restore button.
+      const _restoreBtn = document.getElementById('restoreCancelledGigBtn');
+      if (_restoreBtn) {
+        _restoreBtn.addEventListener('click', async () => {
+          const ok = await (window.showConfirm
+            ? new Promise(res => window.showConfirm('Restore gig', 'Restore this gig to "open" so artists can book it? Any refunds already issued stay refunded.', {
+                confirmText: 'Restore',
+                onConfirm: () => res(true),
+                onCancel:  () => res(false),
+              }))
+            : Promise.resolve(window.confirm('Restore this gig to "open"?')));
+          if (!ok) return;
+          _restoreBtn.disabled = true;
+          _restoreBtn.textContent = 'Restoring…';
+          try {
+            const r = await fetch(`/api/gigs/${gig.id}/restore`, {
+              method: 'POST', credentials: 'include',
+            });
+            if (!r.ok) {
+              const j = await r.json().catch(() => ({}));
+              throw new Error(j.detail || `Server returned ${r.status}`);
+            }
+            invalidateGigs(); await renderCalendar();
+            document.getElementById('modalOverlay').classList.add('hidden');
+          } catch (e) {
+            alert('Restore failed: ' + e.message);
+            _restoreBtn.disabled = false;
+            _restoreBtn.textContent = '↺ Restore to Open';
+          }
+        });
+      }
+      // Diagonal CANCELLED watermark overlaid on the modal. Pointer
+      // events off so clicks on Close / Restore still work.
+      const _modalRoot = document.querySelector('#modalOverlay .modal');
+      if (_modalRoot) {
+        const existingWm = _modalRoot.querySelector('.gf-modal-cancelled-watermark');
+        if (existingWm) existingWm.remove();
+        _modalRoot.style.position = _modalRoot.style.position || 'relative';
+        const wm = document.createElement('div');
+        wm.className = 'gf-modal-cancelled-watermark';
+        wm.setAttribute('aria-hidden', 'true');
+        wm.style.cssText = [
+          'position:absolute','inset:0','z-index:5',
+          'pointer-events:none','display:flex',
+          'align-items:center','justify-content:center',
+          'overflow:hidden',
+        ].join(';');
+        wm.innerHTML = `
+          <div style="transform:rotate(-18deg);border:6px solid rgba(239,68,68,0.7);border-radius:14px;padding:10px 34px;background:rgba(0,0,0,0.15);backdrop-filter:blur(1px);">
+            <div style="font-size:3.2rem;font-weight:900;letter-spacing:0.18em;color:rgba(239,68,68,0.85);text-shadow:0 2px 8px rgba(0,0,0,0.6);white-space:nowrap;">CANCELLED</div>
+          </div>`;
+        _modalRoot.appendChild(wm);
+      }
       document.getElementById('modalOverlay').classList.remove('hidden');
       return;
     }
