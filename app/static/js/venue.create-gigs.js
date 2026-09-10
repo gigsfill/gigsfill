@@ -3107,6 +3107,21 @@ async function renderCalendar() {
     // open — the cancelled-gig branch re-adds it below.
     document.querySelectorAll('#modalOverlay .gf-modal-cancelled-watermark')
             .forEach(el => el.remove());
+    // 2026-09-10: reset the recurring-options "end" row so the
+    // "After N weeks" option is visible again by default. The
+    // edit-a-recurring-series branch below hides that option to
+    // force absolute-date semantics — this reset undoes the hide
+    // when the user opens a different (non-recurring or new) gig.
+    (function _resetRecurringEndOptions() {
+      const _endAfterInp = document.getElementById('endAfter');
+      const _endByInp    = document.getElementById('endBy');
+      const _afterOpt = _endAfterInp && _endAfterInp.closest('.recur-end-option');
+      if (_afterOpt) _afterOpt.style.display = '';
+      const _orSep = document.querySelector('#recurringOptions .recur-or-sep');
+      if (_orSep) _orSep.style.display = '';
+      const _byPill = _endByInp && _endByInp.closest('.recur-end-option')?.querySelector('.end-pill');
+      if (_byPill) _byPill.style.display = '';
+    })();
     // Invalidate the Hold-picker freq cache: freq_status is per gig
     // date, and the modal can be opened for different dates in a
     // session. Re-fetch on next Hold-panel open (Jun 2026).
@@ -3973,30 +3988,77 @@ async function renderCalendar() {
             if (_dayEl) _dayEl.checked = true;
           }
           
-          // Set end type
-          const endType = (gig.recurring_end_type && gig.recurring_end_type !== 'never') ? gig.recurring_end_type : 'after';
-          document.querySelectorAll('input[name="endType"]').forEach(radio => {
-            radio.checked = (radio.value === endType);
+          // 2026-09-10: on Edit, always show the series end as an
+          // ABSOLUTE date rather than the historical "N weeks" count
+          // the user picked at create time. That number silently
+          // becomes meaningless as time passes — "12 weeks" on
+          // creation, but 8 weeks later the user reads "12" and
+          // thinks the series is 12 more weeks (backend actually
+          // extends N from today when they save, doubling the
+          // confusion). Absolute date doesn't drift.
+          //
+          // Compute the effective end date from the cache: the
+          // latest date across every gig in this recurring_group_id
+          // that hasn't already passed. Count of upcoming = "gigs
+          // remaining". Both drive a summary line the venue can
+          // read at a glance.
+          const _grpId = gig.recurring_group_id;
+          const _today = new Date(); _today.setHours(0, 0, 0, 0);
+          const _seriesGigs = (venueGigsCache || []).filter(g => g.recurring_group_id === _grpId);
+          const _upcomingGigs = _seriesGigs.filter(g => {
+            const d = new Date(g.date + 'T00:00:00');
+            return d >= _today;
           });
-          
-          endAfterInput.disabled = endType !== 'after';
-          endByInput.disabled = endType !== 'by';
-          
-          if (endType === 'after' && gig.recurring_end_after) {
-            endAfterInput.value = gig.recurring_end_after;
-          }
-          if (endType === 'by' && gig.recurring_end_by_date) {
-            // Convert backend ISO yyyy-mm-dd to the display mm/dd/yyyy.
-            endByInput.value = _isoToDisp(gig.recurring_end_by_date);
-          }
-          
-          // Add series indicator
+          const _lastDateIso = _seriesGigs
+            .map(g => g.date)
+            .filter(Boolean)
+            .sort()
+            .slice(-1)[0]  // last item after ascending sort
+            || gig.recurring_end_by_date
+            || gig.date;
+          const _gigsRemaining = _upcomingGigs.length;
+
+          // Force endType='by' so the date picker is the one visible
+          // control. Hide the "After N weeks" row entirely on Edit —
+          // absolute date is unambiguous.
+          document.querySelectorAll('input[name="endType"]').forEach(radio => {
+            radio.checked = (radio.value === 'by');
+          });
+          endAfterInput.disabled = true;
+          endByInput.disabled = false;
+          endByInput.value = _isoToDisp(_lastDateIso);
+          // Hide the "After N weeks" option row on Edit — only the
+          // "By [date]" row makes sense once a series exists.
+          const _endAfterOption = endAfterInput.closest('.recur-end-option');
+          if (_endAfterOption) _endAfterOption.style.display = 'none';
+          const _endOrSep = document.querySelector('#recurringOptions .recur-or-sep');
+          if (_endOrSep) _endOrSep.style.display = 'none';
+          // Also hide the "By" pill label — with the alternative gone
+          // the picker + a "Series ends" label are enough. Keep the
+          // radio in the DOM so the endType read still works.
+          const _endByPill = endByInput.closest('.recur-end-option')?.querySelector('.end-pill');
+          if (_endByPill) _endByPill.style.display = 'none';
+
+          // Format the end date for the summary blurb.
+          const _endDateLabel = (function () {
+            const m = String(_lastDateIso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (!m) return '';
+            const d = new Date(+m[1], +m[2] - 1, +m[3]);
+            return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+          })();
+
+          // Series indicator: state + summary + edit-intent hint.
           gigArtistInfo.style.display = "block";
           gigArtistInfo.innerHTML = `
             <div style="padding: 12px; background: rgba(124, 107, 255, 0.15); border: 1px solid rgba(124, 107, 255, 0.3); border-radius: 8px; margin-bottom: 16px;">
               <div style="font-size: 0.875rem; color: #a78bfa; font-weight: 500; text-align: center;">
-                🔁 This gig is part of a recurring series<br>
-                <span style="font-size: 0.75rem; opacity: 0.8;">Changes to recurring settings will add/remove gigs (booked gigs won't be deleted)</span>
+                🔁 This gig is part of a recurring series
+              </div>
+              <div style="font-size: 0.78rem; color: #c4b5fd; margin-top: 6px; text-align: center;">
+                Currently ends <strong>${_endDateLabel || '—'}</strong> · <strong>${_gigsRemaining}</strong> gig${_gigsRemaining === 1 ? '' : 's'} remaining
+              </div>
+              <div style="font-size: 0.72rem; opacity: 0.75; margin-top: 8px; text-align: center; color: #ddd6fe;">
+                Change the end date above to extend or trim the series. Booked gigs are preserved either way.
               </div>
             </div>
           `;
