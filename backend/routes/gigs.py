@@ -1541,6 +1541,10 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
                   -- They become visible (and bookable) only after the
                   -- venue resolves the hold (accept → 'booked', open → NULL).
                   AND (g.hold_status IS NULL OR g.hold_status NOT IN ('active','exhausted'))
+                -- 2026-09-10: cancelled gigs ARE returned here so the venue's
+                -- public calendar can render them with a CANCELLED badge.
+                -- Artist search filters status='open' on its side, so
+                -- cancelled ones naturally don't clutter their booking view.
                 ORDER BY g.date ASC
             """)
         ).mappings().all()
@@ -2976,6 +2980,12 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
     cancelled_by = data.get("cancelled_by", "venue")  # "venue" or "artist"
     cancellation_reason = data.get("cancellation_reason", "")
     keep_open = data.get("keep_open", False)  # If True, reset to open instead of deleting
+    # 2026-09-10: keep_cancelled — new "mark as cancelled but keep on
+    # calendar" path. Mutually exclusive with keep_open (if both slip
+    # through, keep_cancelled wins as the more explicit intent).
+    keep_cancelled = data.get("keep_cancelled", False)
+    if keep_cancelled:
+        keep_open = False
     request_artist_id = data.get("artist_id")  # For slot bookings where gig.artist_id is NULL
 
     result = db.execute(
@@ -3204,45 +3214,58 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
                 {"gid": gig_id, "aid": effective_result.get("artist_id")}
             ).scalar() or 0
             if other_booked > 0:
+                # If other slots are still booked and the venue chose
+                # keep_cancelled, we still can't wipe the whole gig —
+                # force keep_open behavior instead (this cancel is
+                # per-artist within a multi-slot gig; only the caller's
+                # slots reset). keep_cancelled applies gig-wide, so it
+                # only makes sense when no other bookings remain.
                 logger.info(f"[CANCEL_GIG] venue cancel: {other_booked} other in-flight slot(s) remain — forcing keep_open for gig {gig_id}")
                 keep_open = True
+                keep_cancelled = False
 
-        if keep_open:
-            # Reset to open — keep gig on calendar, clear artist/contract
+        if keep_open or keep_cancelled:
+            # Reset + keep gig on calendar. Two variants:
+            #   keep_open       → status='open', slots reopen, artists can book
+            #   keep_cancelled  → status='cancelled', slots frozen open but
+            #                     excluded from search / digest / blast /
+            #                     public open-gig listings, rendered with a
+            #                     CANCELLED badge everywhere
+            _target_status = 'cancelled' if keep_cancelled else 'open'
+            # Reset to target status — keep gig on calendar, clear artist/contract
             # Only reset slots belonging to the cancelled artist (leaves other booked slots intact)
             if effective_result.get("artist_id"):
                 db.execute(
                     text("""UPDATE gig_slots
-                            SET status = 'open', artist_id = NULL,
+                            SET status = :st, artist_id = NULL,
                                 pay = (SELECT g.pay FROM gigs g WHERE g.id = :gid)
                             WHERE gig_id = :gid AND artist_id = :aid"""),
-                    {"gid": gig_id, "aid": effective_result["artist_id"]}
+                    {"gid": gig_id, "aid": effective_result["artist_id"], "st": _target_status}
                 )
             else:
                 # No specific artist — reset all slots
                 db.execute(
                     text("""UPDATE gig_slots
-                            SET status = 'open', artist_id = NULL,
+                            SET status = :st, artist_id = NULL,
                                 pay = (SELECT g.pay FROM gigs g WHERE g.id = :gid)
                             WHERE gig_id = :gid"""),
-                    {"gid": gig_id}
+                    {"gid": gig_id, "st": _target_status}
                 )
             # Audit fix (May 2026 part 3): NULL `gigs.artist_id` only when
             # it actually points at the cancelling artist. Multi-slot
             # gigs with other slots still booked would otherwise lose
             # the link to whichever artist `gigs.artist_id` was already
             # pointing at (typically the first booked artist on the gig).
-            # Also drop the stray `:gig` bound parameter — never used.
             _cancelled_aid_for_clear = effective_result.get("artist_id")
             db.execute(
                 text("""UPDATE gigs
-                        SET status = 'open',
+                        SET status = :st,
                             artist_id = CASE WHEN artist_id = :aid OR :aid IS NULL THEN NULL ELSE artist_id END,
                             radius_blast_token = NULL,
                             contract_hold_artist_id = NULL,
                             contract_hold_expires_at = NULL
                         WHERE id = :gid"""),
-                {"gid": gig_id, "aid": _cancelled_aid_for_clear}
+                {"gid": gig_id, "aid": _cancelled_aid_for_clear, "st": _target_status}
             )
             # BUG FIX (Jul 2026 audit): mirror the artist-cancel and cancel_slot
             # branches' waitlist cleanup here. Without it, the cancelled
@@ -3417,8 +3440,11 @@ async def cancel_gig(gig_id: int, request: Request, db=Depends(get_db), user=Dep
         _threading.Thread(target=_send_cancel_emails_bg, daemon=True).start()
 
     # Fire cancelled-gig preferred blast if: gig is now open (keep_open or artist cancel) AND within 7 days
-    gig_is_now_open = keep_open or (cancelled_by == "artist")
-    logger.info(f"[BLAST] cancel_gig: keep_open={keep_open}, cancelled_by={cancelled_by}, gig_is_now_open={gig_is_now_open}, gig_id={gig_id}, venue_id={effective_result.get('venue_id')}")
+    # keep_cancelled explicitly excluded — the gig is NOT open in that mode
+    # (it's frozen with status='cancelled') so blasting artists to book a
+    # gig that's now marked cancelled would be a bug.
+    gig_is_now_open = (keep_open and not keep_cancelled) or (cancelled_by == "artist")
+    logger.info(f"[BLAST] cancel_gig: keep_open={keep_open}, keep_cancelled={keep_cancelled}, cancelled_by={cancelled_by}, gig_is_now_open={gig_is_now_open}, gig_id={gig_id}, venue_id={effective_result.get('venue_id')}")
     if gig_is_now_open:
         _gig_id_bg  = gig_id
         _venue_id_bg = effective_result.get("venue_id")
@@ -6401,6 +6427,7 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
 
         cancellation_reason = ""
         keep_open = False
+        keep_cancelled = False  # 2026-09-10: new "mark cancelled but keep on calendar" path
         content_type = request.headers.get("content-type", "")
         if "application/json" in content_type:
             try:
@@ -6410,6 +6437,12 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                     body_data = _json.loads(body)
                     cancellation_reason = body_data.get("cancellation_reason", "")
                     keep_open = body_data.get("keep_open", False)
+                    keep_cancelled = body_data.get("keep_cancelled", False)
+                    # keep_open and keep_cancelled are mutually exclusive.
+                    # If both slip through (frontend bug), keep_cancelled wins
+                    # since it's the more explicit "keep on calendar" intent.
+                    if keep_cancelled:
+                        keep_open = False
             except Exception:
                 pass
 
@@ -6457,14 +6490,21 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
             raise HTTPException(404, "Gig not found")
         gig = dict(gig)
 
-        if keep_open:
-            # Reset slots to open — keep gig on calendar
+        if keep_open or keep_cancelled:
+            # Reset slots + keep gig on calendar. Two variants:
+            #   keep_open       — status='open' → visible to artists, bookable
+            #   keep_cancelled  — status='cancelled' → visible everywhere with
+            #                     a CANCELLED marker but NOT bookable, excluded
+            #                     from open-gig searches / digests / blasts
+            _target_status = 'cancelled' if keep_cancelled else 'open'
             try:
-                db.execute(text("""UPDATE gig_slots SET status='open', artist_id=NULL,
-                    pay=(SELECT g.pay FROM gigs g WHERE g.id=:gid) WHERE gig_id=:gid"""), {"gid": gig_id})
-                db.execute(text("""UPDATE gigs SET status='open', artist_id=NULL,
+                db.execute(text("""UPDATE gig_slots SET status=:st, artist_id=NULL,
+                    pay=(SELECT g.pay FROM gigs g WHERE g.id=:gid) WHERE gig_id=:gid"""),
+                    {"gid": gig_id, "st": _target_status})
+                db.execute(text("""UPDATE gigs SET status=:st, artist_id=NULL,
                     contract_hold_artist_id=NULL, contract_hold_expires_at=NULL,
-                    radius_blast_token=NULL WHERE id=:gid"""), {"gid": gig_id})
+                    radius_blast_token=NULL WHERE id=:gid"""),
+                    {"gid": gig_id, "st": _target_status})
                 db.commit()
 
                 # FIX (May 2026): the cleanup that was missing from this endpoint.
@@ -6598,14 +6638,14 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
 
         # Send notifications (best-effort — never fail the response)
         # BUG FIX (Jul 2026 audit): pass gig_id=None in the delete branch
-        # (keep_open=False). notifications.gig_id FKs to gigs(id) with no
-        # ON DELETE CASCADE, and the gig row was DELETEd at line 6241 above.
-        # Without this fix, every create_notification call raised
-        # IntegrityError caught by the outer try/except → every in-app
-        # cancellation notification silently dropped. The cancellation email
-        # (which doesn't touch notifications) still fired, so the artist got
-        # an email but no Activity Center row.
-        _notif_gig_id = gig_id if keep_open else None
+        # (keep_open=False AND keep_cancelled=False). notifications.gig_id
+        # FKs to gigs(id) with no ON DELETE CASCADE, and the gig row was
+        # DELETEd in the else-branch above. Without this fix, every
+        # create_notification call raised IntegrityError caught by the
+        # outer try/except → every in-app cancellation notification
+        # silently dropped. keep_cancelled preserves the gig row (just
+        # flipped to status='cancelled'), so gig_id is safe to attach.
+        _notif_gig_id = gig_id if (keep_open or keep_cancelled) else None
         if gig:
             event_label = gig.get("artist_type") or gig.get("title") or "Event"
             for s in booked_slots:
@@ -6655,7 +6695,9 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                 except Exception as e:
                     logger.warning(f"Cancellation email failed: {e}")
 
-            # Blast / waitlist for keep_open
+            # Blast / waitlist ONLY when the gig is reopening for
+            # bookings — keep_cancelled explicitly excluded because
+            # a cancelled gig can't be booked.
             if keep_open:
                 try:
                     from backend.routes.waitlist import notify_waitlist, _has_active_waitlist
@@ -6676,6 +6718,7 @@ async def delete_gig_with_slots(gig_id: int, request: Request, db=Depends(get_db
                 target_table="gigs", target_id=gig_id,
                 metadata={
                     "keep_open": bool(keep_open),
+                    "keep_cancelled": bool(keep_cancelled),
                     "booked_artist_ids": [int(s["artist_id"]) for s in (booked_slots or []) if s.get("artist_id")],
                     "cancellation_reason": (cancellation_reason or "")[:200],
                 },

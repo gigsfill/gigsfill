@@ -5903,20 +5903,23 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
               </label>
               <div style="margin-bottom: 8px; font-weight: 500; color: #ffffff;">After cancelling:</div>
               <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeMulti" value="keep_open" checked style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Keep Event Open? <span style="color:#22c55e;font-weight:600;">(re-list the slot as available)</span></td></tr></table>
+              <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeMulti" value="keep_cancelled" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Show as Cancelled on Calendar? <span style="color:#f59e0b;font-weight:600;">(keep visible with CANCELLED badge — not bookable)</span></td></tr></table>
               <table style="border-collapse:collapse;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeMulti" value="delete_gig" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Delete Event Entirely? <span style="color:#ef4444;font-weight:600;">(remove from calendar)</span></td></tr></table>
             </div>
           `;
-          
+
           gigArtistInfo.insertAdjacentHTML('beforeend', cancellationHTML);
           deleteBtn.textContent = "Confirm Cancel Event";
           deleteBtn.style.background = "#dc3545";
           if (cancelGigBtn) cancelGigBtn.textContent = "Close";
           return;
         }
-        
+
         // Second click - actually cancel with reason
         const cancelReason = document.getElementById("cancelReason")?.value || "";
-        const keepOpen = (document.querySelector('input[name="cancelModeMulti"]:checked')?.value ?? 'keep_open') === 'keep_open';
+        const _cancelMode = document.querySelector('input[name="cancelModeMulti"]:checked')?.value ?? 'keep_open';
+        const keepOpen = _cancelMode === 'keep_open';
+        const keepCancelled = _cancelMode === 'keep_cancelled';
         deleteBtn.disabled = true;
         deleteBtn.textContent = 'Cancelling...';
         try {
@@ -5924,7 +5927,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ cancellation_reason: cancelReason, keep_open: keepOpen })
+            body: JSON.stringify({ cancellation_reason: cancelReason, keep_open: keepOpen, keep_cancelled: keepCancelled })
           });
           if (!resp.ok) {
             // Audit fix (May 2026 part 3): surface FastAPI detail body
@@ -6004,19 +6007,22 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
             </label>
             <div style="margin-bottom: 8px; font-weight: 500; color: #ffffff;">After cancelling:</div>
             <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeSingle" value="keep_open" checked style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Keep Gig Open? <span style="color:#22c55e;font-weight:600;">(re-list as available to book)</span></td></tr></table>
+            <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeSingle" value="keep_cancelled" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Show as Cancelled on Calendar? <span style="color:#f59e0b;font-weight:600;">(keep visible with CANCELLED badge — not bookable)</span></td></tr></table>
             <table style="border-collapse:collapse;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeSingle" value="delete_gig" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Delete Gig Entirely? <span style="color:#ef4444;font-weight:600;">(remove from calendar)</span></td></tr></table>
           </div>
         `;
-        
+
         gigArtistInfo.insertAdjacentHTML('beforeend', cancellationHTML);
         deleteBtn.textContent = "Confirm Cancel Gig";
         deleteBtn.style.background = "#dc3545";
         if (cancelGigBtn) cancelGigBtn.textContent = "Close";
         return;
       }
-      
+
       const cancelReason = document.getElementById("cancelReason")?.value || "";
-      const keepOpen = (document.querySelector('input[name="cancelModeSingle"]:checked')?.value ?? 'keep_open') === 'keep_open';
+      const _cancelMode = document.querySelector('input[name="cancelModeSingle"]:checked')?.value ?? 'keep_open';
+      const keepOpen = _cancelMode === 'keep_open';
+      const keepCancelled = _cancelMode === 'keep_cancelled';
       deleteBtn.disabled = true;
       deleteBtn.textContent = 'Cancelling...';
       try {
@@ -6024,7 +6030,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ cancelled_by: "venue", cancellation_reason: cancelReason, keep_open: keepOpen })
+          body: JSON.stringify({ cancelled_by: "venue", cancellation_reason: cancelReason, keep_open: keepOpen, keep_cancelled: keepCancelled })
         });
         if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
         
