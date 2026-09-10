@@ -5924,11 +5924,21 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     const cancelGigBtn = document.getElementById("cancelGig");
     const gigArtistInfo = document.getElementById("gigArtistInfo");
     
-    // Check if this gig is part of a recurring series (only for open gigs)
-    if (selectedGig.recurring_group_id && selectedGig.status !== "booked") {
+    // Check if this gig is part of a recurring series (only for open gigs).
+    // 2026-09-10: series modal is skipped when we've already asked the
+    // venue "This Gig Only" vs "All Gigs in Series" — the flag is set by
+    // seriesEditThis so the cancel-mode radios (Keep Open / Show
+    // Cancelled / Delete Entirely) still get shown for a single-gig
+    // delete from a recurring series.
+    if (selectedGig.recurring_group_id
+        && selectedGig.status !== "booked"
+        && !selectedGig._skipSeriesModal) {
       showSeriesModal('delete');
       return;
     }
+    // One-shot flag — reset after we routed past the series modal so a
+    // subsequent unrelated click doesn't inherit it.
+    if (selectedGig) selectedGig._skipSeriesModal = false;
     
     // MULTI-SLOT GIG handling
     if (true) {
@@ -6239,14 +6249,13 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       );
 
     } else if (seriesAction === 'delete') {
-      // Delete only this gig
-      try {
-        await api(`/gigs/${selectedGig.id}`, { method: "DELETE" });
-        showGigSuccess("Gig deleted");
-        invalidateGigs(); renderCalendar();
-      } catch (e) {
-        showAlert("Failed to delete gig: " + e.message);
-      }
+      // 2026-09-10: instead of an immediate hard-delete, route the
+      // user through the same cancel-mode radios (Keep Open / Show
+      // Cancelled on Calendar / Delete Entirely) that a non-recurring
+      // gig gets. The _skipSeriesModal flag stops the delete handler
+      // from bouncing back into the series modal we just closed.
+      if (selectedGig) selectedGig._skipSeriesModal = true;
+      deleteBtn.click();
     }
   };
 
