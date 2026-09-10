@@ -1318,7 +1318,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (selectedGig && selectedGig.id) {
           // Simulate clicking Delete Gig button to enter confirm-delete flow
           deleteBtn.dataset.confirmDelete = 'false';
-          deleteBtn.dataset.multiSlotDelete = 'false';
           deleteBtn.textContent = 'Confirm Delete?';
           deleteBtn.dataset.confirmDelete = 'true';
           // Auto-reset after 5s if not clicked
@@ -3256,8 +3255,9 @@ async function renderCalendar() {
       deleteBtn.textContent = "Delete Gig";
       deleteBtn.disabled = false;
       deleteBtn.dataset.confirmDelete = 'false';
-      deleteBtn.dataset.multiSlotDelete = 'false';
-      deleteBtn.dataset.multiSlotBookedCount = '0';
+      // Reset booked-slot count on the delete button (read by the
+      // cancel dialog to shape its copy + radio set).
+      deleteBtn.dataset.bookedCount = '0';
     }
     if (saveBtn) {
       saveBtn.style.display = "block";
@@ -3536,8 +3536,7 @@ async function renderCalendar() {
         deleteBtn.disabled = false;
         deleteBtn.textContent = _pcBookedCount > 0 ? "Cancel Gig" : "Delete Event";
         deleteBtn.dataset.cancelMode = "false";
-        deleteBtn.dataset.multiSlotDelete = 'true';
-        deleteBtn.dataset.multiSlotBookedCount = String(_pcBookedCount);
+        deleteBtn.dataset.bookedCount = String(_pcBookedCount);
         deleteBtn.dataset.confirmDelete = 'false';
       }
       const _pcModalActions = document.querySelector('#gigModal .modal-actions');
@@ -4516,13 +4515,12 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     }
     
     const bookedCount = slots.filter(s => s.status === 'booked').length;
-    const totalSlots = slots.length;
-    const isMultiSlot = totalSlots > 1;
-
+    // Post-cleanup 2026-09-10: removed unused `totalSlots` + `isMultiSlot`
+    // locals — dead reads, they were never referenced downstream.
+    //
     // Pay is no longer rendered at the top of the modal — it's shown inline
-    // on the slot row(s) below for BOTH single and multi-slot gigs so the
-    // layout is identical regardless of slot count. slot.pay already reflects
-    // any per-artist override applied at booking time.
+    // on the slot row(s) below regardless of slot count. slot.pay already
+    // reflects any per-artist override applied at booking time.
 
     gigArtistInfo.style.display = "block";
 
@@ -4798,8 +4796,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       }
       deleteBtn.disabled = false;
       deleteBtn.dataset.cancelMode = "false";
-      deleteBtn.dataset.multiSlotDelete = 'true';
-      deleteBtn.dataset.multiSlotBookedCount = bookedCount;
+      deleteBtn.dataset.bookedCount = bookedCount;
       var modalActions = document.querySelector('#gigModal .modal-actions');
       if (modalActions) { modalActions.style.display = 'flex'; modalActions.style.visibility = 'visible'; }
       const cancelPayBtn = document.getElementById('cancelGigPaymentBtn');
@@ -5940,209 +5937,124 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     // subsequent unrelated click doesn't inherit it.
     if (selectedGig) selectedGig._skipSeriesModal = false;
     
-    // MULTI-SLOT GIG handling
-    if (true) {
-      const bookedCount = parseInt(deleteBtn.dataset.multiSlotBookedCount || '0');
-      
+    // 2026-09-10: consolidated cancel/delete flow. Every gig is
+    // slot-shaped (post-backfill is_multi_slot=1 across the board), so
+    // the old "if multi-slot else single-artist" branch is gone. This
+    // is now the single canonical Delete Gig flow:
+    //
+    //   • gigs with 1+ booked slot → dialog with 3 radios
+    //     (Keep Open / Show Cancelled / Delete Entirely), reason box,
+    //     and a warning listing which artists get notified
+    //   • gigs with 0 booked slots → dialog with 2 radios
+    //     (Show Cancelled / Delete Entirely) since "Keep Open" would
+    //     be a no-op on an already-open unbooked gig, and no reason
+    //     box since nobody's getting a notification
+    //
+    // Both paths POST to /api/gigs/{id}/with-slots with keep_open /
+    // keep_cancelled flags. The old /api/gigs/{id}/cancel endpoint
+    // stays live as an artist-side cancel path but isn't used from
+    // this button anymore.
+    const bookedCount = parseInt(deleteBtn.dataset.bookedCount || '0');
+
+    if (cancelGigBtn && cancelGigBtn.dataset.cancelMode !== "true") {
+      cancelGigBtn.dataset.cancelMode = "true";
+
+      let bookedArtistsHtml = '';
+      let reasonHtml = '';
+      let keepOpenRadio = '';
       if (bookedCount > 0) {
-        // Has booked slots - show cancel process
-        if (cancelGigBtn && cancelGigBtn.dataset.cancelMode !== "true") {
-          cancelGigBtn.dataset.cancelMode = "true";
-          
-          // Get booked artist names from slot data
-          let bookedArtists = [];
-          try {
-            const slotsRes = await fetch(`/api/gigs/${selectedGig.id}/slots`, { credentials: 'include' });
-            if (slotsRes.ok) {
-              const slots = await slotsRes.json();
-              bookedArtists = slots.filter(s => s.status === 'booked').map(s => s.artist_name || 'Unknown Artist');
-            }
-          } catch(e) {}
-          
-          // Jul 2026 audit fix: escape each artist name BEFORE joining
-          // so an artist named `</strong><script>...</script>` can't
-          // XSS the venue's browser via the cancel modal.
-          const artistList = bookedArtists.length > 0
-            ? bookedArtists.map(esc).join(', ')
-            : 'Booked artists';
-
-          const cancellationHTML = `
-            <div id="cancellationSection" style="margin-top: 24px; padding: 16px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px;">
-              <p style="color: #ef4444; margin: 0 0 12px 0; line-height: 1.6;">
-                <strong>⚠️ This event has ${bookedCount} booked slot${bookedCount > 1 ? 's' : ''}!</strong><br/>
-                <strong>${artistList}</strong> will be notified. We recommend communicating with the artist${bookedCount > 1 ? 's' : ''} so they understand why this event is being cancelled.
-              </p>
-              <label style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
-                <span style="font-weight: 500; color: #ffffff;">Reason For Cancelling:</span>
-                <textarea id="cancelReason" rows="3" placeholder="Explain why you're cancelling this event..." style="width: 100%;"></textarea>
-              </label>
-              <div style="margin-bottom: 8px; font-weight: 500; color: #ffffff;">After cancelling:</div>
-              <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeMulti" value="keep_open" checked style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Keep Event Open? <span style="color:#22c55e;font-weight:600;">(re-list the slot as available)</span></td></tr></table>
-              <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeMulti" value="keep_cancelled" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Show as Cancelled on Calendar? <span style="color:#f59e0b;font-weight:600;">(keep visible with CANCELLED badge — not bookable)</span></td></tr></table>
-              <table style="border-collapse:collapse;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeMulti" value="delete_gig" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Delete Event Entirely? <span style="color:#ef4444;font-weight:600;">(remove from calendar)</span></td></tr></table>
-            </div>
-          `;
-
-          gigArtistInfo.insertAdjacentHTML('beforeend', cancellationHTML);
-          deleteBtn.textContent = "Confirm Cancel Event";
-          deleteBtn.style.background = "#dc3545";
-          if (cancelGigBtn) cancelGigBtn.textContent = "Close";
-          return;
-        }
-
-        // Second click - actually cancel with reason
-        const cancelReason = document.getElementById("cancelReason")?.value || "";
-        const _cancelMode = document.querySelector('input[name="cancelModeMulti"]:checked')?.value ?? 'keep_open';
-        const keepOpen = _cancelMode === 'keep_open';
-        const keepCancelled = _cancelMode === 'keep_cancelled';
-        deleteBtn.disabled = true;
-        deleteBtn.textContent = 'Cancelling...';
+        // Look up which artists will be notified. Audit fix Jul 2026:
+        // escape each name BEFORE joining so a hostile artist name
+        // like `</strong><script>…</script>` can't XSS the venue.
+        let bookedArtists = [];
         try {
-          const resp = await fetch(`/api/gigs/${selectedGig.id}/with-slots`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ cancellation_reason: cancelReason, keep_open: keepOpen, keep_cancelled: keepCancelled })
-          });
-          if (!resp.ok) {
-            // Audit fix (May 2026 part 3): surface FastAPI detail body
-            // so charged-transaction / locked-gig errors are actionable.
-            let _detail = '';
-            try { const _j = await resp.json(); _detail = _j && _j.detail ? _j.detail : ''; } catch (_) {}
-            throw new Error(_detail || `Server returned ${resp.status}`);
+          const slotsRes = await fetch(`/api/gigs/${selectedGig.id}/slots`, { credentials: 'include' });
+          if (slotsRes.ok) {
+            const slots = await slotsRes.json();
+            bookedArtists = slots.filter(s => s.status === 'booked').map(s => s.artist_name || 'Unknown Artist');
           }
-
-          if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
-          if (window.myArtists) { await myArtists.loadArtists(); myArtists.render(); }
-          // Refresh Payments tab — cancellation deletes the gig's transactions.
-          if (typeof loadVenueBillingHistory === 'function') await loadVenueBillingHistory();
-
-          invalidateGigs(); await renderCalendar();
-          // Repaint the venue Pending Offers banner immediately so a
-          // held gig that was just cancelled disappears from the top
-          // strip without waiting for the 60s poll (Jun 2026 user
-          // report — banner showed "1 Pending Hold" for ~a minute
-          // after the gig was already gone from the calendar).
-          if (typeof window.refreshVenueHoldOffersBanner === 'function') {
-            try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
-          }
-          showGigSuccess("Event cancelled");
-        } catch (e) {
-          deleteBtn.disabled = false;
-          deleteBtn.textContent = 'Confirm Cancel Event';
-          showAlert("Failed to cancel event: " + e.message);
-        }
-      } else {
-        // No booked slots - simple delete confirmation
-        if (deleteBtn.dataset.confirmDelete === 'true') {
-          deleteBtn.disabled = true;
-          deleteBtn.textContent = 'Deleting...';
-          try {
-            await api(`/api/gigs/${selectedGig.id}/with-slots`, { method: 'DELETE' });
-            deleteBtn.dataset.confirmDelete = 'false';
-            deleteBtn.dataset.multiSlotDelete = 'false';
-            invalidateGigs(); await renderCalendar();
-            if (typeof window.refreshVenueHoldOffersBanner === 'function') {
-              try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
-            }
-            showGigSuccess("Event deleted");
-          } catch (e) {
-            deleteBtn.disabled = false;
-            deleteBtn.textContent = 'Delete Event';
-            deleteBtn.dataset.confirmDelete = 'false';
-            showAlert("Failed to delete: " + e.message);
-          }
-          return;
-        }
-        deleteBtn.dataset.confirmDelete = 'true';
-        deleteBtn.textContent = 'Confirm Delete?';
-        setTimeout(() => {
-          if (deleteBtn.dataset.confirmDelete === 'true') {
-            deleteBtn.dataset.confirmDelete = 'false';
-            deleteBtn.textContent = 'Delete Event';
-          }
-        }, 5000);
+        } catch (_) {}
+        const artistList = bookedArtists.length > 0 ? bookedArtists.map(esc).join(', ') : 'Booked artists';
+        bookedArtistsHtml = `
+          <p style="color: #ef4444; margin: 0 0 12px 0; line-height: 1.6;">
+            <strong>⚠️ This gig has ${bookedCount} booked slot${bookedCount > 1 ? 's' : ''}.</strong><br/>
+            <strong>${artistList}</strong> will be notified. We recommend communicating with the artist${bookedCount > 1 ? 's' : ''} so they understand why the gig is being cancelled.
+          </p>`;
+        reasonHtml = `
+          <label style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
+            <span style="font-weight: 500; color: #ffffff;">Reason For Cancelling:</span>
+            <textarea id="cancelReason" rows="3" placeholder="Explain why you're cancelling this gig..." style="width: 100%;"></textarea>
+          </label>`;
+        keepOpenRadio = `
+          <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelMode" value="keep_open" checked style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Keep Gig Open? <span style="color:#22c55e;font-weight:600;">(re-list as available to book)</span></td></tr></table>`;
       }
+      // Default check goes on keep_cancelled when there's no keep_open
+      // option (unbooked gig) so the middle radio is pre-selected.
+      const keepCancelledChecked = bookedCount > 0 ? '' : 'checked';
+
+      const cancellationHTML = `
+        <div id="cancellationSection" style="margin-top: 24px; padding: 16px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px;">
+          ${bookedArtistsHtml}
+          ${reasonHtml}
+          <div style="margin-bottom: 8px; font-weight: 500; color: #ffffff;">After cancelling:</div>
+          ${keepOpenRadio}
+          <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelMode" value="keep_cancelled" ${keepCancelledChecked} style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Show as Cancelled on Calendar? <span style="color:#f59e0b;font-weight:600;">(keep visible with CANCELLED badge — not bookable)</span></td></tr></table>
+          <table style="border-collapse:collapse;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelMode" value="delete_gig" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Delete Gig Entirely? <span style="color:#ef4444;font-weight:600;">(remove from calendar)</span></td></tr></table>
+        </div>
+      `;
+
+      gigArtistInfo.insertAdjacentHTML('beforeend', cancellationHTML);
+      deleteBtn.textContent = bookedCount > 0 ? "Confirm Cancel Gig" : "Confirm";
+      deleteBtn.style.background = "#dc3545";
+      if (cancelGigBtn) cancelGigBtn.textContent = "Close";
       return;
     }
-    
-    // SINGLE-ARTIST BOOKED GIG - cancel process
-    if (selectedGig.status === "booked") {
-      if (cancelGigBtn && cancelGigBtn.dataset.cancelMode !== "true") {
-        cancelGigBtn.dataset.cancelMode = "true";
-        
-        const cancellationHTML = `
-          <div id="cancellationSection" style="margin-top: 24px; padding: 16px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px;">
-            <p style="color: #ef4444; margin: 0 0 12px 0; line-height: 1.6;">
-              <strong>This gig is booked!</strong> ${esc(selectedGig.artist_name || 'The artist')} will be notified but we recommend communicating with the Artist so it is understood why this gig is being cancelled.
-            </p>
-            <label style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
-              <span style="font-weight: 500; color: #ffffff;">Reason For Cancelling:</span>
-              <textarea id="cancelReason" rows="3" placeholder="Explain why you're cancelling this gig..." style="width: 100%;"></textarea>
-            </label>
-            <div style="margin-bottom: 8px; font-weight: 500; color: #ffffff;">After cancelling:</div>
-            <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeSingle" value="keep_open" checked style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Keep Gig Open? <span style="color:#22c55e;font-weight:600;">(re-list as available to book)</span></td></tr></table>
-            <table style="border-collapse:collapse; margin-bottom:8px;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeSingle" value="keep_cancelled" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Show as Cancelled on Calendar? <span style="color:#f59e0b;font-weight:600;">(keep visible with CANCELLED badge — not bookable)</span></td></tr></table>
-            <table style="border-collapse:collapse;"><tr><td style="padding:0; vertical-align:middle; padding-right:8px;"><input type="radio" name="cancelModeSingle" value="delete_gig" style="width:16px;height:16px;cursor:pointer;margin:0;display:block;"></td><td style="padding:0; vertical-align:middle; color:#d1d5db; font-size:14px;">Delete Gig Entirely? <span style="color:#ef4444;font-weight:600;">(remove from calendar)</span></td></tr></table>
-          </div>
-        `;
 
-        gigArtistInfo.insertAdjacentHTML('beforeend', cancellationHTML);
-        deleteBtn.textContent = "Confirm Cancel Gig";
-        deleteBtn.style.background = "#dc3545";
-        if (cancelGigBtn) cancelGigBtn.textContent = "Close";
-        return;
+    // Second click — apply the chosen mode.
+    const cancelReason = document.getElementById("cancelReason")?.value || "";
+    const _cancelMode = document.querySelector('input[name="cancelMode"]:checked')?.value
+                     ?? (bookedCount > 0 ? 'keep_open' : 'keep_cancelled');
+    const keepOpen = _cancelMode === 'keep_open';
+    const keepCancelled = _cancelMode === 'keep_cancelled';
+    deleteBtn.disabled = true;
+    deleteBtn.textContent = 'Cancelling...';
+    try {
+      const resp = await fetch(`/api/gigs/${selectedGig.id}/with-slots`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ cancellation_reason: cancelReason, keep_open: keepOpen, keep_cancelled: keepCancelled })
+      });
+      if (!resp.ok) {
+        // Audit fix (May 2026 part 3): surface FastAPI detail body so
+        // charged-transaction / locked-gig errors are actionable.
+        let _detail = '';
+        try { const _j = await resp.json(); _detail = _j && _j.detail ? _j.detail : ''; } catch (_) {}
+        throw new Error(_detail || `Server returned ${resp.status}`);
       }
 
-      const cancelReason = document.getElementById("cancelReason")?.value || "";
-      const _cancelMode = document.querySelector('input[name="cancelModeSingle"]:checked')?.value ?? 'keep_open';
-      const keepOpen = _cancelMode === 'keep_open';
-      const keepCancelled = _cancelMode === 'keep_cancelled';
-      deleteBtn.disabled = true;
-      deleteBtn.textContent = 'Cancelling...';
-      try {
-        const resp = await fetch(`/api/gigs/${selectedGig.id}/cancel`, {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ cancelled_by: "venue", cancellation_reason: cancelReason, keep_open: keepOpen, keep_cancelled: keepCancelled })
-        });
-        if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
-        
-        if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
-        // Switch to Payments tab so container is visible, then load fresh data (fixes tab not updating)
-        var paymentsTabBtn = document.querySelector('.tab[onclick*="payments"]');
-        if (typeof switchTab === 'function' && paymentsTabBtn) switchTab('payments', paymentsTabBtn);
-        if (typeof loadVenueBillingHistory === 'function') await loadVenueBillingHistory();
-        if (window.venueContracts && window.venueContracts.loadExecuted) await window.venueContracts.loadExecuted();
-        if (window.myArtists) {
-          await myArtists.loadArtists(); myArtists.render();
-          const badge = document.getElementById('artistsBadge');
-          if (badge && window.myArtists.artists) {
-            const approvedCount = window.myArtists.artists.filter(a => a.preferred_status === 'approved').length;
-            badge.textContent = `(${approvedCount})`;
-          }
-        }
-        showGigSuccess("Gig cancelled");
-        invalidateGigs(); renderCalendar();
-      } catch (e) {
-        deleteBtn.disabled = false;
-        deleteBtn.textContent = 'Confirm Cancel Gig';
-        showAlert("Failed to cancel gig: " + e.message);
+      if (window.activityCenterVenue) await window.activityCenterVenue.loadNotifications();
+      if (window.myArtists) { await myArtists.loadArtists(); myArtists.render(); }
+      // Refresh Payments tab — cancellation deletes the gig's transactions.
+      if (typeof loadVenueBillingHistory === 'function') await loadVenueBillingHistory();
+
+      invalidateGigs(); await renderCalendar();
+      // Repaint the venue Pending Offers banner immediately so a
+      // held gig that was just cancelled disappears from the top
+      // strip without waiting for the 60s poll (Jun 2026 user
+      // report — banner showed "1 Pending Hold" for ~a minute
+      // after the gig was already gone from the calendar).
+      if (typeof window.refreshVenueHoldOffersBanner === 'function') {
+        try { window.refreshVenueHoldOffersBanner(); } catch (_) {}
       }
-    } else {
-      // Regular open gig - delete
-      deleteBtn.disabled = true;
-      deleteBtn.textContent = 'Deleting...';
-      try {
-        await api(`/gigs/${selectedGig.id}`, { method: "DELETE" });
-        showGigSuccess("Gig deleted");
-        invalidateGigs(); renderCalendar();
-      } catch (e) {
-        deleteBtn.disabled = false;
-        deleteBtn.textContent = 'Delete Gig';
-        showAlert("Failed to delete gig: " + e.message);
-      }
+      const _successMsg = _cancelMode === 'delete_gig'
+        ? 'Gig deleted'
+        : _cancelMode === 'keep_cancelled' ? 'Gig marked as cancelled' : 'Gig cancelled';
+      showGigSuccess(_successMsg);
+    } catch (e) {
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = bookedCount > 0 ? 'Confirm Cancel Gig' : 'Confirm';
+      showAlert("Failed to cancel gig: " + e.message);
     }
   };
 
