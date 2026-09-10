@@ -5732,8 +5732,16 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     const endAfter = endType === 'after'
       ? (parseInt(_endAfterEl?.value) || selectedGig.recurring_end_after || null)
       : null;
+    // 2026-09-10: convert the picker's display value (mm/dd/yyyy) to
+    // ISO (yyyy-mm-dd) before sending — the backend's
+    // generate_recurring_dates_backend uses strptime('%Y-%m-%d'), so a
+    // display-formatted value silently threw ValueError and the update
+    // endpoint returned 500 with the series unchanged. Fallback keeps
+    // the stored ISO on the gig row if the input's empty.
     const endBy = endType === 'by'
-      ? (_endByEl?.value || selectedGig.recurring_end_by_date || null)
+      ? ((typeof _dispToIso === 'function' && _endByEl?.value ? _dispToIso(_endByEl.value) : _endByEl?.value)
+         || selectedGig.recurring_end_by_date
+         || null)
       : null;
 
     // Get slot data for start/end/pay
