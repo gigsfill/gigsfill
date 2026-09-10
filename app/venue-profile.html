@@ -170,6 +170,24 @@
     .cal-gig:hover { transform: translateY(-1px); filter: brightness(1.05); }
     .cal-gig.booked { background: linear-gradient(135deg, #ef4444, #b91c1c); }
     .cal-gig.open { background: linear-gradient(135deg, #10b981, #059669); color: #000 !important; }
+    /* 2026-09-10: cancelled — venue chose "keep visible" instead of
+       delete. Diagonal red hatching over muted gray; a public visitor
+       instantly sees the show isn't happening. */
+    .cal-gig.cancelled {
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          rgba(239, 68, 68, 0.22) 0,
+          rgba(239, 68, 68, 0.22) 5px,
+          rgba(75, 85, 99, 0.9) 5px,
+          rgba(75, 85, 99, 0.9) 10px
+        ) !important;
+      color: #fca5a5 !important;
+      text-decoration: line-through;
+      text-decoration-color: rgba(255,255,255,0.4);
+      box-shadow: inset 0 0 0 1px rgba(239,68,68,0.7);
+    }
+    .cal-gig.cancelled:hover { filter: brightness(1.15); }
     /* Scrollable gigs container */
     .cal-gigs-container {
       max-height: 100px; overflow-y: auto; overflow-x: hidden; margin-top: 26px; padding-right: 4px;
@@ -739,10 +757,12 @@
               });
             } else {
               // Single gig or non-multi-slot
-              const cls = g.status === 'booked' ? 'booked' : 'open';
+              const cls = g.status === 'cancelled' ? 'cancelled' : g.status === 'booked' ? 'booked' : 'open';
               const t = fmtTime(g.start_time);
               const icon = g.is_multi_slot ? (icons[g.artist_type] || '🎵') + ' ' : '';
-              const label = g.status === 'booked' && g.artist_name ? `${icon}${t} · ${g.artist_name}` : `${icon}${t} · ${g.title || 'Open'}`;
+              const label = g.status === 'cancelled'
+                ? `${icon}${t} · Cancelled`
+                : (g.status === 'booked' && g.artist_name ? `${icon}${t} · ${g.artist_name}` : `${icon}${t} · ${g.title || 'Open'}`);
               const _street = [venueData.address_line_1, venueData.address_line_2].filter(Boolean).join(' ');
               const _cityState = [venueData.city, venueData.state].filter(Boolean).join(', ');
               const _mapsQ = [venueData.venue_name, _street, venueData.city, venueData.state].filter(Boolean).join(', ');

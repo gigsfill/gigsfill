@@ -574,13 +574,41 @@
       text-decoration-color: rgba(255,255,255,0.3);
     }
 
+    /* 2026-09-10: bumped up so the venue clearly sees "this was
+       cancelled but I chose to keep it visible". Diagonal red-white
+       hatching over a muted gray base + a red "CANCELLED" label
+       styled to look like a stamp. Still muted enough (opacity 0.75)
+       that it doesn't compete with real open/booked gigs above/below. */
     .calendar .gig.cancelled {
-      background: linear-gradient(135deg, #4b5563, #374151) !important;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
-      opacity: 0.55;
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          rgba(239, 68, 68, 0.18) 0,
+          rgba(239, 68, 68, 0.18) 6px,
+          rgba(75, 85, 99, 0.85) 6px,
+          rgba(75, 85, 99, 0.85) 12px
+        ) !important;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3), inset 0 0 0 1.5px rgba(239, 68, 68, 0.75) !important;
+      opacity: 0.85;
       text-decoration: line-through;
-      text-decoration-color: rgba(255,255,255,0.4);
+      text-decoration-color: rgba(255, 255, 255, 0.55);
       cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+    .calendar .gig.cancelled::after {
+      content: 'CANCELLED';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-14deg);
+      font-size: 0.6rem;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      color: rgba(239, 68, 68, 0.95);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+      pointer-events: none;
+      white-space: nowrap;
     }
 
     /* PENDING VENUE APPROVAL — amber pulse, needs venue action */
