@@ -1332,6 +1332,11 @@ function _showFlyerOverlay(data, modalId) {
           var tv = (jsonObj.src && tplVarBySrc[jsonObj.src]) || jsonObj._tplVar;
           if (tv) fabricObj._tplVar = tv;
           if (jsonObj._isZoneRect) fabricObj._isZoneRect = true;
+          // 2026-09-14: restore _isBorder / _isDarkOverlay so the
+          // post-logo-swap "keep border on top" pass finds them.
+          // (Same bug mirrored in flyer-overlay.js — see comment there.)
+          if (jsonObj._isBorder)      fabricObj._isBorder      = true;
+          if (jsonObj._isDarkOverlay) fabricObj._isDarkOverlay = true;
         };
 
         fc.loadFromJSON(parsed, function() {

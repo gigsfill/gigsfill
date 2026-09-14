@@ -122,6 +122,16 @@ function _showFlyerOverlay(data, modalId) {
           var tv = (jsonObj.src && tplVarBySrc[jsonObj.src]) || jsonObj._tplVar;
           if (tv) fabricObj._tplVar = tv;
           if (jsonObj._isZoneRect) fabricObj._isZoneRect = true;
+          // 2026-09-14: also restore _isBorder + _isDarkOverlay so the
+          // "keep border on top" pass below (after replacing venue/artist
+          // logos with the real images) actually finds the border rects.
+          // Without these lines, the placeholder-swap left the freshly
+          // added logo above the border, and if a user stretched their
+          // logo outside the flyer bounds it visibly overflowed the
+          // border on the saved preview even though the editor rendered
+          // it correctly.
+          if (jsonObj._isBorder)      fabricObj._isBorder      = true;
+          if (jsonObj._isDarkOverlay) fabricObj._isDarkOverlay = true;
         };
 
         fc.loadFromJSON(parsed, function() {
