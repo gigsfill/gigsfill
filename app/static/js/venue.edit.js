@@ -470,6 +470,32 @@ async function loadVenue() {
 
   document.getElementById("has_lighting").value = venueData.has_lighting ? "true" : "false";
   document.getElementById("arrival_time_type").value = venueData.arrival_time_type || "flexible";
+  // 2026-09-14: opt-in flag for displaying the website link on the
+  // public profile hero. Off by default.
+  const _websitePublicCb = document.getElementById("website_public");
+  if (_websitePublicCb) {
+    _websitePublicCb.checked = !!Number(venueData.website_public);
+    // Autosave on toggle — bindAutosave is text-input shaped, so a
+    // small dedicated handler PUTs {website_public: 0 or 1}.
+    _websitePublicCb.addEventListener("change", async () => {
+      try {
+        const res = await fetch(`/api/venues/${venueId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ website_public: _websitePublicCb.checked ? 1 : 0 })
+        });
+        if (!res.ok) {
+          let detail = "";
+          try { const j = await res.json(); detail = j?.detail || ""; } catch (_) {}
+          console.warn("[venue.edit website_public]", detail || `HTTP ${res.status}`);
+          if (window.showErrorModal) window.showErrorModal("Save failed", detail || `Couldn't save (HTTP ${res.status}).`);
+        }
+      } catch (_) {
+        if (window.showErrorModal) window.showErrorModal("Save failed", "Couldn't reach the server. Try again.");
+      }
+    });
+  }
 
   // Apply toggle visibility
   applyToggles();

@@ -165,6 +165,7 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.twitter_url,
                 a.tiktok_url,
                 a.website_url,
+                COALESCE(a.website_public, 0) as website_public,
                 a.social_order,
                 a.latitude,
                 a.longitude,
@@ -249,6 +250,7 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 twitter_url,
                 tiktok_url,
                 website_url,
+                COALESCE(website_public, 0) as website_public,
                 social_order
             FROM artists
             WHERE id=:id
@@ -313,6 +315,10 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
     # via COALESCE.
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
+    # 2026-09-14: same 0/1/None coercion for website_public. None →
+    # COALESCE keeps the stored value; 0 or 1 → toggle explicitly.
+    _wp_in = data.get("website_public")
+    _wp = None if _wp_in is None else (1 if bool(_wp_in) else 0)
     db.execute(
         text("""
             UPDATE artists SET
@@ -332,6 +338,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 twitter_url = COALESCE(:twitter_url, twitter_url),
                 tiktok_url = COALESCE(:tiktok_url, tiktok_url),
                 website_url = COALESCE(:website_url, website_url),
+                website_public = COALESCE(:website_public, website_public),
                 social_order = COALESCE(:social_order, social_order)
             WHERE id = :id
 
@@ -354,6 +361,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "twitter_url": data.get("twitter_url"),
             "tiktok_url": data.get("tiktok_url"),
             "website_url": data.get("website_url"),
+            "website_public": _wp,
             "social_order": data.get("social_order"),
         }
     )

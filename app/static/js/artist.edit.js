@@ -252,6 +252,9 @@ async function loadArtist() {
   if (qs("twitter_url")) qs("twitter_url").value = artist.twitter_url || "";
   if (qs("tiktok_url")) qs("tiktok_url").value = artist.tiktok_url || "";
   if (qs("website_url")) qs("website_url").value = artist.website_url || "";
+  // 2026-09-14: opt-in flag for surfacing the website on the public
+  // profile hero. Coerce falsy/0/1/'0'/'1' safely.
+  if (qs("website_public")) qs("website_public").checked = !!Number(artist.website_public);
 
   // AUTOSAVE
   bindAutosave(qs("city"), "city", artistId);
@@ -270,6 +273,30 @@ async function loadArtist() {
   if (qs("twitter_url")) bindAutosave(qs("twitter_url"), "twitter_url", artistId);
   if (qs("tiktok_url")) bindAutosave(qs("tiktok_url"), "tiktok_url", artistId);
   if (qs("website_url")) bindAutosave(qs("website_url"), "website_url", artistId);
+  // 2026-09-14: checkbox autosave — bindAutosave assumes a text
+  // input (input.value.trim()) so it can't reuse. Small dedicated
+  // change handler PUTs {website_public: 0 or 1} on toggle.
+  (function _bindWebsitePublic() {
+    const cb = qs("website_public");
+    if (!cb) return;
+    cb.addEventListener("change", async () => {
+      try {
+        const res = await fetch(`/artists/${artistId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ website_public: cb.checked ? 1 : 0 })
+        });
+        if (!res.ok && window.showErrorModal) {
+          let detail = "";
+          try { const j = await res.json(); detail = j?.detail || ""; } catch (_) {}
+          window.showErrorModal("Save failed", detail || `Couldn't save (HTTP ${res.status}).`);
+        }
+      } catch (_) {
+        if (window.showErrorModal) window.showErrorModal("Save failed", "Couldn't reach the server. Try again.");
+      }
+    });
+  })();
 
   // Reorder the social rows in DOM to match the saved `social_order` (a
   // comma-separated list of brand keys). Rows missing from the saved order

@@ -478,6 +478,11 @@ def setup_database():
         "twitter_url TEXT",
         "tiktok_url TEXT",
         "website_url TEXT",
+        # 2026-09-14: per-artist opt-in to surface the private website
+        # link in the hero area of the public profile. Off by default so
+        # existing artists don't leak a link they didn't explicitly
+        # choose to publish.
+        "website_public INTEGER DEFAULT 0",
         "display_order INTEGER DEFAULT 0",
         "styles VARCHAR",
         "avg_rating REAL DEFAULT NULL",
@@ -576,6 +581,9 @@ def setup_database():
         "bar_tab_details TEXT",
         "food_tab_details TEXT",
         "website_url TEXT",
+        # 2026-09-14: per-venue opt-in to surface the website link in
+        # the hero area of the public profile. Off by default.
+        "website_public INTEGER DEFAULT 0",
         "facebook_url TEXT",
         "instagram_url TEXT",
         "twitter_url TEXT",

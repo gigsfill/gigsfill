@@ -589,7 +589,7 @@
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=23"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=24"></script>
   
 </head>
 
@@ -778,6 +778,20 @@
           <span class="drag-handle" draggable="true">☰</span>
           <label>Website</label>
           <input id="website_url" type="text" placeholder="https://www.yourwebsite.com" />
+        </div>
+        <!-- 2026-09-14: opt-in to surface the Website link in the hero
+             area of the public profile. Indented under the Website row
+             so it's visually clear the toggle only affects THIS row —
+             not the Social Media tab, which always shows the full set.
+             The empty first two columns mirror the drag-handle + label
+             widths from the social-row grid so alignment is exact. -->
+        <div class="social-row website-public-row" style="padding-top:0;padding-bottom:2px;">
+          <span></span>
+          <span></span>
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.78rem;color:var(--text-gray);cursor:pointer;font-weight:400;">
+            <input id="website_public" type="checkbox" style="width:14px;height:14px;cursor:pointer;">
+            Display website on Public Profile page?
+          </label>
         </div>
       </div>
     </div>

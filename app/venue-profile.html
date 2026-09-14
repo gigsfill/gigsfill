@@ -399,6 +399,10 @@
       </div>
       <div class="venue-address" id="venueAddress"></div>
       <div id="venueAboutHeader" style="font-size:0.88rem;color:var(--text-gray);margin:6px auto 0;max-width:560px;line-height:1.5;font-style:italic;"></div>
+      <!-- 2026-09-14: opt-in Website link (populated by loadVenue if
+           the venue ticked "Display website on Public Profile page?"
+           in their edit UI). -->
+      <div id="venuePublicWebsite" style="display:none;margin-top:8px;text-align:center;font-size:0.85rem;color:var(--text-gray);"></div>
     </div>
 
     <div class="profile-tabs">
@@ -587,6 +591,24 @@
       // belonged on the public profile.
       const _aboutEl = document.getElementById("venueAboutHeader");
       if (_aboutEl && venueData.description) _aboutEl.textContent = venueData.description.trim();
+
+      // 2026-09-14: opt-in Website link under the About area. Only
+      // renders when the venue explicitly ticked "Display website
+      // on Public Profile page?" in the edit UI. Label follows the
+      // user's spec: "Website: [venue_name]", hyperlinked, new tab.
+      (function _renderPublicVenueWebsite() {
+        const host = document.getElementById("venuePublicWebsite");
+        if (!host) return;
+        const url = (venueData.website_url || "").trim();
+        const opt = Number(venueData.website_public) === 1;
+        if (!opt || !url) { host.innerHTML = ""; host.style.display = "none"; return; }
+        const safeUrl = (url.startsWith('http://') || url.startsWith('https://')) ? url : 'https://' + url;
+        const name = (venueData.venue_name || "Website").trim();
+        const escHtml = s => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+        const escAttr = s => String(s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        host.style.display = "";
+        host.innerHTML = `Website: <a href="${escAttr(safeUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:underline;text-underline-offset:2px;">${escHtml(name)}</a>`;
+      })();
 
       // Social
       const ensureProto = u => { if (!u) return ''; const t = u.trim(); return (t.startsWith('http://') || t.startsWith('https://')) ? t : 'https://' + t; };

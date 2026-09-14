@@ -420,6 +420,10 @@
       <div class="artist-location" id="artistLocation"></div>
       <div class="artist-type-badge" id="artistType" style="margin-top:8px;"></div>
       <div class="artist-bio" id="artistBio" style="max-width:640px;margin-left:auto;margin-right:auto;text-align:center;"></div>
+      <!-- 2026-09-14: opt-in Website link. Populated (or hidden) by
+           the loadArtist init block. Sits under the bio, above Booking
+           Contact — a natural spot for "how to reach me". -->
+      <div id="artistPublicWebsite" style="display:none;margin-top:10px;text-align:center;font-size:0.85rem;color:var(--text-gray);"></div>
       <div class="booking-contact" id="artistBooking" style="margin-top:12px;"></div>
     </div>
 
@@ -629,6 +633,24 @@
       document.getElementById("artistType").textContent = typeText;
       document.getElementById("artistBio").textContent = (artist.bio || "").trim();
       document.getElementById("artistBooking").textContent = artist.booking_contact ? `Booking: ${artist.booking_contact}` : "";
+      // 2026-09-14: opt-in Website link under the bio, only when the
+      // artist explicitly ticked "Display website on Public Profile
+      // page?" in their edit UI. Label uses the artist's display name
+      // per the user's spec ("Website: Fridays Past"). Opens in a new
+      // tab; rel="noopener noreferrer" is standard for external links.
+      (function _renderPublicWebsite() {
+        const host = document.getElementById("artistPublicWebsite");
+        if (!host) return;
+        const url = (artist.website_url || "").trim();
+        const opt = Number(artist.website_public) === 1;
+        if (!opt || !url) { host.innerHTML = ""; host.style.display = "none"; return; }
+        const safeUrl = (url.startsWith('http://') || url.startsWith('https://')) ? url : 'https://' + url;
+        const name = (artist.name || "Website").trim();
+        const escHtml = s => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+        const escAttrLocal = s => String(s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        host.style.display = "";
+        host.innerHTML = `Website: <a href="${escAttrLocal(safeUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:underline;text-underline-offset:2px;">${escHtml(name)}</a>`;
+      })();
 
       const ensureProto = u => { if (!u) return ''; const t = u.trim(); return (t.startsWith('http://') || t.startsWith('https://')) ? t : 'https://' + t; };
       let links = [
