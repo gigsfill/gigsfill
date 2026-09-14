@@ -660,7 +660,10 @@
         { url: artist.youtube_url,   label: "YouTube",   brand: "youtube" },
         { url: artist.twitter_url,   label: "X",         brand: "twitter" },
         { url: artist.tiktok_url,    label: "TikTok",    brand: "tiktok" },
-        { url: artist.website_url,   label: "Website",   brand: "website" }
+        // 2026-09-14: Website tile label shows the artist's name
+        // instead of the generic word — matches the hero placement
+        // treatment and reads more like "this is who you'll reach".
+        { url: artist.website_url,   label: (artist.name || "Website"),   brand: "website" }
       ].filter(l => l.url && l.url.trim());
       // Apply user-chosen social order. Each entry in `social_order` is a
       // brand key; tiles for those brands move to the front in the saved

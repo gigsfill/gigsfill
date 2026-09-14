@@ -99,7 +99,7 @@ let venueId = new URLSearchParams(window.location.search).get("venue_id");
   // Social
   const ensureProto = u => { if (!u) return ''; const t = u.trim(); return (t.startsWith('http://') || t.startsWith('https://')) ? t : 'https://' + t; };
   const links = [
-    { url: venueData.website_url, label: "Website", icon: "🌐" },
+    { url: venueData.website_url, label: (venueData.venue_name || "Website"), icon: "🌐" },
     { url: venueData.facebook_url, label: "Facebook", icon: "👥" },
     { url: venueData.instagram_url, label: "Instagram", icon: "📷" },
     { url: venueData.twitter_url, label: "Twitter/X", icon: "🐦" },

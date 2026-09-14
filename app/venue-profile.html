@@ -613,7 +613,10 @@
       // Social
       const ensureProto = u => { if (!u) return ''; const t = u.trim(); return (t.startsWith('http://') || t.startsWith('https://')) ? t : 'https://' + t; };
       let links = [
-        { url: venueData.website_url,     label: "Website",     brand: "website" },
+        // 2026-09-14: Website tile label shows the venue name
+        // instead of the generic word — same treatment as the
+        // artist side; reads more like "this is where you'll land".
+        { url: venueData.website_url,     label: (venueData.venue_name || "Website"),     brand: "website" },
         { url: venueData.facebook_url,    label: "Facebook",    brand: "facebook" },
         { url: venueData.instagram_url,   label: "Instagram",   brand: "instagram" },
         { url: venueData.twitter_url,     label: "X",           brand: "twitter" },

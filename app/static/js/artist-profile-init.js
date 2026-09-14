@@ -67,7 +67,7 @@ let artistId = params.get("artist_id");
     { url: artist.youtube_url, label: "YouTube", icon: "▶️" },
     { url: artist.twitter_url, label: "Twitter/X", icon: "🐦" },
     { url: artist.tiktok_url, label: "TikTok", icon: "🎬" },
-    { url: artist.website_url, label: "Website", icon: "🌐" }
+    { url: artist.website_url, label: (artist.name || "Website"), icon: "🌐" }
   ].filter(l => l.url && l.url.trim());
   if (links.length > 0) {
     document.getElementById("socialMedia").innerHTML = links.map(l => `<a href="${escAttr(ensureProto(l.url))}" target="_blank" rel="noopener noreferrer" class="social-link"><span>${esc(l.icon)}</span><span>${esc(l.label)}</span></a>`).join('');
