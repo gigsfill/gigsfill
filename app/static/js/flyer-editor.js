@@ -377,6 +377,13 @@
           <button onclick="FE.nudgeSelected(0, -10)" class="fe-btn fe-sq" title="Move up">↑</button>
           <button onclick="FE.nudgeSelected(0, 10)"  class="fe-btn fe-sq" title="Move down">↓</button>
           <button onclick="FE.centerOnCanvas()" class="fe-btn fe-sq" title="Center on canvas">⊕</button>
+          <!-- 2026-09-15: rescue when the selected object was scaled past
+               the canvas edges — its transform handles land outside the
+               visible viewport and can't be grabbed. This shrinks the
+               object back to fit inside the flyer while preserving its
+               aspect ratio + center point, so the user can adjust from
+               a reachable state. -->
+          <button onclick="FE.fitToCanvas()" class="fe-btn fe-sq" title="Fit inside flyer bounds (rescues over-stretched objects)">🗜</button>
         </div>
         <!-- 2026-08-01: rotate row. ↺ / ↻ nudge 15° at a time, the number
              input takes any exact degree, and ◫ resets to 0. Works on any
@@ -1206,7 +1213,17 @@
             }
             // Preserve the artist tag so subsequent saves keep the multi-slot binding.
             if (artistTagId != null) img._tplArtistId = artistTagId;
-            canvas.remove(obj); canvas.add(img); canvas.renderAll();
+            // 2026-09-15: `canvas.add(img)` appends at the END of the
+            // objects array (topmost z-order). If a border was saved on
+            // this flyer, the freshly-added logo was sitting on top of
+            // it, so any part of the logo stretched past the flyer bounds
+            // rendered outside the border in the editor after re-open —
+            // even though the initial edit session looked correct. Bring
+            // the border back to the front here so the frame keeps
+            // clipping the overflow the way it did originally.
+            canvas.remove(obj); canvas.add(img);
+            keepBorderOnTop();
+            canvas.renderAll();
           });
         } else if (v === 'venue_logo') {
           // No venue picture — leave the zone rect as-is (shows "VENUE LOGO" placeholder label)
@@ -1229,7 +1246,9 @@
               _tplVar: 'artist_logo', stroke: '#000000', strokeWidth: 3 * s,
               shadow: new fabric.Shadow({color:'rgba(0,0,0,0.9)',blur:25})
             });
-            canvas.remove(obj); canvas.add(txt); canvas.renderAll();
+            canvas.remove(obj); canvas.add(txt);
+            keepBorderOnTop();
+            canvas.renderAll();
           }
           // Zone rect: leave it — it shows the purple placeholder border correctly
         }
@@ -1247,7 +1266,9 @@
               originX:'center', originY:'center', scaleX:sc, scaleY:sc,
               _tplVar:'artist_logo',
               shadow: new fabric.Shadow({color:'rgba(0,0,0,0.9)',blur:35}) });
-            canvas.remove(obj); canvas.add(img); canvas.renderAll();
+            canvas.remove(obj); canvas.add(img);
+            keepBorderOnTop();
+            canvas.renderAll();
           });
         } else if (varMap.artist_name) {
           // No picture but has name — ensure full visibility (white, full opacity)
@@ -3017,6 +3038,43 @@
     obj.setCoords(); canvas.renderAll();
   }
 
+  /* 2026-09-15: Fit the selected object inside the canvas viewport.
+     When an object was scaled up past the flyer bounds (venue logo
+     stretched huge for a full-bleed background, artist photo dragged
+     wide, etc), its transform handles sit outside the canvas element
+     and can't be grabbed — the user is stuck. This button shrinks the
+     object back to just fit inside the canvas while preserving the
+     aspect ratio and centering it. Border objects and dark overlays
+     are skipped (they're SUPPOSED to fill the entire flyer). */
+  function fitToCanvas() {
+    const obj = canvas?.getActiveObject(); if (!obj) return;
+    if (obj._isBorder || obj._isDarkOverlay || obj._isBg) return;
+    const cw = canvas.width;
+    const ch = canvas.height;
+    // Aspect-preserving scale so the object's larger dimension exactly
+    // fits inside the canvas (with a tiny 4-px margin so the handles
+    // land inside the viewport, not right on the edge).
+    const margin = 4;
+    const targetW = cw - margin * 2;
+    const targetH = ch - margin * 2;
+    const objW = (obj.width || 1) * (obj.scaleX || 1);
+    const objH = (obj.height || 1) * (obj.scaleY || 1);
+    const s = Math.min(targetW / objW, targetH / objH);
+    if (!isFinite(s) || s <= 0) return;
+    obj.set({
+      scaleX: (obj.scaleX || 1) * s,
+      scaleY: (obj.scaleY || 1) * s,
+      left:   cw / 2,
+      top:    ch / 2,
+      originX: 'center',
+      originY: 'center',
+    });
+    obj.setCoords();
+    keepBorderOnTop();
+    canvas.renderAll();
+    if (typeof saveState === 'function') saveState();
+  }
+
   /* Move the currently-selected object by (dx, dy) pixels. Used by the
      ← → ↑ ↓ buttons in the properties panel for fine-grained positioning. */
   function nudgeSelected(dx, dy) {
@@ -3848,7 +3906,7 @@
     // 2026-08-01: rotate + accent-block color themes + custom colors
     rotateSelected, setAngle,
     applyThemeToBlock, customSetColor, toggleCustomTheme,
-    layer, deleteSelected, copySelected, cutSelected, pasteClipboard, centerOnCanvas, nudgeSelected, changeSize,
+    layer, deleteSelected, copySelected, cutSelected, pasteClipboard, centerOnCanvas, fitToCanvas, nudgeSelected, changeSize,
     onTemplateSelect, saveAsDefaultTemplate, saveAsNewTemplate, deleteCurrentTemplate, deleteCurrentFlyer, loadDefaultTemplate, setSiteDefault, toggleAutoFlyers,
     saveAsAdminDefault, saveAsNewAdminTemplate, deleteAdminTemplate,
     searchPrevious, loadPrevious,
