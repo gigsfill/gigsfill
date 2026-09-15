@@ -377,13 +377,21 @@
           <button onclick="FE.nudgeSelected(0, -10)" class="fe-btn fe-sq" title="Move up">↑</button>
           <button onclick="FE.nudgeSelected(0, 10)"  class="fe-btn fe-sq" title="Move down">↓</button>
           <button onclick="FE.centerOnCanvas()" class="fe-btn fe-sq" title="Center on canvas">⊕</button>
-          <!-- 2026-09-15: rescue when the selected object was scaled past
-               the canvas edges — its transform handles land outside the
-               visible viewport and can't be grabbed. This shrinks the
-               object back to fit inside the flyer while preserving its
-               aspect ratio + center point, so the user can adjust from
-               a reachable state. -->
-          <button onclick="FE.fitToCanvas()" class="fe-btn fe-sq" title="Fit inside flyer bounds (rescues over-stretched objects)">🗜</button>
+        </div>
+        <!-- 2026-09-15: rescue when the selected object was scaled past
+             the canvas edges — its transform handles land outside the
+             visible viewport and can't be grabbed. This shrinks the
+             object back to fit inside the flyer while preserving its
+             aspect ratio + center point, so the user can adjust from
+             a reachable state. Own row + full-width text label so it's
+             obviously discoverable (the emoji-only version people
+             couldn't see because 🗜 renders as ▢ on many systems). -->
+        <div style="display:flex;margin-top:6px;">
+          <button onclick="FE.fitToCanvas()" class="fe-btn"
+            style="flex:1;color:#c4b5fd;border-color:rgba(139,92,246,0.4);background:rgba(139,92,246,0.12);"
+            title="Rescue an object whose transform handles landed outside the visible flyer area — shrinks + centers it back inside">
+            ⤢ Fit inside flyer bounds
+          </button>
         </div>
         <!-- 2026-08-01: rotate row. ↺ / ↻ nudge 15° at a time, the number
              input takes any exact degree, and ◫ resets to 0. Works on any
