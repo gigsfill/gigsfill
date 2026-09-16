@@ -523,10 +523,40 @@ function exportVenueBilling(format) {
   var data = window._venueBillingData;
   if (!data || data.length === 0) return;
   if (format === 'excel') {
-    var csv = 'Date,Time,Artist,Gig Fee,Platform Fee,Total Paid,Status\n';
+    // 2026-09-16 formatting pass:
+    //   • Prepend "$" to every money column so Excel renders it as
+    //     currency-looking text instead of a bare number.
+    //   • Strip decorative glyphs from the status ("Paid ✓" → "Paid",
+    //     "🎟 Free Trial" → "Free Trial") because Excel's default
+    //     Windows-1252 CSV import turns UTF-8 characters like ✓ into
+    //     mojibake ("Paid âœ""), which is what the user was seeing.
+    //   • Emit a UTF-8 BOM at the very top so any status text we DO
+    //     leave in (venue names with accents, etc.) still renders
+    //     correctly if Excel does open the file as UTF-8.
+    var _stripDecor = function(s) {
+      return String(s == null ? '' : s)
+        // Explicit list — the current status labels only use ✓ (U+2713),
+        // and 🎟 (U+1F39F, a surrogate pair 🎟). A broader
+        // "strip all non-ASCII" would eat accents in venue/artist
+        // names elsewhere in the row, so we scope narrowly.
+        .replace(/[✓✔✅]/g, '')
+        .replace(/\uD83C[\uDF9F\uDFAB]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+    var BOM = '﻿';
+    var csv = BOM + 'Date,Time,Artist,Gig Fee,Platform Fee,Total Paid,Status\n';
     data.forEach(function(t) {
       var isCx = t.rawStatus === 'payment_cancelled';
-      csv += t.gig_date + ',' + (t.gig_time || '') + ',"' + t.artist_name.replace(/"/g,'""') + '",' + (isCx ? '0.00' : t.gig_fee.toFixed(2)) + ',' + t.platform_fee.toFixed(2) + ',' + (isCx ? t.platform_fee.toFixed(2) : t.total_paid.toFixed(2)) + ',' + t.status + '\n';
+      var gigFee    = isCx ? 0                          : t.gig_fee;
+      var totalPaid = isCx ? t.platform_fee              : t.total_paid;
+      csv += t.gig_date + ',' +
+             (t.gig_time || '') + ',' +
+             '"' + t.artist_name.replace(/"/g,'""') + '",' +
+             '$' + gigFee.toFixed(2)          + ',' +
+             '$' + t.platform_fee.toFixed(2)  + ',' +
+             '$' + totalPaid.toFixed(2)       + ',' +
+             _stripDecor(t.status) + '\n';
     });
     var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'billing_history.csv'; a.click();
@@ -536,15 +566,44 @@ function exportVenueBilling(format) {
     // via a malicious artist name.
     var _esc_pe = function(s){return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
     var w = window.open('', '_blank');
-    w.document.write('<html><head><title>Billing History</title><style>@page{size:landscape;margin:10mm 12mm;}body{font-family:Arial,sans-serif;padding:10px 15px;}table{width:100%;border-collapse:collapse;margin-top:12px;}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:12px;white-space:nowrap;}th{background:#f4f4f4;font-weight:bold;}tr:nth-child(even){background:#fafafa;}.right{text-align:right;}.cancelled{color:#ef4444;}</style></head><body>');
+    w.document.write('<html><head><title>Billing History</title><style>' +
+      '@page{size:landscape;margin:10mm 12mm;}' +
+      'body{font-family:Arial,sans-serif;padding:10px 15px;}' +
+      // 2026-09-16: darker + explicit vertical/horizontal grid so
+      // every column separator is visible in print (some browsers/
+      // drivers drop very light borders). border-collapse:collapse
+      // + border on every th/td gives a clean lattice.
+      'table{width:100%;border-collapse:collapse;margin-top:12px;border:1px solid #333;}' +
+      'th,td{border:1px solid #666;padding:6px 8px;text-align:left;font-size:12px;white-space:nowrap;}' +
+      'th{background:#f4f4f4;font-weight:bold;border-bottom:2px solid #333;}' +
+      'tr:nth-child(even){background:#fafafa;}' +
+      // 2026-09-16: thicker top border on the first row of a new date
+      // group so runs of same-date rows read as belonging together
+      // and the boundary between date groups is obvious.
+      'tr.date-boundary td{border-top:2px solid #333;}' +
+      '.right{text-align:right;}' +
+      '.cancelled{color:#ef4444;}' +
+      '</style></head><body>');
     w.document.write('<h2 style="margin-bottom:4px;">Billing History</h2><p style="margin-top:0;font-size:12px;color:#666;">Exported: ' + _esc_pe(new Date().toLocaleDateString()) + '</p>');
     w.document.write('<table><tr><th>Date</th><th>Time</th><th>Artist</th><th class="right">Gig Fee</th><th class="right">Platform Fee</th><th class="right">Total Paid</th><th>Status</th></tr>');
+    // Track prev row's date so we can flag every row that starts a new
+    // date group with a thicker top border (see .date-boundary in CSS
+    // above). The very first data row also counts as a boundary so
+    // there's a clean line between the header and the first date's
+    // block of rows.
+    var _prevDate = null;
     data.forEach(function(t) {
       var isCx = t.rawStatus === 'payment_cancelled';
       var gigFeeStr = isCx ? '<span class="cancelled">$0.00 ($' + t.gig_fee.toFixed(2) + ')</span>' : '$' + t.gig_fee.toFixed(2);
       var totalPaidStr = isCx ? '$' + t.platform_fee.toFixed(2) : '$' + t.total_paid.toFixed(2);
-      var statusStr = isCx ? '<span class="cancelled">Cancelled</span>' : _esc_pe(t.status);
-      w.document.write('<tr><td>' + _esc_pe(t.gig_date) + '</td><td>' + _esc_pe(t.gig_time || '') + '</td><td>' + _esc_pe(t.artist_name) + '</td><td class="right">' + gigFeeStr + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
+      // Strip the status decorations same as the CSV path — the print
+      // sheet already colors Cancelled red, so a bare "Paid" / "Free
+      // Trial" reads cleanly without checkmark / ticket glyphs.
+      var _statusPlain = String(t.status || '').replace(/[✓✔✅]/g, '').replace(/\uD83C[\uDF9F\uDFAB]/g, '').replace(/\s+/g, ' ').trim();
+      var statusStr = isCx ? '<span class="cancelled">Cancelled</span>' : _esc_pe(_statusPlain);
+      var rowClass = (_prevDate !== t.gig_date) ? ' class="date-boundary"' : '';
+      _prevDate = t.gig_date;
+      w.document.write('<tr' + rowClass + '><td>' + _esc_pe(t.gig_date) + '</td><td>' + _esc_pe(t.gig_time || '') + '</td><td>' + _esc_pe(t.artist_name) + '</td><td class="right">' + gigFeeStr + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
     });
     w.document.write('</table></body></html>');
     w.document.close();

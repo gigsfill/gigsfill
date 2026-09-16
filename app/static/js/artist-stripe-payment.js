@@ -415,10 +415,28 @@ function exportArtistEarnings(format) {
   var data = window._artistEarnData;
   if (!data || data.length === 0) return;
   if (format === 'excel') {
-    var csv = 'Date,Time,Venue,Gig Pay,Platform Fee,Total Paid,Status\n';
+    // 2026-09-16: same formatting pass as venue export. $ prefix on
+    // every money column, strip ✓/🎟 glyphs from Status (mojibake in
+    // Excel's default Windows-1252 CSV import), UTF-8 BOM so any
+    // remaining accents render correctly.
+    var _stripDecor = function(s) {
+      return String(s == null ? '' : s)
+        .replace(/[✓✔✅]/g, '')
+        .replace(/\uD83C[\uDF9F\uDFAB]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+    var BOM = '﻿';
+    var csv = BOM + 'Date,Time,Venue,Gig Pay,Platform Fee,Total Paid,Status\n';
     data.forEach(function(t) {
       var totalPaid = t.rawStatus === 'payment_cancelled' ? 0 : t.total_paid;
-      csv += t.gig_date + ',' + (t.gig_time || '') + ',"' + t.venue_name.replace(/"/g,'""') + '",' + t.gig_fee.toFixed(2) + ',' + t.platform_fee.toFixed(2) + ',' + totalPaid.toFixed(2) + ',' + t.status + '\n';
+      csv += t.gig_date + ',' +
+             (t.gig_time || '') + ',' +
+             '"' + t.venue_name.replace(/"/g,'""') + '",' +
+             '$' + t.gig_fee.toFixed(2)         + ',' +
+             '$' + t.platform_fee.toFixed(2)    + ',' +
+             '$' + totalPaid.toFixed(2)         + ',' +
+             _stripDecor(t.status) + '\n';
     });
     var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'earnings_history.csv'; a.click();
@@ -428,14 +446,34 @@ function exportArtistEarnings(format) {
     // raw, allowing same-origin XSS via a malicious venue name.
     var _esc_pe = function(s){return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
     var w = window.open('', '_blank');
-    w.document.write('<html><head><title>Earnings History</title><style>@page{size:landscape;margin:10mm 12mm;}body{font-family:Arial,sans-serif;padding:10px 15px;}table{width:100%;border-collapse:collapse;margin-top:12px;}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:12px;white-space:nowrap;}th{background:#f4f4f4;font-weight:bold;}tr:nth-child(even){background:#fafafa;}.right{text-align:right;}.cancelled{color:#ef4444;}</style></head><body>');
+    w.document.write('<html><head><title>Earnings History</title><style>' +
+      '@page{size:landscape;margin:10mm 12mm;}' +
+      'body{font-family:Arial,sans-serif;padding:10px 15px;}' +
+      // Same grid + date-boundary treatment as the venue billing PDF.
+      'table{width:100%;border-collapse:collapse;margin-top:12px;border:1px solid #333;}' +
+      'th,td{border:1px solid #666;padding:6px 8px;text-align:left;font-size:12px;white-space:nowrap;}' +
+      'th{background:#f4f4f4;font-weight:bold;border-bottom:2px solid #333;}' +
+      'tr:nth-child(even){background:#fafafa;}' +
+      'tr.date-boundary td{border-top:2px solid #333;}' +
+      '.right{text-align:right;}' +
+      '.cancelled{color:#ef4444;}' +
+      '</style></head><body>');
     w.document.write('<h2 style="margin-bottom:4px;">Earnings History</h2><p style="margin-top:0;font-size:12px;color:#666;">Exported: ' + _esc_pe(new Date().toLocaleDateString()) + '</p>');
     w.document.write('<table><tr><th>Date</th><th>Time</th><th>Venue</th><th class="right">Gig Pay</th><th class="right">Platform Fee</th><th class="right">Total Paid</th><th>Status</th></tr>');
+    // Same date-boundary tracker as the venue PDF export — every row
+    // that starts a new date group gets a thicker top border via the
+    // .date-boundary class.
+    var _prevDate = null;
     data.forEach(function(t) {
       var isCancelled = t.rawStatus === 'payment_cancelled';
       var totalPaidStr = isCancelled ? '<span class="cancelled">$0.00</span>' : '$' + t.total_paid.toFixed(2);
-      var statusStr = isCancelled ? '<span class="cancelled">Cancelled</span>' : _esc_pe(t.status);
-      w.document.write('<tr><td>' + _esc_pe(t.gig_date) + '</td><td>' + _esc_pe(t.gig_time || '') + '</td><td>' + _esc_pe(t.venue_name) + '</td><td class="right">$' + t.gig_fee.toFixed(2) + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
+      // Strip ✓ / 🎟 from status same as CSV — the print sheet colors
+      // Cancelled red, so bare "Paid" / "Free Trial" reads cleanly.
+      var _statusPlain = String(t.status || '').replace(/[✓✔✅]/g, '').replace(/\uD83C[\uDF9F\uDFAB]/g, '').replace(/\s+/g, ' ').trim();
+      var statusStr = isCancelled ? '<span class="cancelled">Cancelled</span>' : _esc_pe(_statusPlain);
+      var rowClass = (_prevDate !== t.gig_date) ? ' class="date-boundary"' : '';
+      _prevDate = t.gig_date;
+      w.document.write('<tr' + rowClass + '><td>' + _esc_pe(t.gig_date) + '</td><td>' + _esc_pe(t.gig_time || '') + '</td><td>' + _esc_pe(t.venue_name) + '</td><td class="right">$' + t.gig_fee.toFixed(2) + '</td><td class="right">$' + t.platform_fee.toFixed(2) + '</td><td class="right">' + totalPaidStr + '</td><td>' + statusStr + '</td></tr>');
     });
     w.document.write('</table></body></html>');
     w.document.close();
