@@ -283,7 +283,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       el.dataset.time24 = parsed;
       el.value = _slot12Format(parsed);
       el.classList.remove('slot-time-error');
-    } else if (el.value && el.value.trim() === '') {
+    } else if (!el.value || el.value.trim() === '') {
+      // Cleared field is not an error. The old `el.value && ...` guard
+      // could never be true — `''` is falsy, so an empty field fell
+      // through to the error branch below and lit up red.
       el.dataset.time24 = '';
       el.classList.remove('slot-time-error');
     } else {

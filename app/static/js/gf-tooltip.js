@@ -93,7 +93,10 @@
   // the pointer's pageX from the hover event and center the tooltip on
   // it, clamped inside the trigger's horizontal bounds so a narrow
   // trigger still looks centered.
-  function show(target, cursorX, cursorY) {
+  // Only the X coordinate is taken from the cursor — vertical placement is
+  // deliberately element-relative (above, flipping below when clipped), so
+  // there's no cursorY parameter.
+  function show(target, cursorX) {
     hide();
     // Prefer data-tooltip; fall back to title (auto-migration).
     let text = target.getAttribute('data-tooltip');
@@ -154,10 +157,9 @@
     // compute a sensible offset.
     const _arrowX = _anchorX - left;
     if (_arrowX >= 6 && _arrowX <= _tw - 6) {
-      // Inline style overrides the 50% default in the injected CSS.
-      const _arrows = tip.querySelectorAll(':scope::before');
-      // ::before pseudo-elements can't be reached via querySelectorAll,
-      // so set a custom property the stylesheet reads.
+      // ::before pseudo-elements aren't reachable from JS, so we set a
+      // custom property the stylesheet reads instead of styling the
+      // arrow directly.
       tip.style.setProperty('--gf-arrow-left', _arrowX + 'px');
       tip.classList.add('gf-tooltip-arrow-custom');
     }
@@ -173,7 +175,7 @@
     const t = e.target.closest('[data-tooltip], [title]');
     if (!t) return;
     if (t === activeTarget) return;
-    show(t, e.clientX, e.clientY);
+    show(t, e.clientX);
   });
   document.addEventListener('mouseout', (e) => {
     if (!activeTarget) return;
@@ -206,8 +208,7 @@
     if (t === activeTarget) { hide(); return; }
     const touch = e.touches && e.touches[0];
     const cx = touch ? touch.clientX : undefined;
-    const cy = touch ? touch.clientY : undefined;
-    show(t, cx, cy);
+    show(t, cx);
   }, { passive: true });
 
   // Hide on scroll / resize / Escape so tooltips never linger stale.

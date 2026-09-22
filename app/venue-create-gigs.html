@@ -989,26 +989,6 @@
   }
   .slot-pay-pill input:focus { outline: none !important; }
 
-  /* 2026-09-17: kill Chromium's clock-picker glyph on the slot-start /
-     slot-end time inputs. Inline here as a belt-and-suspenders in case
-     the shared rule in gigsfill.css is browser-cached. Very specific
-     selector wins the cascade over anything. */
-  input.slot-start::-webkit-calendar-picker-indicator,
-  input.slot-end::-webkit-calendar-picker-indicator,
-  input.slot-start::-webkit-clear-button,
-  input.slot-end::-webkit-clear-button,
-  input.slot-start::-webkit-inner-spin-button,
-  input.slot-end::-webkit-inner-spin-button {
-    display: none !important;
-    -webkit-appearance: none !important;
-    appearance: none !important;
-    opacity: 0 !important;
-    width: 0 !important;
-    height: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    pointer-events: none !important;
-  }
   /* "$" prefix — same green as the amount text */
   .slot-pay-pill .slot-pay-symbol {
     color: #22c55e;
@@ -2299,7 +2279,7 @@
 <script src="/app/static/js/timezone-utils.js"></script>
 <script src="/app/static/js/auth.guard.js?v=4"></script>
 <script src="/app/static/js/time-format.js"></script>
-<link href="/app/static/css/gigsfill.css?v=13" rel="stylesheet"/>
+<link href="/app/static/css/gigsfill.css?v=14" rel="stylesheet"/>
 
 <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet"/>
   <link href="/app/static/css/mobile.css?v=6" rel="stylesheet"/>
@@ -3878,8 +3858,8 @@
 <script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/hold-mgmt.js?v=13"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=262"></script>
-<script src="/app/static/js/gf-tooltip.js?v=3"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=263"></script>
+<script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/venue.contracts.js?v=4" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=27" defer></script>
 

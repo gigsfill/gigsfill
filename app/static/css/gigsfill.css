@@ -849,3 +849,17 @@ footer {
 #inlineSaveIndicator {
   transition: opacity 0.3s;
 }
+
+/* Slot time picker — invalid-input state.
+   The segmented HH:MM AM/PM widget (venue.create-gigs.js) clamps every
+   value into range, so it can't actually go invalid. This rule exists
+   for the legacy single-<input> fallback path in _slotNormalizeInput,
+   which sets .slot-time-error on text it can't parse. Without a rule
+   here that state was invisible and the field just silently cleared.
+   The !important is needed for the .slot-time-wrap case because the
+   widget's border is an inline style. */
+.slot-time-error,
+.slot-time-wrap.slot-time-error {
+  border-color: #ef4444 !important;
+  background: rgba(239, 68, 68, 0.08) !important;
+}
