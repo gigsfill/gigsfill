@@ -10,22 +10,36 @@ not blocked, so it is the transport we actually use in production.
 and falls back to real SMTP otherwise, so local/dev environments that can
 reach an SMTP server keep working unchanged.
 
-Configuration (all in `.env`):
-    ZOHO_CLIENT_ID          Self Client id from the Zoho API console
-    ZOHO_CLIENT_SECRET      Self Client secret
-    ZOHO_REFRESH_TOKEN      long-lived, obtained once by exchanging a grant code
+MULTIPLE SENDERS
+----------------
+GigsFill sends as more than one identity — `booking@gigsfill.com` for
+platform/transactional mail and `support@gigsfill.com` for support — and
+in Zoho those are separate user accounts, not aliases. A Zoho Self Client
+is authorized by whichever user creates it and can only send as that
+user, so each sending identity needs its own credential set. Zoho rejects
+a `fromAddress` the authorizing account doesn't own, so without this the
+transport would have to rewrite every From to a single address.
+
+Each account is configured as a prefixed triple in `.env`:
+
+    ZOHO_BOOKING_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN
+    ZOHO_SUPPORT_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN
+
+plus an optional unprefixed set (`ZOHO_CLIENT_ID`, ...) used as the
+fallback for any From that matches none of the others. Shared settings:
+
     ZOHO_ACCOUNT_REGION     data-center suffix: com | eu | in | com.au (default com)
     ZOHO_FROM_ADDRESS       optional; overrides the message's own From
 
-The OAuth grant belongs to whichever Zoho user authorized the Self Client,
-and Zoho rejects a `fromAddress` that account can't send as. If the app
-hands us a From the account doesn't own, we rewrite it to the authorized
-address and preserve the original as Reply-To, so replies still reach the
-intended mailbox instead of the send failing outright.
+On send, the From address is matched against the addresses each account
+reports it can send as (discovered once per account via /accounts, then
+cached). Adding another identity later means adding another prefixed
+triple — no code change.
 """
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -39,62 +53,62 @@ _TOKEN_SAFETY_MARGIN_SEC = 120
 _HTTP_TIMEOUT_SEC = 30
 
 
-class ZohoMailTransport:
-    def __init__(self):
+def _region():
+    return os.getenv("ZOHO_ACCOUNT_REGION", "com").strip() or "com"
+
+
+class _ZohoAccount:
+    """One authorized Zoho mailbox: its OAuth creds, cached access token,
+    account id, and the set of addresses it may send as."""
+
+    def __init__(self, name, client_id, client_secret, refresh_token):
+        self.name = name
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._refresh_token = refresh_token
         self._lock = threading.Lock()
         self._access_token = None
-        self._access_token_expires_at = 0.0
-        self._account_id = None
-        self._allowed_from = set()
-        self._primary_address = None
-
-    # ── configuration ────────────────────────────────────────────────
-
-    @property
-    def region(self):
-        return os.getenv("ZOHO_ACCOUNT_REGION", "com").strip() or "com"
-
-    def is_configured(self):
-        return all(
-            os.getenv(k)
-            for k in ("ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET", "ZOHO_REFRESH_TOKEN")
-        )
+        self._expires_at = 0.0
+        self.account_id = None
+        self.primary_address = None
+        self.allowed_from = set()
+        self._resolved = False
 
     # ── auth ─────────────────────────────────────────────────────────
 
-    def _fetch_access_token(self):
-        """Exchange the refresh token for a short-lived access token.
+    def _refresh(self):
+        """Exchange the refresh token for an access token.
 
         Caller must hold `self._lock`.
         """
         payload = urllib.parse.urlencode({
             "grant_type": "refresh_token",
-            "client_id": os.getenv("ZOHO_CLIENT_ID"),
-            "client_secret": os.getenv("ZOHO_CLIENT_SECRET"),
-            "refresh_token": os.getenv("ZOHO_REFRESH_TOKEN"),
+            "client_id": self._client_id,
+            "client_secret": self._client_secret,
+            "refresh_token": self._refresh_token,
         }).encode()
         req = urllib.request.Request(
-            f"https://accounts.zoho.{self.region}/oauth/v2/token", data=payload
+            f"https://accounts.zoho.{_region()}/oauth/v2/token", data=payload
         )
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SEC) as resp:
             body = json.loads(resp.read().decode())
         token = body.get("access_token")
         if not token:
-            raise RuntimeError(f"Zoho token refresh returned no access_token: {body.get('error')}")
+            raise RuntimeError(
+                f"Zoho token refresh for {self.name} returned no access_token: {body.get('error')}"
+            )
         self._access_token = token
-        self._access_token_expires_at = (
-            time.time() + int(body.get("expires_in", 3600)) - _TOKEN_SAFETY_MARGIN_SEC
-        )
+        self._expires_at = time.time() + int(body.get("expires_in", 3600)) - _TOKEN_SAFETY_MARGIN_SEC
         return token
 
     def _token(self):
         with self._lock:
-            if self._access_token and time.time() < self._access_token_expires_at:
+            if self._access_token and time.time() < self._expires_at:
                 return self._access_token
-            return self._fetch_access_token()
+            return self._refresh()
 
-    def _api(self, path, method="GET", body=None, _retry_on_401=True):
-        url = f"https://mail.zoho.{self.region}/api{path}"
+    def api(self, path, method="GET", body=None, _retry_on_401=True):
+        url = f"https://mail.zoho.{_region()}/api{path}"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             url, data=data, method=method,
@@ -112,33 +126,125 @@ class ZohoMailTransport:
             if e.code == 401 and _retry_on_401:
                 with self._lock:
                     self._access_token = None
-                    self._access_token_expires_at = 0.0
-                return self._api(path, method, body, _retry_on_401=False)
-            raise RuntimeError(f"Zoho API {method} {path} -> {e.code}: {e.read().decode()[:300]}") from None
+                    self._expires_at = 0.0
+                return self.api(path, method, body, _retry_on_401=False)
+            raise RuntimeError(
+                f"Zoho API {method} {path} [{self.name}] -> {e.code}: {e.read().decode()[:300]}"
+            ) from None
 
-    # ── account discovery ────────────────────────────────────────────
+    # ── discovery ────────────────────────────────────────────────────
 
-    def _account(self):
-        """Resolve and cache the sending account id plus the addresses it
-        is permitted to send as."""
-        if self._account_id:
-            return self._account_id
-        data = (self._api("/accounts") or {}).get("data") or []
+    def resolve(self):
+        """Look up the account id and sendable addresses. Cached; a failure
+        is remembered as 'resolved with no addresses' so one broken account
+        doesn't retry on every single send."""
+        if self._resolved:
+            return
+        self._resolved = True
+        try:
+            data = (self.api("/accounts") or {}).get("data") or []
+        except Exception as e:
+            logger.warning("[ZOHO] account lookup failed for %s: %s", self.name, e)
+            return
         if not data:
-            raise RuntimeError("Zoho returned no mail accounts for this token")
+            logger.warning("[ZOHO] no mail accounts returned for %s", self.name)
+            return
         acct = data[0]
-        self._account_id = acct.get("accountId")
-        self._primary_address = acct.get("primaryEmailAddress")
-        allowed = {self._primary_address} if self._primary_address else set()
+        self.account_id = acct.get("accountId")
+        self.primary_address = acct.get("primaryEmailAddress")
+        allowed = {self.primary_address} if self.primary_address else set()
         for entry in (acct.get("emailAddress") or []):
             if entry.get("mailId"):
                 allowed.add(entry["mailId"])
-        self._allowed_from = {a.lower() for a in allowed if a}
+        self.allowed_from = {a.lower() for a in allowed if a}
         logger.info(
-            "[ZOHO] account=%s primary=%s sends_as=%s",
-            self._account_id, self._primary_address, sorted(self._allowed_from),
+            "[ZOHO] %s -> account=%s primary=%s sends_as=%s",
+            self.name, self.account_id, self.primary_address, sorted(self.allowed_from),
         )
-        return self._account_id
+
+    def can_send_as(self, address):
+        self.resolve()
+        return bool(address) and address.lower() in self.allowed_from
+
+    @property
+    def usable(self):
+        self.resolve()
+        return bool(self.account_id)
+
+
+class ZohoMailTransport:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._accounts = None
+
+    # ── configuration ────────────────────────────────────────────────
+
+    @staticmethod
+    def _discover_from_env():
+        """Build the account list from environment variables.
+
+        Finds every `ZOHO_<NAME>_CLIENT_ID` and pairs it with the matching
+        secret and refresh token, then appends the unprefixed set last so
+        it acts as the fallback.
+        """
+        found = []
+        for key in os.environ:
+            m = re.fullmatch(r"ZOHO_([A-Z0-9]+)_CLIENT_ID", key)
+            if not m:
+                continue
+            name = m.group(1)
+            # ACCOUNT_REGION / API_DOMAIN etc. are settings, not accounts.
+            cid = os.getenv(f"ZOHO_{name}_CLIENT_ID")
+            sec = os.getenv(f"ZOHO_{name}_CLIENT_SECRET")
+            ref = os.getenv(f"ZOHO_{name}_REFRESH_TOKEN")
+            if cid and sec and ref:
+                found.append(_ZohoAccount(name.lower(), cid, sec, ref))
+        found.sort(key=lambda a: a.name)
+
+        cid, sec, ref = (os.getenv("ZOHO_CLIENT_ID"), os.getenv("ZOHO_CLIENT_SECRET"),
+                         os.getenv("ZOHO_REFRESH_TOKEN"))
+        if cid and sec and ref:
+            found.append(_ZohoAccount("default", cid, sec, ref))
+        return found
+
+    def accounts(self):
+        with self._lock:
+            if self._accounts is None:
+                self._accounts = self._discover_from_env()
+                logger.info(
+                    "[ZOHO] configured accounts: %s",
+                    [a.name for a in self._accounts] or "none",
+                )
+            return self._accounts
+
+    def is_configured(self):
+        return bool(self.accounts())
+
+    def reset(self):
+        """Drop cached accounts and tokens — used by tests and after a
+        credential change without a restart."""
+        with self._lock:
+            self._accounts = None
+
+    # ── routing ──────────────────────────────────────────────────────
+
+    def _pick(self, from_addr):
+        """Choose the account that may send as `from_addr`.
+
+        Returns `(account, rewritten_from)`. When nothing matches we fall
+        back to the last usable account and report the address it will
+        actually send as, so the caller can log the substitution.
+        """
+        accounts = self.accounts()
+        if not accounts:
+            raise RuntimeError("Zoho transport has no configured accounts")
+        for acct in accounts:
+            if acct.can_send_as(from_addr):
+                return acct, from_addr
+        for acct in accounts:
+            if acct.usable:
+                return acct, acct.primary_address
+        raise RuntimeError("Zoho transport: no usable accounts (all lookups failed)")
 
     # ── sending ──────────────────────────────────────────────────────
 
@@ -186,38 +292,41 @@ class ZohoMailTransport:
             return []
         return [a.strip() for a in str(value).split(",") if a.strip()]
 
+    @staticmethod
+    def _bare(address):
+        """Strip a display name: 'GigsFill <a@b.c>' -> 'a@b.c'."""
+        if not address:
+            return ""
+        m = re.search(r"<([^>]+)>", address)
+        return (m.group(1) if m else address).strip()
+
     def send_message(self, msg):
         """Send a `email.message.Message` through the Zoho Mail API.
 
         Returns True on success; raises on failure so callers keep their
         existing try/except behaviour around SMTP errors.
         """
-        account_id = self._account()
-
         to_addrs = self._addr_list(msg.get("To"))
         if not to_addrs:
             raise RuntimeError("Zoho send: message has no To address")
 
         configured_from = (os.getenv("ZOHO_FROM_ADDRESS") or "").strip()
-        msg_from = (msg.get("From") or "").strip()
-        from_addr = configured_from or msg_from or self._primary_address
+        wanted_from = self._bare(configured_from or (msg.get("From") or ""))
 
-        # Zoho rejects a From the authorized account can't send as. Rather
-        # than fail the send, fall back to the authorized address.
-        reply_to = (msg.get("Reply-To") or "").strip()
-        if self._allowed_from and from_addr.lower() not in self._allowed_from:
+        acct, from_addr = self._pick(wanted_from)
+        if wanted_from and from_addr.lower() != wanted_from.lower():
             logger.warning(
-                "[ZOHO] From %r not sendable by this account; sending as %r instead. "
-                "To send as %r, authorize a Self Client as that user.",
-                from_addr, self._primary_address, from_addr,
+                "[ZOHO] no account can send as %r; sending as %r via %s. "
+                "Authorize a Self Client as %r to send as it directly.",
+                wanted_from, from_addr, acct.name, wanted_from,
             )
-            from_addr = self._primary_address
 
-        # Zoho also rejects an *unverified* replyTo with a 500 and
-        # "You need to verify the ReplyTo address". Only pass one through
-        # when the account already owns it, otherwise drop it — a missing
-        # Reply-To is a cosmetic loss, a failed send is an outage.
-        if reply_to and self._allowed_from and reply_to.lower() not in self._allowed_from:
+        # Zoho rejects an *unverified* replyTo with a 500 and "You need to
+        # verify the ReplyTo address". Only pass one through when the
+        # sending account already owns it — a missing Reply-To is a
+        # cosmetic loss, a failed send is an outage.
+        reply_to = self._bare(msg.get("Reply-To") or "")
+        if reply_to and not acct.can_send_as(reply_to):
             logger.warning(
                 "[ZOHO] dropping unverified Reply-To %r (verify it in Zoho Mail to keep it)",
                 reply_to,
@@ -241,18 +350,16 @@ class ZohoMailTransport:
         if reply_to:
             payload["replyTo"] = reply_to
 
-        result = self._api(f"/accounts/{account_id}/messages", method="POST", body=payload)
+        result = acct.api(f"/accounts/{acct.account_id}/messages", method="POST", body=payload)
         # Zoho can return HTTP 200 with a failure code in the body.
         status = (result or {}).get("status") or {}
         code = status.get("code")
         if code is not None and str(code) != "200":
-            raise RuntimeError(
-                f"Zoho send failed: {status} {(result or {}).get('data')}"
-            )
+            raise RuntimeError(f"Zoho send failed: {status} {(result or {}).get('data')}")
         return True
 
 
-# Module-level singleton so the access token and account lookup are shared
+# Module-level singleton so access tokens and account lookups are shared
 # across every caller in the process.
 transport = ZohoMailTransport()
 
@@ -263,3 +370,7 @@ def is_configured():
 
 def send_message(msg):
     return transport.send_message(msg)
+
+
+def reset():
+    transport.reset()
