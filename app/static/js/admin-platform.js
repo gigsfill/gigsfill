@@ -515,6 +515,38 @@ window._adminConfirm = function(opts) {
   // and PUTs empty strings for every email/SMTP/demo field at once. That
   // race actually happened on 2026-07-21 (audit log row #82) and wiped 15
   // settings in one shot.
+  // Renders which transport mail actually leaves through, and which Zoho
+  // account owns each sending identity. Reads live state from the server
+  // rather than describing it statically, so it can't drift out of date.
+  function renderMailTransport(t) {
+    const el = document.getElementById('mailTransportStatus');
+    if (!el) return;
+    if (!t || t.mode !== 'zoho_api') {
+      el.innerHTML =
+        '<span style="color:#f59e0b;font-weight:600;">⚠ SMTP fallback</span> ' +
+        '<span style="color:var(--text-muted);">— no Zoho credentials found in .env. ' +
+        'Outbound mail will fail on this server, because DigitalOcean blocks SMTP.</span>';
+      return;
+    }
+    const accts = t.accounts || [];
+    const rows = accts.map(a => {
+      const ok = a.ok && a.sends_as;
+      const mark  = ok ? '<span style="color:#22c55e;">●</span>'
+                       : '<span style="color:#ef4444;">●</span>';
+      const addr  = ok ? a.sends_as
+                       : '<span style="color:#ef4444;">unreachable — check credentials</span>';
+      return '<div style="margin:2px 0 0 14px;font-family:monospace;font-size:0.75rem;">' +
+             mark + ' ' + a.name + ' → ' + addr + '</div>';
+    }).join('');
+    const bad = accts.filter(a => !(a.ok && a.sends_as)).length;
+    const head = bad
+      ? '<span style="color:#f59e0b;font-weight:600;">Zoho Mail API — ' + bad + ' account(s) failing</span>'
+      : '<span style="color:#22c55e;font-weight:600;">✓ Zoho Mail API</span>';
+    el.innerHTML = head +
+      ' <span style="color:var(--text-muted);">(' + accts.length + ' sending identit' +
+      (accts.length === 1 ? 'y' : 'ies') + ')</span>' + rows;
+  }
+
   window._settingsLoaded = false;
   async function loadEmailSettings() {
     try {
@@ -534,6 +566,7 @@ window._adminConfirm = function(opts) {
       set('supportSmtpPort',       d.support_smtp_port);
       set('adminAlertEmail',       d.admin_alert_email);
       set('farBookingAlertMiles',  d.far_booking_alert_miles);
+      renderMailTransport(d.mail_transport);
       // Demo pipeline — notify address + default video-call URL.
       set('demoRequestAdminEmail', d.demo_request_admin_email);
       set('demoMeetingUrl',        d.demo_meeting_url);

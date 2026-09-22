@@ -866,6 +866,43 @@
 
       <!-- ── Sub-tab: Email Settings ── -->
       <div class="ps-subtab-content active" id="ps-email">
+
+        <!-- How mail actually leaves this server. Without this panel the SMTP
+             fields below read as live config when production ignores them. -->
+        <div class="content-card" style="padding:14px;margin-bottom:12px;border-left:3px solid var(--cyan);">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+            How mail is sent
+          </div>
+          <div id="mailTransportStatus" style="font-size:0.8rem;margin-bottom:10px;">
+            <span style="color:var(--text-muted);">Checking transport…</span>
+          </div>
+          <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6;">
+            <p style="margin:0 0 8px 0;">
+              Outbound mail goes through the <strong>Zoho Mail HTTPS API</strong>, not SMTP.
+              DigitalOcean blocks outbound SMTP (ports 25 / 465 / 587) from this server to
+              every destination, so SMTP cannot work here no matter which provider or port
+              is configured.
+            </p>
+            <p style="margin:0 0 8px 0;">
+              Zoho credentials live in <code>/opt/gigsfill/.env</code>, one set per sending
+              identity, because <strong>booking@ and support@ are separate Zoho accounts</strong>
+              (not aliases) and Zoho only lets an account send as itself:
+            </p>
+            <pre style="margin:0 0 8px 0;padding:8px 10px;background:rgba(0,0,0,.25);border-radius:4px;font-size:0.72rem;overflow-x:auto;">ZOHO_BOOKING_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN
+ZOHO_SUPPORT_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN
+ZOHO_CLIENT_ID         / _CLIENT_SECRET / _REFRESH_TOKEN   (fallback)
+ZOHO_ACCOUNT_REGION=com</pre>
+            <p style="margin:0;">
+              Each message is routed to whichever account owns its From address. Changing
+              credentials requires editing <code>.env</code> and restarting
+              <code>gigsfill</code> + <code>gigsfill-scheduler</code> — it cannot be done
+              from this page. To add a new sending address, create a Zoho Self Client while
+              logged in as that mailbox with scope
+              <code>ZohoMail.messages.CREATE,ZohoMail.accounts.READ</code>.
+            </p>
+          </div>
+        </div>
+
         <div class="content-card" style="padding:14px;">
           <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Platform Communications Email</div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
@@ -878,17 +915,17 @@
               <input type="email" id="platformEmail" placeholder="noreply@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
             <div class="field">
-              <label style="font-size:0.7rem;">Email Password</label>
+              <label style="font-size:0.7rem;">Email Password <span style="color:var(--text-muted);font-weight:400;" title="Not used in production — mail goes out over the Zoho Mail HTTPS API. Kept only as a fallback for local development.">(fallback only)</span></label>
               <input type="password" id="platformEmailPassword" placeholder="Email password" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;max-width:66%;">
             <div class="field">
-              <label style="font-size:0.7rem;">SMTP Server</label>
+              <label style="font-size:0.7rem;">SMTP Server <span style="color:var(--text-muted);font-weight:400;" title="Not used in production — mail goes out over the Zoho Mail HTTPS API. Kept only as a fallback for local development.">(fallback only)</span></label>
               <input type="text" id="platformSmtpServer" placeholder="smtp.gmail.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
             <div class="field">
-              <label style="font-size:0.7rem;">SMTP Port</label>
+              <label style="font-size:0.7rem;">SMTP Port <span style="color:var(--text-muted);font-weight:400;" title="Not used in production — mail goes out over the Zoho Mail HTTPS API. Kept only as a fallback for local development.">(fallback only)</span></label>
               <input type="number" id="platformSmtpPort" placeholder="587" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
           </div>
@@ -919,17 +956,17 @@
               <input type="email" id="supportEmail" placeholder="support@gigsfill.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
             <div class="field">
-              <label style="font-size:0.7rem;">Email Password</label>
+              <label style="font-size:0.7rem;">Email Password <span style="color:var(--text-muted);font-weight:400;" title="Not used in production — mail goes out over the Zoho Mail HTTPS API. Kept only as a fallback for local development.">(fallback only)</span></label>
               <input type="password" id="supportEmailPassword" placeholder="Email password" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;max-width:66%;">
             <div class="field">
-              <label style="font-size:0.7rem;">SMTP Server</label>
+              <label style="font-size:0.7rem;">SMTP Server <span style="color:var(--text-muted);font-weight:400;" title="Not used in production — mail goes out over the Zoho Mail HTTPS API. Kept only as a fallback for local development.">(fallback only)</span></label>
               <input type="text" id="supportSmtpServer" placeholder="smtp.gmail.com" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
             <div class="field">
-              <label style="font-size:0.7rem;">SMTP Port</label>
+              <label style="font-size:0.7rem;">SMTP Port <span style="color:var(--text-muted);font-weight:400;" title="Not used in production — mail goes out over the Zoho Mail HTTPS API. Kept only as a fallback for local development.">(fallback only)</span></label>
               <input type="number" id="supportSmtpPort" placeholder="587" onblur="autoSaveSettings()" onkeypress="if(event.key==='Enter'){ autoSaveSettings(); this.blur(); }" style="padding:7px 10px;font-size:0.8rem;width:100%;box-sizing:border-box;">
             </div>
           </div>
@@ -2401,7 +2438,7 @@ function switchTemplatesSubTab(tab) {
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=4"></script>
-<script src="/app/static/js/admin-platform.js?v=13"></script>
+<script src="/app/static/js/admin-platform.js?v=14"></script>
 <script src="/app/static/js/admin-payments.js?v=36"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=3"></script>

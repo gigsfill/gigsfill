@@ -597,8 +597,31 @@ def get_settings(admin=Depends(check_admin), db=Depends(get_db)):
     def _mask(val):
         return "••••••••" if val else ""
 
+    # Live mail-transport state for the admin Email Settings panel. Without
+    # this the page shows SMTP fields that production no longer reads, which
+    # is actively misleading — see §11 "Transport" in gigsfill-claude-doc.md.
+    _mail_transport = {'mode': 'smtp', 'accounts': []}
+    try:
+        from backend.services import zoho_mail as _zm
+        if _zm.is_configured():
+            _accts = []
+            for _a in _zm.transport.accounts():
+                try:
+                    _a.resolve()
+                except Exception:
+                    pass
+                _accts.append({
+                    'name': _a.name,
+                    'sends_as': _a.primary_address or None,
+                    'ok': bool(_a.account_id),
+                })
+            _mail_transport = {'mode': 'zoho_api', 'accounts': _accts}
+    except Exception:
+        pass
+
     return {
         'commission': settings.get('commission_percentage', 0),
+        'mail_transport': _mail_transport,
         'platform_email': settings.get('platform_email', ''),
         'platform_email_password': _mask(settings.get('platform_email_password', '')),
         'platform_smtp_server': settings.get('platform_smtp_server', 'smtp.gmail.com'),
