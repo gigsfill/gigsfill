@@ -18,7 +18,8 @@
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Venue Profile – GigsFill">
   <meta name="twitter:description" content="View this venue's profile on GigsFill.">
-  <link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=13" rel="stylesheet">
+
   <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet">
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
@@ -210,20 +211,68 @@
       padding: 28px 32px; max-width: 480px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
       max-height: 90vh; overflow-y: auto;
     }
+    /* 2026-09-16: day-gigs modal restyled to a compact multi-line row.
+       Row spec (per user):
+         Line 1: 🎸 Time · Venue Name (link → venue profile, new tab)
+         Line 2: Full Address (link → Google Maps, new tab), indented
+         Line 3: Live Band · Format, indented
+         Line 4: Artist Name (link → artist profile, new tab) / OPEN, indented
+       Rows are no longer clickable — click-through to gig details was
+       removed. Modal body caps at ~5 rows then scrolls. */
     .gig-modal.day-modal {
-      max-width: min(980px, 96vw);
+      max-width: min(720px, 96vw);
       width: fit-content;
-      min-width: min(900px, 96vw);
-      padding: 24px;
-    }
-    .gig-modal.day-modal .gig-row {
-      font-size: 0.7rem;
-      font-weight: 700;
+      min-width: min(660px, 96vw);
+      padding: 20px 24px;
     }
     .gig-modal.day-modal h3 {
-      margin: 0 0 18px; font-size: 1rem; font-weight: 700; color: var(--text);
-      padding-bottom: 12px; border-bottom: 1px solid var(--border);
+      margin: 0 0 14px; font-size: 1rem; font-weight: 700; color: var(--text);
+      padding-bottom: 10px; border-bottom: 1px solid var(--border);
     }
+    .gig-modal.day-modal .day-gig-list {
+      display: grid;
+      grid-auto-rows: auto;
+      row-gap: 8px;
+      max-height: 420px;   /* ≈ 5 rows before scroll kicks in */
+      overflow-y: auto;
+      padding-right: 4px;  /* leave room for the scrollbar */
+    }
+    .gig-modal.day-modal .day-gig-row {
+      display: block;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      line-height: 1.35;
+      border: 1px solid transparent;
+    }
+    .gig-modal.day-modal .day-gig-row .dgr-line1 {
+      /* Venue anchors line 1. */
+      display: block;
+      font-weight: 700;
+    }
+    .gig-modal.day-modal .day-gig-row .dgr-line2,
+    .gig-modal.day-modal .day-gig-row .dgr-line3 {
+      /* Lines 2 & 3 (artist type + artist name / OPEN) share the same
+         indent so they left-align vertically. Font size + font-weight
+         also matched so the two lines read as a stacked pair. */
+      display: block;
+      padding-left: 10ch;
+      opacity: 0.95;
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin-top: 3px;
+    }
+    /* 2026-09-16: subtle-accent theme means the row text is the site's
+       normal foreground now, so anchors get an explicit cyan matching
+       the city public-gigs day modal for consistency. */
+    .gig-modal.day-modal .day-gig-row a {
+      color: #67e8f9;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      font-weight: 600;
+    }
+    .gig-modal.day-modal .day-gig-row a:hover { opacity: 0.85; }
     .gig-modal-row {
       display: flex; justify-content: space-between; padding: 7px 0;
       border-bottom: 1px solid rgba(255,255,255,0.03);
@@ -1326,19 +1375,47 @@
         } catch(e) {}
       }));
 
+      // 2026-09-16: sort earliest → latest by gig start_time. Was falling
+      // back to the venueGigs array order which is date-desc from the API.
+      const sortedDayGigs = [...dayGigs].sort(
+        (a, b) => (a.start_time || '').localeCompare(b.start_time || '')
+      );
+
       const [y, mo, d] = ds.split('-').map(Number);
       const dateStr = new Date(y, mo-1, d).toLocaleDateString('en-US', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
 
       const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
 
-      let rows = dayGigs.map(g => {
+      // Full venue address (line 2) — hyperlinked to Google Maps.
+      const _vName = venueData?.venue_name || '';
+      const _vStreet = [venueData?.address_line_1, venueData?.address_line_2].filter(Boolean).join(' ');
+      const _vCityState = [venueData?.city, venueData?.state].filter(Boolean).join(', ');
+      const _vAddrParts = [_vStreet, _vCityState, venueData?.postal_code].filter(Boolean);
+      const _fullAddr = _vAddrParts.join(', ');
+      const _mapsQuery = encodeURIComponent(_vName ? `${_vName}, ${_fullAddr}` : _fullAddr);
+      const _mapsUrl = _fullAddr ? `https://www.google.com/maps/search/?api=1&query=${_mapsQuery}` : '';
+      const _venueId = venueData?.id || venueId || (dayGigs[0] && dayGigs[0].venue_id);
+      const _venueHref = _venueId ? `/app/venue-profile.html?venue_id=${_venueId}` : '';
+
+      // 4-line gig row (2026-09-16 revision):
+      //   Line 1: 🎸 Time · Venue Name (link → venue profile)
+      //   Line 2 (indent): Full Address (link → Google Maps)
+      //   Line 3 (indent): Live Band · Format
+      //   Line 4 (indent): Artist Name (link) / OPEN
+      // Row itself is no longer clickable — the venue / address / artist
+      // hyperlinks are the only affordances.
+      let rows = sortedDayGigs.map(g => {
         const isBooked = g.status === 'booked' || g.booked_slots_count > 0;
-        const gigBg    = isBooked ? 'linear-gradient(135deg,#ef4444,#b91c1c)' : 'linear-gradient(135deg,#10b981,#059669)';
-        const gigBorder= isBooked ? '#b91c1c' : '#059669';
-        const gigColor = isBooked ? '#ffffff' : '#000000';
+        // 2026-09-16: subtle accent theme — matches the city public-gigs
+        // day modal. Previously used a solid red/green gradient with
+        // forced black/white text; that clashed with the rest of the
+        // profile and made hyperlinks harder to color consistently.
+        const _accentRGB = isBooked ? '239,68,68' : '16,185,129';
+        const gigBg    = `linear-gradient(180deg, rgba(${_accentRGB},0.08), rgba(${_accentRGB},0.03))`;
+        const gigBorder= `rgba(${_accentRGB},0.35)`;
+        const gigColor = 'var(--text, #e4e7eb)';
         const icon = icons[g.artist_type] || '🎵';
         const time = fmtTime(g.start_time) + (g.end_time ? ' – ' + fmtTime(g.end_time) : '');
-        const loc = [venueData?.city, venueData?.state].filter(Boolean).join(', ');
         let artistTypeDisplay = g.artist_type || 'Any';
         if (g.artist_type === 'Live Band' && g.band_formats)
           artistTypeDisplay += ' • ' + g.band_formats.split(',').map(f=>f.trim()).join(', ');
@@ -1346,24 +1423,30 @@
         // Artist name from prefetched slots or gig directly
         let artistDisplay = '';
         if (!isBooked) {
-          artistDisplay = `<span style="opacity:0.75;">OPEN</span>`;
+          artistDisplay = `<span style="opacity:0.85;font-weight:700;">OPEN - No Artist Booked</span>`;
         } else if (g._daySlots) {
           const bookedSlots = g._daySlots.filter(s => s.status === 'booked' && s.artist_name);
           artistDisplay = bookedSlots.length === 0
             ? '<span style="opacity:0.75;">Booked</span>'
-            : bookedSlots.map(s => `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigColor};text-decoration:underline;font-weight:600;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">${esc(s.artist_name)}</a>`).join('<br>');
+            : bookedSlots.map(s => `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" rel="noopener">${esc(s.artist_name)}</a>`).join(', ');
         } else if (g.artist_name) {
-          artistDisplay = `<a href="/app/artist-profile.html?artist_id=${g.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigColor};text-decoration:underline;font-weight:600;">${esc(g.artist_name)}</a>`;
+          artistDisplay = `<a href="/app/artist-profile.html?artist_id=${g.artist_id}" target="_blank" rel="noopener">${esc(g.artist_name)}</a>`;
         } else {
           artistDisplay = '<span style="opacity:0.75;">Booked</span>';
         }
 
-        return `<div onclick="openDayGigDetail(${g.id},'${ds}')" style="display:grid;grid-template-columns:130px minmax(130px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(150px,1.5fr);column-gap:12px;align-items:center;padding:6px 10px;margin:0;border:1px solid ${gigBorder};border-radius:6px;background:${gigBg};color:${gigColor};font-weight:700;white-space:nowrap;cursor:pointer;line-height:1.3;">
-          <div>${icon} ${time}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(g.venue_name || venueData?.venue_name || '')}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(loc)}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${artistDisplay}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(artistTypeDisplay)}</div>
+        const _venueLabel = esc(g.venue_name || _vName);
+        const _venueLink = _venueHref
+          ? `<a href="${_venueHref}" target="_blank" rel="noopener">${_venueLabel}</a>`
+          : _venueLabel;
+        const _addrLink = _mapsUrl
+          ? `<a href="${_mapsUrl}" target="_blank" rel="noopener">${esc(_fullAddr)}</a>`
+          : (_fullAddr ? esc(_fullAddr) : '<span style="opacity:0.75;">Address not listed</span>');
+
+        return `<div class="day-gig-row" style="border-color:${gigBorder};background:${gigBg};color:${gigColor};">
+          <span class="dgr-line1">${icon} ${time} &nbsp;&middot;&nbsp; ${_venueLink} &nbsp;&middot;&nbsp; ${_addrLink}</span>
+          <span class="dgr-line2">${esc(artistTypeDisplay)}</span>
+          <span class="dgr-line3">${artistDisplay}</span>
         </div>`;
       }).join('');
 
@@ -1371,7 +1454,7 @@
       modal.querySelector('.gig-modal').classList.add('day-modal');
       modal.querySelector('h3').textContent = dateStr;
       document.getElementById('gigModalBody').innerHTML =
-        `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;"><div style="display:grid;grid-auto-rows:auto;row-gap:10px;width:100%;min-width:820px;font-size:0.7rem;">${rows}</div></div>`;
+        `<div class="day-gig-list">${rows}</div>`;
       modal.classList.remove('hidden');
     }
 
@@ -1715,14 +1798,14 @@ window.loadVenueReviews = loadVenueReviews;
   </script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
-<script src="/app/static/js/venue-gig-details-modal.js?v=2"></script>
+<script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
 <script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
-<script src="/app/static/js/gf-tooltip.js?v=2"></script>
+<script src="/app/static/js/gf-tooltip.js?v=3"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>
 </html>

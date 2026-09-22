@@ -55,6 +55,11 @@
         border-left: 1px solid rgba(124, 107, 255, 0.45);
         border-top: 1px solid rgba(124, 107, 255, 0.45);
       }
+      /* 2026-09-16: cursor-anchored arrow — when show() computes an
+         offset it sets --gf-arrow-left, and this class kicks in. */
+      .gf-tooltip.gf-tooltip-arrow-custom::before {
+        left: var(--gf-arrow-left, 50%);
+      }
       .gf-tooltip.gf-tooltip-above::before {
         top: auto;
         bottom: -5px;
@@ -80,7 +85,15 @@
     activeTarget = null;
   }
 
-  function show(target) {
+  // 2026-09-16: position tooltips near the cursor for wide triggers.
+  // Previously the tooltip always centered under the trigger's bounding
+  // box — fine for tiny icons but terrible for full-width paragraphs
+  // and long email-center rows, where the tooltip could appear hundreds
+  // of pixels away from wherever the cursor actually was. Now we take
+  // the pointer's pageX from the hover event and center the tooltip on
+  // it, clamped inside the trigger's horizontal bounds so a narrow
+  // trigger still looks centered.
+  function show(target, cursorX, cursorY) {
     hide();
     // Prefer data-tooltip; fall back to title (auto-migration).
     let text = target.getAttribute('data-tooltip');
@@ -104,18 +117,51 @@
     const tipRect = tip.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
 
-    // Default: below the trigger
+    // Vertical: below the trigger by default, flip above when no room.
+    // Keep it anchored to the trigger's edge (not the cursor Y) so the
+    // tooltip doesn't jitter as the mouse moves within the trigger.
     let top = rect.bottom + window.scrollY + 8;
     if (rect.bottom + tipRect.height + 16 > vh) {
-      // Flip above when no room below
       top = rect.top + window.scrollY - tipRect.height - 8;
       tip.classList.add('gf-tooltip-above');
     }
-    let left = rect.left + window.scrollX + (rect.width / 2) - (tipRect.width / 2);
-    left = Math.max(8, Math.min(left, vw - tipRect.width - 8));
+
+    // Horizontal: center on the cursor when we have one (mouse / touch),
+    // fall back to the trigger's midpoint (keyboard focus). Clamp inside
+    // the trigger so a narrow icon still gets a centered tooltip, and
+    // clamp inside the viewport so we don't overflow the edge.
+    const _elCenter = rect.left + window.scrollX + (rect.width / 2);
+    const _anchorX = (typeof cursorX === 'number')
+      ? cursorX + window.scrollX
+      : _elCenter;
+    const _tw = tipRect.width;
+    let left = _anchorX - _tw / 2;
+    const _elLeft  = rect.left + window.scrollX;
+    const _elRight = rect.right + window.scrollX;
+    // Only clamp inside the trigger when the trigger is wider than the
+    // tooltip (so a tiny icon doesn't force the tip to overhang it).
+    if (rect.width > _tw + 8) {
+      left = Math.max(_elLeft, Math.min(left, _elRight - _tw));
+    }
+    // Viewport clamp — always applies.
+    left = Math.max(8, Math.min(left, vw + window.scrollX - _tw - 8));
 
     tip.style.top = top + 'px';
     tip.style.left = left + 'px';
+
+    // Reposition the CSS arrow to point at the cursor (or element center
+    // for keyboard focus). Falls back to the default 50% if we can't
+    // compute a sensible offset.
+    const _arrowX = _anchorX - left;
+    if (_arrowX >= 6 && _arrowX <= _tw - 6) {
+      // Inline style overrides the 50% default in the injected CSS.
+      const _arrows = tip.querySelectorAll(':scope::before');
+      // ::before pseudo-elements can't be reached via querySelectorAll,
+      // so set a custom property the stylesheet reads.
+      tip.style.setProperty('--gf-arrow-left', _arrowX + 'px');
+      tip.classList.add('gf-tooltip-arrow-custom');
+    }
+
     requestAnimationFrame(() => tip.classList.add('gf-tooltip-visible'));
 
     activeTip = tip;
@@ -127,7 +173,7 @@
     const t = e.target.closest('[data-tooltip], [title]');
     if (!t) return;
     if (t === activeTarget) return;
-    show(t);
+    show(t, e.clientX, e.clientY);
   });
   document.addEventListener('mouseout', (e) => {
     if (!activeTarget) return;
@@ -144,6 +190,7 @@
     const t = e.target.closest('[data-tooltip], [title]');
     if (!t) return;
     if (t === activeTarget) return;
+    // Keyboard focus — no cursor position; show() falls back to element center.
     show(t);
   });
   document.addEventListener('focusout', (e) => {
@@ -157,7 +204,10 @@
       return;
     }
     if (t === activeTarget) { hide(); return; }
-    show(t);
+    const touch = e.touches && e.touches[0];
+    const cx = touch ? touch.clientX : undefined;
+    const cy = touch ? touch.clientY : undefined;
+    show(t, cx, cy);
   }, { passive: true });
 
   // Hide on scroll / resize / Escape so tooltips never linger stale.

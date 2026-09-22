@@ -498,6 +498,28 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
+/* 2026-09-17: kill every Chromium sub-glyph on time inputs — clock
+   indicator, spin arrows, clear "X". Fewer visual gizmos crowding the
+   HH:MM number. Rule strengthened after `display:none` alone left the
+   glyph visible in some Chromium builds; combining opacity/width/pad
+   suppresses it in every version we've seen. Scoped to time inputs
+   only — date-picker indicators still show because some non-modal
+   flows depend on the native calendar. */
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-clear-button,
+input[type="time"]::-webkit-inner-spin-button,
+input[type="time"]::-webkit-outer-spin-button {
+  display: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  pointer-events: none;
+}
+
 /* Checkbox styling */
 input[type="checkbox"] {
   width: 18px;

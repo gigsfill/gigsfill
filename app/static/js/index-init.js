@@ -84,6 +84,18 @@ async function login() {
       return;
     }
 
+    // 2026-09-16: If the account exists but email hasn't been verified,
+    // stop the login flow here and show a modal with a Resend link
+    // instead of letting them silently land on user-profile.html (which
+    // is verify-exempt and has no verification banner).
+    let _loginBody = {};
+    try { _loginBody = await res.clone().json(); } catch (_) {}
+    if (_loginBody && _loginBody.email_verified === false) {
+      _restoreLoginBtn();
+      _showVerifyRequiredModal(_loginBody.email || emailInput.value);
+      return;
+    }
+
     // Redirect back to original page if we were sent here from a protected link.
     // Audit fix (May 2026): validate the redirect target. Previously any
     // ?redirect=https://evil.com would be honored as window.location.href —
@@ -138,6 +150,63 @@ async function login() {
     console.error('Login error:', error);
     showError('An error occurred during login');
     _restoreLoginBtn();
+  }
+}
+
+function _escapeHtmlForModal(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function _showVerifyRequiredModal(email) {
+  const safeEmail = _escapeHtmlForModal(email);
+  const bodyHtml = `
+    <p style="margin:0 0 10px 0;">You need to verify your email before continuing.</p>
+    <p style="margin:0 0 10px 0;">We sent a verification link to <strong>${safeEmail}</strong>. Click the link in that email to activate your account. Check your spam folder if you don't see it.</p>
+    <button id="loginResendBtn" onclick="loginResendVerification()"
+      style="margin-top:8px;padding:10px 16px;background:#0066cc;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">
+      Resend Verification Email
+    </button>
+    <div id="loginResendMsg" style="margin-top:8px;font-size:14px;"></div>
+  `;
+  showModalHTML('Please verify your email', bodyHtml, [
+    { text: 'Close', onClick: null },
+    { text: 'Go to Verification Page', primary: true, onClick: () => {
+        window.location.href = '/app/verify-email.html';
+      }
+    }
+  ]);
+}
+
+async function loginResendVerification() {
+  const btn = document.getElementById('loginResendBtn');
+  const msg = document.getElementById('loginResendMsg');
+  if (!btn || !msg) return;
+  btn.disabled = true;
+  const _origLabel = btn.textContent;
+  btn.textContent = 'Sending...';
+  msg.textContent = '';
+  msg.style.color = '';
+  try {
+    const res = await fetch('/api/resend-verification-email', {
+      method: 'POST',
+      credentials: 'include'
+    });
+    if (!res.ok) throw new Error('failed');
+    msg.textContent = '✓ Sent! Check your inbox (and spam folder).';
+    msg.style.color = '#0a7a2f';
+    btn.textContent = 'Email Sent';
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = _origLabel;
+      msg.textContent = '';
+    }, 30000);
+  } catch (_) {
+    msg.textContent = 'Failed to send. Please try again.';
+    msg.style.color = '#b00020';
+    btn.disabled = false;
+    btn.textContent = _origLabel;
   }
 }
 

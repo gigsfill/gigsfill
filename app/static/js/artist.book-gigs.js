@@ -1775,7 +1775,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (window.activityCenter) await window.activityCenter.loadNotifications();
           if (window.myVenuesRedesign) { await myVenuesRedesign.loadVenues(); myVenuesRedesign.render(); }
           if (res && res.pending_approval) {
-            showSuccessModal("Request Sent!", `Your same-day booking request for Slot ${slotNum} has been sent to the venue.`);
+            showSuccessModal("Request Sent!", `Your booking request for Slot ${slotNum} has been sent to the venue for approval.`);
           } else {
             showSuccessModal("Slot Booked!", `You booked Slot ${slotNum}!`);
           }

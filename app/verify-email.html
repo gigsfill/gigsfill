@@ -10,7 +10,8 @@
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
   <meta name="theme-color" content="#0f1419">
-  <link href="/app/static/css/gigsfill.css?v=10" rel="stylesheet">
+  <link href="/app/static/css/gigsfill.css?v=13" rel="stylesheet">
+
   <link href="/app/static/css/mobile.css" rel="stylesheet">
   <style>
     .verify-container {
@@ -86,6 +87,67 @@
     }
     .status-ok  { color: #22c55e; }
     .status-err { color: #ef4444; }
+
+    /* Inline "change email" form — revealed when the link is clicked. */
+    #changeEmailForm {
+      margin-top: 20px;
+      padding: 18px 16px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      text-align: left;
+    }
+    #changeEmailForm label {
+      display: block;
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin: 8px 0 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    #changeEmailForm input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      background: #0f1419;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 6px;
+      color: #e5e5e5;
+      font-size: 0.9rem;
+    }
+    #changeEmailForm input:focus {
+      outline: none;
+      border-color: #06b6d4;
+    }
+    .change-email-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .change-email-actions button {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-save-email {
+      background: #06b6d4;
+      color: #fff;
+    }
+    .btn-cancel-email {
+      background: transparent;
+      color: #9ca3af;
+      border: 1px solid rgba(255,255,255,0.12) !important;
+    }
+    .btn-save-email:disabled { opacity: 0.5; cursor: default; }
+    #changeEmailMsg {
+      min-height: 18px;
+      font-size: 0.82rem;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -112,8 +174,21 @@
 
       <hr class="divider">
       <div class="links">
-        <a href="/app/user-profile.html">Update email address</a>
-        <a href="#" onclick="logout(); return false;">Log out</a>
+        <a href="#" id="showChangeEmailBtn" onclick="showChangeEmailForm(); return false;">Wrong email? Change it</a>
+      </div>
+
+      <div id="changeEmailForm" style="display:none;">
+        <p style="margin:0 0 6px 0;color:#e5e5e5;font-size:0.9rem;">Change your email address</p>
+        <p style="margin:0 0 12px 0;font-size:0.78rem;color:#9ca3af;">We'll send a new verification link to the corrected address.</p>
+        <label for="newEmailInput">New email</label>
+        <input type="email" id="newEmailInput" autocomplete="email" placeholder="you@example.com">
+        <label for="currentPasswordInput">Current password</label>
+        <input type="password" id="currentPasswordInput" autocomplete="current-password" placeholder="Confirm your password">
+        <div id="changeEmailMsg"></div>
+        <div class="change-email-actions">
+          <button type="button" class="btn-cancel-email" onclick="hideChangeEmailForm()">Cancel</button>
+          <button type="button" class="btn-save-email" id="saveEmailBtn" onclick="submitChangeEmail()">Save & Resend</button>
+        </div>
       </div>
     </div>
   </div>
@@ -173,11 +248,80 @@
       }
     }
 
-    async function logout() {
-      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
-      document.cookie = 'session_token=; Max-Age=0; path=/';
-      document.cookie = 'user_id=; Max-Age=0; path=/';
-      window.location.href = '/app/index.html';
+    function showChangeEmailForm() {
+      document.getElementById('changeEmailForm').style.display = 'block';
+      document.getElementById('showChangeEmailBtn').style.display = 'none';
+      const newEmail = document.getElementById('newEmailInput');
+      const currentEmail = document.getElementById('userEmail').textContent.trim();
+      if (currentEmail && currentEmail !== 'your email address') newEmail.value = currentEmail;
+      setTimeout(() => newEmail.focus(), 50);
+    }
+
+    function hideChangeEmailForm() {
+      document.getElementById('changeEmailForm').style.display = 'none';
+      document.getElementById('showChangeEmailBtn').style.display = '';
+      document.getElementById('newEmailInput').value = '';
+      document.getElementById('currentPasswordInput').value = '';
+      const msg = document.getElementById('changeEmailMsg');
+      msg.textContent = '';
+      msg.className = '';
+    }
+
+    async function submitChangeEmail() {
+      const emailEl = document.getElementById('newEmailInput');
+      const pwEl = document.getElementById('currentPasswordInput');
+      const msg = document.getElementById('changeEmailMsg');
+      const saveBtn = document.getElementById('saveEmailBtn');
+      const newEmail = (emailEl.value || '').trim();
+      const pw = pwEl.value || '';
+      msg.textContent = '';
+      msg.className = '';
+      if (!newEmail) {
+        msg.textContent = 'Please enter an email address.';
+        msg.className = 'status-err';
+        emailEl.focus();
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+        msg.textContent = 'Please enter a valid email address.';
+        msg.className = 'status-err';
+        emailEl.focus();
+        return;
+      }
+      if (!pw) {
+        msg.textContent = 'Please confirm your current password.';
+        msg.className = 'status-err';
+        pwEl.focus();
+        return;
+      }
+      saveBtn.disabled = true;
+      const _origSaveLabel = saveBtn.textContent;
+      saveBtn.textContent = 'Saving...';
+      try {
+        const res = await fetch('/api/change-preverification-email', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_email: newEmail, current_password: pw })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(body.detail || 'Could not update email.');
+        }
+        // Success: reflect the new email on the page and reset the form.
+        if (body.email) {
+          document.getElementById('userEmail').textContent = body.email;
+        }
+        hideChangeEmailForm();
+        const statusMsg = document.getElementById('statusMsg');
+        statusMsg.textContent = '✓ Email updated. A new verification link was sent to ' + (body.email || newEmail) + '.';
+        statusMsg.className = 'status-ok';
+      } catch (err) {
+        msg.textContent = (err && err.message) ? err.message : 'Could not update email.';
+        msg.className = 'status-err';
+        saveBtn.disabled = false;
+        saveBtn.textContent = _origSaveLabel;
+      }
     }
   </script>
   <script src="/app/static/js/maintenance-banner.js"></script>

@@ -101,29 +101,52 @@
       rows.push(line('Artist Frequency', `1 performance every ${Number(v.artist_frequency_days)} days`));
     }
 
+    // 2026-09-16: when a "Yes" toggle has no accompanying description,
+    // show a placeholder detail row instead of leaving the artist to
+    // guess. Previously the Yes rendered alone with no follow-up
+    // whenever the venue skipped the description field on venue-edit,
+    // which read as an incomplete profile even for venues that had one
+    // (they just hadn't filled in the free-text box).
+    const _missing = '<span style="color:var(--text-muted);font-style:italic;">No details provided by the venue.</span>';
+
     rows.push(line('Has Stage?', _esc(yn(v.has_stage))));
     if (isTrue(v.has_stage)) {
-      if (has(v.stage_width_ft) || has(v.stage_depth_ft)) {
+      const _hasDims  = has(v.stage_width_ft) || has(v.stage_depth_ft);
+      const _hasNotes = has(v.setup_location_description);
+      if (_hasDims) {
         const w = has(v.stage_width_ft) ? `${v.stage_width_ft} ft wide` : null;
         const d = has(v.stage_depth_ft) ? `${v.stage_depth_ft} ft deep` : null;
         rows.push(line('Stage Dimensions', _esc([w, d].filter(Boolean).join(' × ') || '—')));
       }
-      if (has(v.setup_location_description)) rows.push(line('Stage Setup Notes', _esc(v.setup_location_description)));
+      if (_hasNotes) rows.push(line('Stage Setup Notes', _esc(v.setup_location_description)));
+      if (!_hasDims && !_hasNotes) rows.push(line('Stage Details', _missing));
     }
 
     rows.push(line('Sound Equipment?', _esc(yn(v.has_sound_equipment))));
-    if (has(v.sound_equipment_description)) rows.push(line('Sound Equipment Details', _esc(v.sound_equipment_description)));
+    if (has(v.sound_equipment_description)) {
+      rows.push(line('Sound Equipment Details', _esc(v.sound_equipment_description)));
+    } else if (isTrue(v.has_sound_equipment)) {
+      rows.push(line('Sound Equipment Details', _missing));
+    }
 
     // Sound Engineer only when Sound Equipment=Yes (matches the
     // conditional reveal on venue-edit.html so we don't confuse artists
     // with a "No" to a question the venue was never asked).
     if (isTrue(v.has_sound_equipment)) {
       rows.push(line('Sound Engineer?', _esc(yn(v.has_sound_engineer))));
-      if (has(v.sound_engineer_details)) rows.push(line('Sound Engineer Details', _esc(v.sound_engineer_details)));
+      if (has(v.sound_engineer_details)) {
+        rows.push(line('Sound Engineer Details', _esc(v.sound_engineer_details)));
+      } else if (isTrue(v.has_sound_engineer)) {
+        rows.push(line('Sound Engineer Details', _missing));
+      }
     }
 
     rows.push(line('Lighting?', _esc(yn(v.has_lighting))));
-    if (has(v.lighting_description)) rows.push(line('Lighting Details', _esc(v.lighting_description)));
+    if (has(v.lighting_description)) {
+      rows.push(line('Lighting Details', _esc(v.lighting_description)));
+    } else if (isTrue(v.has_lighting)) {
+      rows.push(line('Lighting Details', _missing));
+    }
 
     if (has(v.bar_tab_details)) rows.push(line('Bar Tab', _esc(v.bar_tab_details)));
     if (has(v.food_tab_details)) rows.push(line('Food Tab', _esc(v.food_tab_details)));

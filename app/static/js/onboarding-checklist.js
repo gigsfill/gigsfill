@@ -68,6 +68,24 @@
     // ── State ────────────────────────────────────────────────────────
     let checklistData = null;
     let modalEl = null;
+
+    // ── Close everything else on the page ──────────────────────────────
+    // 2026-09-16: setup-incomplete users must not be able to interact with
+    // any gig-management UI. When the checklist popup renders or is
+    // dismissed, drain every competing modal so the user can't reach the
+    // create-gig modal underneath. Previously the checklist would layer
+    // over #gigModal, and clicking backdrop/X left the gig modal usable.
+    function _closeCompetingModals() {
+      // Bespoke overlays used by venue-create-gigs / artist-book-gigs
+      ['gigModal', 'paymentRequiredModal', 'modalOverlay', 'flyerFullModal'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && el.classList) el.classList.add('hidden');
+      });
+      // gf-modals stack
+      if (typeof window.closeAllModals === 'function') {
+        try { window.closeAllModals(); } catch (_) {}
+      }
+    }
   
     // ── Fetch checklist status ───────────────────────────────────────
     async function fetchChecklist() {
@@ -95,6 +113,10 @@
     // ── Build & show modal ───────────────────────────────────────────
     function showModal(data) {
       if (modalEl) modalEl.remove();
+      // Kill anything currently open (create-gig modal from a fast day-click,
+      // payment-required prompts, gf-modals stack, etc). The setup checklist
+      // is a hard gate — nothing else may coexist with it on-screen.
+      _closeCompetingModals();
   
       const completedCount = data.tasks.filter(t => t.completed).length;
       const totalCount = data.tasks.length;
@@ -272,6 +294,13 @@
 
     function closeModal() {
       if (modalEl) {
+        // 2026-09-16: on close (X, backdrop, or programmatic from a task
+        // click), drain any competing modal the user may have opened
+        // before the checklist rendered — otherwise dismissing the
+        // checklist reveals a usable create-gig modal underneath and the
+        // setup gate is bypassed. Idempotent, so the task-click path is
+        // fine too (nothing to close there).
+        _closeCompetingModals();
         // Immediately disable pointer-events so clicks during the fade
         // pass through to the underlying page — a click on the calendar
         // that lands during the 150ms fade shouldn't be swallowed by
@@ -403,6 +432,11 @@
       }
   
       const data = await fetchChecklist();
+      // 2026-09-16: publish setup state so page-level gates
+      // (openGigModal, book-slot handlers, etc.) can short-circuit
+      // BEFORE opening their own modals. Undefined = fetch pending;
+      // true = incomplete (block); false = complete (allow).
+      window._obNeedsSetup = !!(data && !data.all_complete);
       if (!data || data.all_complete) return;
 
       checklistData = data;

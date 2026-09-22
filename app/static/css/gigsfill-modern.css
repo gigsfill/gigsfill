@@ -538,6 +538,15 @@ select:focus {
   background: var(--color-bg-elevated);
 }
 
+/* 2026-09-17: hide the native clock icon on time inputs. Scoped to
+   time only — date inputs keep their picker. Same rationale as
+   gigsfill.css. */
+input[type="time"]::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 input::placeholder,
 textarea::placeholder {
   color: var(--color-text-muted);

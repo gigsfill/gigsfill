@@ -351,13 +351,17 @@ function _renderAffEmails() {
     sent:              '<span style="font-size:0.65rem;padding:2px 7px;border-radius:10px;background:rgba(107,114,128,0.15);color:#9ca3af;">Sent</span>',
   }[s] || '');
 
-  // Search — matches Recipient name + Email + Status (case-insensitive).
+  // Search — matches Recipient name + Email + Status + Venue name
+  // (case-insensitive). Venue name added 2026-09-16 so a user who
+  // searches for a converted recipient by the venue they later signed
+  // up as still finds the row.
   const q = (_affEmails.q || '').trim().toLowerCase();
   const filtered = q
     ? all.filter(e =>
-        (e.recipient_name  || '').toLowerCase().includes(q) ||
-        (e.recipient_email || '').toLowerCase().includes(q) ||
-        (e.status          || '').toLowerCase().includes(q))
+        (e.recipient_name       || '').toLowerCase().includes(q) ||
+        (e.recipient_email      || '').toLowerCase().includes(q) ||
+        (e.status               || '').toLowerCase().includes(q) ||
+        (e.signed_up_venue_name || '').toLowerCase().includes(q))
     : all;
 
   // Sort by the configured key/dir. Date columns parsed as ms; everything
@@ -419,8 +423,15 @@ function _renderAffEmails() {
       </tr></thead>
       <tbody>${emptyFiltered || pageRows.map(e => `
         <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
-          <td style="padding:6px 8px;text-align:left;color:var(--text);font-size:0.78rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-            ${e.recipient_name ? esc(e.recipient_name) : '<span style="color:var(--text-gray);">—</span>'}
+          <td style="padding:6px 8px;text-align:left;color:var(--text);font-size:0.78rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+              title="${esc(e.recipient_name || e.signed_up_venue_name || '')}">
+            ${
+              e.recipient_name
+                ? esc(e.recipient_name)
+                : (e.signed_up_venue_name
+                    ? `<span style="color:var(--text);" title="Venue created by this recipient">${esc(e.signed_up_venue_name)}</span> <span style="font-size:0.62rem;color:var(--text-muted);font-weight:600;letter-spacing:0.02em;">VENUE</span>`
+                    : '<span style="color:var(--text-gray);">—</span>')
+            }
           </td>
           <td style="padding:6px 8px;text-align:left;color:var(--text-gray);font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
             ${esc(e.recipient_email)}

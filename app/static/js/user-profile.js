@@ -832,9 +832,9 @@ async function loadEmailPreferences() {
       'artist_gig_booked':                { title: 'Gig Booked',                  desc: 'When you book a gig' },
       'artist_gig_cancelled':             { title: 'Gig Cancelled',               desc: 'When a gig you booked is cancelled' },
       'artist_gig_edited':                { title: 'Gig Updated',                 desc: 'When a venue edits a gig you have booked' },
-      'artist_booking_pending_approval':  { title: 'Booking Pending Approval',    desc: 'When your same-day booking is awaiting venue approval' },
-      'artist_booking_approved':          { title: 'Booking Approved',            desc: 'When a venue approves your same-day booking request' },
-      'artist_booking_denied':            { title: 'Booking Denied',              desc: 'When a venue denies your same-day booking request' },
+      'artist_booking_pending_approval':  { title: 'Booking Pending Approval',    desc: 'When your booking is awaiting venue approval' },
+      'artist_booking_approved':          { title: 'Booking Approved',            desc: 'When a venue approves your booking request' },
+      'artist_booking_denied':            { title: 'Booking Denied',              desc: 'When a venue denies your booking request' },
       'artist_payment_sent':              { title: 'Payment Received',            desc: 'When your gig payout is sent' },
       'artist_preferred_request':         { title: 'Preferred Request Sent',      desc: 'When you send a preferred status request' },
       'artist_preferred_approved':        { title: 'Preferred Approved',          desc: 'When a Venue approves your preferred request' },
@@ -875,10 +875,12 @@ async function loadEmailPreferences() {
       'venue_gig_cancelled':           { title: 'Gig Cancelled',            desc: 'When an Artist cancels a gig at your Venue' },
       // 2026-08-10: 'venue_booking_approval_request' row removed. This
       // notification is fully venue-scoped now — controlled by the
-      // "Require my approval for same-day bookings" toggle on each
-      // venue's Email Notifications → Booking Policies section. When
-      // the gate is ON, every venue team member gets the email; when
-      // OFF, no gate fires so no email is sent. No per-user opt-out.
+      // "Require my approval for bookings by non-preferred artists"
+      // toggle on each venue's Email Notifications → Booking Policies
+      // section (broadened from same-day-only on 2026-09-16). When the
+      // gate is ON, every venue team member gets the email on any
+      // non-preferred booking; when OFF, no gate fires so no email is
+      // sent. No per-user opt-out.
       'venue_contract_sign_needed':    { title: 'Contract Signed',          desc: 'When an Artist signs a contract and needs your countersignature' },
       'venue_payment_charged':         { title: 'Payment Charged',          desc: 'When your card is charged for a gig booking' },
       'transfer_failed_venue':         { title: 'Payment Failed',           desc: 'When a charge to your card fails' },

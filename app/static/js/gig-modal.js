@@ -277,23 +277,27 @@ async function renderGigModal(data, callbacks = {}) {
       html += _banner('green', _openTitle, _openMsg);
     }
 
-    // 2026-08-23: same-day booking banner. Fires for any artist viewing
-    // a gig whose start is within 36h (venue-local, per _is_same_day_
-    // booking on the backend). Copy varies by (a) whether the venue
-    // requires approval for same-day bookings, and (b) whether THIS
-    // artist bypasses that gate (preferred artists always do — see
-    // gigs.py:5288 `not _is_preferred_slot`). Skipped for the artist's
-    // own booked slot (they've already booked, no new context needed).
-    // 2026-08-24 fix: was showing "Requires Approval" to preferred
-    // artists too, but their bookings actually go straight to `booked`.
-    if (data.is_same_day && !isPast && !isInProgress) {
+    // Approval / same-day banners.
+    // 2026-09-16: split into two distinct banners now that the venue's
+    // approval gate applies to any non-preferred booking (not just
+    // same-day). Preferred artists still auto-book, so they never see the
+    // approval banner. `data.is_same_day` is purely informational — the
+    // approval requirement now uses `data.will_require_venue_approval`.
+    // Skipped for the artist's own booked slot (they've already booked,
+    // no new context needed).
+    if (!isPast && !isInProgress) {
       const _mySlot = (data.slots || []).find(s => s && s.is_my_slot);
       const _isPreferred = pref === 'approved';
       if (!_mySlot) {
-        if (data.same_day_requires_approval && !_isPreferred) {
-          html += _banner('yellow', '🕐 Same-Day Booking Requires Approval',
-            `This gig is <strong>today</strong>. <strong>${_esc(data.venue_name)}</strong> requires venue approval for same-day bookings by non-preferred artists — if you book, your slot will be marked <em>pending venue approval</em> and you'll be notified once the venue accepts or declines.`);
-        } else {
+        if (data.will_require_venue_approval && !_isPreferred) {
+          if (data.is_same_day) {
+            html += _banner('yellow', '🕐 Same-Day Booking Requires Approval',
+              `This gig is <strong>today</strong>. <strong>${_esc(data.venue_name)}</strong> requires venue approval for bookings by non-preferred artists — if you book, your slot will be marked <em>pending venue approval</em> and you'll be notified once the venue accepts or declines.`);
+          } else {
+            html += _banner('yellow', '⏳ Booking Requires Venue Approval',
+              `<strong>${_esc(data.venue_name)}</strong> requires venue approval for bookings by non-preferred artists — if you book, your slot will be marked <em>pending venue approval</em> and you'll be notified once the venue accepts or declines.`);
+          }
+        } else if (data.is_same_day) {
           html += _banner('yellow', '🕐 Same-Day Booking',
             `Heads up — this gig is <strong>today</strong>. Book now if you can perform on this short notice.`);
         }
@@ -448,10 +452,16 @@ async function renderGigModal(data, callbacks = {}) {
                       onclick="window.gmHoldDecline && window.gmHoldDecline(this)"
                       title="Decline if you are unable to perform on this day."
                       style="padding:5px 14px;background:transparent;border:1px solid #dc2626;border-radius:4px;color:#f87171;cursor:pointer;font-size:0.74rem;font-weight:600;min-width:78px;">Decline</button>`
-                : `<span title="This slot is for ${_esc(s.artist_type || 'a different artist type')}, so it isn't bookable by you."
-                       style="padding:4px 12px;font-size:0.72rem;color:#94a3b8;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.25);border-radius:4px;font-weight:600;white-space:nowrap;min-width:152px;text-align:center;">
-                       ${_esc(s.artist_type || 'Other type')} only
-                     </span>`;
+                : (function () {
+                    // 2026-09-17: same "Type not set" fallback as the
+                    // wrong_type chip below, in case the venue never
+                    // filled in slot.artist_type at gig create/edit.
+                    const _t = (s.artist_type || '').trim();
+                    const _chipStyle = 'padding:4px 12px;font-size:0.72rem;color:#94a3b8;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.25);border-radius:4px;font-weight:600;white-space:nowrap;min-width:152px;text-align:center;';
+                    return _t
+                      ? `<span title="This slot is for ${_esc(_t)}, so it isn't bookable by you." style="${_chipStyle}">${_esc(_t)} only</span>`
+                      : `<span title="This slot has no artist type set. Contact the venue to update it before booking." style="${_chipStyle}">Type not set</span>`;
+                  })();
               return `<div style="display:flex;align-items:center;gap:14px;${containerBg}border-radius:8px;padding:8px 14px;opacity:${opacity};">
                 <span style="display:inline-block;width:18px;text-align:center;flex:0 0 18px;font-size:0.95rem;">${_typeIcon(s.artist_type)}</span>
                 ${slotLabel ? `<span style="display:inline-block;width:60px;flex:0 0 60px;font-size:0.84rem;color:${textColor};font-weight:600;white-space:nowrap;">${slotLabel}</span>` : ''}
@@ -1073,11 +1083,22 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
         // They can see the gig because another slot DOES match — but
         // this row is not bookable by them. Render a clear "<Type>
         // only" chip in place of the Book button.
-        const _slotType = slot.artist_type || data.artist_type || 'Other';
-        rightHtml = `<span title="This slot is for ${_esc(_slotType)}, so it isn't bookable by you."
-          style="padding:4px 12px;font-size:0.72rem;color:#94a3b8;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.25);border-radius:4px;font-weight:600;white-space:nowrap;">
-          ${_esc(_slotType)} only
-        </span>`;
+        // 2026-09-17: when the slot's artist_type is empty (venue never
+        // set it during create), the old fallback rendered "Other only"
+        // which read as a made-up type. Show "Type not set" instead so
+        // the artist knows the gig needs the venue's attention.
+        const _slotType = (slot.artist_type || data.artist_type || '').trim();
+        if (_slotType) {
+          rightHtml = `<span title="This slot is for ${_esc(_slotType)}, so it isn't bookable by you."
+            style="padding:4px 12px;font-size:0.72rem;color:#94a3b8;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.25);border-radius:4px;font-weight:600;white-space:nowrap;">
+            ${_esc(_slotType)} only
+          </span>`;
+        } else {
+          rightHtml = `<span title="This slot has no artist type set. Contact the venue to update it before booking."
+            style="padding:4px 12px;font-size:0.72rem;color:#94a3b8;background:rgba(148,163,184,0.10);border:1px solid rgba(148,163,184,0.25);border-radius:4px;font-weight:600;white-space:nowrap;">
+            Type not set
+          </span>`;
+        }
         break;
       }
 

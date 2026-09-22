@@ -1,9 +1,10 @@
 (async function authGuard() {
-  // Pages that verified users can still access even without verifying email.
-  // user-profile.html is allowed so they can update their email address.
+  // Pages an unverified user can still reach. 2026-09-16: user-profile.html
+  // was removed from this list — unverified users must not get past the
+  // verify wall. The verify-email page itself now has an inline "change
+  // email address" form so signup-typo recoveries don't need the profile.
   const VERIFY_EXEMPT = [
     '/app/verify-email.html',
-    '/app/user-profile.html',
   ];
 
   const currentPath = window.location.pathname;

@@ -200,7 +200,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const holdToggleRow = document.getElementById('holdGigToggleRow');
   const holdMasterList = document.getElementById('holdArtistPickerList');
   const holdSelectedList = document.getElementById('holdSelectedList');
-  const holdEmailBtn = document.getElementById('holdEmailArtistsBtn');
+  // 2026-09-16: `holdEmailArtistsBtn` removed. Hold flow always emails
+  // artists in sequence — see gig_hold.py. `hold_email_artists` is
+  // hardcoded to true wherever the payload is built below.
   // Master data fetched from /preferred-artists, keyed by artist_id
   window._holdArtistMap = {};
   window._holdArtistOrder = [];
@@ -222,13 +224,212 @@ document.addEventListener("DOMContentLoaded", async () => {
   //   - if artist_type === 'Live Band': at least one band_format AND
   //     at least one style picked (these are the .slot-lineup-cb and
   //     .slot-style-cb checkbox pills)
+  // ─── Slot time helpers (2026-09-17) ────────────────────────────────
+  // Slot start/end fields are `<input type="text">` (was `type="time"`,
+  // switched so Firefox's non-hideable clock glyph goes away). Canonical
+  // 24h value lives on `dataset.time24`; visible `.value` shows 12h
+  // ("7:00 PM"). Every reader in this file goes through `_slot24Get`
+  // so they always get the wire-format string the backend expects.
+  function _slotParseLoose(raw) {
+    if (raw == null) return null;
+    const s = String(raw).trim().toUpperCase().replace(/\s+/g, '');
+    if (!s) return null;
+    // Match: H, HH, H:MM, HH:MM, optionally followed by AM/PM (or A/P).
+    const m = s.match(/^(\d{1,2})(?::(\d{2}))?(AM|PM|A|P)?$/);
+    if (!m) return null;
+    let h = parseInt(m[1], 10);
+    const min = parseInt(m[2] || '0', 10);
+    let ampm = m[3] || '';
+    if (ampm === 'A') ampm = 'AM';
+    else if (ampm === 'P') ampm = 'PM';
+    if (isNaN(h) || isNaN(min) || min > 59) return null;
+    if (ampm === 'AM') {
+      if (h < 1 || h > 12) return null;
+      if (h === 12) h = 0;
+    } else if (ampm === 'PM') {
+      if (h < 1 || h > 12) return null;
+      if (h !== 12) h += 12;
+    } else {
+      // No AM/PM → treat as 24h. 0-23 only.
+      if (h > 23) return null;
+    }
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+  }
+  function _slot12Format(hhmm24) {
+    if (!hhmm24) return '';
+    const [h, m] = String(hhmm24).split(':').map(Number);
+    if (isNaN(h) || isNaN(m)) return '';
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const hr = h % 12 || 12;
+    return `${hr}:${String(m).padStart(2, '0')} ${ampm}`;
+  }
+  function _slot24Get(el) {
+    if (!el) return '';
+    if (el.dataset && el.dataset.time24) return el.dataset.time24;
+    // Fallback for a freshly-typed value that hasn't been normalized yet.
+    return _slotParseLoose(el.value) || '';
+  }
+  function _slotNormalizeInput(el) {
+    if (!el) return;
+    // Segmented widget path (2026-09-17 revision): wrapper span with
+    // .slot-time-hh + .slot-time-mm + .slot-time-ampm children.
+    if (el.classList && el.classList.contains('slot-time-wrap')) {
+      _slotTimeSync(el);
+      return;
+    }
+    // Legacy single-input path (kept in case an older widget slipped in).
+    const parsed = _slotParseLoose(el.value);
+    if (parsed) {
+      el.dataset.time24 = parsed;
+      el.value = _slot12Format(parsed);
+      el.classList.remove('slot-time-error');
+    } else if (el.value && el.value.trim() === '') {
+      el.dataset.time24 = '';
+      el.classList.remove('slot-time-error');
+    } else {
+      el.dataset.time24 = '';
+      el.classList.add('slot-time-error');
+    }
+  }
+
+  // ─── Segmented HH:MM AM/PM widget ─────────────────────────────────
+  // Wrap span carries the .slot-start / .slot-end class + data-time24.
+  // Inside: `<input class="slot-time-hh">`, `<input class="slot-time-mm">`,
+  // `<span class="slot-time-ampm">`. `_slot24Get(wrap)` returns
+  // wrap.dataset.time24 so every existing consumer keeps working unchanged.
+  function _slotBuildTimeHTML(extraClass, value24) {
+    const parts = String(value24 || '').split(':');
+    const h24 = parseInt(parts[0], 10);
+    const m   = parseInt(parts[1], 10);
+    const hasVal = !isNaN(h24) && !isNaN(m);
+    const isPM = hasVal ? (h24 >= 12) : false;
+    const h12  = hasVal ? (h24 % 12 || 12) : NaN;
+    const hStr = hasVal ? String(h12).padStart(2, '0') : '';
+    const mStr = hasVal ? String(m).padStart(2, '0')   : '';
+    const ampm = isPM ? 'PM' : 'AM';
+    return `<span class="${extraClass} slot-time-wrap" data-time24="${value24 || ''}"
+      style="display:inline-flex;align-items:center;gap:1px;
+             flex:0 0 auto;box-sizing:border-box;
+             background:rgba(255,255,255,0.02);
+             border:1px solid var(--border);border-radius:6px;
+             padding:2px 6px;font-size:0.85rem;font-weight:700;
+             color:var(--text);white-space:nowrap;line-height:1.2;">
+      <input class="slot-time-hh" inputmode="numeric" maxlength="2"
+             value="${hStr}" placeholder="HH" aria-label="Hour"
+             style="width:2ch;background:transparent;border:0;color:inherit;
+                    text-align:center;padding:0;margin:0;font:inherit;outline:none;">
+      <span style="opacity:0.55;">:</span>
+      <input class="slot-time-mm" inputmode="numeric" maxlength="2"
+             value="${mStr}" placeholder="MM" aria-label="Minute"
+             style="width:2ch;background:transparent;border:0;color:inherit;
+                    text-align:center;padding:0;margin:0;font:inherit;outline:none;">
+      <span class="slot-time-ampm" role="button" tabindex="0"
+            aria-label="AM or PM — click to toggle"
+            title="Click to toggle AM/PM"
+            style="cursor:pointer;padding:0 4px;margin-left:3px;
+                   user-select:none;color:inherit;font:inherit;
+                   text-decoration:underline;text-decoration-color:rgba(148,163,184,0.4);
+                   text-underline-offset:2px;">${ampm}</span>
+    </span>`;
+  }
+
+  function _slotTimeSync(wrap) {
+    if (!wrap) return;
+    const hh   = wrap.querySelector('.slot-time-hh');
+    const mm   = wrap.querySelector('.slot-time-mm');
+    const ampm = wrap.querySelector('.slot-time-ampm');
+    if (!hh || !mm || !ampm) return;
+    let h = parseInt((hh.value || '').replace(/\D/g, ''), 10);
+    let m = parseInt((mm.value || '').replace(/\D/g, ''), 10);
+    const isPM = (ampm.textContent || 'AM').trim().toUpperCase() === 'PM';
+    if (hh.value.trim() === '' && mm.value.trim() === '') {
+      wrap.dataset.time24 = '';
+      return;
+    }
+    if (isNaN(h) || h < 1 || h > 12) {
+      // Clamp obvious errors (0 -> 12, 13+ -> 12). Leave truly empty
+      // fields blank so validation catches "incomplete slot".
+      if (h === 0) h = 12;
+      else if (isNaN(h)) { wrap.dataset.time24 = ''; return; }
+      else if (h > 12)   h = 12;
+    }
+    if (isNaN(m) || m < 0 || m > 59) m = isNaN(m) ? 0 : Math.min(59, Math.max(0, m));
+    hh.value = String(h).padStart(2, '0');
+    mm.value = String(m).padStart(2, '0');
+    let h24 = (h === 12) ? 0 : h;
+    if (isPM) h24 += 12;
+    wrap.dataset.time24 = `${String(h24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  function _slotSetValue24(wrap, hhmm24) {
+    if (!wrap) return;
+    const parts = String(hhmm24 || '').split(':');
+    const h24 = parseInt(parts[0], 10);
+    const m   = parseInt(parts[1], 10);
+    const hh   = wrap.querySelector('.slot-time-hh');
+    const mm   = wrap.querySelector('.slot-time-mm');
+    const ampm = wrap.querySelector('.slot-time-ampm');
+    if (!hh || !mm || !ampm) return;
+    if (isNaN(h24) || isNaN(m)) {
+      wrap.dataset.time24 = '';
+      hh.value = ''; mm.value = ''; ampm.textContent = 'AM';
+      return;
+    }
+    const isPM = h24 >= 12;
+    const h12  = h24 % 12 || 12;
+    hh.value = String(h12).padStart(2, '0');
+    mm.value = String(m).padStart(2, '0');
+    ampm.textContent = isPM ? 'PM' : 'AM';
+    wrap.dataset.time24 = `${String(h24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  function _slotWireTimeWidget(wrap, onFullyBlurred) {
+    const hh   = wrap.querySelector('.slot-time-hh');
+    const mm   = wrap.querySelector('.slot-time-mm');
+    const ampm = wrap.querySelector('.slot-time-ampm');
+    if (!hh || !mm || !ampm) return;
+    const selectAll = e => setTimeout(() => { try { e.target.select(); } catch (_) {} }, 0);
+    [hh, mm].forEach(inp => {
+      inp.addEventListener('focus', selectAll);
+      inp.addEventListener('click', selectAll);
+      inp.addEventListener('input', () => {
+        // digits only, cap at 2 chars
+        const cleaned = inp.value.replace(/\D/g, '').slice(0, 2);
+        if (cleaned !== inp.value) inp.value = cleaned;
+        // Auto-advance from hour → minute once 2 digits entered
+        if (inp === hh && cleaned.length === 2) mm.focus();
+      });
+    });
+    // Clicking AM/PM just flips the label + resyncs data-time24. The
+    // auto-correct popup is intentionally NOT fired here — it only runs
+    // when the user actually leaves the widget (focusout below). That
+    // way flipping the toggle mid-edit doesn't nag them.
+    ampm.addEventListener('click', () => {
+      ampm.textContent = (ampm.textContent || 'AM').trim().toUpperCase() === 'AM' ? 'PM' : 'AM';
+      _slotTimeSync(wrap);
+      wrap.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    ampm.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); ampm.click(); }
+    });
+    // Fire the pipeline (sync + change + auto-correct hook) only when
+    // focus actually leaves the whole widget — not on the intra-widget
+    // hh → mm → ampm hops.
+    wrap.addEventListener('focusout', (e) => {
+      if (wrap.contains(e.relatedTarget)) return;
+      _slotTimeSync(wrap);
+      wrap.dispatchEvent(new Event('change', { bubbles: true }));
+      if (typeof onFullyBlurred === 'function') onFullyBlurred();
+    });
+  }
+
   // Returns false on the first incomplete slot encountered.
   function _gigReadyForHold() {
     const rows = document.querySelectorAll('#slotList .slot-row');
     if (rows.length === 0) return false;
     for (const row of rows) {
-      const start = row.querySelector('.slot-start')?.value;
-      const end = row.querySelector('.slot-end')?.value;
+      const start = _slot24Get(row.querySelector('.slot-start'));
+      const end = _slot24Get(row.querySelector('.slot-end'));
       const type = row.querySelector('.slot-artist-type')?.value;
       const doorOn = !!row.querySelector('.slot-door-checkbox')?.checked;
       const pay = parseFloat((row.querySelector('.slot-pay-amount')?.value || '0').replace(/,/g, '')) || 0;
@@ -306,23 +507,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Expose for openGigModal to nudge the pill on existing-gig edit.
   window._updateHoldPillState = _updateHoldPillState;
 
-  // ── Email-artists toggle ─────────
-  if (holdEmailBtn) {
-    holdEmailBtn.addEventListener('click', () => {
-      const on = holdEmailBtn.dataset.on === 'true';
-      if (on) {
-        holdEmailBtn.dataset.on = 'false';
-        holdEmailBtn.style.background = 'rgba(0,0,0,0.35)';
-        holdEmailBtn.style.borderColor = 'rgba(255,255,255,0.15)';
-        holdEmailBtn.style.color = 'var(--text-gray)';
-      } else {
-        holdEmailBtn.dataset.on = 'true';
-        holdEmailBtn.style.background = 'rgba(34,197,94,0.12)';
-        holdEmailBtn.style.borderColor = 'rgba(34,197,94,0.40)';
-        holdEmailBtn.style.color = '#86efac';
-      }
-    });
-  }
+  // 2026-09-16: "Email artist(s) immediately" toggle removed. Hold flow
+  // always emails the current offer holder; silent-only mode was risky
+  // (artist had to notice the offer in-app or lose the 24h window).
 
   function _escHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
@@ -508,9 +695,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         ? `<span title="Last gig here ${fs.abs_days_between} day${fs.abs_days_between!==1?'s':''} ${fs.days_between>0?'before':'after'} this gig (venue requires ${fs.freq_days})" style="flex:0 0 auto;font-size:0.62rem;font-weight:600;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.30);border-radius:3px;padding:1px 5px;margin-left:6px;">freq ${fs.abs_days_between}d</span>`
         : '';
       return `<button type="button" class="hold-master-row${(window._holdArtistOrder || []).includes(aid) ? ' is-selected' : ''}" data-aid="${aid}" title="${_escHtml(a.artist_type || 'Artist')}">
-        <span style="display:inline-flex;align-items:center;gap:5px;width:100%;">
+        <span style="display:inline-flex;align-items:center;gap:12px;width:100%;">
           <span style="flex:0 0 auto;font-size:0.85em;line-height:1;">${icon}</span>
-          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>${freqChip}
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;text-align:left;">${nm} <span style="opacity:0.65;font-weight:400;">(${paySuffix})</span></span>${freqChip}
         </span>
       </button>`;
     }).join('');
@@ -960,7 +1147,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     let useEnd = endTime || defaults.endTime;
     const prevRow = slotList.lastElementChild;
     if (prevRow && !startTime) {
-      const prevEnd = prevRow.querySelector('.slot-end').value;
+      const prevEnd = _slot24Get(prevRow.querySelector('.slot-end'));
       if (prevEnd) {
         useStart = prevEnd;
         const [h, m] = prevEnd.split(':').map(Number);
@@ -997,9 +1184,9 @@ document.addEventListener("DOMContentLoaded", async () => {
            door bubble for clarity. -->
       <div style="display:flex; align-items:center; gap:6px; flex-wrap:nowrap;">
         <span style="font-weight:700; min-width:44px; color:#a855f7; letter-spacing:0.3px; font-size:0.78rem; flex-shrink:0;">Slot ${slotNum}</span>
-        <input type="time" class="slot-start" value="${useStart}" style="flex:0 0 auto; width:96px; min-width:0; font-size:0.75rem; padding:2px 5px;">
+        ${_slotBuildTimeHTML('slot-start', useStart)}
         <span style="color:var(--text-muted); font-size:0.68rem; flex-shrink:0;">to</span>
-        <input type="time" class="slot-end" value="${useEnd}" style="flex:0 0 auto; width:96px; min-width:0; font-size:0.75rem; padding:2px 5px;">
+        ${_slotBuildTimeHTML('slot-end', useEnd)}
         <span class="slot-pay-pill" title="Slot pay (click and type)">
           <span class="slot-pay-symbol">$</span>
           <input type="text" class="slot-pay-amount" value="${useAmount}" inputmode="decimal" maxlength="12" placeholder="0.00">
@@ -1261,8 +1448,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     function _checkSlotTimes() {
       const startInput = row.querySelector('.slot-start');
       const endInput   = row.querySelector('.slot-end');
-      const s = startInput.value;
-      const e = endInput.value;
+      // 2026-09-17: switched inputs from type="time" to type="text" (12h
+      // display, 24h canonical on dataset.time24). Read the canonical
+      // value so the same-day / AM-vs-PM math below still gets HH:MM.
+      const s = _slot24Get(startInput);
+      const e = _slot24Get(endInput);
       if (!s || !e || e === s) return;
 
       const [sh, sm] = s.split(':').map(Number);
@@ -1276,7 +1466,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       // End equals start — validateSlots handles this
       if (endMins === startMins) return;
 
-      // End is before start — suggest flipping AM/PM (±12h)
+      // End is before start — MIGHT be an AM/PM typo. Compute the
+      // suggested flip and check whether it gives a reasonable
+      // same-day gig duration (30 min – 8 h). If it does, ask.
+      // If not, the user's input is more consistent with an
+      // intentional overnight booking (e.g. 9 PM → 12 AM = 3 h across
+      // midnight is real, but the "flip" would suggest 9 PM → 12 PM
+      // which is negative — clearly nonsense).
       let suggested, hint;
       if (eh < 12) {
         // e.g. end=11:00 (AM), start=19:00 → suggest 23:00 (11pm)
@@ -1287,10 +1483,43 @@ document.addEventListener("DOMContentLoaded", async () => {
         suggested = _addHours(e, -12);
         hint = 'Looks like an overnight gig — end time is before start.';
       }
+      // Sanity gate: only fire the popup when the suggestion yields a
+      // reasonable positive gig length. Otherwise the "fix" is worse
+      // than the input (or the input was a legit overnight all along).
+      const [_sh, _sm] = suggested.split(':').map(Number);
+      const _suggMins = _sh * 60 + _sm;
+      const _suggestedDelta = _suggMins - startMins;
+      if (_suggestedDelta < 30 || _suggestedDelta > 8 * 60) {
+        return;
+      }
 
       // Phase 2 migration: was an inline DOM-builder time-correction
       // prompt. Now uses showStyledModal — neutral default tone (purple
       // since this isn't an error, just a clarifying ask).
+      // 2026-09-17: close any competing native <select> dropdown before
+      // the modal renders — most commonly the artist-type picker the
+      // user opens right after the time widget blurs.
+      // Prior attempt dispatched a synthetic Escape KeyboardEvent to
+      // force the native dropdown closed; that bubbled to the global
+      // gf-modals.js Escape handler and blew away the entire gig modal.
+      // Now: plain blur() only. That closes the dropdown on Chromium
+      // and (usually) on Firefox; if Firefox stubbornly keeps its own
+      // dropdown visible we accept it — better than nuking the modal.
+      function _closeCompetingUI() {
+        try {
+          if (document.activeElement && typeof document.activeElement.blur === 'function') {
+            document.activeElement.blur();
+          }
+          document.querySelectorAll('#gigModal select, .slot-row select').forEach(s => {
+            try { s.blur(); } catch (_) {}
+          });
+        } catch (_) {}
+      }
+      _closeCompetingUI();
+      // One retry after the current event loop so we catch a dropdown
+      // the browser opened AFTER our first pass (the user's click on
+      // the select is still being processed synchronously here).
+      setTimeout(_closeCompetingUI, 0);
       window.showStyledModal(
         '🕐 Did you mean...',
         `<p style="text-align:center;color:#a78bfa;font-size:1.05rem;font-weight:600;">${_fmt12(s)} to ${_fmt12(suggested)}?</p>` +
@@ -1298,7 +1527,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         [
           { text: 'No, keep it', style: 'ghost' },
           { text: 'Yes, fix it', style: 'primary',
-            onClick: () => { endInput.value = suggested; } },
+            onClick: () => {
+              // `suggested` is 24h HH:MM — push it through the widget so
+              // the hh / mm / ampm children all update visually, then
+              // fire change for validateSlots.
+              _slotSetValue24(endInput, suggested);
+              endInput.classList.remove('slot-time-error');
+              endInput.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          },
         ],
         // dismissible:false — user MUST pick one of the two buttons. Without
         // this, clicking the backdrop / pressing Esc closed the prompt and
@@ -1307,7 +1544,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       );
     }
 
-    row.querySelector('.slot-end').addEventListener('blur', _checkSlotTimes);
+    // 2026-09-17: wire the segmented HH : MM AM/PM widgets. Sync fires
+    // on focusout of the whole wrapper (not on hh→mm intra-hops), which
+    // also dispatches `change` for validateSlots and — for the end
+    // widget — the AM/PM auto-correct.
+    const _slotStartEl = row.querySelector('.slot-start');
+    const _slotEndEl   = row.querySelector('.slot-end');
+    if (_slotStartEl) _slotWireTimeWidget(_slotStartEl);
+    if (_slotEndEl)   _slotWireTimeWidget(_slotEndEl, _checkSlotTimes);
     // ─────────────────────────────────────────────────────────────────────
     
     // Remove slot handler
@@ -1442,8 +1686,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     const rows = document.querySelectorAll('#slotList .slot-row');
     const slots = [];
     rows.forEach((row, i) => {
-      const start = row.querySelector('.slot-start').value;
-      const end = row.querySelector('.slot-end').value;
+      // 2026-09-17: read canonical 24h from dataset (input is now
+      // text with 12h display).
+      const _startEl = row.querySelector('.slot-start');
+      const _endEl   = row.querySelector('.slot-end');
+      if (_startEl) _slotNormalizeInput(_startEl);
+      if (_endEl)   _slotNormalizeInput(_endEl);
+      const start = _slot24Get(_startEl);
+      const end   = _slot24Get(_endEl);
       const amountRaw = (row.querySelector('.slot-pay-amount')?.value || '0').replace(/,/g, '');
       const pay = parseFloat(amountRaw) || 0;
       const artistType = row.querySelector('.slot-artist-type')?.value || null;
@@ -3101,6 +3351,20 @@ async function renderCalendar() {
   }
 
     async function openGigModal(gig) {
+    // 2026-09-16: hard onboarding gate. A venue whose setup checklist
+    // is incomplete must not be able to open the create-gig modal —
+    // previously the checklist popup layered ON TOP of an already-
+    // opened gig modal, and dismissing the popup left the create form
+    // fully usable. If the checklist has confirmed incomplete state,
+    // route straight to the checklist and refuse to open here. The
+    // checklist's showModal drains #gigModal too, so the fallback path
+    // (fetch not yet resolved when the user clicks) closes cleanly.
+    if (window._obNeedsSetup && typeof window.showOnboardingChecklist === 'function') {
+      const _gm = document.getElementById('gigModal');
+      if (_gm) _gm.classList.add('hidden');
+      try { window.showOnboardingChecklist(); } catch (_) {}
+      return;
+    }
     selectedGig = gig;
     selectedDate = gig.date;
     // Purge any leftover CANCELLED watermark from a previous modal
@@ -5314,10 +5578,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     // ──────────────────────────────────────────────────────────────────────
 
     // Hold params (Phase 1): single-gig only. Send the ordered artist
-    // list + the "email now?" flag if the venue enabled Hold mode.
-    // Empty array → backend treats this as a regular open gig.
+    // list if the venue enabled Hold mode. Empty array → backend treats
+    // this as a regular open gig. 2026-09-16: `hold_email_artists` is
+    // hardcoded true — the venue-side toggle was removed.
     const holdEnabled = document.getElementById('holdGigCheckbox')?.checked;
-    const holdEmail = document.getElementById('holdEmailArtistsBtn')?.dataset.on === 'true';
     const holdArtistIds = holdEnabled ? (window._holdArtistOrder || []) : [];
 
     await api(`/venues/${venueId}/gigs`, {
@@ -5333,7 +5597,7 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         is_recurring: 0,
         slots: slots,
         hold_artist_ids: holdArtistIds,
-        hold_email_artists: holdEmail,
+        hold_email_artists: true,
         hold_offer_window_hours: 24
       })
     });
@@ -5459,11 +5723,9 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
     // series via /api/series/{rgid}/hold/start.
     const _holdEnabledR = !!(holdCheckbox && holdCheckbox.checked);
     const _holdArtistIdsR = _holdEnabledR ? (window._holdArtistOrder || []) : [];
-    const _holdEmailR = (function () {
-      const t = document.getElementById('holdEmailToggle');
-      if (!t) return true;
-      return !t.dataset.off || t.dataset.off === '0';
-    })();
+    // 2026-09-16: email toggle removed — hold always emails artists in
+    // sequence.
+    const _holdEmailR = true;
 
     // Create all gigs in the series with proper database fields
     const gigData = {
@@ -5655,12 +5917,13 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         if (_holdOn && !_alreadyHeld) {
           const artistIds = window._holdArtistOrder || [];
           if (artistIds.length > 0) {
-            const emailNow = document.getElementById('holdEmailArtistsBtn')?.dataset.on === 'true';
+            // 2026-09-16: hardcoded to true — the "Email artist(s)
+            // immediately" toggle was removed.
             await api(`/api/gigs/${gigId}/hold/start`, {
               method: 'POST',
               body: JSON.stringify({
                 artist_ids: artistIds,
-                hold_email_artists: emailNow,
+                hold_email_artists: true,
                 hold_offer_window_hours: 24,
               })
             });

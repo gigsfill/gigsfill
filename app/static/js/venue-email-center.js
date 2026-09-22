@@ -980,7 +980,18 @@ async function loadInvitedArtists(venueId) {
             // button does the right thing. min-height keeps the row from
             // collapsing when the cell only has the date span (signed-up
             // / declined states).
+            // 2026-09-16: dedicated Artist column to the LEFT of Email.
+            // Shows the artist name once the invitee signs up and creates
+            // an artist row; blank ("—") until then. Mirrors the
+            // affiliate "Emails Sent" pattern; column added in
+            // venue-create-gigs.html header + `.inv-row` grid template.
+            const artistCell = inv.signed_up_artist_name
+                ? '<div class="inv-artist" title="' + escapeAttr(inv.signed_up_artist_name) + '">'
+                  + escapeHtmlLocal(inv.signed_up_artist_name) + '</div>'
+                : '<div class="inv-artist pending">—</div>';
+
             return '<div class="inv-row">' +
+                artistCell +
                 '<div class="inv-email" title="' + escapeAttr(inv.email) + '">' + escapeHtmlLocal(inv.email) + '</div>' +
                 '<div>' + statusBadge + '</div>' +
                 '<div class="inv-date">' + date + '</div>' +

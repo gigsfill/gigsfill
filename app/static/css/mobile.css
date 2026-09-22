@@ -213,8 +213,9 @@
      column. Action gets slightly more weight than middle columns since
      Resend + Delete need the row. */
   .inv-table-header, .inv-row {
-    grid-template-columns: 1.4fr 1fr 1fr 1.6fr !important;
-    gap: 16px !important;
+    /* 2026-09-16: Artist column added at the front. */
+    grid-template-columns: 1fr 1.3fr 1fr 1fr 1.2fr !important;
+    gap: 10px !important;
     font-size: 0.75rem !important;
   }
   .inv-table-header > div:last-child,
