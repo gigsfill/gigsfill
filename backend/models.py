@@ -386,19 +386,6 @@ class GigEmailLog(Base):
     venue = relationship("Venue")
 
 
-class EmailSetting(Base):
-    __tablename__ = "email_settings"
-
-    id = Column(Integer, primary_key=True)
-    smtp_server = Column(Text)
-    smtp_port = Column(Integer)
-    smtp_username = Column(Text)
-    smtp_password = Column(Text)
-    from_email = Column(Text)
-    from_name = Column(Text)
-    enabled = Column(Integer, default=1)
-
-
 class EmailTemplate(Base):
     __tablename__ = "email_templates"
 
