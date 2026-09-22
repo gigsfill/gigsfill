@@ -175,6 +175,7 @@
       <hr class="divider">
       <div class="links">
         <a href="#" id="showChangeEmailBtn" onclick="showChangeEmailForm(); return false;">Wrong email? Change it</a>
+        <a href="#" id="verifyLogoutBtn" onclick="verifyLogout(); return false;">Log out</a>
       </div>
 
       <div id="changeEmailForm" style="display:none;">
@@ -214,6 +215,18 @@
         window.location.href = '/app/index.html';
       }
     })();
+
+    // Escape hatch. Every app page bounces an unverified user back here,
+    // so without this the only way out is clearing cookies. The session
+    // cookie is HttpOnly, so this has to POST /api/logout — clearing it
+    // from JS is impossible.
+    function verifyLogout() {
+      fetch('/api/logout', { method: 'POST', credentials: 'include' })
+        .catch(() => {})
+        .finally(() => {
+          window.location.href = '/app/index.html';
+        });
+    }
 
     async function resendVerification() {
       const btn = document.getElementById('resendBtn');

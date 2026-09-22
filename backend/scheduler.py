@@ -1803,6 +1803,13 @@ def run_scheduled_emails():
         # Requests made INSIDE a tier's window skip prior tiers (a request
         # made 2.5 days out will only get the 2d + 1d reminders; the 3d
         # ship already sailed).
+        #
+        # The scan can't filter on gigs.status alone: book_slot marks the
+        # umbrella gig 'booked' once no slot is 'open', and a slot sitting
+        # in pending_venue_approval doesn't count as open. So a 2-slot gig
+        # with one slot pending and one booked reads as 'booked' at the gig
+        # level while still needing reminders. The EXISTS clause catches
+        # that case (and keeps the token eligible for cleanup at gig start).
         def _remind_pending_venue_approvals():
             from backend.db import SessionLocal as _RPSL
             from sqlalchemy import text as _rp_text
@@ -1818,6 +1825,12 @@ def run_scheduled_emails():
                     FROM pending_approval_tokens pt
                     JOIN gigs g ON g.id = pt.gig_id
                     WHERE g.status IN ('pending_venue_approval', 'open')
+                       OR EXISTS (
+                           SELECT 1 FROM gig_slots gs
+                           WHERE gs.gig_id = pt.gig_id
+                             AND gs.artist_id = pt.artist_id
+                             AND gs.status = 'pending_venue_approval'
+                       )
                 """)).mappings().all()
                 sent_count = 0
                 for r in rows:

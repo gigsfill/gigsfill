@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-22 (Follow-ups to the 2026-09-16 approval-gate work: multi-slot reminder gap, stale comments, verify-email dead end):** Three defects surfaced during a review of the 09-16 batch.
+
+  **(1) Multi-slot gigs stopped getting approval reminders.** `_remind_pending_venue_approvals` scanned `WHERE g.status IN ('pending_venue_approval','open')`. But [book_slot](backend/routes/gigs.py) flips the umbrella gig to `'booked'` as soon as no slot is `'open'` — and a slot sitting in `pending_venue_approval` does not count as open. So a 2-slot gig with one slot pending approval and one slot booked reads as `'booked'` at the gig level, and its pending token became invisible to the sweep: no 3d/2d/1d reminders, and the token never got cleaned up at gig start either (cleanup lives inside the same loop). The old `_auto_approve_stale_bookings` included `'booked'` in its scan; the 09-16 rewrite dropped it. Fixed by OR-ing in an `EXISTS` on `gig_slots` for a still-pending slot matching the token's gig + artist. `EXISTS` is standard SQL so the dual-engine (SQLite/Postgres) requirement holds, and the query takes no placeholders so `_PgCompatConn` isn't involved. Verified against the live schema.
+
+  **(2) Comments and changelog asserted a safety net that no longer exists.** `_venue_requires_non_preferred_approval`'s docstring and a comment in `book_slot` both still said auto-approve in the scheduler handled imminent gigs — that function was deleted on 09-16. The 09-16 "broadened approval gate" changelog entry likewise claimed "Auto-approve safeguard (scheduler.py) unchanged" with the full 30min/2h/6h tier table. Anyone reading any of the three would believe unattended same-day requests still resolve themselves. All three corrected; the changelog line is struck through rather than deleted so the contradiction stays visible in the record.
+
+  **(3) Unverified users had no way out.** The 09-16 verify-email work removed `user-profile.html` from `VERIFY_EXEMPT` in [auth.guard.js](app/static/js/auth.guard.js) so unverified accounts couldn't slip past the wall. But [verify-email.html](app/verify-email.html) had no logout affordance — every other page bounced them back, so the only escape was clearing cookies. Added a "Log out" link beside the existing "Wrong email? Change it", backed by a `verifyLogout()` that POSTs `/api/logout` (the session cookie is HttpOnly, so clearing it from JS is impossible — same reasoning as the [user-profile.js](app/static/js/user-profile.js) logout). The `.links` container was already `display:flex` with a gap, so no CSS change was needed.
+
+  Full test suite green (60 passed).
+
 - **2026-09-16 (Approval gate — replace auto-approve with 3d/2d/1d reminders):** When the venue's "Require my approval for bookings by non-preferred artists" toggle is ON and a non-preferred artist requests a booking, the old scheduler would auto-approve after tiered deadlines (30 min / 2 h / 6 h for gigs within 36h) so the artist wasn't stuck in limbo. That effectively booked unvetted artists on the venue's behalf whenever they didn't respond fast enough — defeating the whole point of the approval gate.
 
   Now nothing auto-approves. The venue is emailed at request time, then re-nagged at **3 days, 2 days, and 1 day** before gig start if the request is still pending. If the venue never acts, the gig stays unbooked — venue's call.
@@ -48,7 +58,7 @@ The list below tracks meaningful changes after the initial sync from the codebas
     - `artist_booking_denied` body drops "same-day".
     - All three synced to DB on the restart's `_populate_email_templates` upsert; verified in `email_templates` table.
 
-  Auto-approve safeguard (scheduler.py) unchanged and still handles the imminent case that motivated it: gigs starting in ≤4h auto-approve after 30 min, 4–12h after 2h, 12–36h after 6h; requests for gigs further out stay pending until the venue acts — which is exactly the right behavior for the broadened scope.
+  ~~Auto-approve safeguard (scheduler.py) unchanged and still handles the imminent case that motivated it: gigs starting in ≤4h auto-approve after 30 min, 4–12h after 2h, 12–36h after 6h; requests for gigs further out stay pending until the venue acts — which is exactly the right behavior for the broadened scope.~~ **Superseded the same day** — see the "Approval gate — replace auto-approve with 3d/2d/1d reminders" entry above. `_auto_approve_stale_bookings` was deleted outright; nothing auto-approves at any distance out.
 
   Frontend UI copy on [venue-create-gigs.html](app/venue-create-gigs.html) Email Notifications tab:
   - Main toggle label: "Require my approval for same-day bookings by non-preferred artists" → "Require my approval for bookings by non-preferred artists" (kept the input id `venue_require_same_day_approval` and its save handler — the column name stayed the same so the wire stays stable).

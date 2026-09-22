@@ -961,9 +961,14 @@ def _venue_requires_non_preferred_approval(db, venue_id: int) -> bool:
     identifier to avoid a schema migration (and preserve the one-shot
     backfill from Aug), but every read now treats it as "require approval
     for non-preferred artists, period." The user-facing toggle label was
-    updated to match; auto-approve in the scheduler still handles imminent
-    (same-day-ish) gigs and lets far-out ones sit pending indefinitely,
-    which is the right behavior for both scopes.
+    updated to match.
+
+    Nothing auto-approves. An earlier version of this docstring claimed the
+    scheduler auto-approved imminent gigs as an artist-limbo safeguard —
+    that code (`_auto_approve_stale_bookings`) was deleted on 2026-09-16
+    because booking unvetted artists on the venue's behalf defeated the
+    point of the gate. A pending request now sits pending until the venue
+    acts or the gig starts; the scheduler only sends 3d/2d/1d reminders.
 
     Defaults to True (safe): venue not found OR column NULL → require approval.
     """
@@ -5399,10 +5404,9 @@ def book_slot(
     # 2026-09-16: gate broadened from "same-day only" to "any non-preferred
     # booking" when the venue's approval toggle is on. Same-day timing
     # data is no longer part of the decision — preferred status +
-    # venue policy is the whole story. Auto-approve tiers in the
-    # scheduler still handle imminent gigs and leave far-out requests
-    # pending indefinitely, so the artist-limbo protection is preserved
-    # for the same-day case that this gate used to be scoped to.
+    # venue policy is the whole story. Nothing auto-approves: the request
+    # sits pending until the venue acts or the gig starts. The scheduler's
+    # only involvement is 3d/2d/1d reminder emails to the venue.
     if (not _is_preferred_slot
             and _venue_requires_non_preferred_approval(db, gig.get("venue_id"))):
         # Audit fix (May 2026 part 5): atomic claim guard — without
