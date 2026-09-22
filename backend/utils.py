@@ -61,6 +61,59 @@ def log_admin_action(db, admin_user, action: str, *,
         logging.getLogger("gigsfill.admin.audit").warning(f"audit log write failed: {_e}")
 
 
+def signing_keys():
+    """Keys valid for VERIFYING signed tokens, current one first.
+
+    Signing always uses the first entry. `GIGSFILL_SECRET_KEY_PREVIOUS`
+    exists so a rotated-out key can keep verifying tokens already in the
+    wild during a grace period.
+
+    This matters because `GIGSFILL_SECRET_KEY` signs far more than session
+    cookies. One-click unsubscribe tokens carry a 90-day TTL and are
+    verified by signature alone (no DB lookup), and they are embedded in
+    the List-Unsubscribe header of every email already sent. A hard
+    cutover would break one-click unsubscribe for Gmail/Yahoo bulk-sender
+    compliance and leave recipients hitting "mark as spam" instead —
+    exactly the outcome that header exists to prevent. Contact-reply
+    (90d) and demo prospect links (60d) have the same problem.
+
+    Sessions deliberately do NOT use this: invalidating them is the point
+    of a rotation.
+
+    Drop `GIGSFILL_SECRET_KEY_PREVIOUS` once the longest TTL (90 days)
+    has elapsed since the rotation.
+    """
+    import os
+    keys = []
+    for var in ("GIGSFILL_SECRET_KEY", "GIGSFILL_SECRET_KEY_PREVIOUS"):
+        val = (os.environ.get(var) or "").strip()
+        if val:
+            keys.append(val)
+    return keys
+
+
+def loads_rotating(salt, token, max_age, **kwargs):
+    """`URLSafeTimedSerializer.loads` that accepts the previous signing key.
+
+    Tries each key from `signing_keys()` in order. Raises the most
+    informative failure: a `SignatureExpired` from any key beats a
+    `BadSignature`, since "valid signature, too old" tells the caller
+    something different from "forged".
+    """
+    from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+    expired = bad = None
+    for key in signing_keys():
+        try:
+            return URLSafeTimedSerializer(key, salt=salt).loads(
+                token, max_age=max_age, **kwargs
+            )
+        except SignatureExpired as e:
+            expired = e
+        except BadSignature as e:
+            bad = e
+    raise expired or bad or BadSignature("no signing key configured")
+
+
 def utcnow_naive():
     """Drop-in replacement for the deprecated `datetime.utcnow()`.
 

@@ -52,7 +52,10 @@ def _sign_reply_token(msg_id: int) -> str:
 
 def _verify_reply_token(token: str) -> int:
     try:
-        payload = _reply_serializer.loads(token, max_age=_REPLY_MAX_AGE)
+        # Accepts the previous signing key during a rotation grace
+        # period — these links live in already-sent email for 90 days.
+        from backend.utils import loads_rotating
+        payload = loads_rotating("contact-reply", token, _REPLY_MAX_AGE)
         return int(payload.get("id") or 0)
     except SignatureExpired:
         raise HTTPException(410, "This reply link has expired.")
@@ -66,7 +69,10 @@ def _sign_admin_reply_token(msg_id: int) -> str:
 
 def _verify_admin_reply_token(token: str) -> int:
     try:
-        payload = _admin_reply_serializer.loads(token, max_age=_REPLY_MAX_AGE)
+        # Accepts the previous signing key during a rotation grace
+        # period — these links live in already-sent email for 90 days.
+        from backend.utils import loads_rotating
+        payload = loads_rotating("contact-admin-reply", token, _REPLY_MAX_AGE)
         return int(payload.get("id") or 0)
     except SignatureExpired:
         raise HTTPException(410, "This reply link has expired.")

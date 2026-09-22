@@ -8,6 +8,20 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-22 (Rotated `GIGSFILL_SECRET_KEY` with a verification grace period):** The key was exposed in a session transcript and needed rotating. Rotating it naively would have been worse than the exposure.
+
+  **Why:** `GIGSFILL_SECRET_KEY` signs far more than session cookies. It also signs **one-click unsubscribe tokens** ([unsubscribe.py](backend/routes/unsubscribe.py), 90-day TTL, verified by signature alone with no DB lookup) that are embedded in the `List-Unsubscribe` header of every email already sent. Gmail/Yahoo bulk-sender rules require that header to work, and CAN-SPAM requires a functioning opt-out for 30+ days after sending. A hard cutover would have left recipients clicking unsubscribe, getting an error, and marking the mail as spam instead — the exact outcome the header exists to prevent. Contact-reply tokens (90d) and demo prospect links (30-60d) had the same problem.
+
+  **Design:** `GIGSFILL_SECRET_KEY_PREVIOUS` holds the rotated-out key and is used for **verification only, never signing**. New `utils.signing_keys()` returns current-then-previous; new `utils.loads_rotating(salt, token, max_age)` tries each in order and raises the most informative failure (a `SignatureExpired` from any key beats a `BadSignature`, since "valid signature, too old" means something different from "forged"). Applied to the long-TTL email-embedded tokens: unsubscribe, contact-reply, contact-admin-reply, demo-accept, demo-cancel, demo-reschedule, demo-prospect-accept, demo-ics.
+
+  **Sessions deliberately do NOT use the grace path** — invalidating them is the point of a rotation, so everyone was logged out as intended.
+
+  Verified the mechanism before touching production keys: old token + rotated key without the grace key → rejected; with it → verified; forged token signed by a third key → rejected; right key but wrong salt → rejected.
+
+  **Also removed `SESSION_SECRET_KEY` and the `override.conf` drop-ins that set it.** Nothing in the codebase read that variable — `RollingSessionMiddleware` is custom and doesn't use it, and `SESSION_MAX_AGE` is a separate still-live var. It was dead config that looked authoritative, the same trap as the `email_settings` table. Both units now carry only `secret.conf`, chmod 600, byte-identical (they must stay mirrored or the scheduler can't sign tokens). Previous drop-ins backed up to `/root/secret-conf-backup-<timestamp>/`.
+
+  **Remove `GIGSFILL_SECRET_KEY_PREVIOUS` after 2026-12-21** — once the longest TTL (90 days) has elapsed, the grace key is pure liability.
+
 - **2026-09-22 (Outbound email outage — DO blocks SMTP; moved all sends to the Zoho Mail HTTPS API):** GigsFill email stopped working. Last successful send was 2026-09-21 13:47; the first failure was 2026-09-22 13:23 (`[DIGEST] SMTP FAILURE`).
 
   **Cause:** DigitalOcean blocks outbound SMTP (25/465/587) from this droplet to every destination. Verified by testing Bluehost, Zoho and Gmail — all four host/port combinations time out identically — and by confirming `ufw` is `default: allow (outgoing)` with no OUTPUT rules, so the block is at DO's edge, not ours. Port 2525 is blocked too. IMAP (143/993) and HTTPS (443) are unaffected, which is why the bounce handler kept working while every send failed.

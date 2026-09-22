@@ -122,7 +122,10 @@ def _sign_accept_token(req_id: int, slot_index: int, slots_version: int = 1) -> 
 
 def _verify_accept_token(token: str) -> dict:
     try:
-        return _accept_serializer.loads(token, max_age=_ACCEPT_MAX_AGE)
+        # Accepts the previous signing key during a rotation grace period —
+        # these links sit in already-sent prospect email for 30-60 days.
+        from backend.utils import loads_rotating
+        return loads_rotating("demo-accept", token, _ACCEPT_MAX_AGE)
     except SignatureExpired:
         raise HTTPException(410, "This accept link has expired.")
     except BadSignature:
@@ -135,7 +138,10 @@ def _sign_cancel_token(req_id: int) -> str:
 
 def _verify_cancel_token(token: str) -> int:
     try:
-        payload = _cancel_serializer.loads(token, max_age=_PROSPECT_LINK_MAX_AGE)
+        # Accepts the previous signing key during a rotation grace period —
+        # these links sit in already-sent prospect email for 30-60 days.
+        from backend.utils import loads_rotating
+        payload = loads_rotating("demo-cancel", token, _PROSPECT_LINK_MAX_AGE)
         return int(payload.get("req_id") or 0)
     except SignatureExpired:
         raise HTTPException(410, "This link has expired.")
@@ -149,7 +155,10 @@ def _sign_reschedule_token(req_id: int) -> str:
 
 def _verify_reschedule_token(token: str) -> int:
     try:
-        payload = _reschedule_serializer.loads(token, max_age=_PROSPECT_LINK_MAX_AGE)
+        # Accepts the previous signing key during a rotation grace period —
+        # these links sit in already-sent prospect email for 30-60 days.
+        from backend.utils import loads_rotating
+        payload = loads_rotating("demo-reschedule", token, _PROSPECT_LINK_MAX_AGE)
         return int(payload.get("req_id") or 0)
     except SignatureExpired:
         raise HTTPException(410, "This link has expired.")
@@ -169,7 +178,10 @@ def _sign_prospect_accept_token(req_id: int, slot_index: int) -> str:
 
 def _verify_prospect_accept_token(token: str) -> tuple[int, int]:
     try:
-        payload = _prospect_accept_serializer.loads(token, max_age=_PROSPECT_LINK_MAX_AGE)
+        # Accepts the previous signing key during a rotation grace period —
+        # these links sit in already-sent prospect email for 30-60 days.
+        from backend.utils import loads_rotating
+        payload = loads_rotating("demo-prospect-accept", token, _PROSPECT_LINK_MAX_AGE)
         return int(payload.get("req_id") or 0), int(payload.get("slot") or 0)
     except SignatureExpired:
         raise HTTPException(410, "This link has expired.")
@@ -490,7 +502,10 @@ def _sign_ics_token(req_id: int, slot_index: int) -> str:
 
 def _verify_ics_token(token: str) -> tuple[int, int]:
     try:
-        payload = _ics_endpoint_serializer().loads(token, max_age=_PROSPECT_LINK_MAX_AGE)
+        # Accepts the previous signing key during a rotation grace period —
+        # these links sit in already-sent prospect email for 30-60 days.
+        from backend.utils import loads_rotating
+        payload = loads_rotating("demo-ics", token, _PROSPECT_LINK_MAX_AGE)
         return int(payload.get("req_id") or 0), int(payload.get("slot") or 0)
     except SignatureExpired:
         raise HTTPException(410, "This calendar link has expired.")

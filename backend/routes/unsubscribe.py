@@ -56,8 +56,13 @@ def sign_unsubscribe_token(user_id: int, notification_type: str) -> str:
 
 
 def _verify_token(token: str) -> dict:
+    # Verifies against the previous signing key too. These tokens live in
+    # the List-Unsubscribe header of every email already sent and are good
+    # for 90 days, so a key rotation must not break them — see
+    # utils.signing_keys().
+    from backend.utils import loads_rotating
     try:
-        return _unsub_serializer.loads(token, max_age=_UNSUB_MAX_AGE)
+        return loads_rotating("email-unsub", token, _UNSUB_MAX_AGE)
     except SignatureExpired:
         raise HTTPException(410, "Unsubscribe link has expired")
     except BadSignature:
