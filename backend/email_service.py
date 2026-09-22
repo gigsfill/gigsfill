@@ -30,7 +30,29 @@ BLAST_OFF_DEFAULTS = frozenset({
 })
 
 def _smtp_send(server_host, port, username, password, msg):
-    """Send email via SMTP handling port 465 (SSL), 587 (STARTTLS), and other ports (plain/try-STARTTLS)."""
+    """Single chokepoint for outbound mail.
+
+    Despite the name this is transport-agnostic. In production it goes out
+    through the Zoho Mail HTTPS API, because DigitalOcean blocks outbound
+    SMTP (25/465/587) from this droplet to every destination — Zoho, Gmail
+    and Bluehost all time out identically and the local firewall is clean,
+    so no SMTP port or provider gets around it. See
+    `backend/services/zoho_mail.py`.
+
+    The SMTP path below is kept for environments that can actually reach an
+    SMTP server (local dev, or if the DO block is ever lifted). It handles
+    port 465 (SSL), 587 (STARTTLS), and other ports (plain/try-STARTTLS).
+
+    Everything that sends mail should call this rather than touching
+    smtplib directly, so transport stays one decision in one place.
+    """
+    try:
+        from backend.services import zoho_mail
+        if zoho_mail.is_configured():
+            return zoho_mail.send_message(msg)
+    except ImportError:
+        pass
+
     if port == 465:
         with smtplib.SMTP_SSL(server_host, port, timeout=15) as s:
             s.login(username, password)
@@ -47,6 +69,20 @@ def _smtp_send(server_host, port, username, password, msg):
             except Exception: pass
             s.login(username, password)
             s.send_message(msg)
+
+def smtp_pooling_supported():
+    """True when batching sends over one SMTP connection is worth attempting.
+
+    False when mail leaves over an HTTP API, because there's no connection
+    to pool — and on this droplet the pool open can't succeed anyway, so
+    trying burns a 15s timeout per batch before falling back.
+    """
+    try:
+        from backend.services import zoho_mail
+        return not zoho_mail.is_configured()
+    except ImportError:
+        return True
+
 
 class EmailService:
     """Handles email sending and template processing"""

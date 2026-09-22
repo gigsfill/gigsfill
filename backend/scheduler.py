@@ -309,31 +309,13 @@ def send_email(smtp_config, to_email, subject, body_html):
         msg['Subject'] = subject
         msg.attach(MIMEText(body_html, 'html'))
 
-        port = smtp_config['port']
-        if port == 465:
-            # SSL
-            with smtplib.SMTP_SSL(smtp_config['server'], port, timeout=15) as server:
-                server.login(smtp_config['username'], smtp_config['password'])
-                server.send_message(msg)
-        elif port in (587, 2587):
-            # STARTTLS
-            with smtplib.SMTP(smtp_config['server'], port, timeout=15) as server:
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-                server.login(smtp_config['username'], smtp_config['password'])
-                server.send_message(msg)
-        else:
-            # Plain SMTP (port 25, 26, etc.) — try starttls first, fall back to plain
-            with smtplib.SMTP(smtp_config['server'], port, timeout=15) as server:
-                server.ehlo()
-                try:
-                    server.starttls()
-                    server.ehlo()
-                except Exception:
-                    pass  # Server doesn't support STARTTLS — proceed plain
-                server.login(smtp_config['username'], smtp_config['password'])
-                server.send_message(msg)
+        # Shared transport. In production this goes out over the Zoho Mail
+        # HTTPS API because DigitalOcean blocks outbound SMTP from this
+        # droplet; _smtp_send keeps the real SMTP paths (465 SSL / 587
+        # STARTTLS / plain) for environments that can reach a mail server.
+        from backend.email_service import _smtp_send
+        _smtp_send(smtp_config['server'], smtp_config['port'],
+                   smtp_config['username'], smtp_config['password'], msg)
         return True
     except Exception as e:
         logger.error(f"Email send failed to {to_email}: {e}")

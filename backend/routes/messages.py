@@ -1118,15 +1118,9 @@ def _notify_other_party(db, gig_id: int, sender_user_id: int, sender_role: str,
             msg["From"] = email_service.from_email
         msg["To"] = to_email
         msg.attach(MIMEText(styled, "html"))
-        if email_service.smtp_port == 465:
-            with smtplib.SMTP_SSL(email_service.smtp_server, email_service.smtp_port, timeout=15) as server:
-                server.login(email_service.smtp_username, email_service.smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(email_service.smtp_server, email_service.smtp_port, timeout=15) as server:
-                server.starttls()
-                server.login(email_service.smtp_username, email_service.smtp_password)
-                server.send_message(msg)
+        # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+        from backend.email_service import _smtp_send
+        _smtp_send(email_service.smtp_server, email_service.smtp_port, email_service.smtp_username, email_service.smtp_password, msg)
         logger.info(f"Message notification sent to {to_email} (gig={gig_id}, role={sender_role})")
     except Exception as e:
         logger.warning(f"Message email notification failed: {e}")

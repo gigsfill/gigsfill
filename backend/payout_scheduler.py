@@ -1400,27 +1400,17 @@ def _send_html_email(settings, to_email, subject, html_body):
     msg['From'] = formataddr((from_name, from_email))
     msg['To'] = to_email
     msg.attach(MIMEText(styled, 'html'))
-    # Audit fix (May 2026 part 5): wrap in try/finally so server.quit() runs
-    # even when sendmail raises. Previously a single SMTP-level failure left
-    # the TCP connection open until the kernel reaped it — and over a long
-    # scheduler run a stuck server could leak hundreds of half-open sockets.
-    server = None
+    # Shared transport — production sends go over the Zoho Mail HTTPS API
+    # because DigitalOcean blocks outbound SMTP from this droplet. The
+    # connection-leak guard the old inline SMTP code needed (May 2026
+    # audit part 5: quit() in a finally, so a failed sendmail didn't leave
+    # half-open sockets across a long scheduler run) now lives inside
+    # _smtp_send's context managers.
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
-        server.starttls()
-        server.login(from_email, email_pass)
-        server.sendmail(from_email, to_email, msg.as_string())
+        from backend.email_service import _smtp_send
+        _smtp_send(smtp_server, smtp_port, from_email, email_pass, msg)
     except Exception as e:
-        logger.error(f"SMTP error for {to_email}: {e}")
-    finally:
-        if server is not None:
-            try:
-                server.quit()
-            except Exception:
-                try:
-                    server.close()
-                except Exception:
-                    pass
+        logger.error(f"Email send error for {to_email}: {e}")
 
 def _get_entity_emails(conn, entity_type, entity_id):
     if entity_type == 'venue':

@@ -168,15 +168,13 @@ class SmsService:
 
             logger.info(f"Sending to {sms_email} via {self.smtp_server}:{self.smtp_port}")
 
-            if self.smtp_port == 465:
-                with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, timeout=15) as server:
-                    server.login(self.smtp_username, self.smtp_password)
-                    server.send_message(msg)
-            else:
-                with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15) as server:
-                    server.starttls()
-                    server.login(self.smtp_username, self.smtp_password)
-                    server.send_message(msg)
+            # Shared transport — see email_service._smtp_send. Production
+            # goes over the Zoho Mail HTTPS API because DO blocks outbound
+            # SMTP. This message is plain text (carrier gateways choke on
+            # HTML), which the transport detects and sends as plaintext.
+            from backend.email_service import _smtp_send
+            _smtp_send(self.smtp_server, self.smtp_port,
+                       self.smtp_username, self.smtp_password, msg)
 
             logger.info(f"SMS sent to {sms_email}")
             return True

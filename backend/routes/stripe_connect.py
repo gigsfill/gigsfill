@@ -2606,11 +2606,9 @@ def _wh_send_email(settings, to_email, subject, html_body):
             msg["From"] = from_email
         msg["To"] = to_email
         msg.attach(MIMEText(styled, "html"))
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
-        server.starttls()
-        server.login(from_email, email_pass)
-        server.sendmail(from_email, to_email, msg.as_string())
-        server.quit()
+        # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+        from backend.email_service import _smtp_send
+        _smtp_send(smtp_server, smtp_port, from_email, email_pass, msg)
     except Exception as e:
         logger.error(f"Webhook email send error to {to_email}: {e}")
 def _wh_admin_emails(conn):
@@ -2652,10 +2650,9 @@ def _wh_send_email(settings, to_email, subject, html_body):
         msg["From"] = from_addr
         msg["To"] = to_email
         msg.attach(MIMEText(html_body, "html"))
-        with smtplib.SMTP(host, port) as s:
-            s.starttls()
-            s.login(user, pw)
-            s.sendmail(from_addr, [to_email], msg.as_string())
+        # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+        from backend.email_service import _smtp_send
+        _smtp_send(host, port, user, pw, msg)
     except Exception as e:
         logger.error(f"Webhook email send error: {e}")
 

@@ -725,9 +725,13 @@ def send_cancellation_emails(db, gig_details: dict, cancellation_reason: str = "
 
         # Send to ALL artist + venue users in ONE SMTP session
         import smtplib as _smtplib
+        from backend.email_service import smtp_pooling_supported
         _smtp = None
+        # Skip the pool when mail goes out over the HTTP API — nothing to
+        # reuse, and the open would just burn a 15s timeout before the
+        # per-call fallback in _cancel_send takes over.
         try:
-            if email_service.enabled:
+            if email_service.enabled and smtp_pooling_supported():
                 if email_service.smtp_port == 465:
                     _smtp = _smtplib.SMTP_SSL(email_service.smtp_server, email_service.smtp_port, timeout=15)
                 else:

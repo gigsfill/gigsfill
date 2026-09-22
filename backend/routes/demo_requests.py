@@ -464,24 +464,10 @@ def _send_email_via_smtp(smtp, to_email: str, subject: str, html_body: str,
         user = smtp.get("username") or ""
         pw = smtp.get("password") or ""
 
-        if port == 465:
-            with smtplib.SMTP_SSL(server_host, port, timeout=15) as srv:
-                srv.login(user, pw)
-                srv.send_message(msg)
-        elif port in (587, 2587):
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo(); srv.starttls(); srv.ehlo()
-                srv.login(user, pw)
-                srv.send_message(msg)
-        else:
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo()
-                try:
-                    srv.starttls(); srv.ehlo()
-                except Exception:
-                    pass
-                srv.login(user, pw)
-                srv.send_message(msg)
+        # Shared transport — see email_service._smtp_send. Production goes
+        # over the Zoho Mail HTTPS API because DO blocks outbound SMTP.
+        from backend.email_service import _smtp_send
+        _smtp_send(server_host, port, user, pw, msg)
         return True
     except Exception as e:
         logger.error(f"demo-request email send failed to {to_email}: {e}", exc_info=True)

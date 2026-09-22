@@ -120,17 +120,9 @@ class _ErrorEmailHandler(logging.Handler):
             msg["Subject"] = subject
             msg.attach(MIMEText(body_html, "html"))
 
-            if smtp_port == 465:
-                with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10) as s:
-                    s.login(smtp_user, smtp_pass)
-                    s.send_message(msg)
-            else:
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as s:
-                    s.ehlo()
-                    try: s.starttls(); s.ehlo()
-                    except Exception: pass
-                    s.login(smtp_user, smtp_pass)
-                    s.send_message(msg)
+            # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+            from backend.email_service import _smtp_send
+            _smtp_send(smtp_host, smtp_port, smtp_user, smtp_pass, msg)
         except Exception:
             pass  # Never let the alert handler itself crash the app
 
@@ -1100,15 +1092,9 @@ def user_reply_to_ticket(ticket_id: int, request: Request, data: dict, token: st
                 msg['Reply-To'] = user_email
                 msg.attach(MIMEText(body_html, 'html'))
                 
-                if smtp_port == 465:
-                    with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-                        server.login(smtp_email, smtp_password)
-                        server.send_message(msg)
-                else:
-                    with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as server:
-                        server.starttls()
-                        server.login(smtp_email, smtp_password)
-                        server.send_message(msg)
+                # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+                from backend.email_service import _smtp_send
+                _smtp_send(smtp_server, smtp_port, smtp_email, smtp_password, msg)
                 email_sent = True
         except Exception as e:
             logger.error(f"User reply email to admin failed: {e}")
@@ -1199,15 +1185,9 @@ def recommend_gigsfill(data: dict):
                 
                 msg.attach(MIMEText(body_html, 'html'))
                 
-                if smtp_port == 465:
-                    with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-                        server.login(smtp_email, smtp_password)
-                        server.send_message(msg)
-                else:
-                    with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as server:
-                        server.starttls()
-                        server.login(smtp_email, smtp_password)
-                        server.send_message(msg)
+                # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+                from backend.email_service import _smtp_send
+                _smtp_send(smtp_server, smtp_port, smtp_email, smtp_password, msg)
         except Exception as e:
             logger.error(f"Email send failed: {e}")
         
@@ -1404,15 +1384,9 @@ def resend_invitation(venue_id: int, invitation_id: int):
             
             msg.attach(MIMEText(body_html, 'html'))
             
-            if smtp_port == 465:
-                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-                    server.login(smtp_email, smtp_password)
-                    server.send_message(msg)
-            else:
-                with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as server:
-                    server.starttls()
-                    server.login(smtp_email, smtp_password)
-                    server.send_message(msg)
+            # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+            from backend.email_service import _smtp_send
+            _smtp_send(smtp_server, smtp_port, smtp_email, smtp_password, msg)
         
         # Update resend count
         cursor.execute("""
@@ -1625,15 +1599,9 @@ def request_access(request: Request, data: dict):
                 
                 msg.attach(MIMEText(body_html, 'html'))
                 
-                if smtp_port == 465:
-                    with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-                        server.login(smtp_email, smtp_password)
-                        server.send_message(msg)
-                else:
-                    with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as server:
-                        server.starttls()
-                        server.login(smtp_email, smtp_password)
-                        server.send_message(msg)
+                # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+                from backend.email_service import _smtp_send
+                _smtp_send(smtp_server, smtp_port, smtp_email, smtp_password, msg)
         except Exception as e:
             logger.error(f"Email send failed: {e}")
         

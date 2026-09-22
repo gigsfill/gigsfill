@@ -1368,15 +1368,11 @@ def _send_reset_email_direct(db, to_email: str, first_name: str, reset_url: str)
 
     msg.attach(MIMEText(body_html, 'html'))
 
-    if smtp_port == 465:
-        with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-            server.login(smtp_email, smtp_password)
-            server.send_message(msg)
-    else:
-        with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as server:
-            server.starttls()
-            server.login(smtp_email, smtp_password)
-            server.send_message(msg)
+    # Route through the shared transport rather than smtplib directly:
+    # DigitalOcean blocks outbound SMTP from this droplet, so production
+    # sends go out over the Zoho Mail HTTPS API. See email_service._smtp_send.
+    from backend.email_service import _smtp_send
+    _smtp_send(smtp_server, smtp_port, smtp_email, smtp_password, msg)
 
 
 @router.post("/api/reset-password")
@@ -1589,15 +1585,10 @@ def _send_verification_email(db, user_id: int, email: str, first_name: str, base
 </body></html>"""
 
         msg.attach(MIMEText(html, "html"))
-        if smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as s:
-                s.login(smtp_email, smtp_password)
-                s.send_message(msg)
-        else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as s:
-                s.starttls()
-                s.login(smtp_email, smtp_password)
-                s.send_message(msg)
+        # Shared transport — see email_service._smtp_send (Zoho HTTPS API
+        # in production; DO blocks outbound SMTP from this droplet).
+        from backend.email_service import _smtp_send
+        _smtp_send(smtp_server, smtp_port, smtp_email, smtp_password, msg)
         logger.info(f"_send_verification_email: sent directly to {email}")
     except Exception as _e2:
         logger.error(f"_send_verification_email fallback failed: {_e2}")

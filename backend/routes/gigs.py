@@ -7406,15 +7406,9 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
             msg["To"]   = artist["email"]
             msg["Subject"] = subject
             msg.attach(MIMEText(body, "html"))
-            if smtp_port == 465:
-                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as srv:
-                    srv.login(smtp_user, smtp_pass)
-                    srv.send_message(msg)
-            else:
-                with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as srv:
-                    srv.starttls()
-                    srv.login(smtp_user, smtp_pass)
-                    srv.send_message(msg)
+            # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+            from backend.email_service import _smtp_send
+            _smtp_send(smtp_server, smtp_port, smtp_user, smtp_pass, msg)
             logger.info(f"[BLAST] ✅ Sent to {artist['name']} <{artist['email']}>")
             sent_count += 1
         except Exception as e:
@@ -7597,15 +7591,9 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
             msg["To"]      = ra["email"]
             msg["Subject"] = subject
             msg.attach(MIMEText(body, "html"))
-            if smtp_port == 465:
-                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as srv:
-                    srv.login(smtp_user, smtp_pass)
-                    srv.send_message(msg)
-            else:
-                with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as srv:
-                    srv.starttls()
-                    srv.login(smtp_user, smtp_pass)
-                    srv.send_message(msg)
+            # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+            from backend.email_service import _smtp_send
+            _smtp_send(smtp_server, smtp_port, smtp_user, smtp_pass, msg)
             logger.info(f"[BLAST] ✅ Radius sent to {ra['name']} <{ra['email']}> ({dist:.1f}mi away)")
             radius_sent += 1
         except Exception as e:
@@ -7921,12 +7909,9 @@ def batch_blast(request: Request, venue_id: int, data: dict, background_tasks: B
             msg["To"]   = artist_email
             msg["Subject"] = subject
             msg.attach(MIMEText(body, "html"))
-            if smtp_port == 465:
-                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as sv:
-                    sv.login(smtp_user, smtp_pass); sv.send_message(msg)
-            else:
-                with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as sv:
-                    sv.starttls(); sv.login(smtp_user, smtp_pass); sv.send_message(msg)
+            # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+            from backend.email_service import _smtp_send
+            _smtp_send(smtp_server, smtp_port, smtp_user, smtp_pass, msg)
         except Exception as e:
             logger.error(f"[BATCH_BLAST] Send error: {e}")
     # Collect gigs per artist (preferred)

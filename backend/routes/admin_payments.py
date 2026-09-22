@@ -135,17 +135,22 @@ def _send_admin_email(db, recipients, template_name, variables):
         # ~3-4x slower than necessary. Falls back to per-call open if
         # the pool can't be established.
         import smtplib as _smtplib
+        from backend.email_service import smtp_pooling_supported
         _pool = None
-        try:
-            if email_service.smtp_port == 465:
-                _pool = _smtplib.SMTP_SSL(email_service.smtp_server, email_service.smtp_port, timeout=15)
-            else:
-                _pool = _smtplib.SMTP(email_service.smtp_server, email_service.smtp_port, timeout=15)
-                _pool.starttls()
-            _pool.login(email_service.smtp_username, email_service.smtp_password)
-        except Exception as _pe:
-            log.warning(f"[ADMIN ACTION EMAIL] pooled SMTP login failed, will open per-call: {_pe}")
-            _pool = None
+        # Skip the pool entirely when mail goes out over the HTTP API —
+        # there's no connection to reuse, and attempting one costs a 15s
+        # timeout per batch before the fallback below takes over.
+        if smtp_pooling_supported():
+            try:
+                if email_service.smtp_port == 465:
+                    _pool = _smtplib.SMTP_SSL(email_service.smtp_server, email_service.smtp_port, timeout=15)
+                else:
+                    _pool = _smtplib.SMTP(email_service.smtp_server, email_service.smtp_port, timeout=15)
+                    _pool.starttls()
+                _pool.login(email_service.smtp_username, email_service.smtp_password)
+            except Exception as _pe:
+                log.warning(f"[ADMIN ACTION EMAIL] pooled SMTP login failed, will open per-call: {_pe}")
+                _pool = None
         for r in recipients:
             email = r.get('email') if isinstance(r, dict) else None
             if not email or email in sent_to:

@@ -201,19 +201,9 @@ def _send_admin_notification(smtp, admin_email: str, msg: dict, site_url: str) -
         port = int(smtp.get("port") or 587)
         user = smtp.get("username") or ""
         pw = smtp.get("password") or ""
-        if port == 465:
-            with smtplib.SMTP_SSL(server_host, port, timeout=15) as srv:
-                srv.login(user, pw); srv.send_message(mime)
-        elif port in (587, 2587):
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo(); srv.starttls(); srv.ehlo()
-                srv.login(user, pw); srv.send_message(mime)
-        else:
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo()
-                try: srv.starttls(); srv.ehlo()
-                except Exception: pass
-                srv.login(user, pw); srv.send_message(mime)
+        # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+        from backend.email_service import _smtp_send
+        _smtp_send(server_host, port, user, pw, mime)
         return True
     except Exception as e:
         logger.error(f"contact admin notify failed to {admin_email}: {e}", exc_info=True)
@@ -688,19 +678,9 @@ def _send_admin_prospect_reply_notification(smtp, admin_email: str, row: dict,
         port = int(smtp.get("port") or 587)
         user = smtp.get("username") or ""
         pw = smtp.get("password") or ""
-        if port == 465:
-            with smtplib.SMTP_SSL(server_host, port, timeout=15) as srv:
-                srv.login(user, pw); srv.send_message(mime)
-        elif port in (587, 2587):
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo(); srv.starttls(); srv.ehlo()
-                srv.login(user, pw); srv.send_message(mime)
-        else:
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo()
-                try: srv.starttls(); srv.ehlo()
-                except Exception: pass
-                srv.login(user, pw); srv.send_message(mime)
+        # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+        from backend.email_service import _smtp_send
+        _smtp_send(server_host, port, user, pw, mime)
         return True
     except Exception as e:
         logger.error(f"prospect-reply admin notify failed to {admin_email}: {e}", exc_info=True)
@@ -949,19 +929,9 @@ The GigsFill Team
         port = int(smtp.get("port") or 587)
         user = smtp.get("username") or ""
         pw = smtp.get("password") or ""
-        if port == 465:
-            with smtplib.SMTP_SSL(server_host, port, timeout=15) as srv:
-                srv.login(user, pw); srv.send_message(mime)
-        elif port in (587, 2587):
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo(); srv.starttls(); srv.ehlo()
-                srv.login(user, pw); srv.send_message(mime)
-        else:
-            with smtplib.SMTP(server_host, port, timeout=15) as srv:
-                srv.ehlo()
-                try: srv.starttls(); srv.ehlo()
-                except Exception: pass
-                srv.login(user, pw); srv.send_message(mime)
+        # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+        from backend.email_service import _smtp_send
+        _smtp_send(server_host, port, user, pw, mime)
         return True
     except Exception as e:
         logger.error(f"contact reply send failed to {to_email}: {e}", exc_info=True)

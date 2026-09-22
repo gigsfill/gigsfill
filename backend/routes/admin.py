@@ -3051,15 +3051,9 @@ def test_smtp(data: dict, request: Request, admin=Depends(check_admin), db=Depen
             "html"
         ))
 
-        if smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as s:
-                s.login(smtp_email, smtp_password)
-                s.send_message(msg)
-        else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as s:
-                s.starttls()
-                s.login(smtp_email, smtp_password)
-                s.send_message(msg)
+        # Shared transport (Zoho HTTPS API in prod; DO blocks outbound SMTP).
+        from backend.email_service import _smtp_send
+        _smtp_send(smtp_server, smtp_port, smtp_email, smtp_password, msg)
 
         # Audit fix (May 2026 part 5): log every test-smtp call so abuse
         # is traceable (admin-controlled recipient + arbitrary body).
