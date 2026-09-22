@@ -8,6 +8,19 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-22 (Outbound email outage — DO blocks SMTP; moved all sends to the Zoho Mail HTTPS API):** GigsFill email stopped working. Last successful send was 2026-09-21 13:47; the first failure was 2026-09-22 13:23 (`[DIGEST] SMTP FAILURE`).
+
+  **Cause:** DigitalOcean blocks outbound SMTP (25/465/587) from this droplet to every destination. Verified by testing Bluehost, Zoho and Gmail — all four host/port combinations time out identically — and by confirming `ufw` is `default: allow (outgoing)` with no OUTPUT rules, so the block is at DO's edge, not ours. Port 2525 is blocked too. IMAP (143/993) and HTTPS (443) are unaffected, which is why the bounce handler kept working while every send failed.
+
+  **Fix:** all mail now goes over Zoho's Mail HTTPS API — not blocked, and no new vendor since Zoho already hosts the mailboxes. See the new "Transport — why it is not SMTP" subsection under §11 for the full design, config and gotchas.
+
+  - [services/zoho_mail.py](backend/services/zoho_mail.py) — new. OAuth refresh-token flow with a cached access token, lazy account discovery, and a 401 retry for tokens revoked before their nominal expiry. Holds **one account per sending identity** (booking@ / support@ / fallback) and routes each message to whichever account is allowed to send its From address — necessary because those are separate Zoho users, not aliases, and Zoho rejects a `fromAddress` the authorizing account doesn't own. Credentials live in `.env` (gitignored), never hardcoded.
+  - [email_service.py](backend/email_service.py) — `_smtp_send` becomes the single transport chokepoint, preferring the API and falling back to SMTP so local dev is unaffected. Added `smtp_pooling_supported()`.
+  - **The bigger half of the change:** mail did *not* all go through that chokepoint. **Fourteen files called `smtplib` directly** — password resets and email verification ([auth.py](backend/routes/auth.py)), digests ([scheduler.py](backend/scheduler.py)), payout notices ([payout_scheduler.py](backend/payout_scheduler.py)), SMS ([sms_service.py](backend/sms_service.py)), demo requests, contact forms, admin actions, tax notices, messages, Stripe webhooks and gig blasts. Every one was silently broken and would have *stayed* broken after fixing only `email_service`. All now route through `_smtp_send`; the only remaining direct `smtplib` use is the fallback inside `_smtp_send` itself plus the two guarded pooling sites.
+  - Verified end to end: `EmailService -> _smtp_send -> zoho_mail -> Zoho API`, with booking@ and support@ each sending under their own address.
+
+  **Still outstanding:** the SPF record for gigsfill.com is broken independently of this (duplicate include, plus two conflicting `v=spf1` TXT records at `dc-8e814c8572._spfm`, one of which includes itself — an automatic PermError under RFC 7208). Zoho disabled SPF for the domain because of it. Correct record is now simply `v=spf1 include:zoho.com ~all`, and both `_spfm` records should be deleted. Mailgun was confirmed dead code — referenced nowhere outside DNS.
+
 - **2026-09-22 (Weekly approval reminders + cleanup of dead frontend code):** Two unrelated pieces.
 
   **(1) Weekly nudge for far-out pending approvals.** The broadened approval gate fires for bookings any distance out, but reminders only started at 72h. A request made three weeks ahead got one email at request time and then silence for ~18 days — a reliable source of "I never heard back." Added a weekly cadence that runs until the gig comes inside 72h, at which point the existing 3d/2d/1d ladder takes over.
@@ -2966,8 +2979,33 @@ The `CONTRACT_NOTIFICATION_TYPES` constant lists the notification types tied to 
   - `render_template(template, variables)` — handles `{{var}}` substitution AND `{{#var}}...{{/var}}` conditional blocks (rendered only when var truthy)
   - `user_has_email_enabled(user_id, notification_type)` — checks `email_preferences`. Default ON for transactional emails. Default OFF only for the long-lead-time blasts in the module-level `BLAST_OFF_DEFAULTS` constant (`venue_open_gig_4w`, `venue_open_gig_2w`). Urgent blasts (`_1w`, `_36h`, cancellation blasts) default ON.
   - `send_notification_email(user_email, user_id, notification_type, variables)` — orchestrates all of the above + actual SMTP send via `_smtp_send`
-- `_smtp_send` handles port 465 (SSL_), 587 (STARTTLS), and others (plain w/ try-STARTTLS).
+- `_smtp_send` is the **single transport chokepoint for all outbound mail**. Despite the name it is transport-agnostic: it prefers the Zoho Mail HTTPS API when configured and falls back to real SMTP (465 SSL / 587 STARTTLS / plain w/ try-STARTTLS) otherwise. Anything that sends mail must call it rather than touching `smtplib` directly.
 - On SMTP failure, throttled admin alert via `_alert_admin_smtp_failure` (1 per 15 min).
+
+### Transport — why it is not SMTP (2026-09-22)
+
+**DigitalOcean blocks outbound SMTP (25/465/587) from this droplet to every destination.** Zoho, Gmail and Bluehost all time out identically; the local firewall is clean (`ufw` default allow-outgoing, no OUTPUT rules), so the block is at DO's edge. No SMTP port or provider gets around it — port 2525 is blocked too. IMAP (143/993) and HTTPS (443) are unaffected.
+
+Production therefore sends over **Zoho's Mail HTTPS API** (`backend/services/zoho_mail.py`), which is not blocked and needs no new vendor since Zoho already hosts the mailboxes.
+
+**Multiple sending identities.** GigsFill sends as `booking@gigsfill.com` (platform/transactional, display name "GigsFill Booking") and `support@gigsfill.com` ("GigsFill Support"). In Zoho these are **separate user accounts, not aliases**. A Zoho Self Client is authorized by whichever user creates it and can only send as that user — Zoho rejects a `fromAddress` the authorizing account doesn't own. So each identity needs its own credential set, declared as prefixed triples in `.env`:
+
+```
+ZOHO_BOOKING_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN
+ZOHO_SUPPORT_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN
+ZOHO_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN     # unprefixed = fallback (jcarta@)
+ZOHO_ACCOUNT_REGION=com                               # data-center suffix
+```
+
+On send, the message's From is matched against the addresses each account reports it can send as (discovered once via `/accounts`, cached including failure). Adding a third identity is a config change, not a code change. If nothing matches, the transport falls back to a usable account and logs the substitution rather than failing the send.
+
+**Gotchas learned the hard way:**
+- Zoho rejects an **unverified `replyTo`** with a 500 ("You need to verify the ReplyTo address"). The transport drops an unverified Reply-To instead of failing — a missing Reply-To is cosmetic, a failed send is an outage.
+- Grant codes from the Zoho console are **single-use and expire in ~10 minutes**. Exchange immediately; a spent code returns `invalid_code`.
+- SMS goes out as bare `MIMEText(text, 'plain')` through carrier gateways, so the body extractor reports whether it found HTML or plain and sets `mailFormat` accordingly rather than labelling everything `html`.
+- SMTP connection **pooling** (used by `email_dispatch.send_cancellation_emails` and `admin_payments`) is skipped when the HTTP transport is active — there is no connection to pool, and attempting one burned a 15s timeout per batch. Guarded by `email_service.smtp_pooling_supported()`.
+- The admin UI's SMTP server/port/username/password fields are now **fallback-only** — `_smtp_send` returns before reading them. Only **From Email** and **From Name** still affect production mail.
+- The `email_settings` table is **dead** — nothing reads it. Config lives in `platform_settings`.
 
 ### Template variable conventions
 Most templates use these standard variables:
