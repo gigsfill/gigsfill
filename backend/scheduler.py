@@ -22,6 +22,59 @@ logger = logging.getLogger("gigsfill.scheduler")
 DB_PATH = Path(__file__).parent.parent / "backend.db"
 
 
+APPROVAL_REMINDER_WEEKLY_DAYS = 7.0
+
+
+def approval_reminder_decision(hours_until_gig, tier_sent, created_at,
+                               last_weekly_at, now_utc):
+    """Decide which venue-approval reminder (if any) is due right now.
+
+    Returns `(fire_tier, fire_weekly)`. `fire_tier` is 0 (none) or the
+    countdown tier 1/2/3 meaning 3-day / 2-day / 1-day. `fire_weekly` is
+    a bool. At most one of the two is ever truthy.
+
+    Two cadences:
+      - Inside 72h, the countdown ladder fires once per tier, tracked by
+        `reminder_tier_sent`. Windows are inclusive at the upper edge, so
+        a request landing exactly at 72h enters the 3-day window at once.
+      - Outside 72h, a weekly nudge fires so a request made far out
+        doesn't go silent for weeks. Without this, a booking requested
+        three weeks ahead got one email and then nothing for ~18 days.
+
+    `created_at` and `last_weekly_at` are stored naive-UTC, so `now_utc`
+    must also be naive-UTC — passing venue-local time here would skew the
+    7-day threshold by the venue's offset. Unparseable timestamps
+    suppress the weekly nudge rather than firing it every tick.
+    """
+    tier_sent = int(tier_sent or 0)
+
+    if hours_until_gig <= 24:
+        fire_tier = 3
+    elif hours_until_gig <= 48:
+        fire_tier = 2
+    elif hours_until_gig <= 72:
+        fire_tier = 1
+    else:
+        fire_tier = 0
+
+    if fire_tier:
+        # Already nagged at this tier or a more urgent one.
+        return (0, False) if fire_tier <= tier_sent else (fire_tier, False)
+
+    baseline_raw = last_weekly_at or created_at
+    if not baseline_raw:
+        return (0, False)
+    try:
+        baseline = datetime.fromisoformat(
+            str(baseline_raw).replace("Z", "").strip()[:19]
+        )
+    except Exception:
+        return (0, False)
+
+    days_since = (now_utc - baseline).total_seconds() / 86400.0
+    return (0, days_since >= APPROVAL_REMINDER_WEEKLY_DAYS)
+
+
 def _raw_db_conn():
     """Return a raw DB connection with dict-style rows. Delegates to
     `backend.db.get_db_connection` so Postgres uses `_PgCompatConn` with
@@ -1814,12 +1867,13 @@ def run_scheduled_emails():
             from backend.db import SessionLocal as _RPSL
             from sqlalchemy import text as _rp_text
             from datetime import datetime as _rp_dt
-            from backend.utils import get_venue_timezone
+            from backend.utils import get_venue_timezone, utcnow_naive as _utcnow_naive
             _rpdb = _RPSL()
             try:
                 rows = _rpdb.execute(_rp_text("""
                     SELECT pt.token, pt.gig_id, pt.artist_id, pt.created_at,
                            COALESCE(pt.reminder_tier_sent, 0) as tier_sent,
+                           pt.last_weekly_reminder_at as last_weekly_at,
                            g.date as gig_date, g.start_time as gig_start,
                            g.venue_id
                     FROM pending_approval_tokens pt
@@ -1853,19 +1907,15 @@ def run_scheduled_emails():
                             _rpdb.commit()
                             continue
 
-                        _tier_sent = int(r["tier_sent"] or 0)
-                        # Determine which tier (if any) fires now. Windows
-                        # are inclusive at the upper edge — a request made
-                        # right at 72h out enters the 3d window immediately.
-                        _fire_tier = 0
-                        if _hours_until_gig <= 24:
-                            _fire_tier = 3
-                        elif _hours_until_gig <= 48:
-                            _fire_tier = 2
-                        elif _hours_until_gig <= 72:
-                            _fire_tier = 1
-                        if _fire_tier == 0 or _fire_tier <= _tier_sent:
-                            continue  # Not in a window, or already reminded at ≥ this tier.
+                        _fire_tier, _fire_weekly = approval_reminder_decision(
+                            hours_until_gig=_hours_until_gig,
+                            tier_sent=int(r["tier_sent"] or 0),
+                            created_at=r["created_at"],
+                            last_weekly_at=r["last_weekly_at"],
+                            now_utc=_utcnow_naive(),
+                        )
+                        if not _fire_tier and not _fire_weekly:
+                            continue  # Nothing due.
 
                         # Verify the pending slot actually still exists.
                         # Stale token cleanup — if the slot was cancelled or
@@ -1903,16 +1953,25 @@ def run_scheduled_emails():
                                 _slot_info = f"Slot {_slot['slot_number']}: {_slot['start_time']} – {_slot['end_time']}"
                                 send_approval_request_emails(
                                     _rpdb, dict(_details), r["artist_id"],
-                                    slot_info=_slot_info, is_reminder=True
+                                    slot_info=_slot_info, is_reminder=True,
+                                    is_weekly_reminder=_fire_weekly
                                 )
                         except Exception as _re:
                             logger.warning(f"[APPROVAL_REMINDER] send failed gig={r['gig_id']}: {_re}")
                             # Don't advance tier_sent on failure — retry next tick.
                             continue
 
-                        _rpdb.execute(_rp_text(
-                            "UPDATE pending_approval_tokens SET reminder_tier_sent = :t WHERE token = :tok"
-                        ), {"t": _fire_tier, "tok": r["token"]})
+                        if _fire_weekly:
+                            # Weekly nudges don't touch reminder_tier_sent —
+                            # the countdown ladder still gets its full 3d/2d/1d
+                            # run once the gig comes inside 72h.
+                            _rpdb.execute(_rp_text(
+                                "UPDATE pending_approval_tokens SET last_weekly_reminder_at = :n WHERE token = :tok"
+                            ), {"n": _utcnow_naive().strftime("%Y-%m-%d %H:%M:%S"), "tok": r["token"]})
+                        else:
+                            _rpdb.execute(_rp_text(
+                                "UPDATE pending_approval_tokens SET reminder_tier_sent = :t WHERE token = :tok"
+                            ), {"t": _fire_tier, "tok": r["token"]})
                         _rpdb.commit()
                         sent_count += 1
                         logger.info(

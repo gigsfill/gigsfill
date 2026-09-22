@@ -3005,7 +3005,8 @@ def setup_database():
                 artist_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 expires_at TEXT,
-                reminder_tier_sent INTEGER DEFAULT 0
+                reminder_tier_sent INTEGER DEFAULT 0,
+                last_weekly_reminder_at TEXT
             )
         """)
         # Additive migration (Jul 2026 audit B-C2): add expires_at to
@@ -3014,12 +3015,20 @@ def setup_database():
         # 2026-09-16: reminder_tier_sent tracks 3d/2d/1d approval-reminder
         # emails so the scheduler doesn't double-send. Values:
         #   0 = none sent; 1 = 3-day sent; 2 = 2-day sent; 3 = 1-day sent.
+        # 2026-09-22: last_weekly_reminder_at covers the gap BEFORE the
+        # 3d tier opens. A request made 3 weeks out used to get one email
+        # at request time then silence for ~18 days. Now it gets a weekly
+        # nudge until the gig comes inside 72h, at which point the tier
+        # ladder above takes over. NULL means no weekly has fired yet, in
+        # which case created_at is the baseline for the first one.
         try:
             _pat_cols = {r[1] for r in c_idem.execute("PRAGMA table_info(pending_approval_tokens)").fetchall()}
             if "expires_at" not in _pat_cols:
                 c_idem.execute("ALTER TABLE pending_approval_tokens ADD COLUMN expires_at TEXT")
             if "reminder_tier_sent" not in _pat_cols:
                 c_idem.execute("ALTER TABLE pending_approval_tokens ADD COLUMN reminder_tier_sent INTEGER DEFAULT 0")
+            if "last_weekly_reminder_at" not in _pat_cols:
+                c_idem.execute("ALTER TABLE pending_approval_tokens ADD COLUMN last_weekly_reminder_at TEXT")
         except Exception:
             pass
         c_idem.execute("CREATE INDEX IF NOT EXISTS idx_pending_approval_gig_artist ON pending_approval_tokens(gig_id, artist_id)")

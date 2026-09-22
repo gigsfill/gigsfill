@@ -1152,7 +1152,7 @@ def send_gig_edited_emails(db, gig_id: int):
         logger.error(f"[GIG_EDITED] Email send error: {e}", exc_info=True)
 
 
-def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_info: str = "", is_reminder: bool = False):
+def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_info: str = "", is_reminder: bool = False, is_weekly_reminder: bool = False):
     """
     Send a booking approval request to ALL venue users, and a
     'pending approval' notification to ALL artist users.
@@ -1167,6 +1167,11 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
     approval token so links from prior emails don't break, don't
     overwrite the token's `reminder_tier_sent` counter, and prefix
     the subject line so venues can visually distinguish reminders.
+
+    2026-09-22: `is_weekly_reminder` distinguishes the two reminder
+    cadences. Both set `is_reminder=True`; the weekly flag only changes
+    the explanatory copy, because "we'll remind you at 3 days, 2 days
+    and 1 day" is wrong for a gig that's still three weeks out.
 
     gig_details must include: id, venue_id, artist_id, artist_name, venue_name,
                                date, start_time, end_time, pay, title,
@@ -1303,6 +1308,11 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
             # `{{#is_reminder}}Reminder: {{/is_reminder}}` so the subject
             # of a 3d/2d/1d nag is visually distinct from the original.
             'is_reminder': 1 if is_reminder else 0,
+            # 2026-09-22: weekly nudges are reminders too, but the body
+            # copy has to describe the right cadence. Mutually exclusive
+            # with is_countdown_reminder below.
+            'is_weekly_reminder': 1 if (is_reminder and is_weekly_reminder) else 0,
+            'is_countdown_reminder': 1 if (is_reminder and not is_weekly_reminder) else 0,
             **slot_vars,
         }
 
