@@ -1111,7 +1111,24 @@ def login(request: Request, data: LoginRequest, response: Response):
             try: db.rollback()
             except Exception: pass
 
-        return {"ok": True}
+        # 2026-09-16: surface email_verified in the login response so the
+        # frontend can show a "please verify" modal + resend link before
+        # navigating. Previously login succeeded silently and the user
+        # only discovered verification was pending when a state-changing
+        # action 403'd — confusing for new accounts that lost the
+        # verify-email tab.
+        email_verified = True
+        try:
+            _ensure_email_verified_column(db)
+            row = db.execute(
+                text("SELECT email_verified FROM users WHERE id = :uid"),
+                {"uid": user.id}
+            ).mappings().first()
+            email_verified = bool(row and row.get("email_verified"))
+        except Exception as _e:
+            logger.warning(f"email_verified read failed for user {user.id}: {_e}")
+
+        return {"ok": True, "email_verified": email_verified, "email": user.email}
 
     finally:
         db.close()
@@ -1690,5 +1707,91 @@ def resend_verification_email(request: Request, user=Depends(get_current_user)):
                 _db.close()
         threading.Thread(target=_bg, daemon=True).start()
         return {"ok": True, "message": "Verification email sent."}
+    finally:
+        db.close()
+
+
+class ChangePreverificationEmailRequest(BaseModel):
+    new_email: EmailStr
+    current_password: str
+
+
+@router.post("/api/change-preverification-email")
+@limiter.limit("5/hour")
+def change_preverification_email(
+    request: Request,
+    data: ChangePreverificationEmailRequest,
+    user=Depends(get_current_user),
+):
+    """Correct the email address on an unverified account.
+
+    2026-09-16: added so new users who mistyped their email at signup can
+    fix it directly from /app/verify-email.html without ever reaching the
+    profile page (unverified accounts must not have access to anything
+    else). Requires current password so a stolen session can't silently
+    swap the email. Only works while email_verified=0 — verified users
+    must go through /api/me.
+    """
+    db = SessionLocal()
+    try:
+        _ensure_email_verified_column(db)
+        current = db.execute(
+            text("SELECT email, email_verified, password, first_name FROM users WHERE id = :uid"),
+            {"uid": user.id}
+        ).mappings().first()
+        if not current:
+            raise HTTPException(404, "User not found")
+
+        if current.get("email_verified"):
+            raise HTTPException(400, "Email is already verified. Use profile settings to change.")
+
+        new_email = (data.new_email or "").strip().lower()
+        old_email = (current.get("email") or "").strip().lower()
+
+        if not new_email:
+            raise HTTPException(400, "Please enter an email address.")
+        if new_email == old_email:
+            raise HTTPException(400, "That is your current email address.")
+
+        # Reconfirm password — defense-in-depth against stolen-session hijack.
+        try:
+            stored = (current.get("password") or "").encode()
+            ok = bcrypt.checkpw((data.current_password or "").encode(), stored)
+        except Exception:
+            ok = False
+        if not ok:
+            raise HTTPException(403, "Current password is incorrect.")
+
+        # Reject if that address is already on another account. Generic
+        # phrasing so we don't leak whether an account exists.
+        clash = db.execute(
+            text("SELECT 1 FROM users WHERE LOWER(email) = :em AND id != :uid"),
+            {"em": new_email, "uid": user.id}
+        ).first()
+        if clash:
+            raise HTTPException(400, "That email cannot be used.")
+
+        db.execute(
+            text("UPDATE users SET email = :em, email_verified = 0 WHERE id = :uid"),
+            {"em": new_email, "uid": user.id}
+        )
+        db.commit()
+
+        # Fire a new verification link to the corrected address in the background.
+        import threading
+        _first = current.get("first_name") or ""
+        _uid = user.id
+        _base = str(request.base_url).rstrip("/")
+        def _bg():
+            _db = SessionLocal()
+            try:
+                _send_verification_email(_db, _uid, new_email, _first, _base)
+            except Exception as _e:
+                logger.warning(f"[PRE_VERIFY_EMAIL_CHANGE] send failed for uid={_uid}: {_e}")
+            finally:
+                _db.close()
+        threading.Thread(target=_bg, daemon=True).start()
+
+        return {"ok": True, "email": new_email}
     finally:
         db.close()

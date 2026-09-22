@@ -118,7 +118,7 @@ def _apply_slot_pay_override(db, slot_id: int, venue_id: int, artist_id: int):
 
 from backend.db import get_db
 from backend.routes.auth import get_current_user
-from backend.routes.gigs import _create_booking_transaction, _ensure_approval_columns, _is_same_day_booking
+from backend.routes.gigs import _create_booking_transaction, _ensure_approval_columns
 from backend.services.email_dispatch import format_email_date, send_approval_request_emails
 
 router = APIRouter()
@@ -2688,7 +2688,11 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
 
     # ── Pre-booking checks — shared with book_gig and book_slot ─────────────
     _blast_token = request.query_params.get("blast_token") or data.get("blast_token") or ""
-    from backend.routes.gigs import _run_prebooking_checks, _is_same_day_booking, _ensure_approval_columns, _enforce_no_artist_time_overlap, _check_artist_matches_gig
+    from backend.routes.gigs import (
+        _run_prebooking_checks, _ensure_approval_columns,
+        _enforce_no_artist_time_overlap, _check_artist_matches_gig,
+        _venue_requires_non_preferred_approval,
+    )
     _check_result = _run_prebooking_checks(db, gig_id, artist_id, venue_id, str(gig.get("date", "")), _blast_token)
     # Slot-aware match gate (multi-slot gigs can override per slot).
     # _run_prebooking_checks already ran the gig-level version; this
@@ -2707,22 +2711,23 @@ def book_with_contract(gig_id: int, data: dict, request: Request, user=Depends(g
                                         gig.get("date"), gig.get("start_time"), gig.get("end_time"))
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Same-day check: radius artists (non-preferred) need venue approval even with contract.
+    # Non-preferred artist gate: force pending_venue_approval instead of
+    # letting the contract flow auto-confirm.
     # Audit fix (May 2026 part 5): re-read `preferred_artists` directly instead
     # of trusting `_check_result["pref"]`, which `_run_prebooking_checks`
     # reassigns to a synthetic `{"status":"approved"}` for blast tokens.
-    # Same bug pattern that book_gig was fixed for earlier this audit.
     _real_pref_bwc = db.execute(
         text("SELECT status FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"),
         {"vid": venue_id, "aid": artist_id}
     ).first()
     _is_preferred_bwc = bool(_real_pref_bwc and _real_pref_bwc[0] == "approved")
     _ensure_approval_columns(db)
-    # Jul 2026 full-site audit: pass venue_id so the TZ conversion in
-    # _is_same_day_booking uses the venue's local time zone (matches
-    # book_gig at gigs.py:2639 and book_slot at gigs.py:5156). Was
-    # regressing the May 2026 Hawaii/Alaska fix.
-    if _is_same_day_booking(str(gig.get("date", "")), gig.get("start_time"), venue_id=venue_id) and not _is_preferred_bwc:
+    # 2026-09-16: gate broadened from "same-day only" to "any non-preferred
+    # booking" AND now honors the per-venue toggle (the contract path
+    # previously ignored the toggle — always gated same-day, always let
+    # far-out through). Matches book_gig / book_slot behavior exactly.
+    if (not _is_preferred_bwc
+            and _venue_requires_non_preferred_approval(db, venue_id)):
         # Route to pending_venue_approval — no contract flow for non-preferred same-day.
         # Audit fix (May 2026 part 5): atomic claim guard. Without `AND status='open'`
         # two concurrent same-day requests on the same slot would both pass the

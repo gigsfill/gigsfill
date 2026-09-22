@@ -352,6 +352,12 @@ def get_my_recommend_emails(user=Depends(get_current_user), db=Depends(get_db)):
             -- Check if this email is now a registered venue user
             (SELECT v.id FROM users u2 JOIN venues v ON v.user_id = u2.id
              WHERE LOWER(u2.email) = LOWER(are.recipient_email) LIMIT 1) as signed_up_venue_id,
+            -- Venue name for the signed-up recipient, if any. Surfaced so
+            -- the Emails Sent table can show "who they became" once a
+            -- recipient without a stored recipient_name signs up and
+            -- creates their venue (added 2026-09-16).
+            (SELECT v.venue_name FROM users u2 JOIN venues v ON v.user_id = u2.id
+             WHERE LOWER(u2.email) = LOWER(are.recipient_email) LIMIT 1) as signed_up_venue_name,
             -- Check if linked to this affiliate
             (SELECT ar.id FROM affiliate_referrals ar
              JOIN venues v2 ON v2.id = ar.venue_id
@@ -376,6 +382,8 @@ def get_my_recommend_emails(user=Depends(get_current_user), db=Depends(get_db)):
             "id": r["id"],
             "recipient_email": r["recipient_email"],
             "recipient_name": r["recipient_name"],
+            "signed_up_venue_id": r["signed_up_venue_id"],
+            "signed_up_venue_name": r["signed_up_venue_name"],
             "sent_at": r["sent_at"],
             "clicked": bool(r["clicked"]),
             "clicked_at": r["clicked_at"],

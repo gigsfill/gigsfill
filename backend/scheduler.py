@@ -1785,160 +1785,137 @@ def run_scheduled_emails():
                 _epdb.close()
         _run(_prune_expired_unbooked_gigs, "prune_expired_unbooked_gigs")
 
-        # 2026-08-24: auto-approve stale same-day booking requests. When
-        # a non-preferred artist books a same-day gig at a venue with
-        # require_same_day_approval=1, the slot goes to
-        # pending_venue_approval and the venue gets an approval-request
-        # email. If the venue doesn't act, the artist is in limbo until
-        # the gig starts. This task auto-approves after a tiered
-        # deadline (chosen so the artist gets an answer before gig
-        # start — venue silence is treated as consent since they set up
-        # the same-day-blast + approval-required themselves):
+        # 2026-09-16: replaced auto-approve tiers with reminder emails.
+        # Previously, a non-preferred booking sitting in pending_venue_approval
+        # would be auto-approved after 30 min / 2 h / 6 h if the gig was
+        # within 36h. Auto-approval was risky ("we booked an unvetted artist
+        # for you because you didn't respond") and quietly overrode the whole
+        # point of the approval toggle. Now: venue is nagged at 3 days,
+        # 2 days, and 1 day before the gig starts if the request is still
+        # pending. Nothing auto-approves. If the venue never acts, the slot
+        # stays pending until gig start — venue's responsibility.
         #
-        #   Gig starts in… → Venue has… → After timeout: auto-approve
-        #   0–4h            30 minutes
-        #   4–12h           2 hours
-        #   12–36h          6 hours
-        #
-        # Auto-approved bookings: slot → 'booked', txn created, both
-        # parties get the standard booking-confirmation emails + a
-        # separate "auto-approved (no venue response)" notification.
-        def _auto_approve_stale_bookings():
-            from backend.db import SessionLocal as _AASL
-            from sqlalchemy import text as _aa_text
-            from datetime import datetime as _aa_dt
+        # `reminder_tier_sent` on pending_approval_tokens tracks progress:
+        #   0 = none sent   → will send 3d/2d/1d whichever tier applies now
+        #   1 = 3d sent     → will send 2d or 1d
+        #   2 = 2d sent     → will send 1d
+        #   3 = 1d sent     → nothing more to send
+        # Requests made INSIDE a tier's window skip prior tiers (a request
+        # made 2.5 days out will only get the 2d + 1d reminders; the 3d
+        # ship already sailed).
+        def _remind_pending_venue_approvals():
+            from backend.db import SessionLocal as _RPSL
+            from sqlalchemy import text as _rp_text
+            from datetime import datetime as _rp_dt
             from backend.utils import get_venue_timezone
-            _aadb = _AASL()
+            _rpdb = _RPSL()
             try:
-                rows = _aadb.execute(_aa_text("""
+                rows = _rpdb.execute(_rp_text("""
                     SELECT pt.token, pt.gig_id, pt.artist_id, pt.created_at,
+                           COALESCE(pt.reminder_tier_sent, 0) as tier_sent,
                            g.date as gig_date, g.start_time as gig_start,
                            g.venue_id
                     FROM pending_approval_tokens pt
                     JOIN gigs g ON g.id = pt.gig_id
-                    WHERE g.status IN ('pending_venue_approval', 'open', 'booked')
+                    WHERE g.status IN ('pending_venue_approval', 'open')
                 """)).mappings().all()
-                approved = 0
+                sent_count = 0
                 for r in rows:
                     try:
-                        # Compute gig start in venue-local; skip if we can't parse.
-                        _tz = get_venue_timezone(_aadb, r["venue_id"])
-                        _now_local = _aa_dt.now(_tz).replace(tzinfo=None)
+                        _tz = get_venue_timezone(_rpdb, r["venue_id"])
+                        _now_local = _rp_dt.now(_tz).replace(tzinfo=None)
                         _d = str(r["gig_date"])[:10]
                         _t = str(r["gig_start"] or "00:00")[:5]
                         try:
-                            _gs = _aa_dt.fromisoformat(f"{_d}T{_t}")
+                            _gs = _rp_dt.fromisoformat(f"{_d}T{_t}")
                         except Exception:
                             continue
                         _hours_until_gig = (_gs - _now_local).total_seconds() / 3600.0
-                        # Match tier → deadline (in hours since request).
-                        if _hours_until_gig <= 4:
-                            _deadline_h = 0.5
-                        elif _hours_until_gig <= 12:
-                            _deadline_h = 2.0
-                        elif _hours_until_gig <= 36:
-                            _deadline_h = 6.0
-                        else:
-                            # >36h — no same-day pressure; keep waiting on venue.
-                            continue
-                        # Requested at is stored as UTC-naive. Compare against
-                        # UTC-naive now to avoid tz-arithmetic bugs.
-                        _created = r["created_at"]
-                        if isinstance(_created, str):
-                            _created = _aa_dt.fromisoformat(_created.replace("Z", ""))
-                        _now_utc = _aa_dt.utcnow()
-                        _hours_pending = (_now_utc - _created).total_seconds() / 3600.0
-                        if _hours_pending < _deadline_h:
+                        if _hours_until_gig <= 0:
+                            # Gig has started (or passed) with no venue action;
+                            # drop the stale token so we stop scanning it.
+                            _rpdb.execute(_rp_text(
+                                "DELETE FROM pending_approval_tokens WHERE token = :tok"
+                            ), {"tok": r["token"]})
+                            _rpdb.commit()
                             continue
 
-                        # Timeout hit — auto-approve. Same state changes as
-                        # approve_booking (gigs.py:5729-5779).
-                        _slot = _aadb.execute(_aa_text("""
-                            SELECT id, slot_number, start_time, end_time, pay
+                        _tier_sent = int(r["tier_sent"] or 0)
+                        # Determine which tier (if any) fires now. Windows
+                        # are inclusive at the upper edge — a request made
+                        # right at 72h out enters the 3d window immediately.
+                        _fire_tier = 0
+                        if _hours_until_gig <= 24:
+                            _fire_tier = 3
+                        elif _hours_until_gig <= 48:
+                            _fire_tier = 2
+                        elif _hours_until_gig <= 72:
+                            _fire_tier = 1
+                        if _fire_tier == 0 or _fire_tier <= _tier_sent:
+                            continue  # Not in a window, or already reminded at ≥ this tier.
+
+                        # Verify the pending slot actually still exists.
+                        # Stale token cleanup — if the slot was cancelled or
+                        # re-opened by another path, delete the token so we
+                        # stop scanning it.
+                        _slot = _rpdb.execute(_rp_text("""
+                            SELECT id, slot_number, start_time, end_time
                             FROM gig_slots
                             WHERE gig_id = :gid AND artist_id = :aid AND status = 'pending_venue_approval'
                             LIMIT 1
                         """), {"gid": r["gig_id"], "aid": r["artist_id"]}).mappings().first()
                         if not _slot:
-                            # No pending slot — pending token is stale, drop it.
-                            _aadb.execute(_aa_text(
+                            _rpdb.execute(_rp_text(
                                 "DELETE FROM pending_approval_tokens WHERE token = :tok"
                             ), {"tok": r["token"]})
-                            _aadb.commit()
+                            _rpdb.commit()
                             continue
 
-                        _aadb.execute(_aa_text("""
-                            UPDATE gig_slots SET status='booked', approval_requested_at=NULL
-                            WHERE id=:sid AND status='pending_venue_approval'
-                        """), {"sid": _slot["id"]})
-                        _open_left = _aadb.execute(_aa_text(
-                            "SELECT COUNT(*) FROM gig_slots WHERE gig_id=:gid AND status='open'"
-                        ), {"gid": r["gig_id"]}).scalar()
-                        if not _open_left:
-                            _aadb.execute(_aa_text(
-                                "UPDATE gigs SET status='booked', approval_token=NULL, approval_requested_at=NULL WHERE id=:gid AND status='pending_venue_approval'"
-                            ), {"gid": r["gig_id"]})
-                        else:
-                            _aadb.execute(_aa_text(
-                                "UPDATE gigs SET status='open', approval_token=NULL, approval_requested_at=NULL WHERE id=:gid AND status='pending_venue_approval'"
-                            ), {"gid": r["gig_id"]})
-                        _aadb.execute(_aa_text(
-                            "DELETE FROM pending_approval_tokens WHERE token = :tok"
-                        ), {"tok": r["token"]})
-                        _aadb.commit()
-
-                        # Create the payment transaction.
+                        # Send the reminder — reuses the existing approval-
+                        # request template so the venue sees the same
+                        # Approve / Decline links with the same token.
                         try:
-                            from backend.routes.gigs import _create_booking_transaction
-                            _create_booking_transaction(
-                                _aadb, r["gig_id"], r["venue_id"], r["artist_id"],
-                                float(_slot["pay"] or 0), r["gig_date"], slot_id=_slot["id"]
-                            )
-                            _aadb.commit()
-                        except Exception as _txn_e:
-                            logger.warning(f"[AUTO_APPROVE] txn create failed gig={r['gig_id']}: {_txn_e}")
-
-                        # Send the artist the enriched approved email +
-                        # the venue the standard booked email. skip_artist
-                        # avoids the double-email that manual approve had
-                        # (2026-08-24 fix).
-                        try:
-                            from backend.services.email_dispatch import (
-                                send_approval_decision_emails, send_booking_emails
-                            )
-                            _names = _aadb.execute(_aa_text("""
-                                SELECT g.id, g.date, g.start_time, g.end_time, g.pay, g.title, g.notes,
-                                       g.venue_id, v.venue_name, a.name as artist_name
+                            from backend.services.email_dispatch import send_approval_request_emails
+                            _details = _rpdb.execute(_rp_text("""
+                                SELECT g.id, g.date, g.title, g.start_time, g.end_time, g.pay, g.notes,
+                                       g.artist_type, g.venue_id, g.artist_id,
+                                       v.venue_name, v.user_id as venue_user_id,
+                                       a.name as artist_name, a.user_id as artist_user_id
                                 FROM gigs g
-                                JOIN venues v ON v.id = g.venue_id
+                                JOIN venues v ON g.venue_id = v.id
                                 JOIN artists a ON a.id = :aid
                                 WHERE g.id = :gid
                             """), {"gid": r["gig_id"], "aid": r["artist_id"]}).mappings().first()
-                            if _names:
-                                _slot_info_s = f"Slot {_slot['slot_number']}: {_slot['start_time']} – {_slot['end_time']}"
-                                send_approval_decision_emails(
-                                    _aadb, dict(_names), r["artist_id"],
-                                    approved=True, slot_info=_slot_info_s
+                            if _details:
+                                _slot_info = f"Slot {_slot['slot_number']}: {_slot['start_time']} – {_slot['end_time']}"
+                                send_approval_request_emails(
+                                    _rpdb, dict(_details), r["artist_id"],
+                                    slot_info=_slot_info, is_reminder=True
                                 )
-                            send_booking_emails(_aadb, r["gig_id"], slot_id=_slot["id"], skip_artist=True)
-                        except Exception as _be:
-                            logger.warning(f"[AUTO_APPROVE] booking email failed gig={r['gig_id']}: {_be}")
+                        except Exception as _re:
+                            logger.warning(f"[APPROVAL_REMINDER] send failed gig={r['gig_id']}: {_re}")
+                            # Don't advance tier_sent on failure — retry next tick.
+                            continue
 
-                        approved += 1
+                        _rpdb.execute(_rp_text(
+                            "UPDATE pending_approval_tokens SET reminder_tier_sent = :t WHERE token = :tok"
+                        ), {"t": _fire_tier, "tok": r["token"]})
+                        _rpdb.commit()
+                        sent_count += 1
                         logger.info(
-                            f"[AUTO_APPROVE] gig={r['gig_id']} artist={r['artist_id']} — "
-                            f"auto-approved after {_hours_pending:.1f}h "
-                            f"(deadline={_deadline_h}h, gig starts in {_hours_until_gig:.1f}h)"
+                            f"[APPROVAL_REMINDER] gig={r['gig_id']} artist={r['artist_id']} — "
+                            f"tier {_fire_tier} reminder sent "
+                            f"(gig starts in {_hours_until_gig:.1f}h)"
                         )
                     except Exception as _row_e:
-                        logger.warning(f"[AUTO_APPROVE] row error gig={r.get('gig_id')}: {_row_e}")
-                        try: _aadb.rollback()
+                        logger.warning(f"[APPROVAL_REMINDER] row error gig={r.get('gig_id')}: {_row_e}")
+                        try: _rpdb.rollback()
                         except Exception: pass
-                if approved:
-                    logger.info(f"[AUTO_APPROVE] processed {approved} stale approval(s) this tick")
+                if sent_count:
+                    logger.info(f"[APPROVAL_REMINDER] processed {sent_count} reminder(s) this tick")
             finally:
-                _aadb.close()
-        _run(_auto_approve_stale_bookings, "auto_approve_stale_bookings")
+                _rpdb.close()
+        _run(_remind_pending_venue_approvals, "remind_pending_venue_approvals")
 
         # is preserved. Runs once per tick; idempotent (rows already
         # cleared are skipped by the WHERE flyer_path IS NOT NULL guard).

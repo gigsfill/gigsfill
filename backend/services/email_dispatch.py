@@ -1152,10 +1152,22 @@ def send_gig_edited_emails(db, gig_id: int):
         logger.error(f"[GIG_EDITED] Email send error: {e}", exc_info=True)
 
 
-def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_info: str = ""):
+def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_info: str = "", is_reminder: bool = False):
     """
-    Send same-day booking approval request to ALL venue users,
-    and a 'pending' notification to ALL artist users.
+    Send a booking approval request to ALL venue users, and a
+    'pending approval' notification to ALL artist users.
+
+    2026-09-16: previously only fired for same-day bookings; the venue
+    policy toggle now gates every non-preferred booking, so this can
+    fire for gigs any distance out.
+
+    2026-09-16 (later same day): also drives the 3d/2d/1d reminder
+    emails. When `is_reminder=True`, the caller is the scheduler's
+    `_remind_pending_venue_approvals` task — reuse the existing
+    approval token so links from prior emails don't break, don't
+    overwrite the token's `reminder_tier_sent` counter, and prefix
+    the subject line so venues can visually distinguish reminders.
+
     gig_details must include: id, venue_id, artist_id, artist_name, venue_name,
                                date, start_time, end_time, pay, title,
                                venue_user_id (for token lookup)
@@ -1201,24 +1213,51 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
         # to the new lookup yet (compat during rollout).
         from sqlalchemy import text as _text
         from backend.utils import utcnow_naive as _utcnow_naive
-        approval_token = secrets.token_urlsafe(32)
-        try:
-            # Replace any prior pending row for this (gig, artist) — a fresh
-            # request supersedes its predecessor.
-            db.execute(_text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid"),
-                       {"gid": gig_id, "aid": artist_id})
-            # Jul 2026 audit (B-C2): populate `expires_at` so a venue
-            # that never acts can't leave a valid replayable token forever.
-            # 72h window matches the artist's typical wait tolerance for
-            # a same-day booking response.
-            _now_utc = _utcnow_naive()
-            from datetime import timedelta as _td
-            _expires_at = _now_utc + _td(hours=72)
-            db.execute(_text("INSERT INTO pending_approval_tokens (token, gig_id, artist_id, created_at, expires_at) VALUES (:tok, :gid, :aid, :now, :exp)"),
-                       {"tok": approval_token, "gid": gig_id, "aid": artist_id,
-                        "now": _now_utc, "exp": _expires_at})
-        except Exception as _pe:
-            logger.warning(f"[APPROVAL_EMAIL] pending_approval_tokens write failed: {_pe}")
+        # 2026-09-16: token lifecycle depends on whether this is a fresh
+        # request or a reminder. Reminder path REUSES the existing token
+        # (so links in earlier emails stay valid AND `reminder_tier_sent`
+        # tracking isn't wiped). Fresh-request path deletes + recreates,
+        # matching the original replay-safety property from May 2026.
+        approval_token = None
+        if is_reminder:
+            _existing = db.execute(
+                _text("SELECT token FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid ORDER BY created_at DESC LIMIT 1"),
+                {"gid": gig_id, "aid": artist_id}
+            ).first()
+            if _existing:
+                approval_token = _existing[0]
+        if not approval_token:
+            approval_token = secrets.token_urlsafe(32)
+            try:
+                # Replace any prior pending row for this (gig, artist) — a fresh
+                # request supersedes its predecessor.
+                db.execute(_text("DELETE FROM pending_approval_tokens WHERE gig_id = :gid AND artist_id = :aid"),
+                           {"gid": gig_id, "aid": artist_id})
+                # 2026-09-16: token expiry now aligns with gig start —
+                # the venue can approve/deny up until the gig starts.
+                # Previously fixed 72h, which killed the token before
+                # the 2d + 1d reminders for far-out gigs. Falls back to
+                # 72h when the gig start can't be parsed.
+                _now_utc = _utcnow_naive()
+                from datetime import timedelta as _td, datetime as _dt
+                _expires_at = _now_utc + _td(hours=72)
+                try:
+                    _gd = str(gig_details.get('date') or '')[:10]
+                    _gt = str((_slot_row.get('start_time') if _slot_row else None)
+                              or gig_details.get('start_time') or '00:00')[:5]
+                    _gig_start_utcish = _dt.fromisoformat(f"{_gd}T{_gt}")
+                    # Use whichever is later — the fallback 72h floor
+                    # protects short-notice bookings from a too-tight token
+                    # window if the gig is only a few hours out.
+                    if _gig_start_utcish > _expires_at:
+                        _expires_at = _gig_start_utcish
+                except Exception:
+                    pass
+                db.execute(_text("INSERT INTO pending_approval_tokens (token, gig_id, artist_id, created_at, expires_at, reminder_tier_sent) VALUES (:tok, :gid, :aid, :now, :exp, 0)"),
+                           {"tok": approval_token, "gid": gig_id, "aid": artist_id,
+                            "now": _now_utc, "exp": _expires_at})
+            except Exception as _pe:
+                logger.warning(f"[APPROVAL_EMAIL] pending_approval_tokens write failed: {_pe}")
         db.execute(_text("UPDATE gigs SET approval_token = :tok WHERE id = :gid"),
                    {"tok": approval_token, "gid": gig_id})
         db.flush()
@@ -1260,12 +1299,16 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
             'pay':         pay_display,
             'approve_url': approve_url,
             'deny_url':    deny_url,
+            # 2026-09-16: Mustache truthy sections in the template use
+            # `{{#is_reminder}}Reminder: {{/is_reminder}}` so the subject
+            # of a 3d/2d/1d nag is visually distinct from the original.
+            'is_reminder': 1 if is_reminder else 0,
             **slot_vars,
         }
 
         # Venue users — approval request
         venue_users = get_all_entity_users(db, 'venue', venue_id)
-        logger.info(f"[APPROVAL_EMAIL] venue_id={venue_id} artist_id={artist_id} gig_id={gig_id} venue_users={[u['email'] for u in venue_users]} smtp_enabled={email_service.enabled}")
+        logger.info(f"[APPROVAL_EMAIL] venue_id={venue_id} artist_id={artist_id} gig_id={gig_id} venue_users={[u['email'] for u in venue_users]} smtp_enabled={email_service.enabled} reminder={is_reminder}")
         for vu in venue_users:
             result = email_service.send_notification_email(
                 user_email=vu["email"],
@@ -1275,18 +1318,21 @@ def send_approval_request_emails(db, gig_details: dict, artist_id: int, slot_inf
             )
             logger.info(f"[APPROVAL_EMAIL] venue email to {vu['email']}: sent={result}")
 
-        # Artist users — pending notification
-        artist_email_vars = {k: v for k, v in email_vars.items() if k not in ('approve_url', 'deny_url')}
-        artist_users = get_all_entity_users(db, 'artist', artist_id)
-        logger.info(f"[APPROVAL_EMAIL] artist_users={[u['email'] for u in artist_users]}")
-        for au in artist_users:
-            result = email_service.send_notification_email(
-                user_email=au["email"],
-                user_id=au["user_id"],
-                notification_type='artist_booking_pending_approval',
-                variables=artist_email_vars,
-            )
-            logger.info(f"[APPROVAL_EMAIL] artist email to {au['email']}: sent={result}")
+        # Artist users — pending notification. Reminders only re-nag the
+        # venue; the artist already knows they're waiting and doesn't
+        # need a duplicate email every day the venue sits on the request.
+        if not is_reminder:
+            artist_email_vars = {k: v for k, v in email_vars.items() if k not in ('approve_url', 'deny_url')}
+            artist_users = get_all_entity_users(db, 'artist', artist_id)
+            logger.info(f"[APPROVAL_EMAIL] artist_users={[u['email'] for u in artist_users]}")
+            for au in artist_users:
+                result = email_service.send_notification_email(
+                    user_email=au["email"],
+                    user_id=au["user_id"],
+                    notification_type='artist_booking_pending_approval',
+                    variables=artist_email_vars,
+                )
+                logger.info(f"[APPROVAL_EMAIL] artist email to {au['email']}: sent={result}")
 
     except Exception as e:
         import traceback

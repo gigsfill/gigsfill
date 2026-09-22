@@ -382,7 +382,7 @@ TEMPLATES = {
     },
 
     "venue_booking_approval_request": {
-        "subject": "{{artist_name}} is requesting same-day booking at {{venue_name}}",
+        "subject": "{{#is_reminder}}Reminder: {{/is_reminder}}{{artist_name}} is requesting to book a gig at {{venue_name}}",
         "body": '''<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -394,8 +394,9 @@ TEMPLATES = {
 <img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height:40px;width:160px;max-width:160px;display:block;border:0;outline:none;">
 </td></tr>
 <tr><td style="padding: 32px 40px;">
-<h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 600; color: #d97706;">Same-Day Booking Request</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> wants to book a gig at <strong>{{venue_name}}</strong> <strong>today</strong>. Please approve or deny this request.</p>
+<h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 600; color: #d97706;">{{#is_reminder}}Reminder: {{/is_reminder}}Booking Approval Request</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;"><strong>{{artist_name}}</strong> wants to book a gig at <strong>{{venue_name}}</strong> on <strong>{{date}}</strong>. Please approve or deny this request.</p>
+{{#is_reminder}}<p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.55; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px 16px;"><strong>Heads up:</strong> this booking has been waiting for your response. The gig will stay unbooked until you approve or deny it. You'll get reminders at 3 days, 2 days, and 1 day before gig start.</p>{{/is_reminder}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; margin-bottom: 24px;">
 <tr><td style="padding: 20px;">
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
@@ -497,7 +498,7 @@ TEMPLATES = {
     },
 
     "artist_booking_approved": {
-        "subject": "Booking approved - you're on at {{venue_name}} today!",
+        "subject": "Booking approved by {{venue_name}}!",
         "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
 <tbody>
 <tr>
@@ -510,7 +511,7 @@ TEMPLATES = {
 <tr>
 <td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #059669;">You&#39;re Approved!</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, <strong>{{venue_name}}</strong> has approved your same-day booking request. You&#39;re confirmed &mdash; full gig details below.</p>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, <strong>{{venue_name}}</strong> has approved your booking request. You&#39;re confirmed &mdash; full gig details below.</p>
 {{far_notice_artist}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; margin-bottom: 24px;">
 <tbody>
@@ -631,7 +632,7 @@ TEMPLATES = {
 </td></tr>
 <tr><td style="padding: 32px 40px;">
 <h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 600; color: #dc2626;">Booking Request Denied</h1>
-<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, unfortunately <strong>{{venue_name}}</strong> has denied your same-day booking request.</p>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, unfortunately <strong>{{venue_name}}</strong> has denied your booking request.</p>
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fef2f2; border: 1px solid #fca5a5; border-radius: 6px; margin-bottom: 24px;">
 <tr><td style="padding: 20px;">
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">

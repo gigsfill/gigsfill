@@ -944,24 +944,26 @@ def _is_same_day_booking(gig_date_str: str, gig_start_time: str = None,
             return False
 
 
-def _venue_requires_same_day_approval(db, venue_id: int) -> bool:
-    """Return True if the venue wants to gatekeep same-day bookings
-    (i.e. force a pending_venue_approval hold before the artist is confirmed).
+def _venue_requires_non_preferred_approval(db, venue_id: int) -> bool:
+    """Return True if the venue wants to gatekeep bookings by non-preferred
+    artists (i.e. force pending_venue_approval before the artist is confirmed).
 
-    2026-08-10 rewrite — moved from user-level to venue-level. Previously
-    this read the venue OWNER's `email_preferences.venue_booking_approval_request`
-    row, which conflated "does the gate fire" (policy) with "does the
-    owner want an email" (notification) and forced multi-venue owners
-    into a single global setting. Now:
+    2026-08-10 (moved from user-level to venue-level): previously read the
+    venue OWNER's `email_preferences.venue_booking_approval_request` row,
+    which conflated policy with notification and forced multi-venue
+    owners into a single global setting. Split into per-venue policy on
+    `venues.require_same_day_approval` and per-user opt-out on
+    `email_preferences.venue_booking_approval_request`.
 
-      • POLICY (does the gate fire?) → venues.require_same_day_approval,
-        editable per-venue by any authorized team member on the venue's
-        Email Notifications tab.
-      • NOTIFICATION (does THIS user want an email when the gate fires?) →
-        email_preferences.venue_booking_approval_request, per-user opt-out.
-
-    A one-shot backfill on deploy copies each venue owner's old email
-    pref into the new column so existing behavior is preserved.
+    2026-09-16 (broadened semantic): the toggle used to gate ONLY same-day
+    bookings; now it gates every non-preferred booking regardless of how
+    far out. The DB column name kept its old `require_same_day_approval`
+    identifier to avoid a schema migration (and preserve the one-shot
+    backfill from Aug), but every read now treats it as "require approval
+    for non-preferred artists, period." The user-facing toggle label was
+    updated to match; auto-approve in the scheduler still handles imminent
+    (same-day-ish) gigs and lets far-out ones sit pending indefinitely,
+    which is the right behavior for both scopes.
 
     Defaults to True (safe): venue not found OR column NULL → require approval.
     """
@@ -978,6 +980,12 @@ def _venue_requires_same_day_approval(db, venue_id: int) -> bool:
         # If anything goes wrong reading the pref, default to the pre-fix
         # behavior (require approval) so we never silently lose the gate.
         return True
+
+
+# Back-compat alias: several call sites and imports still use the old
+# name from before the 2026-09-16 broadening. Both names read the same
+# column and evaluate the same policy.
+_venue_requires_same_day_approval = _venue_requires_non_preferred_approval
 
 
 # CREATE GIG (VENUE)
@@ -2722,12 +2730,12 @@ def book_gig(
         _real_pref_status_row and _real_pref_status_row[0] == "approved"
     )
     _ensure_approval_columns(db)
-    # Same-day gate now respects the venue owner's `venue_booking_approval_request`
-    # preference (Jul 21 2026). Opted-out → auto-confirm same-day; opted-in
-    # or default → hold in pending_venue_approval as before.
-    if (_is_same_day_booking(gig["date"], gig.get("start_time"), venue_id=gig.get("venue_id"))
-            and not _is_preferred_artist
-            and _venue_requires_same_day_approval(db, gig.get("venue_id"))):
+    # 2026-09-16: gate broadened from "same-day only" to "any non-preferred
+    # booking" when the venue has the approval toggle on. Preferred artists
+    # still auto-book. Toggle off → auto-book for everyone. See
+    # `_venue_requires_non_preferred_approval` for the policy details.
+    if (not _is_preferred_artist
+            and _venue_requires_non_preferred_approval(db, gig.get("venue_id"))):
         db.execute(
             text("""
                 UPDATE gigs
@@ -2794,7 +2802,7 @@ def book_gig(
                     gig_details["venue_user_id"],
                     "booking_approval_request",
                     "⏳ Booking Approval Needed",
-                    f"{gig_details['artist_name']} is requesting same-day booking approval for today's gig.",
+                    f"{gig_details['artist_name']} is requesting approval to book this gig.",
                     gig_id=gig_id,
                     venue_id=gig['venue_id'],
                     artist_id=artist_id
@@ -4329,6 +4337,29 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
     if not skip_schedule_recalc:
       new_start = data.get('start_time')
       new_end   = data.get('end_time')
+      # 2026-09-17 safety net: when the venue adds a new weekday to a
+      # recurring series (e.g. tacks Fridays onto a Wed/Sat series),
+      # inherit artist_type / band_formats / styles from the earliest
+      # existing gig in the series whenever the payload didn't carry
+      # them. Without this fallback, an edit path that omitted these
+      # fields left the freshly-inserted Friday gigs with NULL type,
+      # which then rendered as "Type not set" on the artist calendar
+      # and blocked the artist_matches gate. Existing gigs on the
+      # existing weekdays kept their fields, so the mixed-type state
+      # was silently created.
+      _series_defaults = db.execute(
+          text("""SELECT artist_type, band_formats, styles
+                  FROM gigs
+                  WHERE recurring_group_id = :rgid
+                    AND (artist_type IS NOT NULL AND artist_type != '')
+                  ORDER BY date ASC LIMIT 1"""),
+          {"rgid": recurring_group_id}
+      ).mappings().first() or {}
+      def _fld(key):
+          v = data.get(key)
+          if v not in (None, ''):
+              return v
+          return _series_defaults.get(key)
       for date_str in target_dates:
         if date_str in existing_dates:
             continue
@@ -4390,9 +4421,9 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
                 "title": data.get("title"),
                 "pay": data.get("pay", 0),
                 "notes": data.get("notes"),
-                "artist_type": data.get("artist_type"),
-                "band_formats": data.get("band_formats"),
-                "styles": data.get("styles"),
+                "artist_type": _fld("artist_type"),
+                "band_formats": _fld("band_formats"),
+                "styles": _fld("styles"),
                 "recurring_group_id": recurring_group_id,
                 "recurring_interval_weeks": data.get("recurring_interval_weeks"),
                 "recurring_days_of_week": data.get("recurring_days_of_week"),
@@ -4422,9 +4453,9 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
                 "st": data.get("start_time"),
                 "et": data.get("end_time"),
                 "pay": data.get("pay", 0),
-                "atype": data.get("artist_type"),
-                "bf":    data.get("band_formats"),
-                "styles": data.get("styles"),
+                "atype": _fld("artist_type"),
+                "bf":    _fld("band_formats"),
+                "styles": _fld("styles"),
             })
         except Exception as _slot_e:
             logger.warning(f"[SERIES_EXTEND] slot-1 insert failed for gig {new_gig_id}: {_slot_e}")
@@ -5365,20 +5396,15 @@ def book_slot(
     # gig-level book path above.
     _is_preferred_slot = pref and pref.get("status") == "approved"
     _ensure_approval_columns(db)
-    # 2026-08-24: use SLOT start_time, not gig.start_time. The gig SELECT
-    # at line ~5011 doesn't fetch start_time (only id/venue_id/date/
-    # status/hold_status), so gig.get("start_time") returned None →
-    # _is_same_day_booking defaulted the time to 00:00, computed the gig
-    # as ~17h in the PAST (venue-local), returned False, and the whole
-    # approval gate silently skipped. Every same-day non-preferred
-    # booking went straight to 'booked' with normal booking emails
-    # instead of pending_venue_approval. Also more correct for multi-
-    # slot gigs where the slot's start_time can differ from the gig
-    # umbrella.
-    _slot_start_for_check = slot.get("start_time") if hasattr(slot, "get") else None
-    if (_is_same_day_booking(gig["date"], _slot_start_for_check, venue_id=gig.get("venue_id"))
-            and not _is_preferred_slot
-            and _venue_requires_same_day_approval(db, gig.get("venue_id"))):
+    # 2026-09-16: gate broadened from "same-day only" to "any non-preferred
+    # booking" when the venue's approval toggle is on. Same-day timing
+    # data is no longer part of the decision — preferred status +
+    # venue policy is the whole story. Auto-approve tiers in the
+    # scheduler still handle imminent gigs and leave far-out requests
+    # pending indefinitely, so the artist-limbo protection is preserved
+    # for the same-day case that this gate used to be scoped to.
+    if (not _is_preferred_slot
+            and _venue_requires_non_preferred_approval(db, gig.get("venue_id"))):
         # Audit fix (May 2026 part 5): atomic claim guard — without
         # `AND status='open'` two concurrent same-day book_slot requests
         # would both pass and both UPDATE. Rowcount check raises SLOT_TAKEN.
@@ -5429,7 +5455,7 @@ def book_slot(
                     gig_details_approval["venue_user_id"],
                     "booking_approval_request",
                     "⏳ Booking Approval Needed",
-                    f"{gig_details_approval['artist_name']} is requesting same-day slot booking approval for today's gig.",
+                    f"{gig_details_approval['artist_name']} is requesting approval to book this slot.",
                     gig_id=gig_id,
                     venue_id=gig['venue_id'],
                     artist_id=artist_id

@@ -1291,26 +1291,36 @@ def get_venue_invitations(venue_id: int):
         if cursor.rowcount > 0:
             conn.commit()
         
+        # 2026-09-16: also surface the artist name once the invitee signs
+        # up and creates an artist row — mirrors the affiliate "Emails Sent"
+        # change so the venue can see who the pending invite turned into.
+        # LEFT JOIN because a user may sign up without creating an artist
+        # yet (they land on user-profile first). Two joins: user by email,
+        # then any active artist row owned by that user.
         cursor.execute("""
-            SELECT id, invited_email, inviter_name, message, status, 
-                   sent_at, signed_up_at, resent_count, last_resent_at
-            FROM artist_invitations 
-            WHERE venue_id = ? AND status != 'deleted'
-            ORDER BY sent_at DESC
+            SELECT ai.id, ai.invited_email, ai.inviter_name, ai.message, ai.status,
+                   ai.sent_at, ai.signed_up_at, ai.resent_count, ai.last_resent_at,
+                   a.name as signed_up_artist_name, a.id as signed_up_artist_id
+            FROM artist_invitations ai
+            LEFT JOIN users u ON LOWER(u.email) = LOWER(ai.invited_email)
+            LEFT JOIN artists a ON a.user_id = u.id AND a.deleted_at IS NULL
+            WHERE ai.venue_id = ? AND ai.status != 'deleted'
+            ORDER BY ai.sent_at DESC
         """, (venue_id,))
-        
+
         rows = cursor.fetchall()
         invitations = []
         for r in rows:
             invitations.append({
                 "id": r[0], "email": r[1], "inviter_name": r[2],
                 "message": r[3], "status": r[4], "sent_at": r[5],
-                "signed_up_at": r[6], "resent_count": r[7], "last_resent_at": r[8]
+                "signed_up_at": r[6], "resent_count": r[7], "last_resent_at": r[8],
+                "signed_up_artist_name": r[9], "signed_up_artist_id": r[10],
             })
-        
+
         pending = sum(1 for i in invitations if i["status"] == "pending")
         signed_up = sum(1 for i in invitations if i["status"] == "signed_up")
-        
+
         return {"invitations": invitations, "pending": pending, "signed_up": signed_up, "total": len(invitations)}
     finally:
         conn.close()

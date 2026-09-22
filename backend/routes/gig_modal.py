@@ -887,22 +887,29 @@ def get_gig_modal_data(
         pass
 
     # 2026-08-23: expose same-day booking context so the modal can render
-    # a banner explaining that today's bookings need venue approval (or
-    # just "heads up — gig is today"). Reuses the existing helpers so
-    # this stays the single source of truth for what counts as same-day.
+    # a "heads up — gig is today" banner.
+    # 2026-09-16: also expose `will_require_venue_approval` — true when a
+    # non-preferred artist viewing this gig would be routed to
+    # pending_venue_approval on book. Previously only fired for same-day;
+    # the broadened gate makes this true for ANY non-preferred booking on
+    # a venue with the approval toggle on. `same_day_requires_approval`
+    # kept as a back-compat alias for older clients but populated with
+    # the same value.
     _is_same_day = False
-    _same_day_requires_approval = False
+    _will_require_venue_approval = False
     try:
-        from backend.routes.gigs import _is_same_day_booking, _venue_requires_same_day_approval
+        from backend.routes.gigs import _is_same_day_booking, _venue_requires_non_preferred_approval
         _is_same_day = bool(_is_same_day_booking(
             str(gig.get("date") or ""),
             gig.get("start_time") or None,
             venue_id=gig["venue_id"],
         ))
-        if _is_same_day:
-            _same_day_requires_approval = bool(_venue_requires_same_day_approval(db, gig["venue_id"]))
+        _viewer_is_preferred = (preferred_status == "approved")
+        if not _viewer_is_preferred:
+            _will_require_venue_approval = bool(_venue_requires_non_preferred_approval(db, gig["venue_id"]))
     except Exception:
         pass
+    _same_day_requires_approval = _will_require_venue_approval and _is_same_day
 
     return {
         # Gig header
@@ -931,6 +938,7 @@ def get_gig_modal_data(
         "is_free_trial": _is_free_trial,
         "is_same_day":                  _is_same_day,
         "same_day_requires_approval":   _same_day_requires_approval,
+        "will_require_venue_approval":  _will_require_venue_approval,
         "address_line_1": gig.get("address_line_1"),
         "address_line_2": gig.get("address_line_2"),
         "city":          gig.get("city"),
