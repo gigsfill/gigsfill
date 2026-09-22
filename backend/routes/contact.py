@@ -840,7 +840,7 @@ def _send_reply_email(smtp, row: dict, to_email: str, to_name: str,
                         reply_body: str, admin_reply_to: str,
                         reply_url: str = "") -> bool:
     """Send admin's reply to the contact-form sender. FROM is the
-    platform's configured sender (so it comes from `booked@gigsfill.com`
+    platform's configured sender (so it comes from `booking@gigsfill.com`
     or whatever admin has set) with `Reply-To` set to the admin's own
     address so a subsequent reply from the prospect lands in admin's
     inbox. Original message is quoted at the bottom in the classic

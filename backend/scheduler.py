@@ -2573,13 +2573,15 @@ def process_bounce_inbox(conn=None):
             return summary
 
         logger.info(f"[BOUNCE] Connecting to IMAP {settings['server']}:{settings['port']} as {settings['username']}")
-        # 2026-07-26: dual-path IMAP connect. Port 993 uses implicit SSL
-        # (IMAP4_SSL); port 143 uses plain IMAP4 + STARTTLS. DigitalOcean
-        # droplets have outbound 993 firewalled to most mail hosts (including
-        # Bluehost's shared IPs), so 143+STARTTLS is the only reachable
-        # path here — and the Dovecot server on mail.gigsfill.com:143
-        # advertises STARTTLS support in its greeting. Both paths still
-        # negotiate a TLS session before the LOGIN command.
+        # Dual-path IMAP connect. Port 993 uses implicit SSL (IMAP4_SSL);
+        # port 143 uses plain IMAP4 + STARTTLS. Both negotiate TLS before
+        # the LOGIN command.
+        #
+        # 2026-07-26 note said 993 was firewalled outbound and 143+STARTTLS
+        # was the only reachable path. That was specific to Bluehost's
+        # shared IPs — imap.zoho.com:993 IS reachable from here (verified
+        # 2026-09-22), while Zoho doesn't offer 143 at all. Outbound SMTP
+        # (25/465/587) is genuinely blocked, but IMAP is not.
         _port = int(settings["port"])
         try:
             if _port == 143:
