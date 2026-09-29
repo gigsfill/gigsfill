@@ -16,6 +16,7 @@ from backend.utils import utcnow_naive
 from zoneinfo import ZoneInfo
 import sqlite3
 from backend.services import statement_descriptor
+from backend.services import ach
 from backend.db import get_db_connection as _raw_db_conn, _IS_POSTGRES
 import os
 from backend.services.email_dispatch import format_email_date
@@ -408,6 +409,56 @@ def process_payouts_now():
                         real_stripe_fee_cents = int(bt.fee)
             except Exception as ce:
                 logger.warning(f"Txn {txn_id}: Could not retrieve charge_id/fee: {ce}")
+
+            # 2026-09-29 (ACH): a card charge is synchronous — if
+            # PaymentIntent.create didn't raise, the money is secured and
+            # 'charged' is true. An ACH debit is NOT: it comes back
+            # `processing` and settles over 3-5 business days, and can still
+            # return afterwards. Marking it 'charged' here would open the
+            # payout gate and transfer money to the artist that we have not
+            # actually received.
+            #
+            # So park an in-flight ACH in `charge_processing`, which is
+            # deliberately outside the payout gate's allowed set. The child
+            # payout rows stay 'scheduled' and nothing transfers. When the
+            # `payment_intent.succeeded` webhook flips the parent to
+            # 'charged', the existing hourly stalled-transfer sweep — which
+            # already picks up 'scheduled' children under a 'charged' parent
+            # — pays the artists. No extra scheduler needed.
+            _pi_state = ach.classify_intent_status(getattr(pi, "status", None))
+            _is_ach = ach.is_ach_intent(pi)
+
+            if _pi_state == "processing":
+                conn.execute(
+                    """UPDATE transactions SET status = ?,
+                       stripe_payment_intent_id = ?, charge_attempts = ?,
+                       credit_card_fee_cents = ?,
+                       notes = COALESCE(notes || ' | ', '') || ?
+                       WHERE id = ?""",
+                    (ach.CHARGE_PROCESSING, payment_intent_id, attempts + 1,
+                     real_stripe_fee_cents,
+                     'ACH debit processing — artist payout held until settlement',
+                     txn_id)
+                )
+                conn.commit()
+                logger.info(
+                    f"Txn {txn_id}: ACH debit PROCESSING (PI: {payment_intent_id}) "
+                    f"— parent parked in '{ach.CHARGE_PROCESSING}', artist payout "
+                    f"held until payment_intent.succeeded"
+                )
+                _send_venue_ach_processing_email(conn, txn, venue_id)
+                _notify_artists_payout_pending(conn, txn_id)
+                continue  # Do NOT transfer to artists yet.
+
+            if _pi_state != "charged":
+                # Neither settled nor in flight — requires_action,
+                # requires_payment_method, canceled. An off-session charge
+                # that needs the customer back at the keyboard hasn't taken
+                # the money and the scheduler can't prompt them.
+                reason = f"PaymentIntent returned status '{getattr(pi, 'status', '?')}'"
+                logger.error(f"Txn {txn_id}: {reason} — treating as charge failure")
+                _handle_charge_failure(conn, txn, venue_id, attempts, reason, tz)
+                continue
 
             # Mark parent as charged. Persist the real Stripe fee if we got it
             # (0 is the legacy default; admin endpoint falls back to the formula
@@ -1720,6 +1771,140 @@ def _send_payout_email(conn, txn):
         logger.info(f"Payout email sent for txn {txn['id']}")
     except Exception as e:
         logger.error(f"Payout email error: {e}")
+
+
+def _render_template(conn, template_key, variables, fallback_subject, fallback_body):
+    """Load a DB email template and substitute {{vars}}. Falls back inline."""
+    row = conn.execute(
+        "SELECT subject, body FROM email_templates WHERE template_key = ? LIMIT 1",
+        (template_key,)
+    ).fetchone()
+    subject = row[0] if row else fallback_subject
+    body = row[1] if row else fallback_body
+    for k, v in variables.items():
+        subject = subject.replace("{{" + k + "}}", str(v))
+        body = body.replace("{{" + k + "}}", str(v))
+    return subject, body
+
+
+def _send_venue_ach_processing_email(conn, txn, venue_id):
+    """Tell the venue their bank payment started and is still clearing.
+
+    2026-09-29 (ACH). Without this the venue gets silence between booking
+    and settlement, having been told elsewhere that payment happens the day
+    after the gig. It also states plainly that the artist is paid only once
+    the debit clears, which is the leverage for keeping the account funded.
+    """
+    try:
+        info = conn.execute("""
+            SELECT g.id as gig_id, g.date, v.id as vid, v.venue_name,
+                   a.name as artist_name
+            FROM gigs g JOIN venues v ON g.venue_id = v.id
+            LEFT JOIN artists a ON a.id = ?
+            WHERE g.id = ?
+        """, (txn["artist_id"] if "artist_id" in txn.keys() else None,
+              txn["gig_id"])).fetchone()
+        if not info:
+            return
+        variables = {
+            "venue_name": _esc(info["venue_name"] or ""),
+            "artist_name": _esc(info["artist_name"] or "Artist"),
+            "date": info["date"] or "",
+            "total_charged": f"{(txn['venue_charge_cents'] or 0) / 100:.2f}",
+            "venue_id": str(info["vid"] or venue_id),
+            "gig_id": str(info["gig_id"] or ""),
+        }
+        subject, body = _render_template(
+            conn, "venue_ach_processing", variables,
+            f"Bank payment started - {variables['artist_name']} gig on {variables['date']}",
+            f"<p>Your bank payment of ${variables['total_charged']} has started and "
+            f"takes a few business days to clear. We'll email you when it does.</p>",
+        )
+        if _pref_enabled(conn, 'venue', venue_id, 'venue_payment_charged'):
+            settings = _get_smtp_settings(conn)
+            for email in _get_entity_emails(conn, 'venue', venue_id):
+                _send_html_email(settings, email, subject, body)
+        logger.info(f"ACH processing email sent to venue {venue_id} for txn {txn['id']}")
+    except Exception as e:
+        logger.error(f"ACH processing venue email error: {e}")
+
+
+def _notify_artists_payout_pending(conn, parent_txn_id):
+    """Tell each artist on an ACH-funded gig that their payout is waiting.
+
+    2026-09-29 (ACH). Artists are told they're paid the day after the gig.
+    When a venue pays by bank that's no longer true, and silence reads as a
+    missing payment. This says the money is confirmed, explains the delay,
+    and promises a second email when it actually sends.
+    """
+    try:
+        children = conn.execute("""
+            SELECT t.id, t.artist_id, t.artist_payout_cents, t.gig_id,
+                   g.date, v.venue_name, a.name as artist_name
+            FROM transactions t
+            JOIN gigs g ON g.id = t.gig_id
+            JOIN venues v ON v.id = g.venue_id
+            LEFT JOIN artists a ON a.id = t.artist_id
+            WHERE t.parent_transaction_id = ?
+              AND t.transaction_type = 'artist_payout'
+              AND t.status IN ('scheduled', 'pending_transfer')
+        """, (parent_txn_id,)).fetchall()
+        if not children:
+            return
+        settings = _get_smtp_settings(conn)
+        for child in children:
+            if not child["artist_id"]:
+                continue
+            variables = {
+                "artist_name": _esc(child["artist_name"] or "there"),
+                "venue_name": _esc(child["venue_name"] or ""),
+                "date": child["date"] or "",
+                "payout": f"{(child['artist_payout_cents'] or 0) / 100:.2f}",
+            }
+            subject, body = _render_template(
+                conn, "artist_payout_pending_settlement", variables,
+                f"Payout scheduled - {variables['venue_name']} gig on {variables['date']}",
+                f"<p>Your ${variables['payout']} payout is confirmed. This venue paid by "
+                f"bank transfer, which takes a few business days to clear — we'll send "
+                f"your payout automatically as soon as it does.</p>",
+            )
+            if _pref_enabled(conn, 'artist', child["artist_id"], 'artist_payment_sent'):
+                for email in _get_entity_emails(conn, 'artist', child["artist_id"]):
+                    _send_html_email(settings, email, subject, body)
+            _create_artist_payout_notification(conn, child)
+        logger.info(f"ACH pending-payout notices sent for parent txn {parent_txn_id}")
+    except Exception as e:
+        logger.error(f"ACH pending-payout notify error: {e}")
+
+
+def _create_artist_payout_notification(conn, child):
+    """In-app notification mirroring the ACH pending-payout email.
+
+    Opens its own SessionLocal because `create_notification` takes a
+    SQLAlchemy session while the scheduler runs on a raw DBAPI connection.
+    Same pattern as the transferred -> paid notification above, and it uses
+    `get_all_entity_users` so multi-user artist accounts all get it.
+    """
+    try:
+        from backend.db import SessionLocal as _SL
+        from backend.services.notification_service import create_notification as _cn
+        from backend.utils import get_all_entity_users as _gaeu
+        _ndb = _SL()
+        try:
+            message = (
+                f"Your ${(child['artist_payout_cents'] or 0) / 100:.2f} payout for the "
+                f"{child['venue_name']} gig is confirmed. The venue paid by bank "
+                f"transfer, so it will send as soon as that clears."
+            )
+            for _u in _gaeu(_ndb, "artist", child["artist_id"]):
+                _cn(_ndb, _u["user_id"], "artist_payout_pending",
+                    "Payout scheduled", message,
+                    gig_id=child["gig_id"], artist_id=child["artist_id"])
+            _ndb.commit()
+        finally:
+            _ndb.close()
+    except Exception as e:
+        logger.warning(f"ACH pending-payout notification skipped: {e}")
 
 
 def _send_venue_charged_email(conn, txn, venue_id):

@@ -128,6 +128,7 @@ async function loadVenueCard() {
       document.getElementById('venueCurrentCard').style.display = 'none';
       document.getElementById('venueAddCardSection').style.display = 'block';
       initVenueStripeCard();
+      venueCheckAchAvailable();
     }
   } catch (e) { console.error('Load card error:', e); initVenueStripeCard(); }
 }
@@ -164,6 +165,131 @@ async function venueSaveCard() {
   } catch (e) {
     showPaymentModal('Card Setup Failed', e.message || 'Failed to save card. Please try again.', 'error');
   } finally { btn.disabled = false; btn.textContent = '💳 Save Card'; }
+}
+
+// ── ACH / bank payments (2026-09-29) ────────────────────────────────
+// Separate from the card flow on purpose. Folding both into a single
+// Payment Element would mean rewriting a live, working card path; this is
+// additive and can't break it.
+//
+// Stripe's bank flow is two steps: collectBankAccountForSetup() opens the
+// bank-login modal and attaches the account, then confirmUsBankAccountSetup()
+// records the mandate. The mandate is a Nacha requirement for debiting a US
+// bank account, which is why the button text below states the authorization.
+
+// Reveal the bank option only when the platform has ACH turned on. The
+// setup-intent response tells us, so the frontend needs no separate view
+// of the platform setting.
+async function venueCheckAchAvailable() {
+  var params = new URLSearchParams(window.location.search);
+  var venueId = params.get("venue_id");
+  if (!venueId) return;
+  try {
+    var res = await fetch('/api/stripe/venue/' + venueId + '/setup-intent', {
+      method: 'POST', credentials: 'include'
+    });
+    if (!res.ok) return;
+    var setup = await res.json();
+    var section = document.getElementById('venueAchSection');
+    if (section && setup.ach_enabled) section.style.display = 'block';
+  } catch (e) { /* bank option simply stays hidden */ }
+}
+
+async function venueSaveBankAccount() {
+  var params = new URLSearchParams(window.location.search);
+  var venueId = params.get("venue_id");
+  var btn = document.getElementById('venueAddBankBtn');
+  var errorEl = document.getElementById('venueBankError');
+  if (errorEl) { errorEl.style.display = 'none'; errorEl.textContent = ''; }
+
+  if (!venueId || !venueStripe) {
+    showPaymentModal('Setup Required', 'Stripe is still loading. Please wait a moment and try again.', 'warning');
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+  try {
+    var setupRes = await fetch('/api/stripe/venue/' + venueId + '/setup-intent', {
+      method: 'POST', credentials: 'include'
+    });
+    if (!setupRes.ok) {
+      var err = await setupRes.json().catch(function () { return {}; });
+      throw new Error(err.detail || 'Could not start bank setup.');
+    }
+    var setup = await setupRes.json();
+    if (!setup.ach_enabled) throw new Error('Bank payments are not enabled on this platform.');
+
+    // Stripe requires a billing name and email for us_bank_account.
+    var acct = await venueGetBillingIdentity(venueId);
+    if (!acct.name || !acct.email) {
+      throw new Error('Add a venue name and contact email to your profile before paying by bank.');
+    }
+
+    var collected = await venueStripe.collectBankAccountForSetup({
+      clientSecret: setup.client_secret,
+      params: {
+        payment_method_type: 'us_bank_account',
+        payment_method_data: { billing_details: { name: acct.name, email: acct.email } }
+      },
+      expand: ['payment_method']
+    });
+    if (collected.error) throw new Error(collected.error.message);
+    // The customer closed the bank window without finishing.
+    if (!collected.setupIntent || !collected.setupIntent.payment_method) return;
+
+    // Record the ACH mandate. Skipped if Stripe already has it.
+    if (collected.setupIntent.status === 'requires_confirmation') {
+      var confirmed = await venueStripe.confirmUsBankAccountSetup(setup.client_secret);
+      if (confirmed.error) throw new Error(confirmed.error.message);
+      collected.setupIntent = confirmed.setupIntent || collected.setupIntent;
+    }
+
+    var pmId = collected.setupIntent.payment_method;
+    if (pmId && typeof pmId === 'object') pmId = pmId.id;
+
+    var saveRes = await fetch('/api/stripe/venue/' + venueId + '/save-payment-method', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+      body: JSON.stringify({ payment_method_id: pmId })
+    });
+    if (!saveRes.ok) {
+      var serr = await saveRes.json().catch(function () { return {}; });
+      throw new Error(serr.detail || 'Failed to save bank account on file.');
+    }
+
+    showPaymentModal(
+      'Bank Account Saved',
+      'Your bank account is saved and will be debited the day after each gig. ' +
+      'Bank payments take a few business days to clear, and the artist is paid ' +
+      'once they do — so please keep the account funded.',
+      'success'
+    );
+    setTimeout(function () { loadVenueCard(); }, 500);
+  } catch (e) {
+    if (errorEl) {
+      errorEl.textContent = e.message || 'Could not save bank account.';
+      errorEl.style.display = 'block';
+    } else {
+      showPaymentModal('Bank Setup Failed', e.message || 'Please try again.', 'error');
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🏦 Pay by Bank'; }
+  }
+}
+
+// Billing name + email for the ACH mandate. Falls back to whatever the page
+// already knows rather than failing outright.
+async function venueGetBillingIdentity(venueId) {
+  try {
+    var res = await fetch('/api/venues/' + venueId, { credentials: 'include' });
+    if (res.ok) {
+      var v = await res.json();
+      return {
+        name: (v.venue_name || v.name || '').trim(),
+        email: (v.email || v.contact_email || '').trim()
+      };
+    }
+  } catch (e) {}
+  return { name: '', email: '' };
 }
 
 function venueUpdateCard() {

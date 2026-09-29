@@ -1675,6 +1675,118 @@ TEMPLATES = {
 </table>'''
     },
 
+    "venue_ach_processing": {
+        'subject': 'Bank payment started - {{artist_name}} gig on {{date}}',
+        'body': '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tbody>
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tbody>
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;"><img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height: 40px; width: 160px; max-width: 160px; display: block; border: 0; outline: none;"></td>
+</tr>
+<tr>
+<td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Bank Payment Started</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{venue_name}}, we've started the bank transfer for <strong>{{artist_name}}</strong>'s gig. Bank payments take a few business days to clear &mdash; nothing more is needed from you.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
+<tbody>
+<tr>
+<td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tbody>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 130px;">Artist</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{artist_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; font-weight: 600;">Total</td>
+<td style="padding: 6px 0; font-size: 16px; color: #111827; font-weight: bold;">${{total_charged}}</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">We'll email you again once it clears. The artist is paid at that point, so please make sure the account has sufficient funds &mdash; a returned payment delays their money.</p>
+<a href="https://gigsfill.com/app/venue-create-gigs.html?venue_id={{venue_id}}" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Calendar</a>
+</td>
+</tr>
+<tr>
+<td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>'''
+    },
+
+    "artist_payout_pending_settlement": {
+        'subject': 'Payout scheduled - {{venue_name}} gig on {{date}}',
+        'body': '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tbody>
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tbody>
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;"><img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height: 40px; width: 160px; max-width: 160px; display: block; border: 0; outline: none;"></td>
+</tr>
+<tr>
+<td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">Payout Scheduled</h1>
+<p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{artist_name}}, your payout for the <strong>{{venue_name}}</strong> gig on {{date}} is confirmed and on its way.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
+<tbody>
+<tr>
+<td style="padding: 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tbody>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 130px;">Venue</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{venue_name}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date</td>
+<td style="padding: 6px 0; font-size: 14px; color: #111827; font-weight: 500;">{{date}}</td>
+</tr>
+<tr>
+<td style="padding: 6px 0; font-size: 14px; color: #6b7280; font-weight: 600;">Your Payout</td>
+<td style="padding: 6px 0; font-size: 16px; color: #059669; font-weight: bold;">${{payout}}</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;">This venue paid by bank transfer, which takes a few business days to clear. We send your payout automatically the moment it does &mdash; there's nothing for you to do, and you'll get another email when it's sent.</p>
+<a href="https://gigsfill.com/app/artist-book-gigs.html" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">View Calendar</a>
+</td>
+</tr>
+<tr>
+<td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>'''
+    },
+
     "artist_payment_sent": {
         "subject": 'Payment sent - {{venue_name}} gig on {{date}}',
         "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">

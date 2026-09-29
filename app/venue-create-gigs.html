@@ -3029,6 +3029,20 @@
       </button>
       <div id="venueCardError" style="color: #ef4444; font-size: 0.8rem; margin-top: 8px; display: none;"></div>
       <div id="venueCardSuccess" style="color: #10b981; font-size: 0.8rem; margin-top: 8px; display: none;">✓ Card saved successfully!</div>
+      <!-- 2026-09-29 (ACH): shown only when the platform has bank payments
+           enabled — venueSaveCard()'s setup-intent response carries the flag.
+           Kept as a separate button rather than folding card + bank into one
+           Payment Element, so the live card flow is untouched. -->
+      <div id="venueAchSection" style="display:none;margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.08);">
+        <p style="color: var(--text-gray); font-size: 0.8rem; margin: 0 0 10px 0; text-align: left;">
+          Or pay by bank transfer and save on fees — <strong style="color:var(--text);">0.8% (max $5)</strong> instead of card rates.
+          Bank payments take a few business days to clear, and the artist is paid once they do.
+        </p>
+        <button id="venueAddBankBtn" onclick="venueSaveBankAccount()" class="btn ghost" style="font-size: 0.85rem;">
+          🏦 Pay by Bank
+        </button>
+        <div id="venueBankError" style="color: #ef4444; font-size: 0.8rem; margin-top: 8px; display: none;"></div>
+      </div>
       <div style="margin-top: 14px; padding: 10px 14px; background: rgba(99,91,255,0.06); border: 1px solid rgba(99,91,255,0.15); border-radius: 6px;">
         <p style="color: var(--text-gray); font-size: 0.7rem; line-height: 1.5; margin: 0;">
           🔒 Your card details are securely stored by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>, a PCI Level 1 certified payment processor. GigsFill never sees or stores your full card number.
@@ -3859,7 +3873,7 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=18" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=19" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/messages.js?v=8"></script>
@@ -3869,7 +3883,7 @@
 <script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/hold-mgmt.js?v=13"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=264"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=265"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/venue.contracts.js?v=4" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=27" defer></script>

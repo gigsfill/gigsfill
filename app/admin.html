@@ -1105,6 +1105,40 @@ ZOHO_ACCOUNT_REGION=com</pre>
              "top of this page" is wrong anyway. A permanent LIVE label
              already lives on Server Stats; no need for a duplicate here. -->
 
+        <!-- ACH / bank payments. Boolean rail switch + the operational
+             caveats, because the payout-timing consequence is not obvious. -->
+        <div class="content-card" style="padding:14px;margin-bottom:12px;border-left:3px solid var(--cyan);">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+            Bank payments (ACH)
+          </div>
+          <label style="display:flex;align-items:center;gap:10px;font-size:0.85rem;margin-bottom:10px;cursor:pointer;">
+            <input type="checkbox" id="achPaymentsEnabled" onchange="autoSavePaymentSettings()" style="width:16px;height:16px;cursor:pointer;">
+            <span>Let venues pay by bank transfer as well as card</span>
+          </label>
+          <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6;">
+            <p style="margin:0 0 8px 0;">
+              <strong style="color:#f59e0b;">Enable ACH in the Stripe Dashboard first</strong>
+              (Settings → Payment methods → ACH Direct Debit). Offering bank payments while
+              Stripe has them switched off makes card setup fail too, not just bank setup.
+              The code falls back to card-only if that happens, but the venue sees an error
+              in the meantime.
+            </p>
+            <p style="margin:0 0 8px 0;">
+              <strong>Why bother:</strong> ACH costs 0.8% capped at $5, against 2.9% + 30¢
+              for cards. On a $200 gig that's about $1.60 instead of $6.10.
+            </p>
+            <p style="margin:0;">
+              <strong>The trade-off — artists wait longer.</strong> A card charge settles
+              instantly, so the artist is paid the day after the gig. A bank debit takes
+              3–5 business days to clear and can still be returned afterwards. We hold the
+              artist's payout until it clears, rather than paying out money we haven't
+              received: the venue charge parks in <code>charge_processing</code>, and the
+              payout releases automatically when Stripe confirms settlement. Both sides are
+              emailed about the delay, so nobody thinks a payment went missing.
+            </p>
+          </div>
+        </div>
+
         <!-- What shows up on a card statement / bank line. Documented here
              because the venue side is config-driven and the artist side is a
              hard Stripe limitation people keep trying to "fix". -->
@@ -2475,7 +2509,7 @@ function switchTemplatesSubTab(tab) {
 </script>
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=4"></script>
-<script src="/app/static/js/admin-platform.js?v=14"></script>
+<script src="/app/static/js/admin-platform.js?v=15"></script>
 <script src="/app/static/js/admin-payments.js?v=36"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=3"></script>

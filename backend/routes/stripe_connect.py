@@ -19,6 +19,7 @@ logger = logging.getLogger("gigsfill.stripe")
 
 
 from backend.services import statement_descriptor
+from backend.services import ach
 
 router = APIRouter()
 
@@ -166,14 +167,41 @@ def create_venue_setup_intent(venue_id: int, user=Depends(get_current_user), db=
         )
         db.commit()
     
-    # Create SetupIntent
-    setup_intent = stripe.SetupIntent.create(
-        customer=customer_id,
-        payment_method_types=["card"],
-        metadata={"venue_id": str(venue_id)}
-    )
-    
-    return {"client_secret": setup_intent.client_secret, "customer_id": customer_id}
+    # 2026-09-29 (ACH): offer bank debit alongside card when the platform
+    # has it enabled. Gated, because naming `us_bank_account` on a Stripe
+    # account that hasn't enabled ACH makes SetupIntent.create raise — which
+    # would take card setup down with it. Falls back to card-only on any
+    # error for the same reason.
+    pm_types = ach.payment_method_types(db)
+    try:
+        setup_intent = stripe.SetupIntent.create(
+            customer=customer_id,
+            payment_method_types=pm_types,
+            metadata={"venue_id": str(venue_id)},
+        )
+    except Exception as e:
+        if pm_types == ["card"]:
+            raise
+        logger.warning(
+            f"SetupIntent with {pm_types} failed for venue {venue_id} "
+            f"({e}) — retrying card-only. Check that ACH is enabled on the "
+            f"Stripe account before turning on {ach.SETTING_KEY}."
+        )
+        pm_types = ["card"]
+        setup_intent = stripe.SetupIntent.create(
+            customer=customer_id,
+            payment_method_types=pm_types,
+            metadata={"venue_id": str(venue_id)},
+        )
+
+    return {
+        "client_secret": setup_intent.client_secret,
+        "customer_id": customer_id,
+        # Lets the frontend show/hide the bank-account option without
+        # needing its own view of the platform setting.
+        "payment_method_types": pm_types,
+        "ach_enabled": ach.PM_TYPE in pm_types,
+    }
 
 
 @router.post("/api/stripe/venue/{venue_id}/save-payment-method")
@@ -3050,12 +3078,86 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
         # payment_intent.payment_failed — async card failure
         # (catches bank-side declines that come back after scheduler runs)
         # ----------------------------------------------------------------
+        # ----------------------------------------------------------------
+        # payment_intent.succeeded — an ACH debit finished settling
+        # ----------------------------------------------------------------
+        # 2026-09-29 (ACH). Card charges never reach here in a way that
+        # matters: they're already 'charged' by the time the scheduler
+        # returns, and the guard below only matches rows parked in
+        # `charge_processing`, so a card's succeeded event is a no-op.
+        #
+        # For ACH this is the event that releases the artist's money. The
+        # parent flips to 'charged', and the existing hourly stalled-transfer
+        # sweep — which already picks up 'scheduled' children under a
+        # 'charged' parent — sends the payouts on its next run. Nothing new
+        # schedules the transfer; that machinery was already there.
+        elif event_type == "payment_intent.succeeded":
+            try:
+                obj = _webhook_get_event_obj(event)
+                pi_id = _webhook_get(obj, "id")
+
+                txn = conn.execute("""
+                    SELECT t.id, t.gig_id, t.status, g.venue_id, g.date,
+                           v.venue_name, a.name as artist_name
+                    FROM transactions t
+                    JOIN gigs g ON t.gig_id = g.id
+                    LEFT JOIN venues v ON v.id = g.venue_id
+                    LEFT JOIN artists a ON a.id = t.artist_id
+                    WHERE t.stripe_payment_intent_id = ?
+                      AND t.status = 'charge_processing'
+                    LIMIT 1
+                """, (pi_id,)).fetchone()
+
+                if not txn:
+                    logger.info(
+                        f"Webhook payment_intent.succeeded: PI {pi_id} — no "
+                        f"'charge_processing' transaction (card charge or already settled)"
+                    )
+                else:
+                    # Capture the real settled fee. ACH pricing (0.8% capped at
+                    # $5) differs sharply from the card formula the accounting
+                    # page falls back to, so an unfetched fee would misreport.
+                    real_fee_cents = 0
+                    try:
+                        stripe_mod, _keys = init_stripe(db)
+                        pi_obj = stripe_mod.PaymentIntent.retrieve(
+                            pi_id, expand=["latest_charge.balance_transaction"]
+                        )
+                        latest = getattr(pi_obj, "latest_charge", None)
+                        bt = getattr(latest, "balance_transaction", None) if latest else None
+                        if bt is not None and getattr(bt, "fee", None) is not None:
+                            real_fee_cents = int(bt.fee)
+                    except Exception as _fe:
+                        logger.warning(f"ACH settle: could not read fee for {pi_id}: {_fe}")
+
+                    conn.execute("""
+                        UPDATE transactions
+                        SET status = 'charged',
+                            credit_card_fee_cents = CASE WHEN ? > 0 THEN ?
+                                                         ELSE credit_card_fee_cents END,
+                            notes = COALESCE(notes || ' | ', '') || ?
+                        WHERE id = ?
+                    """, (real_fee_cents, real_fee_cents,
+                          'ACH settled — artist payout released', txn["id"]))
+                    conn.commit()
+                    logger.info(
+                        f"Webhook payment_intent.succeeded: txn {txn['id']} (PI {pi_id}) "
+                        f"charge_processing -> charged; artist payout released to the "
+                        f"next transfer sweep"
+                    )
+
+            except Exception as e:
+                logger.error(f"Webhook payment_intent.succeeded error: {e}")
+
         elif event_type == "payment_intent.payment_failed":
             try:
                 obj = _webhook_get_event_obj(event)
                 pi_id  = _webhook_get(obj, "id")
                 err    = _webhook_get(obj, "last_payment_error") or {}
-                reason = (err.get("message") if isinstance(err, dict) else getattr(err, "message", "")) or "Card declined"
+                _pm_types = _webhook_get(obj, "payment_method_types") or []
+                _is_ach = "us_bank_account" in list(_pm_types)
+                _default_reason = ("Bank payment returned" if _is_ach else "Card declined")
+                reason = (err.get("message") if isinstance(err, dict) else getattr(err, "message", "")) or _default_reason
 
                 # Only act if transaction is still in a pre-charged state
                 # (avoid double-handling what the scheduler already caught)
@@ -3067,7 +3169,8 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                     LEFT JOIN venues v ON v.id = g.venue_id
                     LEFT JOIN artists a ON a.id = t.artist_id
                     WHERE t.stripe_payment_intent_id = ?
-                      AND t.status IN ('processing', 'scheduled', 'charge_retry')
+                      AND t.status IN ('processing', 'scheduled', 'charge_retry',
+                                       'charge_processing')
                     LIMIT 1
                 """, (pi_id,)).fetchone()
 
@@ -3109,13 +3212,26 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
                             """, (txn["venue_id"], txn["venue_id"])).fetchall()
                             for row in venue_emails:
                                 if row and row[0]:
-                                    _wh_send_email(smtp_settings, row[0],
-                                        f"Card declined — {txn['venue_name']} gig on {txn['date']}",
-                                        f"""<p>Hi,</p>
+                                    # An ACH return is not a decline, and it has a
+                                    # consequence a card retry doesn't: the artist
+                                    # has been waiting on this payment and is still
+                                    # unpaid. Say so plainly.
+                                    if _is_ach:
+                                        _subj = f"Bank payment returned — {txn['venue_name']} gig on {txn['date']}"
+                                        _body = f"""<p>Hi,</p>
+                                        <p>The bank payment for <strong>{txn['venue_name']}</strong>'s gig on <strong>{txn['date']}</strong> was returned by your bank and did not go through.</p>
+                                        <p><strong>Reason:</strong> {reason}</p>
+                                        <p><strong>The artist has not been paid.</strong> Their payout was waiting on this payment to clear, so please resolve this promptly.</p>
+                                        <p>We'll retry automatically on the next scheduled run. If the account has insufficient funds or was closed, update your payment method in your venue's Payments tab at <a href="https://gigsfill.com/app/venue-create-gigs.html">gigsfill.com</a>.</p>
+                                        <p>— The GigsFill Team</p>"""
+                                    else:
+                                        _subj = f"Card declined — {txn['venue_name']} gig on {txn['date']}"
+                                        _body = f"""<p>Hi,</p>
                                         <p>The credit card on file for <strong>{txn['venue_name']}</strong> was declined for the gig on <strong>{txn['date']}</strong>.</p>
                                         <p><strong>Reason:</strong> {reason}</p>
                                         <p>The system will retry the charge automatically on the next scheduled run. To avoid further failures, please update your card in your venue's Payments tab at <a href="https://gigsfill.com/app/venue-create-gigs.html">gigsfill.com</a>.</p>
-                                        <p>— The GigsFill Team</p>""")
+                                        <p>— The GigsFill Team</p>"""
+                                    _wh_send_email(smtp_settings, row[0], _subj, _body)
                     except Exception as _ne:
                         logger.warning(f"Webhook payment_intent.payment_failed: venue-notify error: {_ne}")
                 else:

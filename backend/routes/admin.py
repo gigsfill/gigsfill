@@ -1087,6 +1087,11 @@ def get_payment_settings(admin=Depends(check_admin), db=Depends(get_db)):
         'admin_stripe_publishable_key',
         'admin_stripe_secret_key',
         'admin_stripe_webhook_secret',
+        # 2026-09-29: ACH / bank venue payments. Off unless explicitly set —
+        # offering us_bank_account on a Stripe account that hasn't enabled
+        # ACH makes SetupIntent.create raise, which would break card setup
+        # too. Enable it in the Stripe Dashboard FIRST.
+        'ach_payments_enabled',
     ]
     
     SENSITIVE_PAYMENT_KEYS = {'admin_stripe_secret_key', 'admin_stripe_webhook_secret'}
@@ -1119,6 +1124,7 @@ async def update_payment_settings(request: Request, admin=Depends(check_admin), 
         'admin_stripe_publishable_key',
         'admin_stripe_secret_key',
         'admin_stripe_webhook_secret',
+        'ach_payments_enabled',
     ]
     
     SENSITIVE_PAYMENT_KEYS = {'admin_stripe_secret_key', 'admin_stripe_webhook_secret'}
@@ -1170,6 +1176,9 @@ async def update_payment_settings(request: Request, admin=Depends(check_admin), 
         elif key == 'platform_fee_split':
             if s not in ('split', 'venue_only', 'artist_only'):
                 raise HTTPException(400, f"{key} must be one of split / venue_only / artist_only")
+        elif key == 'ach_payments_enabled':
+            if s.strip().lower() not in ('0', '1', 'true', 'false', 'yes', 'no', 'on', 'off', ''):
+                raise HTTPException(400, f"{key} must be a boolean value")
         elif key == 'payment_processing_hour':
             try:
                 h = int(s)

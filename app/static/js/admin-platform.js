@@ -787,6 +787,14 @@ window._adminConfirm = function(opts) {
 
       const hour = document.getElementById('paymentProcessingHour');
       if (hour && d.payment_processing_hour) hour.value = d.payment_processing_hour;
+
+      // 2026-09-29 (ACH). Checkbox, not a text field — everything else here
+      // is a value, this is a rail being switched on.
+      const achEl = document.getElementById('achPaymentsEnabled');
+      if (achEl) {
+        const v = String(d.ach_payments_enabled || '').trim().toLowerCase();
+        achEl.checked = ['1', 'true', 'yes', 'on'].includes(v);
+      }
     } catch (e) { console.error('loadPaymentSettings:', e); }
   };
 
@@ -813,6 +821,8 @@ window._adminConfirm = function(opts) {
     if (pub && !pub.startsWith('•')) payload.admin_stripe_publishable_key = pub;
     if (sec && !sec.startsWith('•')) payload.admin_stripe_secret_key      = sec;
     if (whk && !whk.startsWith('•')) payload.admin_stripe_webhook_secret  = whk;
+    const achEl = document.getElementById('achPaymentsEnabled');
+    if (achEl) payload.ach_payments_enabled = achEl.checked ? '1' : '0';
     try {
       await fetch('/api/admin/payment-settings', {
         method: 'PUT', credentials: 'include',
