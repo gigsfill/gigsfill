@@ -5,24 +5,24 @@
 <script>/* Audit fix May 2026 part 6: pre-paint hide so auth.guard.js redirect path doesn't flash protected DOM. auth.guard.js sets visibility=visible after auth check succeeds. */ try{document.documentElement.style.visibility="hidden";}catch(_){}</script>
 <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Find Venues – GigsFill</title>
+<title>Find Artists – GigsFill</title>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<meta name="description" content="Discover live music venues near you. Filter by city, state, capacity, amenities, and more. Find your next gig on GigsFill.">
+<meta name="description" content="Discover live music artists near you. Filter by city, state, artist type, and style. Invite them to become Preferred Artists at your venue.">
 <meta name="robots" content="index, follow">
-<link rel="canonical" href="https://gigsfill.com/app/venue-discovery.html">
+<link rel="canonical" href="https://gigsfill.com/app/artist-discovery.html">
 <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
   <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
   <link rel="manifest" href="/app/static/manifest.json">
   <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
 <meta name="theme-color" content="#0f1419">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Find Venues for Live Music – GigsFill">
-<meta property="og:description" content="Discover live music venues near you. Filter by city, capacity, amenities, and more.">
-<meta property="og:url" content="https://gigsfill.com/app/venue-discovery.html">
+<meta property="og:title" content="Find Artists for Your Venue – GigsFill">
+<meta property="og:description" content="Discover live music artists near you. Filter by city, type, and style.">
+<meta property="og:url" content="https://gigsfill.com/app/artist-discovery.html">
 <meta property="og:site_name" content="GigsFill">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Find Venues for Live Music – GigsFill">
-<meta name="twitter:description" content="Discover live music venues near you on GigsFill.">
+<meta name="twitter:title" content="Find Artists for Your Venue – GigsFill">
+<meta name="twitter:description" content="Discover live music artists near you on GigsFill.">
 
 <style>
     .search-bar {
@@ -66,7 +66,7 @@
       font-weight: 700;
     }
 
-    .venue-card {
+    .artist-card {
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid var(--glass-border);
       border-radius: 12px;
@@ -75,32 +75,34 @@
       transition: all 0.2s;
     }
 
-    .venue-card:hover {
+    .artist-card:hover {
       background: rgba(255, 255, 255, 0.05);
       border-color: var(--accent-cyan);
       transform: translateY(-2px);
     }
 
-    .venue-header {
+    .artist-header {
       display: flex;
       justify-content: space-between;
       align-items: start;
       margin-bottom: 12px;
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
-    .venue-name {
+    .artist-name {
       font-size: 1.25rem;
       font-weight: 600;
       color: var(--text-primary);
       margin-bottom: 4px;
     }
 
-    .venue-location {
+    .artist-location {
       color: var(--text-muted);
       font-size: 0.875rem;
     }
 
-    .venue-details {
+    .artist-details {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 12px;
@@ -128,11 +130,17 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      white-space: nowrap;
     }
 
     .status-approved {
       background: rgba(16, 185, 129, 0.2);
       color: #10b981;
+    }
+
+    .status-invited {
+      background: rgba(139, 92, 246, 0.2);
+      color: #a78bfa;
     }
 
     .status-pending {
@@ -195,11 +203,6 @@
 <div class="header-inner">
 <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
 <div class="header-actions">
-<!-- Email Center button removed 2026-08-06: this is the artist-facing
-     "Find Venues" page, and the live Email Center is a tab inside
-     venue-create-gigs.html for venue owners — not an artist feature.
-     The stale /app/venue-email-center.html file linked here was never
-     loaded by the live UI (see CLAUDE.md note). -->
 <a class="btn ghost" href="/app/user-profile.html">User Profile</a>
 <button class="btn ghost" onclick="logout()">Logout</button>
 </div>
@@ -211,59 +214,53 @@
 <!-- Stats -->
 <div class="stats-row">
 <div class="stat-card">
-<div class="stat-value" id="totalVenues">0</div>
-<div class="stat-label">Total Venues</div>
+<div class="stat-value" id="totalArtists">0</div>
+<div class="stat-label">Total Artists</div>
 </div>
 <div class="stat-card">
-<div class="stat-value" id="approvedVenues">0</div>
-<div class="stat-label">Approved</div>
+<div class="stat-value" id="preferredArtists">0</div>
+<div class="stat-label">Preferred</div>
 </div>
 <div class="stat-card">
-<div class="stat-value" id="pendingVenues">0</div>
-<div class="stat-label">Pending</div>
+<div class="stat-value" id="invitedArtists">0</div>
+<div class="stat-label">Invited</div>
 </div>
 </div>
 <!-- Search Bar -->
 <section class="panel">
-<h2>Find Venues</h2>
+<h2>Find Artists</h2>
 <div class="search-bar">
 <input id="searchInput" placeholder="Search by name..." type="text"/>
 <input id="cityInput" placeholder="City..." type="text"/>
 <select id="stateSelect">
 <option value="">All States</option>
-<option value="CA">California</option>
-<option value="NY">New York</option>
-<option value="TX">Texas</option>
-<option value="FL">Florida</option>
-<!-- Add more states as needed -->
 </select>
 </div>
-<div class="filters">
-<div class="filter-chip" data-filter="all">All Venues</div>
-<div class="filter-chip" data-filter="has_stage">Has Stage</div>
-<div class="filter-chip" data-filter="has_sound">Sound Equipment</div>
-<div class="filter-chip" data-filter="has_lighting">Lighting</div>
+<!-- Artist-type chips are populated from the live data rather than
+     hard-coded, so a new artist_type value doesn't silently become
+     unfilterable. -->
+<div class="filters" id="typeFilters">
+<div class="filter-chip active" data-filter="all">All Artists</div>
 </div>
 </section>
-<!-- Venues List -->
+<!-- Artists List -->
 <section class="panel">
-<div id="venuesList"></div>
+<div id="artistsList"></div>
 </section>
 </div>
 </main>
 <script src="/app/static/js/auth.guard.js?v=4"></script>
 <script src="/app/static/js/api-globals.js?v=12"></script>
+<script src="/app/static/js/modals.preview.js"></script>
 <script src="/app/static/js/city-autocomplete.js"></script>
-<script src="/app/static/js/venue.discovery.js" type="module"></script>
+<script src="/app/static/js/artist.discovery.js?v=1" type="module"></script>
 
 <footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
 </footer>
 
-<script src="/app/static/js/venue-discovery-init.js"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/sw-register.js"></script>
-<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>
 </body>

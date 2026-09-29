@@ -112,8 +112,19 @@ def create_artist(data: dict, user=Depends(get_current_user), db=Depends(get_db)
 
 # v90: SEARCH ALL ARTISTS (for venue search)
 @router.get("/api/artists/search")
-def search_artists(db=Depends(get_db)):
-    """Search all artists - returns all artist data for venue filtering"""
+def search_artists(user=Depends(get_current_user), db=Depends(get_db)):
+    """Search all artists — returns artist data for venue-side filtering.
+
+    2026-09-29: added `get_current_user`. This returns every artist on the
+    platform with city, state and lat/long, and was previously reachable
+    without any authentication. That was low-exposure while the only
+    caller was inside the venue calendar, but it now backs the Find
+    Artists browse page, so it should at minimum require a login.
+
+    Deliberately NOT restricted to venue users: artists legitimately hit
+    the same shape of data elsewhere, and narrowing it would break the
+    existing gig-creation flow for multi-entity accounts.
+    """
     try:
         # Jul 2026: exclude tombstoned artists — historical joins still see
         # them under the "[Deleted]" name, but they don't show up in venue

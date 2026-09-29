@@ -8,6 +8,17 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-29 (Find Artists — venue-side discovery page):** Discovery was one-directional. Artists had a dedicated **Find Venues** page (`venue-discovery.html`) with a Request Preferred button. Venues had no browse surface at all — `/api/artists/search` existed but was consumed only from inside `venue.create-gigs.js`'s gig-creation flow, with no way to act on what you found. A venue therefore could not invite an artist it had never worked with: only artists already carrying a `preferred_artists` row appear anywhere in the venue UI, so the new invitation flow had no reachable entry point.
+
+  For a two-sided marketplace where venues are the paying side and the harder side to acquire, having the worse discovery experience on that side is backwards.
+
+  - [artist-discovery.html](app/artist-discovery.html) + [artist.discovery.js](app/static/js/artist.discovery.js) — mirrors `venue-discovery.html`'s structure (stats row, search bar, filter chips, card list, action button). Shows per-artist relationship state: **Preferred** / **Invited** (awaiting response) / **They Requested** (routes to the existing approve flow rather than inviting someone who already applied) / **Not Invited**.
+  - Two deliberate improvements over the page it mirrors: the **state dropdown and artist-type chips are built from live data** rather than hard-coded, so a new `artist_type` can't become unfilterable (the venue page's fixed four-state `<select>` is a known wart, not copied).
+  - [artists.py](backend/routes/artists.py) — **`/api/artists/search` now requires authentication.** It returns every artist on the platform with city, state and lat/long and previously had no `get_current_user` at all. Low-exposure while buried in the calendar; not acceptable as the backbone of a browse page. Now 401s unauthenticated. Deliberately not restricted to venue users — narrowing it would break gig creation for multi-entity accounts.
+  - [user-dropdown.js](app/static/js/user-dropdown.js) — **Find Artists** entry, gated identically to the existing Invite Artists link (venue users, not while on an artist page). Deep-links the user's first venue; multi-venue users switch from inside the page.
+
+  Cache-buster: `user-dropdown.js ?v=11 → ?v=12`. Suite green (170 passed).
+
 - **2026-09-29 (Preferred Artist invitations — artists must now accept):** `POST /api/venues/{vid}/artists/{aid}/make-preferred` used to set `status='approved'` outright. The artist was never asked and never told — they could be "preferred" at a venue they had never heard of and only find out by noticing.
 
   That matters because preferred status is not a label. It **bypasses the venue's booking-approval gate** and can carry `pay_dollars_override` / `pay_cents_override` / `frequency_days_override` values the artist never agreed to.

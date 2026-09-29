@@ -145,6 +145,16 @@ async function initUserDropdown() {
       ? '<a href="#" onclick="openInviteArtistsModal(event)">Invite Artists</a>\n'
       : '';
 
+    // 2026-09-29: venue-side counterpart to the artist's "Find Venues"
+    // page. Discovery used to run one way only — artists could browse
+    // venues and ask for preferred status, venues had no browse surface
+    // at all. Gated the same way as Invite Artists: venue users, and not
+    // while they're on an artist page. Deep-links the first venue; a
+    // multi-venue user can switch from inside the page.
+    const findArtistsLink = (userVenues.length > 0 && !isArtistPage && userVenues[0] && userVenues[0].id)
+      ? `<a href="/app/artist-discovery.html?venue_id=${encodeURIComponent(userVenues[0].id)}">Find Artists</a>\n`
+      : '';
+
     // Create dropdown HTML
     const dropdown = document.createElement('div');
     dropdown.className = 'user-dropdown';
@@ -159,8 +169,7 @@ async function initUserDropdown() {
         <a href="#" onclick="openHelpModal(event)">Help</a>
         <a href="#" onclick="openFeedbackModal(event)">Feedback</a>
         <a href="#" onclick="openRecommendModal(event)">Recommend GigsFill</a>
-        ${inviteLink}
-        <div class="divider"></div>
+        ${inviteLink}${findArtistsLink}        <div class="divider"></div>
         <a href="#" onclick="userDropdownSignOut(event)">Sign Out</a>
       </div>
     `;
