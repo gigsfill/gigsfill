@@ -182,8 +182,8 @@ function venueRenderSavedMethod(data) {
     saved.style.display = 'none';
     chooser.style.display = 'block';
     if (intro) intro.textContent = "Choose how you'd like to pay for gig bookings.";
-    var cancelBtn = document.getElementById('venueCancelChangeBtn');
-    if (cancelBtn) cancelBtn.style.display = 'none';
+    var cancelRow = document.getElementById('venueCancelChangeRow');
+    if (cancelRow) cancelRow.style.display = 'none';
     venueCollapsePanes();
     venueCheckAchAvailable();
   }
@@ -425,8 +425,8 @@ function venueUpdateCard() {
   document.getElementById('venueAddCardSection').style.display = 'block';
   var intro = document.getElementById('venuePmIntro');
   if (intro) intro.textContent = 'Choose a different payment method. Your current one stays active until you save the new one.';
-  var cancelBtn = document.getElementById('venueCancelChangeBtn');
-  if (cancelBtn) cancelBtn.style.display = 'inline-block';
+  var cancelRow = document.getElementById('venueCancelChangeRow');
+  if (cancelRow) cancelRow.style.display = 'block';
   var succ = document.getElementById('venueCardSuccess');
   var err  = document.getElementById('venueCardError');
   if (succ) succ.style.display = 'none';

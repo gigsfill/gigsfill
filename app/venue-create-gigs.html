@@ -3050,16 +3050,11 @@
       <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px;">
         <label for="venuePmChoice" style="font-size: 0.8rem; color: var(--text-gray); white-space: nowrap;">Payment method</label>
         <select id="venuePmChoice" onchange="venuePickMethod(this.value)"
-                style="padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;min-width:220px;">
+                style="padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;width:auto;">
           <option value="">Choose…</option>
           <option value="card">💳 Credit or Debit Card</option>
           <option value="bank" id="venuePmChoiceBank" hidden>🏦 Bank Account</option>
         </select>
-        <!-- Only shown when there's an existing method to go back to.
-             Without it, "Change" was a one-way door. -->
-        <button type="button" id="venueCancelChangeBtn" onclick="venueCancelChange()" class="btn ghost" style="font-size: 0.85rem; display:none;">
-          Cancel
-        </button>
       </div>
 
       <!-- Card detail, expanded by the chooser -->
@@ -3099,6 +3094,13 @@
             🔒 Your bank credentials go directly to <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a> and are never seen by GigsFill.
           </p>
         </div>
+      </div>
+
+      <!-- Sits at the foot of the section, under whichever pane is open.
+           Only shown when there's an existing method to return to —
+           without it, "Change" was a one-way door. -->
+      <div id="venueCancelChangeRow" style="display:none;margin-top:16px;">
+        <button type="button" id="venueCancelChangeBtn" onclick="venueCancelChange()" class="btn ghost">Cancel</button>
       </div>
     </div>
   </div>
@@ -3925,7 +3927,7 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=24" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=25" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/messages.js?v=8"></script>

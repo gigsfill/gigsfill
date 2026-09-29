@@ -468,6 +468,26 @@ def test_cancelling_a_change_restores_the_saved_method():
     assert "loadVenueCard()" in js[start:start + 200]
 
 
+def test_cancel_uses_the_site_button_convention_and_sits_at_the_foot():
+    """Plain `btn ghost`, matching every other Cancel on the page, and placed
+    below the panes so it reads as "back out of this section"."""
+    html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
+    i = html.index('id="venueCancelChangeBtn"')
+    btn = html[i:i + 200]
+    assert 'class="btn ghost"' in btn
+    assert "font-size" not in btn, "should not override the shared button styling"
+    # Below both panes, not up in the select row.
+    assert html.index('id="venueBankPane"') < html.index('id="venueCancelChangeRow"')
+    assert html.index('id="venuePmChoice"') < html.index('id="venueCancelChangeRow"')
+
+
+def test_method_select_sizes_to_its_content():
+    html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
+    i = html.index('id="venuePmChoice"')
+    block = html[i:i + 400]
+    assert "min-width" not in block, "select should size to its longest option"
+
+
 def test_changing_payment_method_can_be_cancelled(): 
     """"Change" hid the saved method with no way back short of a reload."""
     html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
@@ -477,7 +497,7 @@ def test_changing_payment_method_can_be_cancelled():
     assert "window.venueCancelChange" in js
     # Shown when changing an existing method...
     idx = js.index("function venueUpdateCard")
-    assert "venueCancelChangeBtn" in js[idx:idx + 900]
+    assert "venueCancelChangeRow" in js[idx:idx + 900]
     # ...and hidden on first-time setup, where there's nothing to cancel to.
     idx2 = js.index("Choose how you'd like to pay")
-    assert "cancelBtn.style.display = 'none'" in js[idx2:idx2 + 300]
+    assert "cancelRow.style.display = 'none'" in js[idx2:idx2 + 300]
