@@ -383,16 +383,44 @@ def get_venue_payment_method(venue_id: int, user=Depends(get_current_user), db=D
     
     try:
         pm = stripe.PaymentMethod.retrieve(settings["stripe_payment_method_id"])
+    except Exception as e:
+        logger.warning(f"Venue {venue_id}: could not retrieve payment method: {e}")
+        return {"has_card": False}
+
+    # 2026-09-29: this used to read pm.card.* unconditionally. For a
+    # us_bank_account, `pm.card` is None, so it raised AttributeError into a
+    # bare `except` and returned has_card=False — a venue who had just
+    # successfully linked a bank saw the "add a payment method" form as if
+    # nothing had happened, while the charge path used the bank quite happily.
+    pm_type = getattr(pm, "type", "") or ""
+
+    if pm_type == "us_bank_account":
+        bank = getattr(pm, "us_bank_account", None)
+        return {
+            "has_card": True,          # kept: older cached JS keys off this
+            "type": "us_bank_account",
+            "bank_name": getattr(bank, "bank_name", "") or "Bank account",
+            "account_type": getattr(bank, "account_type", "") or "",
+            "last4": getattr(bank, "last4", "") or "",
+            "payment_method_id": pm.id,
+        }
+
+    if pm_type == "card" and getattr(pm, "card", None):
         return {
             "has_card": True,
+            "type": "card",
             "brand": pm.card.brand,
             "last4": pm.card.last4,
             "exp_month": pm.card.exp_month,
             "exp_year": pm.card.exp_year,
-            "payment_method_id": pm.id
+            "payment_method_id": pm.id,
         }
-    except Exception:
-        return {"has_card": False}
+
+    # A type we don't render yet. Say it exists rather than pretending the
+    # venue has nothing on file — the charge path can still use it.
+    logger.warning(f"Venue {venue_id}: unrendered payment method type {pm_type!r}")
+    return {"has_card": True, "type": pm_type or "unknown",
+            "last4": "", "payment_method_id": pm.id}
 
 
 @router.delete("/api/stripe/venue/{venue_id}/payment-method")

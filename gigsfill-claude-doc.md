@@ -8,6 +8,22 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-29 (Bank accounts were invisible in the venue UI; Payment Method section rewritten):** A venue linked a bank successfully, Stripe confirmed it, and the GigsFill page showed nothing — still offering the "add a payment method" form as though the link had failed.
+
+  **Cause:** `GET /api/stripe/venue/{id}/payment-method` read `pm.card.brand` unconditionally. For a `us_bank_account`, `pm.card` is `None`, so it raised `AttributeError` straight into a bare `except Exception` and returned `{"has_card": False}`. Nothing was actually wrong — the row was saved and the charge path would have used the bank quite happily — but every UI surface keyed off that response, so the venue had no way to tell. The endpoint is now type-aware (card / `us_bank_account` / anything else), and an unrendered type still reports `has_card: True` rather than implying the venue has nothing on file.
+
+  The bare `except` is what made this expensive to find: it turned a one-line attribute error into a plausible-looking "no card" answer. Worth remembering when reading the other `except Exception: return` blocks in that module.
+
+  **Payment Method section rewritten.** It previously showed the card form always expanded, with the bank option buried beneath it behind a divider, and the saved method was *replaced* by the form once you went to change it:
+  - Two peer buttons — **Pay by Credit Card** / **Pay by Bank** — in the site's standard `btn primary` / `btn ghost` styling, the selected one taking `primary`. Clicking expands that method's detail below; clicking again collapses it.
+  - The saved method now **always stays on screen** with its own card, showing bank name + account type for ACH or brand + expiry for cards.
+  - A separate amber panel for a bank awaiting microdeposits, with the Stripe confirmation link — distinct from "saved", because that account exists but **cannot be charged yet** and silence would let the venue assume they were finished.
+  - The Pay by Bank button only appears when ACH is enabled platform-wide.
+
+  Three implementation traps handled: `initVenueStripeCard` writes error HTML into its container, so it now targets `venueCardPane` rather than the whole chooser — pointed at the chooser, a Stripe config failure would have deleted the working bank rail along with the broken card one; the Stripe card Element mounts only when its pane is actually visible, since mounting into a hidden container gives a zero-height iframe; and re-opening the pane no longer stacks a second Element on a live iframe.
+
+  - 5 new tests (`tests/test_ach.py` now 53).
+
 - **2026-09-29 (ACH follow-ups: microdeposits, billing identity, admin visibility):** Closing the three gaps left open by the ACH ship, plus one live bug the first real attempt surfaced.
 
   **Billing identity was broken for every venue.** The "Pay by Bank" flow read the billing name and email from `/api/venues/{id}` in the browser — but the **`venues` table has no `email` column at all**. A venue's contact address lives on the owning user (and `entity_users` for multi-user accounts), so the lookup always came back empty and every venue hit the "add a venue name and contact email" guard. Stripe requires both for `us_bank_account`. Now resolved server-side in the setup-intent response via `get_all_entity_users`, and the dead client-side helper is gone. A test pins the missing column so the client-side lookup isn't reintroduced.

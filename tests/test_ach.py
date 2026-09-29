@@ -357,3 +357,63 @@ def test_ach_in_flight_is_empty_when_nothing_is_processing(db, seed_entities):
     out = ach_in_flight(admin=A(), db=db)
     assert out == {"charges": [], "count": 0, "stale_count": 0, "total_cents": 0,
                    "held_payout_cents": 0, "pending_verification": []}
+
+
+# ── payment method display ──────────────────────────────────────────
+
+def test_payment_method_endpoint_describes_a_bank_account():
+    """It used to read pm.card.* unconditionally.
+
+    For a us_bank_account `pm.card` is None, so it raised AttributeError into
+    a bare `except` and returned has_card=False — a venue who had just linked
+    a bank saw the empty "add a payment method" form as though nothing had
+    happened, while the charge path used the bank quite happily.
+    """
+    src = STRIPE_CONNECT.read_text()
+    idx = src.index("def get_venue_payment_method")
+    block = src[idx:idx + 3000]
+    assert 'pm_type == "us_bank_account"' in block
+    assert '"bank_name"' in block
+    # The card branch must be guarded rather than assumed.
+    assert 'pm_type == "card" and getattr(pm, "card", None)' in block
+
+
+def test_payment_method_endpoint_does_not_hide_unknown_types():
+    """An unrendered type must still report that a method exists — claiming
+    otherwise would prompt the venue to add a second one."""
+    src = STRIPE_CONNECT.read_text()
+    idx = src.index("def get_venue_payment_method")
+    block = src[idx:idx + 3000]
+    tail = block[block.index("unrendered payment method type"):]
+    assert '"has_card": True' in tail
+
+
+def test_saved_method_stays_visible_and_both_rails_are_offered():
+    """The UI contract the rewrite is built on."""
+    html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
+    for el in ("venuePickCardBtn", "venuePickBankBtn", "venueCardPane",
+               "venueBankPane", "venueAchPending"):
+        assert f'id="{el}"' in html, f"{el} missing from the payment section"
+    # The old always-expanded card form + buried bank divider is gone.
+    assert 'id="venueAchSection"' not in html
+
+
+def test_card_element_is_only_mounted_into_a_visible_pane():
+    """Mounting Stripe's Element into a hidden container yields a
+    zero-height iframe the venue can't type into."""
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    idx = js.index("window.venuePickMethod")
+    block = js[idx:idx + 900]
+    assert "initVenueStripeCard()" in block
+    assert "!isOpen" in block
+
+
+def test_stripe_config_error_cannot_wipe_the_bank_option():
+    """initVenueStripeCard writes error HTML into its container. Pointed at
+    the whole chooser it would delete the bank rail too."""
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    idx = js.index("async function initVenueStripeCard")
+    block = js[idx:idx + 600]
+    assert "getElementById('venueCardPane')" in block

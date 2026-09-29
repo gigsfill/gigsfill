@@ -3000,54 +3000,96 @@
   <div class="content-card" style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
     <h2 class="section-header gradient-title" style="margin: 0 0 20px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Payment Method</h2>
     
-    <!-- Current Card Display -->
+    <!-- 2026-09-29 rewrite. Was: a card form always expanded, with the bank
+         option buried underneath it behind a divider. Now the two rails are
+         peers — pick one, its details expand below — and whatever is saved
+         stays on screen permanently instead of being replaced by the form. -->
+
+    <!-- Saved method. Shown whenever one exists, card or bank. -->
     <div id="venueCurrentCard" style="display: none; margin-bottom: 20px;">
-      <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 16px; display: flex; justify-content: space-between; align-items: center;">
+      <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
         <div>
-          <div style="font-size: 0.75rem; color: var(--text-gray); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Saved Card</div>
+          <div style="font-size: 0.75rem; color: var(--text-gray); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;" id="venuePmLabel">Saved Payment Method</div>
           <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-white);">
             <span id="venueCardBrand" style="text-transform: uppercase;"></span> •••• <span id="venueCardLast4"></span>
           </div>
-          <div style="font-size: 0.8rem; color: var(--text-gray); margin-top: 2px;">Expires <span id="venueCardExp"></span></div>
+          <div style="font-size: 0.8rem; color: var(--text-gray); margin-top: 2px;" id="venuePmSubline">Expires <span id="venueCardExp"></span></div>
         </div>
         <div style="display: flex; gap: 8px;">
-          <button onclick="venueUpdateCard()" class="btn primary" style="font-size: 0.75rem;">Update</button>
+          <button onclick="venueUpdateCard()" class="btn primary" style="font-size: 0.75rem;">Change</button>
           <button onclick="venueRemoveCard()" style="font-size: 0.75rem;padding:8px 16px;background:#ef4444;border:1px solid #ef4444;color:#fff;border-radius:6px;cursor:pointer;font-weight:600;" onmouseover="this.style.background='#dc2626';this.style.borderColor='#dc2626';" onmouseout="this.style.background='#ef4444';this.style.borderColor='#ef4444';">Remove</button>
         </div>
       </div>
-      <p style="color: var(--text-gray); font-size: 0.7rem; margin-top: 8px; margin-bottom: 0;">🔒 Card stored securely by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>. GigsFill never sees or stores your full card number.</p>
+      <p style="color: var(--text-gray); font-size: 0.7rem; margin-top: 8px; margin-bottom: 0;">🔒 Stored securely by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>. GigsFill never sees or stores your full account details.</p>
     </div>
-    
-    <!-- Add Card Form -->
-    <div id="venueAddCardSection">
-      <p style="color: var(--text-gray); font-size: 0.85rem; margin-bottom: 16px; text-align: left;">
-        Add a credit or debit card to enable automatic payments for gig bookings.
-      </p>
-      <div id="venueCardElement" style="background: #151b28; border: 1px solid #333; border-radius: 6px; padding: 14px; margin-bottom: 16px;"></div>
-      <button id="venueAddCardBtn" onclick="venueSaveCard()" class="btn primary" style="font-size: 0.85rem;">
-        💳 Save Card
-      </button>
-      <div id="venueCardError" style="color: #ef4444; font-size: 0.8rem; margin-top: 8px; display: none;"></div>
-      <div id="venueCardSuccess" style="color: #10b981; font-size: 0.8rem; margin-top: 8px; display: none;">✓ Card saved successfully!</div>
-      <!-- 2026-09-29 (ACH): shown only when the platform has bank payments
-           enabled — venueSaveCard()'s setup-intent response carries the flag.
-           Kept as a separate button rather than folding card + bank into one
-           Payment Element, so the live card flow is untouched. -->
-      <div id="venueAchSection" style="display:none;margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.08);">
-        <p style="color: var(--text-gray); font-size: 0.8rem; margin: 0 0 10px 0; text-align: left;">
-          Or pay directly from a bank account instead of a card. Bank payments take a few
-          business days to clear, and the artist is paid once they do — so please keep the
-          account funded.
+
+    <!-- Bank awaiting microdeposit confirmation. Distinct from "saved":
+         the account exists but cannot be charged yet, and saying nothing
+         would let the venue assume they were done. -->
+    <div id="venueAchPending" style="display:none;margin-bottom:20px;">
+      <div style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.35); border-radius: 8px; padding: 16px;">
+        <div style="font-size: 0.75rem; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 6px;">Bank Account — Verification Needed</div>
+        <div style="font-size: 0.85rem; color: var(--text-white); margin-bottom: 8px;">
+          Bank •••• <span id="venueAchPendingLast4"></span> — we sent two small deposits. They arrive in 1–2 business days.
+        </div>
+        <p style="font-size: 0.78rem; color: var(--text-gray); margin: 0 0 10px 0;">
+          Confirm the amounts to finish setup. Until then this account can't be charged.
         </p>
-        <button id="venueAddBankBtn" onclick="venueSaveBankAccount()" class="btn ghost" style="font-size: 0.85rem;">
+        <a id="venueAchVerifyLink" href="#" target="_blank" rel="noopener" class="btn primary" style="font-size: 0.78rem; display:none;">Confirm Deposits</a>
+      </div>
+    </div>
+
+    <!-- Chooser. Both rails as equal options. -->
+    <div id="venueAddCardSection">
+      <p style="color: var(--text-gray); font-size: 0.85rem; margin-bottom: 14px; text-align: left;" id="venuePmIntro">
+        Choose how you'd like to pay for gig bookings.
+      </p>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
+        <button type="button" id="venuePickCardBtn" onclick="venuePickMethod('card')" class="btn primary" style="font-size: 0.85rem;">
+          💳 Pay by Credit Card
+        </button>
+        <button type="button" id="venuePickBankBtn" onclick="venuePickMethod('bank')" class="btn ghost" style="font-size: 0.85rem; display:none;">
           🏦 Pay by Bank
         </button>
-        <div id="venueBankError" style="color: #ef4444; font-size: 0.8rem; margin-top: 8px; display: none;"></div>
       </div>
-      <div style="margin-top: 14px; padding: 10px 14px; background: rgba(99,91,255,0.06); border: 1px solid rgba(99,91,255,0.15); border-radius: 6px;">
-        <p style="color: var(--text-gray); font-size: 0.7rem; line-height: 1.5; margin: 0;">
-          🔒 Your card details are securely stored by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>, a PCI Level 1 certified payment processor. GigsFill never sees or stores your full card number.
+
+      <!-- Card detail, expanded by the chooser -->
+      <div id="venueCardPane" style="display:none;">
+        <p style="color: var(--text-gray); font-size: 0.8rem; margin: 0 0 12px 0;">
+          Your card is charged the day after each gig. The artist is paid right after.
         </p>
+        <div id="venueCardElement" style="background: #151b28; border: 1px solid #333; border-radius: 6px; padding: 14px; margin-bottom: 16px;"></div>
+        <button id="venueAddCardBtn" onclick="venueSaveCard()" class="btn primary" style="font-size: 0.85rem;">
+          Save Card
+        </button>
+        <div id="venueCardError" style="color: #ef4444; font-size: 0.8rem; margin-top: 8px; display: none;"></div>
+        <div id="venueCardSuccess" style="color: #10b981; font-size: 0.8rem; margin-top: 8px; display: none;">✓ Card saved successfully!</div>
+        <div style="margin-top: 14px; padding: 10px 14px; background: rgba(99,91,255,0.06); border: 1px solid rgba(99,91,255,0.15); border-radius: 6px;">
+          <p style="color: var(--text-gray); font-size: 0.7rem; line-height: 1.5; margin: 0;">
+            🔒 Your card details are stored by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>, a PCI Level 1 certified payment processor. GigsFill never sees or stores your full card number.
+          </p>
+        </div>
+      </div>
+
+      <!-- Bank detail, expanded by the chooser -->
+      <div id="venueBankPane" style="display:none;">
+        <p style="color: var(--text-gray); font-size: 0.8rem; margin: 0 0 12px 0;">
+          Pay directly from a bank account. You'll sign in to your bank through Stripe to
+          connect it — most banks verify instantly, and some take 1–2 business days.
+        </p>
+        <p style="color: var(--text-gray); font-size: 0.8rem; margin: 0 0 14px 0;">
+          Bank payments take a few business days to clear, and the artist is paid once they
+          do — so please keep the account funded.
+        </p>
+        <button id="venueAddBankBtn" onclick="venueSaveBankAccount()" class="btn primary" style="font-size: 0.85rem;">
+          Connect Bank Account
+        </button>
+        <div id="venueBankError" style="color: #ef4444; font-size: 0.8rem; margin-top: 8px; display: none;"></div>
+        <div style="margin-top: 14px; padding: 10px 14px; background: rgba(99,91,255,0.06); border: 1px solid rgba(99,91,255,0.15); border-radius: 6px;">
+          <p style="color: var(--text-gray); font-size: 0.7rem; line-height: 1.5; margin: 0;">
+            🔒 Your bank credentials go directly to <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a> and are never seen by GigsFill.
+          </p>
+        </div>
       </div>
     </div>
   </div>
@@ -3874,7 +3916,7 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=21" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=22" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/messages.js?v=8"></script>

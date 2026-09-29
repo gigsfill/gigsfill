@@ -57,7 +57,18 @@ function showPaymentConfirm(title, message, onConfirm) {
 
 // Initialize Stripe Elements
 async function initVenueStripeCard() {
-  var cardSection = document.getElementById('venueAddCardSection');
+  // 2026-09-29: target the card pane, not the whole chooser. This function
+  // writes error HTML into `cardSection`, and the chooser now also holds the
+  // bank button and bank pane — blowing it away would take the working rail
+  // down with the broken one.
+  var cardSection = document.getElementById('venueCardPane')
+                 || document.getElementById('venueAddCardSection');
+
+  // Toggling the pane calls this again; don't stack a second Element on top
+  // of a live iframe.
+  var _mount = document.getElementById('venueCardElement');
+  if (venueCardElement && _mount && _mount.children.length) return;
+  if (_mount) _mount.innerHTML = '';
   try {
     var configRes = await fetch('/api/stripe/config', { credentials: 'include' });
     if (!configRes.ok) {
@@ -118,20 +129,126 @@ async function loadVenueCard() {
     var res = await fetch('/api/stripe/venue/' + venueId + '/payment-method', { credentials: 'include' });
     if (!res.ok) { initVenueStripeCard(); return; }
     var data = await res.json();
-    if (data.has_card) {
-      document.getElementById('venueCurrentCard').style.display = 'block';
-      document.getElementById('venueAddCardSection').style.display = 'none';
-      document.getElementById('venueCardBrand').textContent = (data.brand || 'Card').toUpperCase();
-      document.getElementById('venueCardLast4').textContent = data.last4;
-      document.getElementById('venueCardExp').textContent = data.exp_month + '/' + data.exp_year;
-    } else {
-      document.getElementById('venueCurrentCard').style.display = 'none';
-      document.getElementById('venueAddCardSection').style.display = 'block';
-      initVenueStripeCard();
-      venueCheckAchAvailable();
-    }
-  } catch (e) { console.error('Load card error:', e); initVenueStripeCard(); }
+    venueRenderSavedMethod(data);
+  } catch (e) { console.error('Load payment method error:', e); venueRenderSavedMethod({}); }
 }
+
+// ── Payment method display (2026-09-29 rewrite) ─────────────────────
+// Previously the saved method was replaced by the add-card form and the
+// bank option lived under a divider inside it. Now the saved method always
+// stays on screen, and the two rails are peer choices that expand.
+
+// Renders whatever is on file. Handles both card and us_bank_account: the
+// endpoint used to read pm.card.* unconditionally, so a venue who had just
+// linked a bank saw the empty "add a payment method" form as though nothing
+// had happened.
+function venueRenderSavedMethod(data) {
+  var saved   = document.getElementById('venueCurrentCard');
+  var chooser = document.getElementById('venueAddCardSection');
+  var intro   = document.getElementById('venuePmIntro');
+  if (!saved || !chooser) return;
+
+  if (data && data.has_card) {
+    var label   = document.getElementById('venuePmLabel');
+    var brandEl = document.getElementById('venueCardBrand');
+    var last4El = document.getElementById('venueCardLast4');
+    var subline = document.getElementById('venuePmSubline');
+
+    if (data.type === 'us_bank_account') {
+      if (label)   label.textContent = 'Saved Bank Account';
+      if (brandEl) brandEl.textContent = data.bank_name || 'BANK ACCOUNT';
+      if (last4El) last4El.textContent = data.last4 || '';
+      if (subline) {
+        var acct = (data.account_type || '').trim();
+        subline.textContent = acct
+          ? acct.charAt(0).toUpperCase() + acct.slice(1) + ' account · debited the day after each gig'
+          : 'Debited the day after each gig';
+      }
+    } else {
+      if (label)   label.textContent = 'Saved Card';
+      if (brandEl) brandEl.textContent = (data.brand || 'Card').toUpperCase();
+      if (last4El) last4El.textContent = data.last4 || '';
+      if (subline) {
+        subline.textContent = (data.exp_month && data.exp_year)
+          ? 'Expires ' + data.exp_month + '/' + data.exp_year
+          : 'Charged the day after each gig';
+      }
+    }
+
+    saved.style.display = 'block';
+    chooser.style.display = 'none';
+    venueCollapsePanes();
+  } else {
+    saved.style.display = 'none';
+    chooser.style.display = 'block';
+    if (intro) intro.textContent = "Choose how you'd like to pay for gig bookings.";
+    venueCollapsePanes();
+    venueCheckAchAvailable();
+  }
+
+  venueRenderAchPending();
+}
+
+// A bank still awaiting microdeposits isn't "saved" — it can't be charged.
+// Surfaced separately so the venue doesn't assume they're finished.
+async function venueRenderAchPending() {
+  var box = document.getElementById('venueAchPending');
+  if (!box) return;
+  var params = new URLSearchParams(window.location.search);
+  var venueId = params.get('venue_id');
+  if (!venueId) { box.style.display = 'none'; return; }
+  try {
+    var r = await fetch('/api/stripe/venue/' + venueId + '/ach-pending-verification', { credentials: 'include' });
+    if (!r.ok) { box.style.display = 'none'; return; }
+    var d = await r.json();
+    if (!d.pending) { box.style.display = 'none'; return; }
+    var l4 = document.getElementById('venueAchPendingLast4');
+    if (l4) l4.textContent = d.bank_last4 || '';
+    var link = document.getElementById('venueAchVerifyLink');
+    if (link) {
+      if (d.verification_url) { link.href = d.verification_url; link.style.display = 'inline-block'; }
+      else { link.style.display = 'none'; }
+    }
+    box.style.display = 'block';
+  } catch (e) { box.style.display = 'none'; }
+}
+
+function venueCollapsePanes() {
+  ['venueCardPane', 'venueBankPane'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  venueSetPickActive(null);
+}
+
+// The chooser buttons read as selected/unselected via the site's own
+// primary/ghost classes rather than bespoke styling.
+function venueSetPickActive(which) {
+  var card = document.getElementById('venuePickCardBtn');
+  var bank = document.getElementById('venuePickBankBtn');
+  if (card) card.className = (which === 'card') ? 'btn primary' : 'btn ghost';
+  if (bank) bank.className = (which === 'bank') ? 'btn primary' : 'btn ghost';
+  if (which === null && card) card.className = 'btn primary';
+  if (which === null && bank) bank.className = 'btn ghost';
+}
+
+window.venuePickMethod = function (which) {
+  var cardPane = document.getElementById('venueCardPane');
+  var bankPane = document.getElementById('venueBankPane');
+  if (!cardPane || !bankPane) return;
+
+  var opening = (which === 'card') ? cardPane : bankPane;
+  var other   = (which === 'card') ? bankPane : cardPane;
+  var isOpen  = opening.style.display === 'block';
+
+  other.style.display = 'none';
+  opening.style.display = isOpen ? 'none' : 'block';
+  venueSetPickActive(isOpen ? null : which);
+
+  // Mount the Stripe card Element only once the card pane is actually open —
+  // mounting into a hidden container gives Stripe a zero-height iframe.
+  if (which === 'card' && !isOpen) initVenueStripeCard();
+};
 
 // Save card via SetupIntent
 async function venueSaveCard() {
@@ -164,7 +281,7 @@ async function venueSaveCard() {
     setTimeout(function() { loadVenueCard(); }, 500);
   } catch (e) {
     showPaymentModal('Card Setup Failed', e.message || 'Failed to save card. Please try again.', 'error');
-  } finally { btn.disabled = false; btn.textContent = '💳 Save Card'; }
+  } finally { btn.disabled = false; btn.textContent = 'Save Card'; }
 }
 
 // ── ACH / bank payments (2026-09-29) ────────────────────────────────
@@ -190,8 +307,8 @@ async function venueCheckAchAvailable() {
     });
     if (!res.ok) return;
     var setup = await res.json();
-    var section = document.getElementById('venueAchSection');
-    if (section && setup.ach_enabled) section.style.display = 'block';
+    var btn = document.getElementById('venuePickBankBtn');
+    if (btn && setup.ach_enabled) btn.style.display = 'inline-block';
   } catch (e) { /* bank option simply stays hidden */ }
 }
 
@@ -305,22 +422,28 @@ async function venueSaveBankAccount() {
       showPaymentModal('Bank Setup Failed', e.message || 'Please try again.', 'error');
     }
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🏦 Pay by Bank'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Connect Bank Account'; }
   }
 }
 
 function venueUpdateCard() {
   document.getElementById('venueCurrentCard').style.display = 'none';
   document.getElementById('venueAddCardSection').style.display = 'block';
-  document.getElementById('venueCardSuccess').style.display = 'none';
-  document.getElementById('venueCardError').style.display = 'none';
-  document.getElementById('venueCardElement').innerHTML = '';
-  initVenueStripeCard();
-  // Switching payment method is exactly when a venue would choose bank over
-  // card, so the ACH option has to appear here too — not just on the
-  // first-time, no-card-on-file path.
+  var intro = document.getElementById('venuePmIntro');
+  if (intro) intro.textContent = 'Choose a different payment method. Your current one stays active until you save the new one.';
+  var succ = document.getElementById('venueCardSuccess');
+  var err  = document.getElementById('venueCardError');
+  if (succ) succ.style.display = 'none';
+  if (err)  err.style.display = 'none';
+  var el = document.getElementById('venueCardElement');
+  if (el) el.innerHTML = '';
+  venueCardElement = null;
+  venueCollapsePanes();
+  // Switching method is exactly when a venue would pick bank over card, so
+  // the bank option has to be offered here too, not only on first setup.
   venueCheckAchAvailable();
 }
+
 
 function venueRemoveCard() {
   showPaymentConfirm('Remove Card?', "You won't be able to book gigs until you add a new card.", function() {
