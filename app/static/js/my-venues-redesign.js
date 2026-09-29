@@ -38,6 +38,86 @@ class MyVenuesRedesign {
     if (window._artistAccessDenied) return;
     await this.loadVenues();
     this.render();
+    this.loadPreferredInvites();
+  }
+
+  // 2026-09-29: pending Preferred Artist invitations. A venue inviting an
+  // artist writes status='invited', which grants nothing until the artist
+  // answers here — see routes/preferred_artists.py make_artist_preferred.
+  // Fetched separately from loadVenues() because /api/artist/preferred-venues
+  // is a different shape and filters to the statuses the venue list cares about.
+  async loadPreferredInvites() {
+    const el = document.getElementById('preferredInvitesBanner');
+    if (!el) return;
+    const artistId = new URLSearchParams(window.location.search).get('artist_id');
+    if (!artistId) return;
+    let invites = [];
+    try {
+      const r = await fetch(`/api/artists/${artistId}/preferred-invitations`, { credentials: 'include' });
+      if (!r.ok) return;
+      invites = await r.json();
+    } catch (e) {
+      console.error('loadPreferredInvites failed', e);
+      return;
+    }
+    if (!Array.isArray(invites) || !invites.length) { el.innerHTML = ''; return; }
+
+    const esc = (v) => String(v == null ? '' : v)
+      .replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+
+    el.innerHTML = `
+      <div style="margin-bottom:14px;padding:12px 14px;border:1px solid rgba(139,92,246,0.4);
+                  border-left:3px solid #8b5cf6;border-radius:8px;background:rgba(139,92,246,0.06);">
+        <div style="font-size:0.75rem;font-weight:700;color:#a78bfa;text-transform:uppercase;
+                    letter-spacing:0.05em;margin-bottom:10px;">
+          Preferred Artist ${invites.length === 1 ? 'Invitation' : 'Invitations'} (${invites.length})
+        </div>
+        ${invites.map(inv => `
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+                      padding:8px 0;border-top:1px solid rgba(255,255,255,0.06);">
+            <div style="flex:1;min-width:180px;">
+              <div style="font-weight:600;font-size:0.9rem;">${esc(inv.venue_name)}</div>
+              <div style="font-size:0.78rem;color:var(--text-muted);">
+                ${esc([inv.city, inv.state].filter(Boolean).join(', ')) || 'Location not listed'}
+                ${inv.venue_absorbs_artist_fee ? ' &middot; <span style="color:#22c55e;">covers all fees</span>' : ''}
+              </div>
+            </div>
+            <a href="/app/venue-profile.html?venue_id=${encodeURIComponent(inv.venue_id)}"
+               style="font-size:0.78rem;color:#06b6d4;text-decoration:none;white-space:nowrap;">View venue</a>
+            <button type="button" onclick="myVenuesRedesign.respondToInvite(${inv.id}, 'accept')"
+              style="padding:5px 14px;border-radius:5px;border:none;cursor:pointer;font-size:0.78rem;
+                     font-weight:600;background:#22c55e;color:#fff;white-space:nowrap;">Accept</button>
+            <button type="button" onclick="myVenuesRedesign.respondToInvite(${inv.id}, 'decline')"
+              style="padding:5px 14px;border-radius:5px;cursor:pointer;font-size:0.78rem;font-weight:600;
+                     background:transparent;color:var(--text-gray);border:1px solid var(--border);
+                     white-space:nowrap;">Decline</button>
+          </div>`).join('')}
+      </div>`;
+  }
+
+  async respondToInvite(preferredId, action) {
+    try {
+      const r = await fetch(`/api/preferred-invitations/${preferredId}/respond`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        window.showErrorModal && window.showErrorModal(
+          'Could not respond', d.detail || 'Please try again.');
+        return;
+      }
+      // Accepting changes the venue list, so reload it as well as the banner.
+      await this.loadVenues();
+      this.render();
+      this.loadPreferredInvites();
+      if (window.updateVenuesBadge) window.updateVenuesBadge();
+    } catch (e) {
+      console.error('respondToInvite failed', e);
+      window.showErrorModal && window.showErrorModal('Could not respond', 'Please try again.');
+    }
   }
 
 
@@ -301,6 +381,12 @@ class MyVenuesRedesign {
     const isActive = (filter) => this.activeFilters.has(filter);
 
     container.innerHTML = `
+      <!-- 2026-09-29: pending Preferred Artist invitations. Rendered as its
+           own block above the venue list rather than woven into it — an
+           invitation needs an answer, so it shouldn't be a row the artist
+           scrolls past. Populated asynchronously by loadPreferredInvites(). -->
+      <div id="preferredInvitesBanner"></div>
+
       <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.75rem; flex-wrap: wrap;">
         <h2 style="margin: 0; font-size: 1rem; white-space: nowrap;">My Venues</h2>
         

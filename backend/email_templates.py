@@ -229,6 +229,39 @@ TEMPLATES = {
 </html>'''
     },
 
+    "artist_preferred_invited": {
+        "subject": "{{venue_name}} wants you as a Preferred Artist",
+        "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tbody>
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tbody>
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;"><img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height: 40px; width: 160px; max-width: 160px; display: block; border: 0; outline: none;"></td>
+</tr>
+<tr>
+<td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111827;">You&#39;ve Been Invited</h1>
+<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">{{artist_name}} &mdash; <strong>{{venue_name}}</strong> would like you as one of their Preferred Artists.</p>
+{{#has_message}}<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0;"><tbody><tr><td style="padding: 14px 16px; background-color: #f8f9fa; border-left: 3px solid #06b6d4; border-radius: 4px;"><p style="margin: 0 0 6px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #6b7280;">A note from {{venue_name}}</p><p style="margin: 0; font-size: 14px; line-height: 1.6; color: #374151;">{{message}}</p></td></tr></tbody></table>{{/has_message}}
+<p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">Being preferred at a venue means you can book their open gigs directly, without waiting on approval each time.</p>
+<p style="margin: 0 0 24px 0; font-size: 14px; color: #6b7280;"><strong>Nothing changes until you accept.</strong> Take a look at the venue first &mdash; you can accept or decline.</p>
+<a href="https://gigsfill.com/app/artist-profile.html?artist_id={{artist_id}}&amp;tab=preferred" style="display: inline-block; background: #1a1a2e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">Review Invitation</a></td>
+</tr>
+<tr>
+<td style="padding: 24px 40px; background-color: #f8f9fa; border-top: 1px solid #eee;">
+<p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">&copy; 2026 GigsFill &middot; <a href="https://gigsfill.com" style="color: #1a1a2e; text-decoration: none;">gigsfill.com</a></p>
+</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>'''
+    },
+
     "artist_preferred_approved": {
         "subject": "You're now preferred at {{venue_name}}",
         "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">

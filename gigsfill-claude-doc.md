@@ -8,6 +8,23 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-29 (Preferred Artist invitations — artists must now accept):** `POST /api/venues/{vid}/artists/{aid}/make-preferred` used to set `status='approved'` outright. The artist was never asked and never told — they could be "preferred" at a venue they had never heard of and only find out by noticing.
+
+  That matters because preferred status is not a label. It **bypasses the venue's booking-approval gate** and can carry `pay_dollars_override` / `pay_cents_override` / `frequency_days_override` values the artist never agreed to.
+
+  New lifecycle: venue invites → `status='invited'` → artist accepts (`'approved'`) or declines (`'denied'`).
+
+  - **`'invited'` grants nothing.** Verified before building: every privilege check in the codebase tests `status = 'approved'` explicitly — `gigs.py` (pay override + approval gate), `contracts.py`, `gig_hold.py`, `email_dispatch.py`, `open_gig_digest.py`, `scheduler.py`. There are no `status != 'denied'` or status-blind reads that would leak privileges to a new status. Re-confirmed empirically against the live DB.
+  - [preferred_artists.py](backend/routes/preferred_artists.py) — `make_artist_preferred` now writes `'invited'`, notifies in-app, and emails every artist user. Optional `{"message": "..."}` body carries a note from the venue into the email so it doesn't read as a cold ping. Returns `{"already": true}` rather than downgrading an existing `approved` relationship back to `invited`. Two new endpoints: `GET /api/artists/{aid}/preferred-invitations` and `POST /api/preferred-invitations/{id}/respond`. Accept/decline is authorized on the **artist** side (`check_artist_access`) — only the invitee can answer — and answering a non-`invited` row returns 409 so a late decline can't reverse an acceptance that already took effect. The venue is notified either way.
+  - [email_templates.py](backend/email_templates.py) — new `artist_preferred_invited`, with a `{{#has_message}}` block for the venue's note. Copy leads with "Nothing changes until you accept."
+  - [my-artists.js](app/static/js/my-artists.js) — the venue's button now opens a confirm modal with an optional note, and says "Invitation Sent" rather than implying the artist is already preferred.
+  - [my-venues-redesign.js](app/static/js/my-venues-redesign.js) — artist-side invitations banner above My Venues, with venue name, location, a "covers all fees" marker where applicable, a link to the venue profile, and Accept / Decline. Rendered as its own block rather than a row in the list, since an invitation needs an answer rather than being scrolled past.
+  - **`declined` reuses `'denied'`** rather than adding a fourth status — it's already terminal and already handled everywhere. A venue can invite again later, which overwrites it.
+
+  **Noted, not fixed:** two queries in [gig_hold.py](backend/services/gig_hold.py) (~L103, ~L419) read `preferred_artists.frequency_days_override` **without filtering on status**. Harmless for invitations (a fresh row's override is NULL, so `COALESCE` falls through to the venue default) but a `denied` or `revoked` row with an override set would still apply it. Pre-existing; worth a separate look.
+
+  Cache-busters: `my-artists.js ?v=5 → ?v=6`, `my-venues-redesign.js ?v=17 → ?v=18`. Suite green (170 passed).
+
 - **2026-09-29 (Venue-elected fee absorption — "we cover the artist's share"):** A venue can now opt to pay the full platform fee so the artist receives 100% of the listed pay. GigsFill's total take is unchanged; only who pays it moves.
 
   **Why it exists:** competitive research on [Jam Juice](https://jamjuice.com/) — a Nashville booking platform at ~900 musicians / ~700 bookings a month — showed it deducting 2.5% from musicians' pay until AFM Local 257 pushed back and it dropped the fee on 2026-09-01. GigsFill's `platform_fee_split` default is `split`, so artists bear 5% of a 10% fee — double what Jam Juice was charging. Rather than pick a side platform-wide, this makes it a per-venue choice and lets opt-in rates answer the pricing question empirically.

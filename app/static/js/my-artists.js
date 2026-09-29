@@ -273,23 +273,57 @@ class MyArtists {
   // Note: the bare alert() fallback on network errors was kept in spirit
   // by routing failures through showErrorModal — visible feedback rather
   // than the legacy native alert.
+  // 2026-09-29: this now sends an INVITATION rather than granting
+  // preferred status outright. The artist accepts or declines — preferred
+  // status changes real things for them (bypasses the venue's booking
+  // approval gate, can carry pay/frequency overrides), so it shouldn't be
+  // applied to someone who was never asked. Optional note goes in the email.
   async makePreferred(artistId, artistName) {
-    try {
-      const r = await fetch(`/api/venues/${this.venueId}/artists/${artistId}/make-preferred`, {
-        method: 'POST', credentials: 'include'
-      });
-      if (r.ok) {
-        await this.loadArtists();
-        this.activeFilters.clear();
-        this.activeFilters.add('preferred');
-        this.render();
-      } else {
-        const d = await r.json().catch(() => ({}));
-        window.showErrorModal && window.showErrorModal('Could not make preferred', d.detail || 'Please try again.');
-      }
-    } catch (e) {
-      console.error('makePreferred failed', e);
-    }
+    const safeName = (artistName || 'this artist').replace(/[<>&"']/g,
+      c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]);
+    window.showStyledModal(
+      'Invite as Preferred Artist',
+      `<p style="margin:0 0 12px 0;">Invite <strong>${safeName}</strong> to become a Preferred Artist at your venue.</p>` +
+      `<p style="margin:0 0 14px 0;color:var(--text-gray);font-size:0.85rem;">They'll get an email and can review your venue before accepting. They become preferred only once they accept.</p>` +
+      `<label style="display:block;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-gray);margin-bottom:6px;">Add a note (optional)</label>` +
+      `<textarea id="prefInviteMsg" rows="3" maxlength="500" placeholder="Loved your set — we'd like you on our regular list."
+         style="width:100%;box-sizing:border-box;padding:9px 11px;border-radius:6px;border:1px solid var(--border);background:var(--bg-dark,#0f1419);color:var(--text);font-size:0.85rem;resize:vertical;"></textarea>`,
+      [
+        { text: 'Cancel', style: 'ghost' },
+        { text: 'Send Invitation', style: 'primary', onClick: async () => {
+            const msgEl = document.getElementById('prefInviteMsg');
+            const message = msgEl ? msgEl.value.trim() : '';
+            try {
+              const r = await fetch(`/api/venues/${this.venueId}/artists/${artistId}/make-preferred`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+              });
+              if (!r.ok) {
+                const d = await r.json().catch(() => ({}));
+                window.showErrorModal && window.showErrorModal('Could not send invitation', d.detail || 'Please try again.');
+                return false;
+              }
+              const d = await r.json().catch(() => ({}));
+              await this.loadArtists();
+              this.render();
+              if (d.already) {
+                window.showSuccessModal && window.showSuccessModal('Already Preferred',
+                  `${safeName} is already a Preferred Artist at your venue.`);
+              } else {
+                window.showSuccessModal && window.showSuccessModal('Invitation Sent',
+                  `${safeName} has been invited and will get an email. They'll appear as preferred once they accept.`);
+              }
+            } catch (e) {
+              console.error('makePreferred failed', e);
+              window.showErrorModal && window.showErrorModal('Could not send invitation', 'Please try again.');
+              return false;
+            }
+          }
+        }
+      ]
+    );
   }
 
   async revokePreferred(artistId, preferredId, artistName) {

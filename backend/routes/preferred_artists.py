@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 import logging
 from sqlalchemy import text
 from backend.db import get_db
@@ -657,29 +657,205 @@ def get_preferred_artists_with_gigs(venue_id: int, db=Depends(get_db), user=Depe
 
 @router.post("/api/venues/{venue_id}/artists/{artist_id}/make-preferred")
 def make_artist_preferred(venue_id: int, artist_id: int,
+                          data: dict = Body(default={}),
                           user=Depends(get_current_user), db=Depends(get_db)):
-    """Part 10k: venue promotes a non-preferred (guest) or revoked artist to
-    approved preferred status. Upserts the preferred_artists row to 'approved'.
-    Refuses if the artist is currently banned (must unban first)."""
-    from backend.utils import check_venue_access
+    """Venue invites an artist to become preferred. The artist must accept.
+
+    2026-09-29: this used to set `status='approved'` outright — the artist
+    was never asked and never told. That's wrong: preferred status is not
+    a label, it changes real things for the artist. It bypasses the venue's
+    booking-approval gate, and it can carry `pay_*_override` /
+    `frequency_days_override` values the artist never agreed to. An artist
+    could be "preferred" at a venue they had never heard of.
+
+    Now it writes `status='invited'` and notifies the artist, who accepts
+    (→ 'approved') or declines (→ 'denied') via
+    /api/preferred-invitations/{id}/accept|decline.
+
+    `invited` grants nothing. Every privilege check in the codebase tests
+    `status = 'approved'` explicitly, so a row sitting at 'invited' is
+    inert — verified across gigs.py, contracts.py, gig_hold.py,
+    email_dispatch.py and open_gig_digest.py.
+
+    Body (optional): {"message": "..."} — a short note from the venue,
+    included in the artist's email so this doesn't read as a cold ping.
+
+    Refuses if the artist is currently banned (must unban first).
+    """
+    from backend.utils import check_venue_access, get_all_entity_users
+    from backend.services.notification_service import create_notification
     check_venue_access(db, venue_id, user.id)
+
     banned = db.execute(text(
         "SELECT 1 FROM venue_artist_bans WHERE venue_id = :vid AND artist_id = :aid"
     ), {"vid": venue_id, "aid": artist_id}).first()
     if banned:
         raise HTTPException(400, "Artist is banned — remove the ban before making them preferred.")
+
+    venue_info = db.execute(text(
+        "SELECT venue_name FROM venues WHERE id = :vid"
+    ), {"vid": venue_id}).mappings().first()
+    artist_info = db.execute(text(
+        "SELECT name FROM artists WHERE id = :aid"
+    ), {"aid": artist_id}).mappings().first()
+    if not venue_info or not artist_info:
+        raise HTTPException(404, "Venue or artist not found")
+
     existing = db.execute(text(
-        "SELECT id FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"
-    ), {"vid": venue_id, "aid": artist_id}).first()
+        "SELECT id, status FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"
+    ), {"vid": venue_id, "aid": artist_id}).mappings().first()
+
+    # Already approved — nothing to invite. Report it rather than
+    # silently downgrading a live relationship back to 'invited'.
+    if existing and existing["status"] == "approved":
+        return {"ok": True, "status": "approved", "already": True}
+
     if existing:
-        db.execute(text("UPDATE preferred_artists SET status = 'approved' WHERE id = :id"), {"id": existing[0]})
+        db.execute(text("UPDATE preferred_artists SET status = 'invited' WHERE id = :id"),
+                   {"id": existing["id"]})
+        row_id = existing["id"]
     else:
         db.execute(text("""
             INSERT INTO preferred_artists (venue_id, artist_id, status)
-            VALUES (:vid, :aid, 'approved')
+            VALUES (:vid, :aid, 'invited')
         """), {"vid": venue_id, "aid": artist_id})
+        row_id = db.execute(text(
+            "SELECT id FROM preferred_artists WHERE venue_id = :vid AND artist_id = :aid"
+        ), {"vid": venue_id, "aid": artist_id}).scalar()
+
+    _message = (data.get("message") or "").strip()[:500] if isinstance(data, dict) else ""
+
+    # In-app notification + email to every artist user. Wrapped so a mail
+    # failure can't roll back the invitation itself — the artist would
+    # still see it in-app, and a silent DB rollback here would be worse.
+    try:
+        artist_users = get_all_entity_users(db, 'artist', artist_id)
+        for au in artist_users:
+            try:
+                create_notification(
+                    db,
+                    user_id=au["user_id"],
+                    notification_type='artist_preferred_invited',
+                    title=f"{venue_info['venue_name']} invited you to be a Preferred Artist",
+                    message=(_message or
+                             f"{venue_info['venue_name']} would like you as a Preferred Artist. "
+                             f"Review the venue and accept or decline."),
+                    venue_id=venue_id,
+                    artist_id=artist_id,
+                )
+            except Exception as _ne:
+                logger.warning(f"[PREFERRED_INVITE] notification failed for user {au['user_id']}: {_ne}")
+
+        from backend.email_service import EmailService
+        email_service = EmailService(db)
+        for au in artist_users:
+            email_service.send_notification_email(
+                user_email=au["email"],
+                user_id=au["user_id"],
+                notification_type='artist_preferred_invited',
+                variables={
+                    'venue_name':  venue_info['venue_name'],
+                    'artist_name': artist_info['name'],
+                    'artist_id':   str(artist_id),
+                    'venue_id':    str(venue_id),
+                    'message':     _message,
+                    'has_message': 1 if _message else 0,
+                },
+            )
+    except Exception as e:
+        logger.error(f"[PREFERRED_INVITE] notify failed venue={venue_id} artist={artist_id}: {e}")
+
     db.commit()
-    return {"ok": True, "status": "approved"}
+    logger.info(f"[PREFERRED_INVITE] venue {venue_id} invited artist {artist_id} (row {row_id})")
+    return {"ok": True, "status": "invited", "preferred_id": row_id}
+
+
+@router.get("/api/artists/{artist_id}/preferred-invitations")
+def list_preferred_invitations(artist_id: int,
+                               user=Depends(get_current_user), db=Depends(get_db)):
+    """Pending preferred invitations for this artist, with enough venue
+    detail to decide without leaving the page."""
+    from backend.utils import check_artist_access
+    check_artist_access(db, artist_id, user.id)
+    rows = db.execute(text("""
+        SELECT pa.id, pa.venue_id, pa.created_at,
+               v.venue_name, v.city, v.state, v.description,
+               v.avg_rating, v.review_count,
+               COALESCE(v.absorbs_artist_fee, 0) AS venue_absorbs_artist_fee
+        FROM preferred_artists pa
+        JOIN venues v ON v.id = pa.venue_id
+        WHERE pa.artist_id = :aid AND pa.status = 'invited'
+        ORDER BY pa.created_at DESC, pa.id DESC
+    """), {"aid": artist_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.post("/api/preferred-invitations/{preferred_id}/respond")
+def respond_to_preferred_invitation(preferred_id: int,
+                                    data: dict = Body(default={}),
+                                    user=Depends(get_current_user), db=Depends(get_db)):
+    """Artist accepts or declines a preferred invitation.
+
+    accept  → status='approved' (privileges begin here, not at invite time)
+    decline → status='denied'   (reuses the existing terminal status rather
+                                 than adding a fourth; the venue can invite
+                                 again later, which overwrites it)
+    """
+    from backend.utils import check_artist_access, get_all_entity_users
+    from backend.services.notification_service import create_notification
+
+    action = (data.get("action") or "").strip().lower()
+    if action not in ("accept", "decline"):
+        raise HTTPException(400, "action must be 'accept' or 'decline'")
+
+    row = db.execute(text("""
+        SELECT pa.id, pa.venue_id, pa.artist_id, pa.status,
+               v.venue_name, a.name AS artist_name
+        FROM preferred_artists pa
+        JOIN venues v  ON v.id = pa.venue_id
+        JOIN artists a ON a.id = pa.artist_id
+        WHERE pa.id = :pid
+    """), {"pid": preferred_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Invitation not found")
+
+    # Authorization is on the ARTIST side — only the invitee may answer.
+    check_artist_access(db, row["artist_id"], user.id)
+
+    if row["status"] != "invited":
+        # Idempotent-ish: answering twice shouldn't 500, and shouldn't
+        # let a decline reverse an acceptance that already took effect.
+        raise HTTPException(409, f"This invitation is no longer pending (status: {row['status']}).")
+
+    new_status = "approved" if action == "accept" else "denied"
+    db.execute(text("UPDATE preferred_artists SET status = :s WHERE id = :pid"),
+               {"s": new_status, "pid": preferred_id})
+
+    # Tell the venue either way — a venue that invited someone should not
+    # have to poll to find out whether it landed.
+    try:
+        for vu in get_all_entity_users(db, 'venue', row["venue_id"]):
+            create_notification(
+                db,
+                user_id=vu["user_id"],
+                notification_type=('venue_preferred_approved' if action == "accept"
+                                   else 'venue_preferred_denied'),
+                title=(f"{row['artist_name']} accepted your Preferred Artist invitation"
+                       if action == "accept"
+                       else f"{row['artist_name']} declined your Preferred Artist invitation"),
+                message=(f"{row['artist_name']} is now a Preferred Artist at {row['venue_name']}."
+                         if action == "accept"
+                         else f"{row['artist_name']} declined the invitation from {row['venue_name']}."),
+                venue_id=row["venue_id"],
+                artist_id=row["artist_id"],
+            )
+    except Exception as e:
+        logger.warning(f"[PREFERRED_INVITE] venue notify failed for row {preferred_id}: {e}")
+
+    db.commit()
+    logger.info(f"[PREFERRED_INVITE] artist {row['artist_id']} {action}ed invitation {preferred_id} "
+                f"from venue {row['venue_id']}")
+    return {"ok": True, "status": new_status}
 
 
 @router.get("/api/venues/{venue_id}/artists/{artist_id}/past-gigs")
