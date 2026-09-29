@@ -773,6 +773,14 @@ function _slotRow(slot, data, vType, isPast, isInProgress, callbacks, gigBaselin
       // guarantee_cents fields. Falls back to "$X.XX" gracefully.
       const payStr = (window.formatPaySummary ? window.formatPaySummary(slot) : `$${parseFloat(slot.pay || 0).toFixed(2)}`);
       payHtml = `<span style="color:#22c55e;font-weight:700;font-size:0.8rem;background:rgba(34,197,94,0.12);padding:1px 8px;border-radius:4px;border:1px solid rgba(34,197,94,0.25);white-space:nowrap;">${payStr}</span>`;
+      // 2026-09-29: this venue covers the artist's share of the platform
+      // fee, so the pay shown is what the artist actually receives. Only
+      // shown to artists — it's meaningless to the venue, who already
+      // knows, and it's the reason the setting is worth electing.
+      if (data && data.venue_absorbs_artist_fee && !isVenue) {
+        payHtml += ` <span title="This venue pays the full GigsFill fee, so you keep the full amount shown."
+          style="color:#22c55e;font-weight:600;font-size:0.68rem;background:rgba(34,197,94,0.08);padding:1px 7px;border-radius:4px;border:1px dashed rgba(34,197,94,0.45);white-space:nowrap;">you keep 100%</span>`;
+      }
     }
   }
 

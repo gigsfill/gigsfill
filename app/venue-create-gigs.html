@@ -2619,6 +2619,17 @@
           <span style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.8rem; line-height: 1.4;">Require my approval for bookings by non-preferred artists <em style="color: var(--cyan);">(When ON: any booking by a non-preferred artist — including via a cancellation blast — is held pending your approval and every venue team member gets an email with Approve / Decline links. Preferred artists still book directly with no approval step. If you don't act, GigsFill will re-send the approval request at 3 days, 2 days, and 1 day before the gig — nothing auto-approves, so the gig stays unbooked until you decide. When OFF: bookings by non-preferred artists auto-confirm silently, no approval email.)</em></span>
         </div>
       </div>
+
+      <!-- 2026-09-29: venue-elected fee absorption. Optional and off by
+           default. The value to the venue is the artist-facing badge —
+           artists browsing gigs see which venues cover the fee, so this
+           is a recruiting lever, not just generosity. -->
+      <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
+        <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
+          <label class="toggle-switch" style="flex-shrink: 0; margin-top: 2px;"><input type="checkbox" id="venue_absorbs_artist_fee" onchange="saveVenueAbsorbsArtistFee()"><span class="toggle-slider"></span></label>
+          <span style="flex: 1; min-width: 0; color: var(--text-gray); font-size: 0.8rem; line-height: 1.4;">Cover the artist's share of the GigsFill fee <em style="color: var(--cyan);">(When ON: you pay the full platform fee and the artist receives 100% of the listed pay. Your gigs show a "Venue covers all fees — artist keeps 100%" badge to artists browsing, which tends to attract more and better applicants. When OFF: the fee is split between you and the artist, the platform default. Either way GigsFill's total fee is the same — this only changes who pays it.)</em></span>
+        </div>
+      </div>
       <!-- ─── Gig Confirmation ─────────────────────────────────────────── -->
       <div style="font-size: 0.75rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px 0; padding-bottom: 6px; border-bottom: 1px solid var(--border);">Gig Confirmation Reminder</div>
             <div class="setting-row" style="padding: 10px 14px; margin-bottom: 6px;">
@@ -3854,7 +3865,7 @@
 <script src="/app/static/js/messages.js?v=8"></script>
 <script src="/app/static/js/review-modal.js?v=3"></script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
-<script src="/app/static/js/gig-modal.js?v=35"></script>
+<script src="/app/static/js/gig-modal.js?v=36"></script>
 <script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/hold-mgmt.js?v=13"></script>
@@ -3874,7 +3885,7 @@
 </footer>
 
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
-<script src="/app/static/js/venue-create-gigs-init.js?v=12"></script>
+<script src="/app/static/js/venue-create-gigs-init.js?v=13"></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>

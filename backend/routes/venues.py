@@ -539,6 +539,10 @@ def update_venue(venue_id: int, data: dict, request: Request,
         # per-user email pref to per-venue policy. Editable on the
         # venue's Email Notifications tab.
         "require_same_day_approval": data.get("require_same_day_approval"),
+        # 2026-09-29: venue elects to cover the artist's share of the
+        # platform fee. Only ever moves cost off the artist; the
+        # platform take is unchanged.
+        "absorbs_artist_fee": data.get("absorbs_artist_fee"),
     }
     
     # Geocode city to get coordinates
@@ -611,7 +615,8 @@ def update_venue(venue_id: int, data: dict, request: Request,
             pro_certified_at = COALESCE(:pro_certified_at, pro_certified_at),
             auto_flyers = COALESCE(:auto_flyers, auto_flyers),
             default_flyer_template_id = COALESCE(:default_flyer_template_id, default_flyer_template_id),
-            require_same_day_approval = COALESCE(:require_same_day_approval, require_same_day_approval)
+            require_same_day_approval = COALESCE(:require_same_day_approval, require_same_day_approval),
+            absorbs_artist_fee = COALESCE(:absorbs_artist_fee, absorbs_artist_fee)
         WHERE id = :id
     """),
     {

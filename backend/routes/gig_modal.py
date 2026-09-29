@@ -241,6 +241,7 @@ def get_gig_modal_data(
                v.venue_name, v.address_line_1, v.address_line_2, v.city, v.state,
                v.latitude as venue_lat, v.longitude as venue_lon,
                v.has_stage, v.has_sound_equipment, v.has_lighting,
+               COALESCE(v.absorbs_artist_fee, 0) as venue_absorbs_artist_fee,
                a.name as artist_name
         FROM gigs g
         JOIN venues v ON v.id = g.venue_id
@@ -945,6 +946,10 @@ def get_gig_modal_data(
         "state":         gig.get("state"),
         "venue_lat":     gig.get("venue_lat"),
         "venue_lon":     gig.get("venue_lon"),
+        # 2026-09-29: venue has elected to cover the artist's share of the
+        # platform fee. Surfaced so the artist can see it BEFORE booking —
+        # the setting is worth nothing if it's invisible at decision time.
+        "venue_absorbs_artist_fee": bool(gig.get("venue_absorbs_artist_fee")),
         # Timing
         "is_past":       is_past,
         "is_in_progress": is_in_progress,

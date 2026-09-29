@@ -24,7 +24,7 @@ router = APIRouter()
 
 @router.get("/api/pricing")
 @limiter.limit("120/minute")
-def get_public_pricing(request: Request, db=Depends(get_db)):
+def get_public_pricing(request: Request, venue_id: int | None = None, db=Depends(get_db)):
     """Return the current platform fee settings + per-side computed
     breakdown so the homepage doesn't have to duplicate the fee-split
     math. Keeps display in perfect sync with the payout math in
@@ -62,6 +62,24 @@ def get_public_pricing(request: Request, db=Depends(get_db)):
     min_fee_dollars = _f("platform_min_fee", 0.0)
     fee_split = settings.get("platform_fee_split") or "split"
 
+    # 2026-09-29: optional ?venue_id= makes this venue-specific. A venue
+    # that elected to cover the artist's share behaves as 'venue_only'
+    # for its own bookings, so the marketing//modal display must reflect
+    # that rather than the platform default — otherwise an artist looking
+    # at a fee-absorbing venue's gig sees a deduction that won't happen.
+    venue_absorbs = False
+    if venue_id:
+        try:
+            _row = db.execute(
+                text("SELECT absorbs_artist_fee FROM venues WHERE id = :vid"),
+                {"vid": venue_id},
+            ).mappings().first()
+            venue_absorbs = bool(_row and int(_row.get("absorbs_artist_fee") or 0))
+        except Exception:
+            venue_absorbs = False
+    if venue_absorbs:
+        fee_split = "venue_only"
+
     # Same math the payout scheduler uses. Kept in sync so what the
     # marketing page shows matches what the artist/venue actually pays.
     if fee_split == "venue_only":
@@ -93,4 +111,5 @@ def get_public_pricing(request: Request, db=Depends(get_db)):
         "artist_fee_percent":     artist_pct,
         "venue_min_fee_dollars":  venue_min,
         "artist_min_fee_dollars": artist_min,
+        "venue_absorbs_artist_fee": venue_absorbs,
     }

@@ -669,6 +669,15 @@ def setup_database():
         "avg_rating REAL DEFAULT NULL",
         "review_count INTEGER DEFAULT 0",
     ])
+    # 2026-09-29: venue-elected "we cover the artist's share of the platform
+    # fee". Distinct from venue_payment_overrides.fee_pct_override, which is
+    # an ADMIN tool for raising a venue's rate — this one is chosen by the
+    # venue and only ever moves cost away from the artist. When on, the
+    # effective split for this venue's bookings becomes 'venue_only'
+    # regardless of the platform-wide platform_fee_split.
+    _add_columns(cursor, "venues", [
+        "absorbs_artist_fee INTEGER DEFAULT 0",
+    ])
     _add_columns(cursor, "venues", [
         "pro_certified INTEGER DEFAULT 0",
         "pro_certified_at TIMESTAMP",
@@ -1567,6 +1576,13 @@ def setup_database():
         "cancel_reason TEXT",
         "cancelled_at DATETIME",
         "platform_fee_charged_cents INTEGER DEFAULT 0",
+        # 2026-09-29: snapshot of venues.absorbs_artist_fee AT BOOKING TIME.
+        # The flag must not be re-read at payout: a venue could advertise
+        # "we cover fees", get the booking, then toggle it off before the
+        # payout fires and the artist would quietly net less than the
+        # listing promised. _recompute_gig_fees reads this column off the
+        # parent row rather than the live venue setting.
+        "venue_absorbed_artist_fee INTEGER DEFAULT 0",
         "transaction_type VARCHAR DEFAULT 'single'",
         "parent_transaction_id INTEGER",
         # Jun 2026 audit: replace the "notes LIKE 'Slot {id}%'"

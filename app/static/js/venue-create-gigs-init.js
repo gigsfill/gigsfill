@@ -404,6 +404,10 @@ async function loadVenueEmailNotifications(venueId) {
           ? true
           : !!parseInt(v.require_same_day_approval, 10);
       }
+      // Fee absorption defaults OFF — opting in costs the venue money,
+      // so it must be an explicit choice, never a default they inherit.
+      const _abs = _el('venue_absorbs_artist_fee');
+      if (_abs) _abs.checked = !!parseInt(v.absorbs_artist_fee || 0, 10);
     }
   } catch (_) {}
 
@@ -440,6 +444,38 @@ async function saveVenueRequireSameDayApproval() {
   }
 }
 window.saveVenueRequireSameDayApproval = saveVenueRequireSameDayApproval;
+
+// Venue elects to cover the artist's half of the platform fee. Applies to
+// bookings made from here on — the value is snapshotted onto each booking's
+// transaction, so toggling this off never changes what an already-booked
+// artist was promised.
+async function saveVenueAbsorbsArtistFee() {
+  if (!window._emailNotifLoaded) return;
+  const vid = window.venueId || new URLSearchParams(window.location.search).get('venue_id');
+  if (!vid) return;
+  const el = _el('venue_absorbs_artist_fee');
+  if (!el) return;
+  try {
+    const res = await fetch(`/api/venues/${vid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ absorbs_artist_fee: el.checked ? 1 : 0 })
+    });
+    if (res.ok) {
+      const indicator = document.getElementById('emailNotifSaveIndicator');
+      if (indicator) {
+        indicator.style.opacity = '1';
+        setTimeout(() => { indicator.style.opacity = '0'; }, 2000);
+      }
+    } else {
+      console.error('Save absorbs_artist_fee failed:', res.status, await res.text());
+    }
+  } catch (e) {
+    console.error('Error saving absorbs_artist_fee:', e);
+  }
+}
+window.saveVenueAbsorbsArtistFee = saveVenueAbsorbsArtistFee;
 
 async function saveVenueEmailNotifications() {
   // Don't save while initial load is populating fields

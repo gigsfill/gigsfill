@@ -154,6 +154,10 @@ def db():
             cancel_reason TEXT,
             cancelled_at DATETIME,
             platform_fee_charged_cents INTEGER DEFAULT 0,
+            -- Snapshot of venues.absorbs_artist_fee at booking time; mirrors
+            -- the production column added in db.py. Kept in sync by hand,
+            -- like the rest of this fixture schema.
+            venue_absorbed_artist_fee INTEGER DEFAULT 0,
             slot_id INTEGER,
             notes TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

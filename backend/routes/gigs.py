@@ -208,6 +208,51 @@ def _get_effective_pay(db, venue_id, artist_id, published_pay):
     return pay
 
 
+def _venue_absorbs_artist_fee(db, venue_id) -> bool:
+    """Has this venue opted to cover the artist's share of the platform fee?
+
+    Venue-elected (venues.absorbs_artist_fee), unlike
+    venue_payment_overrides.fee_pct_override which is an admin tool for
+    RAISING a venue's rate. This one only ever moves cost off the artist:
+    when on, the effective split for this venue becomes 'venue_only'
+    regardless of the platform-wide platform_fee_split. The platform's
+    total take is unchanged — only who pays it moves.
+
+    Defaults to False on any error: failing closed here means the artist
+    pays their normal share rather than the venue being silently billed
+    for something they didn't elect.
+    """
+    if not venue_id:
+        return False
+    try:
+        row = db.execute(
+            text("SELECT absorbs_artist_fee FROM venues WHERE id = :vid"),
+            {"vid": venue_id},
+        ).mappings().first()
+        return bool(row and int(row.get("absorbs_artist_fee") or 0))
+    except Exception:
+        return False
+
+
+def _apply_fee_split(total_fee_cents: int, fee_split: str, venue_absorbs: bool):
+    """Split a total fee into (venue_fee, artist_fee) in integer cents.
+
+    Single source of truth for the split so the booking path and the
+    recompute path can't drift apart. `venue_absorbs` wins over whatever
+    the platform-wide split says — a venue that elected to cover the
+    artist's share covers it even if the platform default later changes.
+
+    Integer division with the remainder going to the venue matches the
+    existing production behaviour (`total // 2` then `total - venue`).
+    """
+    if venue_absorbs or fee_split == 'venue_only':
+        return total_fee_cents, 0
+    if fee_split == 'artist_only':
+        return 0, total_fee_cents
+    venue_fee = total_fee_cents // 2
+    return venue_fee, total_fee_cents - venue_fee
+
+
 def _recompute_gig_fees(db, gig_id):
     """
     Recompute the parent venue_charge and all artist_payout children for a gig
@@ -230,7 +275,8 @@ def _recompute_gig_fees(db, gig_id):
     Caller is responsible for db.commit().
     """
     parent = db.execute(
-        text("""SELECT id, status FROM transactions
+        text("""SELECT id, status, COALESCE(venue_absorbed_artist_fee, 0) AS absorbs
+                FROM transactions
                 WHERE gig_id = :gid
                   AND transaction_type = 'venue_charge'
                   AND status NOT IN ('payment_cancelled')"""),
@@ -291,13 +337,15 @@ def _recompute_gig_fees(db, gig_id):
     fee_split     = settings.get('platform_fee_split', 'split')
 
     total_fee = max(int(total_amount * fee_pct), min_fee_cents)
-    if fee_split == 'venue_only':
-        venue_fee_total, artist_fee_total = total_fee, 0
-    elif fee_split == 'artist_only':
-        venue_fee_total, artist_fee_total = 0, total_fee
-    else:
-        venue_fee_total  = total_fee // 2
-        artist_fee_total = total_fee - venue_fee_total
+    # Read the venue's fee-absorption election from the PARENT ROW's
+    # snapshot, not from venues.absorbs_artist_fee. Adding a slot to an
+    # existing gig recomputes the whole gig's fees — if we re-read the live
+    # flag here, a venue that toggled it off after the first booking would
+    # retroactively push the fee back onto artists who were already booked
+    # under the "venue covers it" promise.
+    venue_fee_total, artist_fee_total = _apply_fee_split(
+        total_fee, fee_split, bool(parent["absorbs"])
+    )
 
     venue_charge_total = total_amount + venue_fee_total
 
@@ -599,15 +647,14 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
             _reason = "pure-door, no guarantee" if _is_door_zero else "flat $0 pay"
             _flag_zero_pay_booking(db, venue_id, gig_id, artist_id, slot_id, _reason)
 
-        # Per-artist fee calculation
+        # Per-artist fee calculation. The venue's "we cover the artist's
+        # share" election is resolved HERE, at booking time, and snapshotted
+        # onto the transaction below — never re-read at payout, or a venue
+        # could advertise it, win the booking, then toggle it off before
+        # the payout fires.
+        _venue_absorbs = _venue_absorbs_artist_fee(db, venue_id)
         total_fee_cents = max(int(amount_cents * fee_pct), min_fee_cents)
-        if fee_split == 'venue_only':
-            venue_fee, artist_fee = total_fee_cents, 0
-        elif fee_split == 'artist_only':
-            venue_fee, artist_fee = 0, total_fee_cents
-        else:
-            venue_fee  = total_fee_cents // 2
-            artist_fee = total_fee_cents - venue_fee
+        venue_fee, artist_fee = _apply_fee_split(total_fee_cents, fee_split, _venue_absorbs)
 
         artist_payout_cents = max(0, amount_cents - artist_fee)  # never negative
 
@@ -705,12 +752,14 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
                             (gig_id, from_user_id, to_user_id, artist_id,
                              amount_cents, venue_charge_cents, artist_payout_cents, commission_cents,
                              credit_card_fee_cents, payment_method_type, status,
-                             scheduled_process_at, created_at, notes, transaction_type)
+                             scheduled_process_at, created_at, notes, transaction_type,
+                             venue_absorbed_artist_fee)
                         VALUES
                             (:gig_id, :from_uid, :from_uid, NULL,
                              :amount, :venue_charge, 0, :commission,
                              0, 'stripe', :status,
-                             :scheduled, :now, :notes, 'venue_charge') RETURNING id
+                             :scheduled, :now, :notes, 'venue_charge',
+                             :absorbs) RETURNING id
                     """),
                     {
                         "gig_id":       gig_id,
@@ -722,6 +771,9 @@ def _create_booking_transaction(db, gig_id, venue_id, artist_id, pay_amount, gig
                         "scheduled":    payout_date,
                         "now":          _utcnow_naive(),
                         "notes":        f"Gig {gig_id} — consolidated venue charge",
+                        # Snapshot, not a live lookup — see the column comment
+                        # in db.py. _recompute_gig_fees reads this back.
+                        "absorbs":      1 if _venue_absorbs else 0,
                     }
                 ).scalar()
             except IntegrityError as _uv:
