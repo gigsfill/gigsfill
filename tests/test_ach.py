@@ -578,3 +578,54 @@ def test_solid_danger_button_is_a_shared_class_not_inline_styles():
     # Remove keeps the solid-red treatment; Cancel is not destructive.
     assert html.count('class="btn danger-solid"') == 1
     assert "background:#ef4444;border:1px solid #ef4444" not in html
+
+
+def test_admin_panel_surfaces_a_venue_stranded_awaiting_microdeposits(db, seed_entities):
+    """This is the safety net for the untested microdeposit path.
+
+    2026-09-29: testing the browser flow end to end was deliberately deferred
+    (it needs a production Stripe key swap, which carries more risk than the
+    bug it would catch). The fallback is that an admin can SEE a venue stuck
+    awaiting verification and help them manually — so that listing has to
+    actually work.
+    """
+    from backend.routes.admin_payments import ach_in_flight
+
+    db.execute(text("""
+        INSERT INTO entity_payment_settings
+            (entity_type, entity_id, stripe_customer_id,
+             ach_pending_setup_intent_id, ach_pending_verification_url,
+             ach_pending_bank_last4)
+        VALUES ('venue', 20, 'cus_test', 'seti_test123',
+                'https://stripe.com/verify/abc', '6789')
+    """))
+    db.commit()
+
+    class A: id = 1; is_admin = 'true'
+    out = ach_in_flight(admin=A(), db=db)
+
+    pending = out["pending_verification"]
+    assert len(pending) == 1, "a stranded venue must appear in the admin listing"
+    row = pending[0]
+    assert row["venue_id"] == 20
+    assert row["venue_name"] == "Bobs Bar", "admin needs the name, not just an id"
+    assert row["bank_last4"] == "6789"
+    # The verification URL is what lets an admin help the venue finish.
+    assert row["verification_url"] == "https://stripe.com/verify/abc"
+
+
+def test_a_verified_venue_drops_off_the_stranded_list(db, seed_entities):
+    """The webhook clears the pending markers; if it didn't, a venue that had
+    finished verifying would sit on the admin list forever."""
+    from backend.routes.admin_payments import ach_in_flight
+
+    db.execute(text("""
+        INSERT INTO entity_payment_settings
+            (entity_type, entity_id, stripe_payment_method_id,
+             ach_pending_setup_intent_id)
+        VALUES ('venue', 20, 'pm_verified', NULL)
+    """))
+    db.commit()
+
+    class A: id = 1; is_admin = 'true'
+    assert ach_in_flight(admin=A(), db=db)["pending_verification"] == []
