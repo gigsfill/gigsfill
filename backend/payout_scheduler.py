@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from backend.utils import utcnow_naive
 from zoneinfo import ZoneInfo
 import sqlite3
+from backend.services import statement_descriptor
 from backend.db import get_db_connection as _raw_db_conn, _IS_POSTGRES
 import os
 from backend.services.email_dispatch import format_email_date
@@ -295,6 +296,29 @@ def process_payouts_now():
 
             venue_charge = txn["venue_charge_cents"]
             
+            # 2026-09-29: put the gig date + artist name on the venue's card
+            # statement. Venues booking several artists a month previously saw
+            # a row of identical "GigsFill.com" lines with nothing to
+            # reconcile against. Best-effort: any failure here leaves the
+            # suffix unset and Stripe falls back to the account default —
+            # a labelling problem must never block a charge.
+            _desc_kwargs = {}
+            try:
+                _dg = conn.execute("SELECT date FROM gigs WHERE id = ?",
+                                   (txn["gig_id"],)).fetchone()
+                _da = None
+                if txn["artist_id"]:
+                    _da = conn.execute("SELECT name FROM artists WHERE id = ?",
+                                       (txn["artist_id"],)).fetchone()
+                _suffix = statement_descriptor.for_gig_charge(
+                    _dg["date"] if _dg else None,
+                    _da["name"] if _da else None,
+                )
+                if _suffix:
+                    _desc_kwargs["statement_descriptor_suffix"] = _suffix
+            except Exception as _e:
+                logger.warning(f"Txn {txn_id}: statement descriptor skipped - {_e}")
+
             payment_intent_id = None
             try:
                 pi = stripe.PaymentIntent.create(
@@ -318,7 +342,8 @@ def process_payouts_now():
                         "transaction_id": str(txn_id),
                         "platform": "gigsfill"
                     },
-                    description=f"GigsFill Gig #{txn['gig_id']} - performance fee"
+                    description=f"GigsFill Gig #{txn['gig_id']} - performance fee",
+                    **_desc_kwargs,
                 )
                 payment_intent_id = pi.id
                 logger.info(f"Txn {txn_id}: Venue charged ${venue_charge/100:.2f} (PI: {payment_intent_id})")
@@ -559,6 +584,7 @@ def process_payouts_now():
                     logger.error(f"Retry txn {txn_id}: artist_payout_cents={txn['artist_payout_cents']} — SKIPPING zero/negative transfer")
                     continue
 
+                _rtail, _rmeta = _payout_context(conn, txn["gig_id"])
                 retry_kwargs = dict(
                     amount=txn["artist_payout_cents"],
                     currency="usd",
@@ -566,9 +592,10 @@ def process_payouts_now():
                     metadata={
                         "gig_id": str(txn["gig_id"]),
                         "transaction_id": str(txn_id),
-                        "platform": "gigsfill"
+                        "platform": "gigsfill",
+                        **_rmeta,
                     },
-                    description=f"GigsFill Gig #{txn['gig_id']} payout"
+                    description=f"GigsFill Gig #{txn['gig_id']} payout{_rtail}"
                 )
                 if retry_charge_id:
                     retry_kwargs["source_transaction"] = retry_charge_id
@@ -1144,6 +1171,7 @@ def _transfer_to_artists(conn, stripe, payout_rows, charge_id, venue_id, parent_
                 conn.commit()
                 continue
 
+            _ptail, _pmeta = _payout_context(conn, payout["gig_id"])
             transfer_kwargs = dict(
                 amount=payout["artist_payout_cents"],
                 currency="usd",
@@ -1152,9 +1180,10 @@ def _transfer_to_artists(conn, stripe, payout_rows, charge_id, venue_id, parent_
                     "gig_id": str(payout["gig_id"]),
                     "transaction_id": str(payout_id),
                     "parent_transaction_id": str(parent_txn_id),
-                    "platform": "gigsfill"
+                    "platform": "gigsfill",
+                    **_pmeta,
                 },
-                description=f"GigsFill Gig #{payout['gig_id']} artist payout"
+                description=f"GigsFill Gig #{payout['gig_id']} artist payout{_ptail}"
             )
             if charge_id:
                 transfer_kwargs["source_transaction"] = charge_id
@@ -1497,6 +1526,45 @@ def _format_time_12h(time_str):
         return f"{h}:{m} {suffix}"
     except:
         return time_str
+
+
+def _payout_context(conn, gig_id):
+    """Gig date + venue name for an artist payout, as (description_tail, metadata).
+
+    2026-09-29. Transfers have **no** `statement_descriptor` field — a
+    Transfer moves money between Stripe balances and is never itself a bank
+    transaction. What the artist's bank shows comes from the Payout
+    (balance -> bank), which Stripe schedules and labels for Express
+    accounts and which batches several transfers together, so per-gig text
+    can't reach a bank statement even in principle.
+
+    Description and metadata DO surface in the artist's Stripe Express
+    dashboard, so that's where the gig detail goes. See
+    backend/services/statement_descriptor.py for the venue-side story.
+
+    Best-effort: a failed lookup returns empty and the caller keeps its
+    original description.
+    """
+    try:
+        row = conn.execute(
+            """SELECT g.date, v.venue_name
+               FROM gigs g JOIN venues v ON v.id = g.venue_id
+               WHERE g.id = ?""",
+            (gig_id,)
+        ).fetchone()
+        if not row:
+            return "", {}
+        gig_date = str(row["date"] or "")[:10]
+        venue_name = str(row["venue_name"] or "").strip()
+        tail = " — ".join(x for x in (venue_name, gig_date) if x)
+        meta = {}
+        if gig_date:
+            meta["gig_date"] = gig_date
+        if venue_name:
+            meta["venue_name"] = venue_name[:200]
+        return (f" — {tail}" if tail else ""), meta
+    except Exception:
+        return "", {}
 
 
 def _get_gig_summary(conn, txn):

@@ -18,7 +18,45 @@ from backend.services.email_dispatch import format_email_date
 logger = logging.getLogger("gigsfill.stripe")
 
 
+from backend.services import statement_descriptor
+
 router = APIRouter()
+
+
+# ── statement descriptors ────────────────────────────────────────────
+# 2026-09-29. Venues saw a bare "GigsFill.com" on every card line with no
+# way to tell which gig it was for. These put the gig date (and, for gig
+# payments, the artist) on the statement instead.
+#
+# Only the venue side is controllable: `Transfer` has no
+# `statement_descriptor` field, so artist payouts can't carry this. See
+# backend/services/statement_descriptor.py for why.
+
+def _descriptor_kwargs(suffix):
+    """Wrap a suffix as PaymentIntent kwargs, or {} to leave it unset.
+
+    Omitting the parameter entirely makes Stripe fall back to the account
+    default, which is always better than sending something it rejects.
+    """
+    return {"statement_descriptor_suffix": suffix} if suffix else {}
+
+
+def _fee_descriptor_kwargs(db, gig_id):
+    """Descriptor for a platform/cancellation fee: date only, no artist.
+
+    Best-effort — a failed lookup leaves the descriptor unset rather than
+    breaking the charge.
+    """
+    try:
+        row = db.execute(
+            text("SELECT date FROM gigs WHERE id = :gid"), {"gid": gig_id}
+        ).mappings().first()
+        return _descriptor_kwargs(
+            statement_descriptor.for_platform_fee(row["date"] if row else None)
+        )
+    except Exception:
+        return {}
+
 
 
 def get_stripe():
@@ -908,6 +946,10 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
                 # Idempotency key on the gig-cancellation fee — if the venue
                 # double-clicks "Cancel Payment", they're charged the
                 # platform fee once, not twice.
+                # Fee charges carry the date but deliberately NOT the artist
+                # name — this is billed by the platform, not paid to the
+                # artist, and naming them would misread on the statement.
+                _fee_desc = _fee_descriptor_kwargs(db, gig_id)
                 pi = stripe_mod.PaymentIntent.create(
                     amount=venue_fee_cents,
                     currency="usd",
@@ -921,7 +963,8 @@ def cancel_gig_payment(data: dict, user=Depends(get_current_user), db=Depends(ge
                         "type": "payment_cancellation_platform_fee",
                         "platform": "gigsfill"
                     },
-                    description=f"GigsFill platform fee - Gig #{gig_id} (payment cancelled by venue)"
+                    description=f"GigsFill platform fee - Gig #{gig_id} (payment cancelled by venue)",
+                    **_fee_desc,
                 )
                 platform_fee_pi_id = pi.id
             except Exception as e:
@@ -1241,7 +1284,8 @@ def cancel_slot_payment(data: dict, user=Depends(get_current_user), db=Depends(g
                         "type": "slot_payment_cancellation_platform_fee",
                         "platform": "gigsfill"
                     },
-                    description=f"GigsFill platform fee — Gig #{slot['gig_id']} slot #{slot_id} (payment cancelled by venue)"
+                    description=f"GigsFill platform fee — Gig #{slot['gig_id']} slot #{slot_id} (payment cancelled by venue)",
+                    **_fee_descriptor_kwargs(db, slot["gig_id"]),
                 )
                 platform_fee_pi_id = pi.id
             except Exception as e:
@@ -1754,7 +1798,9 @@ def reinstate_gig_payment(data: dict, user=Depends(get_current_user), db=Depends
                     "type": "payment_reinstatement",
                     "platform": "gigsfill"
                 },
-                description=f"GigsFill Gig #{txn['gig_id']} - reinstated payment"
+                description=f"GigsFill Gig #{txn['gig_id']} - reinstated payment",
+                **_descriptor_kwargs(statement_descriptor.for_gig_charge(
+                    txn.get("gig_date"), txn.get("artist_name"))),
             )
             payment_intent_id = pi.id
         except Exception as e:

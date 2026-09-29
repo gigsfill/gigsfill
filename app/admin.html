@@ -1105,6 +1105,43 @@ ZOHO_ACCOUNT_REGION=com</pre>
              "top of this page" is wrong anyway. A permanent LIVE label
              already lives on Server Stats; no need for a duplicate here. -->
 
+        <!-- What shows up on a card statement / bank line. Documented here
+             because the venue side is config-driven and the artist side is a
+             hard Stripe limitation people keep trying to "fix". -->
+        <div class="content-card" style="padding:14px;margin-bottom:12px;border-left:3px solid var(--cyan);">
+          <div style="font-size:0.75rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+            What venues and artists see on their statements
+          </div>
+          <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6;">
+            <p style="margin:0 0 8px 0;">
+              <strong>Venues (card charges)</strong> — each charge carries the gig date and
+              artist name, so a venue booking several artists a month can tell the lines
+              apart. Stripe caps the whole descriptor at <strong>22 characters</strong>,
+              prefix included, so long names get truncated:
+            </p>
+            <pre style="margin:0 0 8px 0;padding:8px 10px;background:rgba(0,0,0,.25);border-radius:4px;font-size:0.72rem;overflow-x:auto;">GIGSFILL 1015 BON JOVI     gig payment
+GIGSFILL FEE 1015          cancellation fee (no artist name —
+                           it's billed by us, not paid to them)</pre>
+            <p style="margin:0 0 8px 0;">
+              The <code>GIGSFILL</code> prefix is an account-level Stripe setting
+              (Settings → Business → Public details). The budget calculation reads it from
+              <code>STRIPE_STATEMENT_PREFIX</code> in <code>/opt/gigsfill/.env</code>,
+              default <code>GIGSFILL</code>. <strong>If you change the prefix in Stripe,
+              change it here too</strong> — otherwise Stripe truncates the suffix rather
+              than erroring, and the result is just ugly.
+            </p>
+            <p style="margin:0;">
+              <strong>Artists (payouts)</strong> — their bank line <em>cannot</em> be
+              customized, and this isn't a setting we're missing. Stripe's
+              <code>Transfer</code> has no descriptor field at all; what the artist's bank
+              shows comes from the Payout (Stripe balance → bank), which Stripe schedules
+              and labels for Express accounts and which batches several gigs into one
+              deposit. Instead the gig date and venue name go on the transfer's description
+              and metadata, which the artist sees in their Stripe Express dashboard.
+            </p>
+          </div>
+        </div>
+
         <!-- Stripe Connect -->
         <div class="content-card" style="padding:12px;margin-top:8px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
