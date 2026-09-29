@@ -662,6 +662,52 @@ def ach_in_flight(admin=Depends(check_admin), db=Depends(get_db)):
     }
 
 
+@router.get("/api/admin/payments/webhook-health")
+def webhook_health(admin=Depends(check_admin), db=Depends(get_db)):
+    """Compare the webhook events we handle against Stripe's subscription.
+
+    2026-09-29. Stripe delivers only what the endpoint is subscribed to, so a
+    handler for an unsubscribed event is dead code that looks alive — nothing
+    errors, the event simply never arrives. The live endpoint was found
+    subscribed to 4 of 9: ACH settlement was missing (a bank-funded gig would
+    have parked in `charge_processing` forever), and refunds issued from the
+    Stripe Dashboard had never synced back to `transactions`.
+
+    `missing` is the dangerous list. `extra` is only wasted deliveries.
+    """
+    from backend.routes.stripe_connect import STRIPE_WEBHOOK_EVENTS, init_stripe
+
+    handled = sorted(STRIPE_WEBHOOK_EVENTS)
+    try:
+        stripe_mod, _keys = init_stripe(db)
+        endpoints = [
+            e for e in stripe_mod.WebhookEndpoint.list(limit=20).auto_paging_iter()
+            if "/api/stripe/webhook" in (e.url or "")
+        ]
+    except Exception as e:
+        return {"ok": False, "error": f"Could not reach Stripe: {str(e)[:200]}",
+                "handled": handled}
+
+    if not endpoints:
+        return {"ok": False, "error": "No Stripe webhook endpoint is registered.",
+                "handled": handled, "missing": handled, "extra": []}
+
+    ep = endpoints[0]
+    subscribed = sorted(ep.enabled_events or [])
+    missing = [e for e in handled if e not in subscribed]
+    extra = [e for e in subscribed if e not in handled]
+    return {
+        "ok": (not missing) and ep.status == "enabled",
+        "url": ep.url,
+        "status": ep.status,
+        "endpoint_count": len(endpoints),
+        "handled": handled,
+        "subscribed": subscribed,
+        "missing": missing,
+        "extra": extra,
+    }
+
+
 @router.get("/api/admin/payments/{txn_id}")
 def payment_detail(
     txn_id: int,

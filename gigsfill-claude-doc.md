@@ -8,6 +8,28 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-29 (Stripe was subscribed to 4 of 9 webhook events — ACH settlement was among the missing):** Found while auditing the go-live checklist. The handler in `stripe_connect.py` implements **9** event types; the live endpoint at `https://gigsfill.com/api/stripe/webhook` was subscribed to **4**.
+
+  Stripe delivers only what an endpoint subscribes to, so a handler for an unsubscribed event is dead code that *looks* alive — nothing errors, no log line appears, the event simply never arrives. That makes this class of bug invisible until someone notices a downstream effect.
+
+  What was silently dead:
+
+  | Event | Consequence |
+  |---|---|
+  | `payment_intent.succeeded` | **ACH could never settle.** A bank-funded gig would charge the venue, park the parent in `charge_processing`, and never pay the artist — the exact stuck state the new admin banner was built to surface, with nothing able to resolve it. ACH had just been enabled in production. |
+  | `setup_intent.succeeded` | Microdeposit-verified bank accounts would never activate |
+  | `charge.refunded` | Refunds issued from the Stripe **Dashboard** never synced to `transactions` — so our records and Stripe's have been able to diverge, silently, for months |
+  | `transfer.reversed` | Reversed artist payouts never synced |
+  | `charge.dispute.closed` | Dispute outcomes never synced — a *won* dispute stayed recorded as lost |
+
+  The three reconciliation events predate the ACH work; only the first two were introduced by it. Fixed by subscribing the endpoint to all 9 via the API (no code change, nothing removed, verified 4 → 9 and then parity-checked both directions).
+
+  **The durable fix is making drift visible**, since this went unnoticed for months:
+  - `STRIPE_WEBHOOK_EVENTS` in [stripe_connect.py](backend/routes/stripe_connect.py) is now the canonical list, with a test asserting it matches the actual `elif event_type == "..."` branches — so adding a handler without declaring it fails the suite.
+  - `GET /api/admin/payments/webhook-health` compares that list against the **live** Stripe subscription and reports `missing` / `extra` plus endpoint status (a disabled endpoint delivers nothing even with a perfect event list). Declared before `/{txn_id}` or FastAPI would match it as a transaction id.
+  - A red banner on the admin Payments tab, hidden entirely when healthy, naming the specific events to add.
+  - [tests/test_webhook_events.py](tests/test_webhook_events.py) (new, 6 tests). Note the source scan strips comment lines first: the docstring above the constant quotes the branch syntax as prose, and a naive regex matches that too — which it did on the first run.
+
 - **2026-09-29 (Bank accounts were invisible in the venue UI; Payment Method section rewritten):** A venue linked a bank successfully, Stripe confirmed it, and the GigsFill page showed nothing — still offering the "add a payment method" form as though the link had failed.
 
   **Cause:** `GET /api/stripe/venue/{id}/payment-method` read `pm.card.brand` unconditionally. For a `us_bank_account`, `pm.card` is `None`, so it raised `AttributeError` straight into a bare `except Exception` and returned `{"has_card": False}`. Nothing was actually wrong — the row was saved and the charge path would have used the bank quite happily — but every UI surface keyed off that response, so the venue had no way to tell. The endpoint is now type-aware (card / `us_bank_account` / anything else), and an unrendered type still reports `has_card: True` rather than implying the venue has nothing on file.

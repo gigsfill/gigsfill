@@ -1436,6 +1436,9 @@ GIGSFILL FEE 1015          cancellation fee (no artist name —
         <div id="apHeroStats" style="display:none;"></div>
         <!-- 2026-09-29 (ACH): in-flight bank debits. Hidden when empty, so
              it costs nothing visually until there's something to watch. -->
+        <!-- Hidden unless the handled-event list and Stripe's subscription
+             have drifted apart. See webhook-health endpoint. -->
+        <div id="apWebhookHealth" style="display:none;margin-bottom:14px;"></div>
         <div id="apAchInFlight" style="display:none;margin-bottom:14px;"></div>
         <div id="apStats" style="margin-bottom:14px;"></div>
 
@@ -2516,7 +2519,7 @@ function switchTemplatesSubTab(tab) {
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=4"></script>
 <script src="/app/static/js/admin-platform.js?v=15"></script>
-<script src="/app/static/js/admin-payments.js?v=37"></script>
+<script src="/app/static/js/admin-payments.js?v=38"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=3"></script>
 <script src="/app/static/js/admin-flags.js?v=3"></script>

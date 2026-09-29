@@ -18,6 +18,34 @@ from backend.services.email_dispatch import format_email_date
 logger = logging.getLogger("gigsfill.stripe")
 
 
+# ── webhook event contract ───────────────────────────────────────────
+# Every event the handler below implements. This must match what the Stripe
+# endpoint is actually subscribed to, and nothing enforces that automatically:
+# Stripe only delivers what you subscribe to, so a handler for an
+# unsubscribed event is dead code that looks alive.
+#
+# 2026-09-29: found the live endpoint subscribed to only 4 of 9. ACH
+# settlement (`payment_intent.succeeded`) was among the missing, so a
+# bank-funded gig would have parked in `charge_processing` forever and never
+# paid the artist. `charge.refunded`, `transfer.reversed` and
+# `charge.dispute.closed` had been handled-but-unsubscribed for months, so
+# refunds and dispute outcomes issued from the Stripe Dashboard never synced.
+#
+# Adding a new `elif event_type == "..."` branch means adding it here AND
+# subscribing in Stripe. `GET /api/admin/payments/webhook-health` compares
+# this list against the live subscription so the drift is visible.
+STRIPE_WEBHOOK_EVENTS = [
+    "account.updated",
+    "charge.dispute.closed",
+    "charge.dispute.created",
+    "charge.refunded",
+    "payment_intent.payment_failed",
+    "payment_intent.succeeded",
+    "setup_intent.succeeded",
+    "transfer.created",
+    "transfer.reversed",
+]
+
 from backend.services import statement_descriptor
 from backend.services import ach
 

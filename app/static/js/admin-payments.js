@@ -186,6 +186,58 @@
   // conditional badges after the main row, ONLY when count > 0,
   // so a healthy queue reads as an uncluttered dashboard and any
   // problems immediately draw the eye.
+  // ── Webhook health (2026-09-29) ────────────────────────────────────────
+  // Stripe delivers only what the endpoint subscribes to, so a handler for an
+  // unsubscribed event is dead code that looks alive — nothing errors, the
+  // event just never arrives. That drifted to 4 of 9 subscribed without anyone
+  // noticing, taking ACH settlement and Dashboard refund sync with it. Silent
+  // by design when healthy; loud when not.
+  async function renderWebhookHealth() {
+    const el = document.getElementById('apWebhookHealth');
+    if (!el) return;
+    let d;
+    try {
+      const r = await fetch('/api/admin/payments/webhook-health', { credentials: 'include' });
+      if (!r.ok) { el.style.display = 'none'; return; }
+      d = await r.json();
+    } catch (_) { el.style.display = 'none'; return; }
+
+    if (d.ok) { el.style.display = 'none'; return; }
+
+    let html = '<div style="border:1px solid #ef4444;border-left:3px solid #ef4444;' +
+      'border-radius:8px;padding:12px 14px;background:rgba(239,68,68,0.07);">' +
+      '<div style="font-size:0.72rem;font-weight:700;color:#ef4444;text-transform:uppercase;' +
+      'letter-spacing:.05em;margin-bottom:8px;">Stripe webhook problem</div>';
+
+    if (d.error) {
+      html += '<p style="margin:0;font-size:0.75rem;color:var(--text);">' + esc(d.error) + '</p>';
+    } else {
+      if ((d.missing || []).length) {
+        html += '<p style="margin:0 0 6px 0;font-size:0.75rem;color:var(--text);">' +
+          'These events are handled in code but Stripe is <strong>not</strong> sending them, ' +
+          'so those code paths never run:</p><ul style="margin:0 0 8px 18px;font-size:0.73rem;' +
+          'color:var(--text-muted);">';
+        d.missing.forEach(function (e) {
+          html += '<li><code>' + esc(e) + '</code></li>';
+        });
+        html += '</ul><p style="margin:0;font-size:0.72rem;color:var(--text-muted);">' +
+          'Add them to the endpoint in Stripe → Developers → Webhooks.</p>';
+      }
+      if (d.status && d.status !== 'enabled') {
+        html += '<p style="margin:6px 0 0 0;font-size:0.75rem;color:#ef4444;">' +
+          'Endpoint status is <strong>' + esc(d.status) + '</strong>, not enabled.</p>';
+      }
+      if ((d.extra || []).length) {
+        html += '<p style="margin:6px 0 0 0;font-size:0.72rem;color:var(--text-muted);">' +
+          'Subscribed but unhandled (harmless, just wasted deliveries): ' +
+          d.extra.map(esc).join(', ') + '</p>';
+      }
+    }
+    html += '</div>';
+    el.innerHTML = html;
+    el.style.display = 'block';
+  }
+
   // ── ACH in flight (2026-09-29) ─────────────────────────────────────────
   // Bank debits still clearing, plus venues stuck awaiting microdeposit
   // confirmation. Card charges resolve synchronously, so before ACH there
@@ -406,6 +458,7 @@
       renderHeroStats(stats);
       renderStats(stats);
       renderAchInFlight();
+      renderWebhookHealth();
       renderTable(data.items || []);
       renderPagination();
     } catch (e) {
