@@ -8,12 +8,30 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-09-29 (State dropdowns show all 50 states; Mile Radius filter fixed on venue Search Artists):** Two discovery bugs, both of which made the platform look empty when it wasn't.
+
+  **1. State dropdowns.** `venue-discovery.html` shipped a hard-coded four-option `<select>` (CA/NY/TX/FL), so venues in the other 46 states were unfilterable. `artist-discovery.html` built its list from whatever states currently have artists — better, but still wrong: a venue picking a state with no artists yet can't tell whether it filtered to zero or the filter simply doesn't exist, and the option set silently changes as the platform grows. Both now populate from the shared 50-state list in [us-states.js](app/static/js/us-states.js) via `getStatesHTML()`, which `signup-new.html`, `user-profile.html` and the W-9 form already used.
+
+  Audited every other state `<select>` in `app/`: `artist-edit.html` and `venue-edit.html` carry all 50 inline (fine); `signup-new.html`, `user-profile.html`, `artist-book-gigs.html` (`w9State`, `extGigVenueState`) populate from `US_STATES` in JS (fine). These two discovery pages were the only offenders.
+
+  **2. Mile Radius did nothing on the venue's Search Artists panel** ([venue.create-gigs.js](app/static/js/venue.create-gigs.js) `applyFilters`). Reported as: city defaults to Los Angeles, raise the radius to 100 miles, and the Thousand Oaks artists (~35 mi away) still don't appear.
+
+  `applyFilters` runs in two stages — narrow by name/city/radius, then hard-filter by the Type/Lineup/Style pills. Those pills are **only** ever switched on by `_vcgAutoPopulateFromArtists`, which derives them from the narrowed set, and it re-fired only when the auto-populate key changed. The key was `` `${artistNameFilter}|${cityFilter}` `` — **radius was missing**. So raising the radius pulled new artists into `narrowed`, but the pills were still derived from the old, tighter set, and the pill stage dropped exactly the artists the wider radius had just admitted.
+
+  The reported case was the degenerate form: at the default 20 miles nothing is in range, so auto-populate ran against an **empty** list, switched every pill off, and hit the `activeTypes.length === 0 → filteredArtists = []` short-circuit. From there no radius change could ever recover, because the key never moved. Every live artist in the test data is in Thousand Oaks, so the panel was permanently empty for an LA venue.
+
+  Two fixes: radius is now part of the key (it's a narrowing input like the other two), and **auto-populate no longer runs against an empty set** — wiping all pills reads as "nothing matches your filters" when the truth is "nothing is in range", and leaves a state the user can't clear. Note this is the same helper behind the 2026-07-22 **T3** clobbering bug; it is load-bearing and easy to get wrong.
+
+  Also replaced the generic "No artists found matching your criteria." with the actual reason: `No artists within N miles of <city>. Try a larger Mile Radius.`, or, when the typed city isn't in `us_cities` (so there are no coordinates and radius genuinely cannot apply), a message saying exactly that instead of silently falling back to substring city matching.
+
+  Cache-busters: `venue.create-gigs.js?v=264`, `artist.discovery.js?v=2`, `venue.discovery.js?v=2`. Full suite green (170 passed).
+
 - **2026-09-29 (Find Artists — venue-side discovery page):** Discovery was one-directional. Artists had a dedicated **Find Venues** page (`venue-discovery.html`) with a Request Preferred button. Venues had no browse surface at all — `/api/artists/search` existed but was consumed only from inside `venue.create-gigs.js`'s gig-creation flow, with no way to act on what you found. A venue therefore could not invite an artist it had never worked with: only artists already carrying a `preferred_artists` row appear anywhere in the venue UI, so the new invitation flow had no reachable entry point.
 
   For a two-sided marketplace where venues are the paying side and the harder side to acquire, having the worse discovery experience on that side is backwards.
 
   - [artist-discovery.html](app/artist-discovery.html) + [artist.discovery.js](app/static/js/artist.discovery.js) — mirrors `venue-discovery.html`'s structure (stats row, search bar, filter chips, card list, action button). Shows per-artist relationship state: **Preferred** / **Invited** (awaiting response) / **They Requested** (routes to the existing approve flow rather than inviting someone who already applied) / **Not Invited**.
-  - Two deliberate improvements over the page it mirrors: the **state dropdown and artist-type chips are built from live data** rather than hard-coded, so a new `artist_type` can't become unfilterable (the venue page's fixed four-state `<select>` is a known wart, not copied).
+  - The **artist-type chips are built from live data** rather than hard-coded, so a new `artist_type` can't become unfilterable. (The state dropdown was initially built from live data too; see the 2026-09-29 state-dropdown entry below for why that was wrong and what replaced it.)
   - [artists.py](backend/routes/artists.py) — **`/api/artists/search` now requires authentication.** It returns every artist on the platform with city, state and lat/long and previously had no `get_current_user` at all. Low-exposure while buried in the calendar; not acceptable as the backbone of a browse page. Now 401s unauthenticated. Deliberately not restricted to venue users — narrowing it would break gig creation for multi-entity accounts.
   - [user-dropdown.js](app/static/js/user-dropdown.js) — **Find Artists** entry, gated identically to the existing Invite Artists link (venue users, not while on an artist page). Deep-links the user's first venue; multi-venue users switch from inside the page.
 

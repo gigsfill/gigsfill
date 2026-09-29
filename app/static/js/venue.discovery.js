@@ -27,9 +27,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   let cityFilter = "";
   let stateFilter = "";
 
+  // 2026-09-29: populate the state filter from the shared us-states.js
+  // list. It used to be four hard-coded options in the HTML, so venues
+  // in the other 46 states could not be filtered by state at all.
+  function buildStateOptions() {
+    const sel = document.getElementById("stateSelect");
+    if (!sel) return;
+    if (typeof getStatesHTML === "function") {
+      sel.innerHTML = '<option value="">All States</option>' + getStatesHTML();
+    }
+  }
+
   // Load data
   async function loadVenues() {
     try {
+      buildStateOptions();
       allVenues = await apiGet("/api/venues/public");
       preferredVenues = await apiGet(`/api/artist/preferred-venues?artist_id=${artistId}`);
       updateStats();

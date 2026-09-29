@@ -6988,9 +6988,13 @@ function initializeArtistSearch(venueId, venueData) {
     });
   }
 
-  // v96: tracks last artist-name+city key so auto-populate only fires when the
-  // narrowing inputs change — subsequent pill deselections stay intact.
+  // v96: tracks last artist-name+city+radius key so auto-populate only fires
+  // when the narrowing inputs change — subsequent pill deselections stay intact.
   let _vcgLastAutoPopKey = '';
+
+  // Why the last result set came back empty, so displayArtists() can say
+  // "none within 20 miles of los angeles" instead of a generic "no match".
+  let _vcgEmptyReason = '';
 
   function _vcgSetPillActive(btn, active) {
     if (!btn) return;
@@ -7382,6 +7386,7 @@ function initializeArtistSearch(venueId, venueData) {
     const artistNameFilter = searchArtistInput.value.toLowerCase().trim();
     const cityFilter = searchCityInput.value.toLowerCase().trim();
     const mileRadius = parseInt(mileRadiusInput.value) || 20;
+    _vcgEmptyReason = '';
 
     // Narrow by artist name first
     let narrowed = allArtists.slice();
@@ -7399,16 +7404,43 @@ function initializeArtistSearch(venueId, venueData) {
         if (!a.latitude || !a.longitude) return true;
         return calculateDistance(cityCoords.lat, cityCoords.lon, a.latitude, a.longitude) <= mileRadius;
       });
+      if (narrowed.length === 0) {
+        _vcgEmptyReason = `No artists within ${mileRadius} miles of ${cityFilter}. Try a larger Mile Radius.`;
+      }
     } else if (cityFilter) {
+      // City isn't in the us_cities list, so there are no coordinates to
+      // measure from and Mile Radius can't apply — fall back to a name match.
       narrowed = narrowed.filter(a => a.city && a.city.toLowerCase().includes(cityFilter));
+      if (narrowed.length === 0) {
+        _vcgEmptyReason = `No artists listed in "${cityFilter}". Mile Radius doesn't apply — that city isn't in our list, so we can't measure distance from it.`;
+      }
     }
 
-    // v96: Auto-populate pills when the narrowing inputs change
-    const _autoPopKey = `${artistNameFilter}|${cityFilter}`;
+    // v97: Auto-populate pills when the narrowing inputs change.
+    //
+    // 2026-09-29: the key used to be name+city only, which broke Mile Radius.
+    // The pills hard-filter the result (zero active Types → empty), and they
+    // are only ever switched on by this auto-populate. So widening the radius
+    // pulled new artists into `narrowed` but left the pills derived from the
+    // OLD, narrower set — and those artists were then dropped by the pill
+    // stage below. Worst case: a venue whose city has no artists inside the
+    // default 20 miles got an empty set, every pill switched off, and no
+    // radius change could ever recover it because the key never moved.
+    // Radius is a narrowing input like the other two, so it belongs in the key.
+    const _autoPopKey = `${artistNameFilter}|${cityFilter}|${mileRadius}`;
     if (_autoPopKey !== _vcgLastAutoPopKey) {
-      _vcgLastAutoPopKey = _autoPopKey;
       if (artistNameFilter || cityFilter) {
-        _vcgAutoPopulateFromArtists(narrowed);
+        // Never auto-populate from an empty set: that switches every pill off,
+        // which reads as "nothing matches your pills" when the truth is
+        // "nothing is in range", and leaves the panel in a state the user
+        // can't clear. Leave the pills as they are and let the empty
+        // `narrowed` produce the empty result on its own.
+        if (narrowed.length > 0) {
+          _vcgLastAutoPopKey = _autoPopKey;
+          _vcgAutoPopulateFromArtists(narrowed);
+        }
+      } else {
+        _vcgLastAutoPopKey = _autoPopKey;
       }
     }
 
@@ -7461,7 +7493,8 @@ function initializeArtistSearch(venueId, venueData) {
     artistSearchResults.textContent = ''; // Don't show "Found X artists"
     
     if (filteredArtists.length === 0) {
-      artistResultsList.innerHTML = '<p style="color: var(--text-muted); padding: 12px;">No artists found matching your criteria.</p>';
+      const msg = _vcgEmptyReason || 'No artists found matching your criteria.';
+      artistResultsList.innerHTML = '<p style="color: var(--text-muted); padding: 12px;">' + _vcg_esc(msg) + '</p>';
       return;
     }
     

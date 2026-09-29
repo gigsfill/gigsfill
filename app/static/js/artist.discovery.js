@@ -72,14 +72,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       related.filter(r => r.preferred_status === "invited").length;
   }
 
-  // States come from the data rather than a hard-coded list — the venue
-  // page's fixed 4-state <select> is a known wart we're not copying.
+  // All 50 states from the shared us-states.js list, not just the ones
+  // that happen to have artists today — otherwise a venue searching a
+  // state with no artists yet sees no option and can't tell whether it
+  // filtered to zero or the filter simply doesn't exist.
   function buildStateOptions() {
     const sel = document.getElementById("stateSelect");
     if (!sel) return;
-    const states = [...new Set(allArtists.map(a => (a.state || "").trim()).filter(Boolean))].sort();
-    sel.innerHTML = `<option value="">All States</option>` +
-      states.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+    if (typeof getStatesHTML === "function") {
+      sel.innerHTML = '<option value="">All States</option>' + getStatesHTML();
+    }
   }
 
   function buildTypeFilters() {

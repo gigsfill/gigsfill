@@ -229,13 +229,11 @@
 <div class="search-bar">
 <input id="searchInput" placeholder="Search by name..." type="text"/>
 <input id="cityInput" placeholder="City..." type="text"/>
+<!-- 2026-09-29: was a hard-coded 4-state list (CA/NY/TX/FL), which made
+     venues in the other 46 states unfilterable. Populated from the shared
+     us-states.js list instead. -->
 <select id="stateSelect">
 <option value="">All States</option>
-<option value="CA">California</option>
-<option value="NY">New York</option>
-<option value="TX">Texas</option>
-<option value="FL">Florida</option>
-<!-- Add more states as needed -->
 </select>
 </div>
 <div class="filters">
@@ -253,8 +251,9 @@
 </main>
 <script src="/app/static/js/auth.guard.js?v=4"></script>
 <script src="/app/static/js/api-globals.js?v=12"></script>
+<script src="/app/static/js/us-states.js"></script>
 <script src="/app/static/js/city-autocomplete.js"></script>
-<script src="/app/static/js/venue.discovery.js" type="module"></script>
+<script src="/app/static/js/venue.discovery.js?v=2" type="module"></script>
 
 <footer style="text-align: center; padding: 30px 20px; color: var(--text-gray); font-size: 0.8125rem;">
   © 2026 GigsFill. Built for the music community. · <a href="/app/legal.html" style="color: var(--text-gray); text-decoration: none; border-bottom: 1px solid rgba(148,163,184,0.3);">Terms &amp; Legal</a>
