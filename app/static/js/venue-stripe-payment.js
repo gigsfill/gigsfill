@@ -142,6 +142,10 @@ async function loadVenueCard() {
 // endpoint used to read pm.card.* unconditionally, so a venue who had just
 // linked a bank saw the empty "add a payment method" form as though nothing
 // had happened.
+// What's currently on file, so picking that same method in the dropdown can
+// show it back rather than an empty form the venue would fill in for nothing.
+var venueSavedMethod = { type: null, label: '' };
+
 function venueRenderSavedMethod(data) {
   var saved   = document.getElementById('venueCurrentCard');
   var chooser = document.getElementById('venueAddCardSection');
@@ -155,6 +159,10 @@ function venueRenderSavedMethod(data) {
     var subline = document.getElementById('venuePmSubline');
 
     if (data.type === 'us_bank_account') {
+      venueSavedMethod = {
+        type: 'bank',
+        label: (data.bank_name || 'Bank account') + ' ••••' + (data.last4 || '')
+      };
       if (label)   label.textContent = 'Saved Bank Account';
       if (brandEl) brandEl.textContent = data.bank_name || 'BANK ACCOUNT';
       if (last4El) last4El.textContent = data.last4 || '';
@@ -165,6 +173,10 @@ function venueRenderSavedMethod(data) {
           : 'Debited the day after each gig';
       }
     } else {
+      venueSavedMethod = {
+        type: 'card',
+        label: (data.brand || 'Card').toUpperCase() + ' ••••' + (data.last4 || '')
+      };
       if (label)   label.textContent = 'Saved Card';
       if (brandEl) brandEl.textContent = (data.brand || 'Card').toUpperCase();
       if (last4El) last4El.textContent = data.last4 || '';
@@ -179,6 +191,7 @@ function venueRenderSavedMethod(data) {
     chooser.style.display = 'none';
     venueCollapsePanes();
   } else {
+    venueSavedMethod = { type: null, label: '' };
     saved.style.display = 'none';
     chooser.style.display = 'block';
     if (intro) intro.textContent = "Choose how you'd like to pay for gig bookings.";
@@ -219,9 +232,14 @@ async function venueRenderAchPending() {
 // inactive styling to maintain — which is what the two-button version was
 // straining to express.
 function venueCollapsePanes() {
-  ['venueCardPane', 'venueBankPane'].forEach(function (id) {
+  ['venueCardPane', 'venueBankPane',
+   'venueCardPaneCurrent', 'venueBankPaneCurrent'].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.style.display = 'none';
+  });
+  ['venueCardPaneForm', 'venueBankPaneForm'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'block';
   });
   var sel = document.getElementById('venuePmChoice');
   if (sel) sel.value = '';
@@ -238,10 +256,42 @@ window.venuePickMethod = function (which) {
 
   cardPane.style.display = (which === 'card') ? 'block' : 'none';
   bankPane.style.display = (which === 'bank') ? 'block' : 'none';
+  if (!which) return;
 
-  // Mount the Stripe card Element only once its pane is actually visible —
-  // mounting into a hidden container gives a zero-height iframe.
+  // Picking the method already on file is a no-op, so show what they have
+  // and make them ask for the setup form explicitly — otherwise a venue
+  // re-enters a card they already gave us and ends up with the same one.
+  var isCurrent = (venueSavedMethod.type === which);
+  venueShowPaneMode(which, isCurrent ? 'current' : 'form');
+};
+
+// mode: 'current' shows what's on file; 'form' shows the setup flow.
+function venueShowPaneMode(which, mode) {
+  var ids = (which === 'card')
+    ? { cur: 'venueCardPaneCurrent', form: 'venueCardPaneForm', label: 'venueCardCurrentLabel' }
+    : { cur: 'venueBankPaneCurrent', form: 'venueBankPaneForm', label: 'venueBankCurrentLabel' };
+
+  var cur  = document.getElementById(ids.cur);
+  var form = document.getElementById(ids.form);
+  var lbl  = document.getElementById(ids.label);
+
+  if (mode === 'current') {
+    if (lbl)  lbl.textContent = venueSavedMethod.label || '';
+    if (cur)  cur.style.display = 'block';
+    if (form) form.style.display = 'none';
+    return;
+  }
+
+  if (cur)  cur.style.display = 'none';
+  if (form) form.style.display = 'block';
+  // Mount the Stripe Element only once its container is visible — mounting
+  // into a hidden node gives a zero-height iframe.
   if (which === 'card') initVenueStripeCard();
+}
+
+// "Use a different card / bank account" — drop the summary, show the form.
+window.venueProceedChange = function (which) {
+  venueShowPaneMode(which, 'form');
 };
 
 // Save card via SetupIntent

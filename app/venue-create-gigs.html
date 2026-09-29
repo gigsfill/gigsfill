@@ -3059,6 +3059,17 @@
 
       <!-- Card detail, expanded by the chooser -->
       <div id="venueCardPane" style="display:none;">
+        <!-- Shown when the venue picks the method they're already on, so they
+             don't re-enter details they've already given. -->
+        <div id="venueCardPaneCurrent" style="display:none;">
+          <p style="color: var(--text-gray); font-size: 0.85rem; margin: 0 0 12px 0;">
+            You're already paying by card — <strong style="color: var(--text-white);" id="venueCardCurrentLabel"></strong>.
+          </p>
+          <button type="button" onclick="venueProceedChange('card')" class="btn primary" style="font-size: 0.85rem;">
+            Use a Different Card
+          </button>
+        </div>
+      <div id="venueCardPaneForm">
         <p style="color: var(--text-gray); font-size: 0.8rem; margin: 0 0 12px 0;">
           Your card is charged the day after each gig. The artist is paid right after.
         </p>
@@ -3074,9 +3085,19 @@
           </p>
         </div>
       </div>
+      </div>
 
       <!-- Bank detail, expanded by the chooser -->
       <div id="venueBankPane" style="display:none;">
+        <div id="venueBankPaneCurrent" style="display:none;">
+          <p style="color: var(--text-gray); font-size: 0.85rem; margin: 0 0 12px 0;">
+            You're already paying by bank — <strong style="color: var(--text-white);" id="venueBankCurrentLabel"></strong>.
+          </p>
+          <button type="button" onclick="venueProceedChange('bank')" class="btn primary" style="font-size: 0.85rem;">
+            Use a Different Bank Account
+          </button>
+        </div>
+      <div id="venueBankPaneForm">
         <p style="color: var(--text-gray); font-size: 0.8rem; margin: 0 0 12px 0;">
           Pay directly from a bank account. You'll sign in to your bank through Stripe to
           connect it — most banks verify instantly, and some take 1–2 business days.
@@ -3094,6 +3115,7 @@
             🔒 Your bank credentials go directly to <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a> and are never seen by GigsFill.
           </p>
         </div>
+      </div>
       </div>
 
       <!-- Sits at the foot of the section, under whichever pane is open.
@@ -3927,7 +3949,7 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=25" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=26" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/messages.js?v=8"></script>

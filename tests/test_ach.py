@@ -403,8 +403,10 @@ def test_card_element_is_only_mounted_into_a_visible_pane():
     zero-height iframe the venue can't type into."""
     js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
           / "venue-stripe-payment.js").read_text()
-    idx = js.index("window.venuePickMethod")
-    block = js[idx:idx + 900]
+    # Mounting now lives in venueShowPaneMode, which only runs it on the
+    # 'form' path — the 'current' summary hides the form entirely.
+    idx = js.index("function venueShowPaneMode")
+    block = js[idx:idx + 1200]
     assert "initVenueStripeCard()" in block
     assert "which === 'card'" in block
 
@@ -501,3 +503,52 @@ def test_changing_payment_method_can_be_cancelled():
     # ...and hidden on first-time setup, where there's nothing to cancel to.
     idx2 = js.index("Choose how you'd like to pay")
     assert "cancelRow.style.display = 'none'" in js[idx2:idx2 + 300]
+
+
+def test_picking_the_current_method_shows_it_instead_of_a_blank_form():
+    """Selecting the rail you're already on is a no-op.
+
+    Showing the empty setup form there invites a venue to re-enter a card
+    they already gave us and end up with the same one saved twice over.
+    Show what's on file and make them ask for the form explicitly.
+    """
+    html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
+    for el in ("venueCardPaneCurrent", "venueCardPaneForm",
+               "venueBankPaneCurrent", "venueBankPaneForm",
+               "venueCardCurrentLabel", "venueBankCurrentLabel"):
+        assert f'id="{el}"' in html, f"{el} missing"
+    assert "Use a Different Card" in html
+    assert "Use a Different Bank Account" in html
+
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    idx = js.index("window.venuePickMethod")
+    block = js[idx:idx + 900]
+    assert "venueSavedMethod.type === which" in block
+    assert "'current'" in block and "'form'" in block
+    assert "window.venueProceedChange" in js
+
+
+def test_saved_method_is_tracked_for_both_rails():
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    assert "var venueSavedMethod" in js
+    # Declaration + a card branch + a bank branch + the cleared case. The
+    # clear matters: a removed method would otherwise keep suppressing the
+    # setup form.
+    assert js.count("venueSavedMethod = {") == 4
+    assert js.count("venueSavedMethod = { type: null, label: '' }") == 2
+
+
+def test_card_element_only_mounts_when_the_form_is_actually_shown():
+    """The 'current method' summary hides the form; mounting Stripe's Element
+    behind it would give a zero-height iframe."""
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    idx = js.index("function venueShowPaneMode")
+    block = js[idx:idx + 1200]
+    cur_branch = block[block.index("if (mode === 'current')"):block.index("return;")]
+    assert "initVenueStripeCard" not in cur_branch, (
+        "must not mount the card Element while the form is hidden"
+    )
+    assert "initVenueStripeCard()" in block
