@@ -98,11 +98,21 @@ def create_hold_waitlist(db, gig_id: int, artist_ids: list, send_email_now: bool
             ).scalar() or 0
             _any_under = False
             for _aid in artist_ids:
+                # 2026-09-29: added `pa.status = 'approved'`, matching the
+                # pay-override reads below and at line ~556. Without it any
+                # preferred_artists row applied its frequency override —
+                # including `invited` (artist hasn't accepted yet), `denied`
+                # and `revoked`. Now that venue-initiated invitations write
+                # `status='invited'`, non-approved rows are common, so a
+                # merely-invited artist could silently relax or tighten the
+                # venue's booking-frequency gate. No approved row → no row
+                # returned → falls back to the venue default, as intended.
                 _row = db.execute(
                     text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) as freq_days
                             FROM preferred_artists pa
                             JOIN venues v ON v.id = pa.venue_id
-                            WHERE pa.venue_id = :vid AND pa.artist_id = :aid"""),
+                            WHERE pa.venue_id = :vid AND pa.artist_id = :aid
+                              AND pa.status = 'approved'"""),
                     {"vid": _venue_id, "aid": int(_aid)}
                 ).mappings().first()
                 _fd = (_row["freq_days"] if _row else _venue_default) or 0
@@ -414,11 +424,16 @@ def respond_to_hold_offer(db, token: str, action: str, slot_id: Optional[int] = 
         if gate_gig_date and not gate_freq_exempt:
             try:
                 _gd_str = str(gate_gig_date)[:10]
+                # 2026-09-29: `pa.status = 'approved'` added here too — same
+                # bug as the queue-build read above. The `if not _freq_row`
+                # fallback below already handles "no row" by reading the
+                # venue default, so a non-approved row now takes that path.
                 _freq_row = db.execute(
                     text("""SELECT COALESCE(pa.frequency_days_override, v.artist_frequency_days) as freq_days
                             FROM preferred_artists pa
                             JOIN venues v ON v.id = pa.venue_id
-                            WHERE pa.venue_id = :vid AND pa.artist_id = :aid"""),
+                            WHERE pa.venue_id = :vid AND pa.artist_id = :aid
+                              AND pa.status = 'approved'"""),
                     {"vid": gate_venue_id, "aid": row["artist_id"]}
                 ).mappings().first()
                 if not _freq_row:

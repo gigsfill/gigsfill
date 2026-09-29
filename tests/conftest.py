@@ -300,6 +300,22 @@ def db():
             notes TEXT
         )
     """))
+
+    # Mirrors backend/db.py:setup_database(). Added 2026-09-29 for the
+    # frequency/pay override status-filter tests.
+    session.execute(text("""
+        CREATE TABLE preferred_artists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            venue_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
+            status VARCHAR DEFAULT 'pending',
+            frequency_days_override INTEGER,
+            pay_dollars_override INTEGER,
+            pay_cents_override INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(venue_id, artist_id)
+        )
+    """))
     session.commit()
     
     yield session
