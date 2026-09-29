@@ -299,6 +299,10 @@ function venueUpdateCard() {
   document.getElementById('venueCardError').style.display = 'none';
   document.getElementById('venueCardElement').innerHTML = '';
   initVenueStripeCard();
+  // Switching payment method is exactly when a venue would choose bank over
+  // card, so the ACH option has to appear here too — not just on the
+  // first-time, no-card-on-file path.
+  venueCheckAchAvailable();
 }
 
 function venueRemoveCard() {
