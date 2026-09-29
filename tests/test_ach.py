@@ -629,3 +629,42 @@ def test_a_verified_venue_drops_off_the_stranded_list(db, seed_entities):
 
     class A: id = 1; is_admin = 'true'
     assert ach_in_flight(admin=A(), db=db)["pending_verification"] == []
+
+
+def test_microdeposit_copy_does_not_assert_a_deposit_count():
+    """Stripe has two microdeposit variants and we don't know which applies.
+
+    `next_action.verify_with_microdeposits.microdeposit_type` is either
+    `amounts` (two deposits whose values the venue enters) or
+    `descriptor_code` (one $0.01 deposit carrying a 6-character code in the
+    statement description). `descriptor_code` is Stripe's modern default.
+
+    Copy that promises "two small deposits" sends a venue hunting for the
+    wrong thing on their bank statement, so we state no count and defer to
+    Stripe's hosted page, which is authoritative.
+    """
+    root = Path(__file__).resolve().parents[1]
+    targets = [
+        root / "app" / "venue-create-gigs.html",
+        root / "app" / "static" / "js" / "venue-stripe-payment.js",
+        root / "app" / "static" / "js" / "admin-payments.js",
+    ]
+    banned = ["two small deposits", "two test deposits", "two small amounts",
+              "Confirm the amounts", "confirm the amounts",
+              "enter the amounts", "both amounts"]
+    for path in targets:
+        text = path.read_text()
+        for phrase in banned:
+            assert phrase not in text, (
+                f"{path.name} asserts a microdeposit count/action we can't know: {phrase!r}"
+            )
+
+
+def test_microdeposit_flow_points_the_venue_at_stripes_own_page():
+    """We deliberately don't build an amount-entry form — Stripe hosts one,
+    and it words the instructions correctly for whichever variant applies."""
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    assert "hosted_verification_url" in js
+    src = STRIPE_CONNECT.read_text()
+    assert "hosted_verification_url" in src

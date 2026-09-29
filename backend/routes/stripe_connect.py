@@ -315,9 +315,14 @@ def record_ach_pending_verification(venue_id: int, data: dict,
     """Park a bank account that still needs microdeposit confirmation.
 
     2026-09-29. When Financial Connections can't verify a bank instantly,
-    Stripe falls back to microdeposits: two small amounts land in the
-    account in 1-2 business days and the venue confirms them. The
-    SetupIntent sits in `requires_action` until then.
+    Stripe falls back to microdeposits and the SetupIntent sits in
+    `requires_action` until the venue confirms. Note there are **two
+    variants**, given by `next_action.verify_with_microdeposits.microdeposit_type`:
+    `amounts` (two deposits whose values they enter) or `descriptor_code`
+    (one $0.01 deposit carrying a 6-character code in the statement
+    description). Our copy therefore never states a count or what to type —
+    Stripe's hosted page is authoritative, and guessing wrong sends the
+    venue hunting for the wrong thing on their statement.
 
     A payment method exists at that point but **cannot be charged**, so it
     must NOT go into `stripe_payment_method_id` — doing that would make the
@@ -3260,7 +3265,7 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
         # setup_intent.succeeded — a microdeposit-verified bank is now usable
         # ----------------------------------------------------------------
         # 2026-09-29 (ACH). Only fires for us here after a venue confirms the
-        # two small deposits. Until then the payment method existed but could
+        # a microdeposit. Until then the payment method existed but could
         # not be charged, so it was parked in ach_pending_setup_intent_id
         # rather than made active. This promotes it.
         elif event_type == "setup_intent.succeeded":

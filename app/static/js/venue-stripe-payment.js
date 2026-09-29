@@ -426,12 +426,18 @@ async function venueSaveBankAccount() {
       var url = pdata.verification_url || (na.verify_with_microdeposits || {}).hosted_verification_url || '';
       showPaymentModal(
         'Check Your Bank in 1–2 Days',
-        'Your bank could not be verified instantly, so Stripe is sending two small ' +
-        'deposits to the account. They arrive in 1–2 business days.' +
-        (url ? ' Confirm the amounts here to finish setup: <a href="' + url +
-               '" target="_blank" rel="noopener" style="color:#06b6d4;">Verify bank account</a>.'
-             : ' Watch for an email from Stripe with a link to confirm them.') +
-        ' Until you confirm, this account cannot be charged and your card on file stays active.',
+        // Deliberately does not say how many deposits or what to enter.
+        // Stripe uses either two amounts or a single $0.01 deposit carrying a
+        // 6-character code, depending on the account (next_action's
+        // microdeposit_type). Its hosted page states the right thing; asserting
+        // it here risks telling the venue to look for the wrong item.
+        'Your bank could not be verified instantly, so Stripe is sending a small ' +
+        'test deposit to the account. It arrives in 1–2 business days.' +
+        (url ? ' Finish setup here: <a href="' + url +
+               '" target="_blank" rel="noopener" style="color:#06b6d4;">Verify bank account</a>' +
+               ' — that page tells you exactly what to look for on your statement.'
+             : ' Watch for an email from Stripe with a link to confirm it.') +
+        ' Until you confirm, this account cannot be charged and your existing payment method stays active.',
         'warning'
       );
       setTimeout(function () { loadVenueCard(); }, 500);

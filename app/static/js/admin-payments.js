@@ -302,7 +302,7 @@
         'letter-spacing:.05em;margin:' + (charges.length ? '12px' : '0') + ' 0 6px 0;">' +
         'Awaiting microdeposit confirmation — ' + pending.length + '</div>';
       html += '<p style="margin:0 0 6px 0;font-size:0.7rem;color:var(--text-muted);">' +
-        'These venues added a bank account but have not confirmed the two test deposits. ' +
+        'These venues added a bank account but have not confirmed Stripe\'s test deposit. ' +
         'They cannot be charged on it until they do.</p>';
       pending.forEach(v => {
         html += '<div style="font-size:0.72rem;padding:3px 0;">• ' +

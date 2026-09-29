@@ -3030,10 +3030,10 @@
       <div style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.35); border-radius: 8px; padding: 16px;">
         <div style="font-size: 0.75rem; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 6px;">Bank Account — Verification Needed</div>
         <div style="font-size: 0.85rem; color: var(--text-white); margin-bottom: 8px;">
-          Bank •••• <span id="venueAchPendingLast4"></span> — we sent two small deposits. They arrive in 1–2 business days.
+          Bank •••• <span id="venueAchPendingLast4"></span> — Stripe is sending a small test deposit to this account. It arrives in 1–2 business days.
         </div>
         <p style="font-size: 0.78rem; color: var(--text-gray); margin: 0 0 10px 0;">
-          Confirm the amounts to finish setup. Until then this account can't be charged.
+          Use the link below to finish setup — Stripe's page tells you exactly what to look for on your statement. Until you confirm, this account can't be charged.
         </p>
         <a id="venueAchVerifyLink" href="#" target="_blank" rel="noopener" class="btn primary" style="font-size: 0.78rem; display:none;">Confirm Deposits</a>
       </div>
@@ -3949,7 +3949,7 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=26" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=27" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/messages.js?v=8"></script>

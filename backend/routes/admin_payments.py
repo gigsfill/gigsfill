@@ -582,7 +582,7 @@ def ach_in_flight(admin=Depends(check_admin), db=Depends(get_db)):
     Also returns venues with a bank account stuck awaiting microdeposit
     confirmation, which strands a venue in a different way: they think
     they've added a payment method, but it can't be charged until they
-    confirm the amounts.
+    confirm Stripe's test deposit.
     """
     rows = db.execute(
         text("""
