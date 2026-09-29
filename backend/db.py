@@ -1527,6 +1527,16 @@ def setup_database():
         # twice or after a delay (Stripe redirected to refresh_url
         # → gigsfill.com login screen).
         "stripe_onboarding_token VARCHAR",
+        # 2026-09-29 (ACH microdeposits). When a bank can't be verified
+        # instantly via Financial Connections, Stripe falls back to
+        # microdeposits: the SetupIntent parks in `requires_action` and the
+        # venue must confirm two small amounts 1-2 business days later. The
+        # payment method exists at that point but CANNOT be charged, so it
+        # must not become the active one — we hold the SetupIntent here and
+        # the `setup_intent.succeeded` webhook promotes it once verified.
+        "ach_pending_setup_intent_id VARCHAR",
+        "ach_pending_verification_url TEXT",
+        "ach_pending_bank_last4 VARCHAR",
     ])
     
     # ==========================================

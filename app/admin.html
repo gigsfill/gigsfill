@@ -1125,7 +1125,10 @@ ZOHO_ACCOUNT_REGION=com</pre>
             </p>
             <p style="margin:0 0 8px 0;">
               <strong>Why bother:</strong> ACH costs 0.8% capped at $5, against 2.9% + 30¢
-              for cards. On a $200 gig that's about $1.60 instead of $6.10.
+              for cards. On a $200 gig that's about $1.60 instead of $6.10 — but note this
+              is <strong>GigsFill's</strong> saving, not the venue's, since we absorb Stripe's
+              processing fees. That's why the venue-facing copy doesn't mention it; quoting
+              ACH rates there would imply a discount the venue never sees.
             </p>
             <p style="margin:0;">
               <strong>The trade-off — artists wait longer.</strong> A card charge settles
@@ -1431,6 +1434,9 @@ GIGSFILL FEE 1015          cancellation fee (no artist name —
              #apHeroStats kept as an empty div for backwards compat
              with older cached JS revs — it's cleared by the JS. -->
         <div id="apHeroStats" style="display:none;"></div>
+        <!-- 2026-09-29 (ACH): in-flight bank debits. Hidden when empty, so
+             it costs nothing visually until there's something to watch. -->
+        <div id="apAchInFlight" style="display:none;margin-bottom:14px;"></div>
         <div id="apStats" style="margin-bottom:14px;"></div>
 
         <!-- Pinned-entity filter chips (shown when admin clicks a venue/artist name in the table) -->
@@ -2510,7 +2516,7 @@ function switchTemplatesSubTab(tab) {
 <script src="/app/static/js/admin-logs.js"></script>
 <script src="/app/static/js/admin-db.js?v=4"></script>
 <script src="/app/static/js/admin-platform.js?v=15"></script>
-<script src="/app/static/js/admin-payments.js?v=36"></script>
+<script src="/app/static/js/admin-payments.js?v=37"></script>
 <script src="/app/static/js/admin-templates.js?v=2"></script>
 <script src="/app/static/js/admin-affiliate.js?v=3"></script>
 <script src="/app/static/js/admin-flags.js?v=3"></script>

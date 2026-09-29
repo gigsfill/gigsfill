@@ -564,6 +564,104 @@ def payment_stats(
 
 # ─── /api/admin/payments/{txn_id} ───────────────────────────────────────────
 
+@router.get("/api/admin/payments/ach-in-flight")
+def ach_in_flight(admin=Depends(check_admin), db=Depends(get_db)):
+    """Venue charges sitting in `charge_processing` — ACH debits still clearing.
+
+    2026-09-29. This is the one payment state with no natural end: an ACH
+    debit that neither settles nor returns leaves the parent here
+    indefinitely, the artist's payout held, and nothing in the UI saying so.
+    Card charges resolve synchronously, so before ACH there was no such
+    state to watch.
+
+    `age_days` is the number to look at. Normal settlement is 3-5 business
+    days; past about 7 calendar days something is wrong — a webhook that
+    never arrived, or a Stripe-side hold — and it wants a human. The list is
+    ordered oldest first for exactly that reason.
+
+    Also returns venues with a bank account stuck awaiting microdeposit
+    confirmation, which strands a venue in a different way: they think
+    they've added a payment method, but it can't be charged until they
+    confirm the amounts.
+    """
+    rows = db.execute(
+        text("""
+            SELECT t.id, t.gig_id, t.venue_charge_cents, t.stripe_payment_intent_id,
+                   t.status, t.notes, t.created_at,
+                   g.date AS gig_date, g.venue_id,
+                   v.venue_name,
+                   (SELECT COUNT(*) FROM transactions c
+                     WHERE c.parent_transaction_id = t.id
+                       AND c.transaction_type = 'artist_payout') AS held_payouts,
+                   (SELECT COALESCE(SUM(c.artist_payout_cents), 0) FROM transactions c
+                     WHERE c.parent_transaction_id = t.id
+                       AND c.transaction_type = 'artist_payout') AS held_payout_cents
+            FROM transactions t
+            JOIN gigs g ON g.id = t.gig_id
+            LEFT JOIN venues v ON v.id = g.venue_id
+            WHERE t.status = 'charge_processing'
+            ORDER BY t.created_at ASC
+        """)
+    ).mappings().all()
+
+    from datetime import datetime as _dt
+    now = _dt.utcnow()
+    charges = []
+    for r in rows:
+        age_days = None
+        raw = r.get("created_at")
+        if raw:
+            try:
+                created = raw if isinstance(raw, _dt) else _dt.fromisoformat(
+                    str(raw).replace("Z", "").strip()[:19])
+                age_days = round((now - created).total_seconds() / 86400.0, 1)
+            except Exception:
+                age_days = None
+        charges.append({
+            "transaction_id": r["id"],
+            "gig_id": r["gig_id"],
+            "gig_date": str(r.get("gig_date") or ""),
+            "venue_id": r.get("venue_id"),
+            "venue_name": r.get("venue_name") or "",
+            "amount_cents": r.get("venue_charge_cents") or 0,
+            "payment_intent_id": r.get("stripe_payment_intent_id") or "",
+            "age_days": age_days,
+            # Past ~7 days an ACH debit should have resolved either way.
+            "stale": (age_days is not None and age_days > 7),
+            "held_payouts": r.get("held_payouts") or 0,
+            "held_payout_cents": r.get("held_payout_cents") or 0,
+        })
+
+    pending_verification = [
+        {
+            "venue_id": r["entity_id"],
+            "venue_name": r.get("venue_name") or "",
+            "bank_last4": r.get("ach_pending_bank_last4") or "",
+            "verification_url": r.get("ach_pending_verification_url") or "",
+        }
+        for r in db.execute(
+            text("""
+                SELECT eps.entity_id, eps.ach_pending_bank_last4,
+                       eps.ach_pending_verification_url, v.venue_name
+                FROM entity_payment_settings eps
+                LEFT JOIN venues v ON v.id = eps.entity_id
+                WHERE eps.entity_type = 'venue'
+                  AND eps.ach_pending_setup_intent_id IS NOT NULL
+                  AND eps.ach_pending_setup_intent_id != ''
+            """)
+        ).mappings().all()
+    ]
+
+    return {
+        "charges": charges,
+        "count": len(charges),
+        "stale_count": sum(1 for c in charges if c["stale"]),
+        "total_cents": sum(c["amount_cents"] for c in charges),
+        "held_payout_cents": sum(c["held_payout_cents"] for c in charges),
+        "pending_verification": pending_verification,
+    }
+
+
 @router.get("/api/admin/payments/{txn_id}")
 def payment_detail(
     txn_id: int,

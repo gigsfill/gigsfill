@@ -302,6 +302,27 @@ def db():
     """))
 
     # Mirrors backend/db.py:setup_database(). Added 2026-09-29 for the
+    # ACH admin-visibility tests. Only the columns those tests touch.
+    session.execute(text("""
+        CREATE TABLE entity_payment_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type VARCHAR NOT NULL,
+            entity_id INTEGER NOT NULL,
+            default_payment_method VARCHAR DEFAULT 'stripe',
+            stripe_customer_id VARCHAR,
+            stripe_payment_method_id VARCHAR,
+            stripe_connect_account_id VARCHAR,
+            stripe_connect_onboarding_complete BOOLEAN DEFAULT 0,
+            ach_pending_setup_intent_id VARCHAR,
+            ach_pending_verification_url TEXT,
+            ach_pending_bank_last4 VARCHAR,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(entity_type, entity_id)
+        )
+    """))
+
+    # Mirrors backend/db.py:setup_database(). Added 2026-09-29 for the
     # frequency/pay override status-filter tests.
     session.execute(text("""
         CREATE TABLE preferred_artists (

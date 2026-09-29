@@ -219,17 +219,21 @@ async function venueSaveBankAccount() {
     var setup = await setupRes.json();
     if (!setup.ach_enabled) throw new Error('Bank payments are not enabled on this platform.');
 
-    // Stripe requires a billing name and email for us_bank_account.
-    var acct = await venueGetBillingIdentity(venueId);
-    if (!acct.name || !acct.email) {
-      throw new Error('Add a venue name and contact email to your profile before paying by bank.');
+    // Stripe requires a billing name and email for us_bank_account. These
+    // come from the setup-intent response — resolved server-side, because
+    // `venues` has no email column and the contact address lives on the
+    // owning user account.
+    var billingName = (setup.billing_name || '').trim();
+    var billingEmail = (setup.billing_email || '').trim();
+    if (!billingName || !billingEmail) {
+      throw new Error('We could not find a contact email for this venue. Add one to your user profile, then try again.');
     }
 
     var collected = await venueStripe.collectBankAccountForSetup({
       clientSecret: setup.client_secret,
       params: {
         payment_method_type: 'us_bank_account',
-        payment_method_data: { billing_details: { name: acct.name, email: acct.email } }
+        payment_method_data: { billing_details: { name: billingName, email: billingEmail } }
       },
       expand: ['payment_method']
     });
@@ -242,6 +246,35 @@ async function venueSaveBankAccount() {
       var confirmed = await venueStripe.confirmUsBankAccountSetup(setup.client_secret);
       if (confirmed.error) throw new Error(confirmed.error.message);
       collected.setupIntent = confirmed.setupIntent || collected.setupIntent;
+    }
+
+    // Microdeposit fallback: banks Financial Connections can't verify
+    // instantly leave the SetupIntent in `requires_action`. A payment
+    // method exists but CANNOT be charged until the venue confirms two
+    // small deposits in 1-2 business days. Saving it as the active method
+    // here would make the venue look ready to book while every charge
+    // failed, so park it instead and let the webhook promote it.
+    var na = collected.setupIntent.next_action || {};
+    if (collected.setupIntent.status === 'requires_action' &&
+        na.type === 'verify_with_microdeposits') {
+      var pending = await fetch('/api/stripe/venue/' + venueId + '/ach-pending-verification', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ setup_intent_id: collected.setupIntent.id })
+      });
+      var pdata = await pending.json().catch(function () { return {}; });
+      var url = pdata.verification_url || (na.verify_with_microdeposits || {}).hosted_verification_url || '';
+      showPaymentModal(
+        'Check Your Bank in 1–2 Days',
+        'Your bank could not be verified instantly, so Stripe is sending two small ' +
+        'deposits to the account. They arrive in 1–2 business days.' +
+        (url ? ' Confirm the amounts here to finish setup: <a href="' + url +
+               '" target="_blank" rel="noopener" style="color:#06b6d4;">Verify bank account</a>.'
+             : ' Watch for an email from Stripe with a link to confirm them.') +
+        ' Until you confirm, this account cannot be charged and your card on file stays active.',
+        'warning'
+      );
+      setTimeout(function () { loadVenueCard(); }, 500);
+      return;
     }
 
     var pmId = collected.setupIntent.payment_method;
@@ -274,22 +307,6 @@ async function venueSaveBankAccount() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🏦 Pay by Bank'; }
   }
-}
-
-// Billing name + email for the ACH mandate. Falls back to whatever the page
-// already knows rather than failing outright.
-async function venueGetBillingIdentity(venueId) {
-  try {
-    var res = await fetch('/api/venues/' + venueId, { credentials: 'include' });
-    if (res.ok) {
-      var v = await res.json();
-      return {
-        name: (v.venue_name || v.name || '').trim(),
-        email: (v.email || v.contact_email || '').trim()
-      };
-    }
-  } catch (e) {}
-  return { name: '', email: '' };
 }
 
 function venueUpdateCard() {

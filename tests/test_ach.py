@@ -239,3 +239,121 @@ def test_setup_intent_falls_back_to_card_only_on_error():
     block = src[idx:idx + 1400]
     assert 'pm_types = ["card"]' in block
     assert "SetupIntent.create" in block
+
+
+# ── microdeposit fallback ───────────────────────────────────────────
+
+def test_pending_bank_is_not_saved_as_the_active_payment_method():
+    """A bank awaiting microdeposits CANNOT be charged.
+
+    If the frontend saved it via /save-payment-method the venue would look
+    ready to book while every charge failed. The microdeposit branch must
+    bail out before that call.
+    """
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    start = js.index("verify_with_microdeposits")
+    end = js.index("var pmId = collected.setupIntent.payment_method")
+    block = js[start:end]
+    assert "save-payment-method" not in block, (
+        "microdeposit branch must not save the unusable payment method"
+    )
+    assert "ach-pending-verification" in block
+    assert "return;" in block
+
+
+def test_pending_verification_columns_exist_in_both_schema_and_orm():
+    """CLAUDE.md: db.py and models.py are kept in sync by hand."""
+    db_py = (Path(__file__).resolve().parents[1] / "backend" / "db.py").read_text()
+    models_py = (Path(__file__).resolve().parents[1] / "backend" / "models.py").read_text()
+    for col in ("ach_pending_setup_intent_id", "ach_pending_verification_url",
+                "ach_pending_bank_last4"):
+        assert col in db_py, f"{col} missing from db.py"
+        assert col in models_py, f"{col} missing from models.py ORM mirror"
+
+
+def test_setup_intent_succeeded_webhook_clears_the_pending_state():
+    """Promoting a verified bank must also clear the pending markers,
+    otherwise the admin panel reports it as stuck forever."""
+    src = STRIPE_CONNECT.read_text()
+    idx = src.index('elif event_type == "setup_intent.succeeded":')
+    block = src[idx:idx + 3500]
+    assert "ach_pending_setup_intent_id = NULL" in block
+    assert "stripe_payment_method_id = ?" in block
+
+
+def test_billing_identity_is_resolved_server_side():
+    """`venues` has no email column — a venue's contact address lives on the
+    owning user. Reading it from /api/venues/{id} in the browser always came
+    back empty and blocked every venue at the guard."""
+    src = STRIPE_CONNECT.read_text()
+    assert '"billing_email": billing_email' in src
+    assert "get_all_entity_users" in src
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    assert "venueGetBillingIdentity" not in js, "dead client-side lookup still present"
+    assert "setup.billing_email" in js
+
+
+def test_venues_table_really_has_no_email_column(db):
+    """Pins the fact above, so the client-side lookup isn't reintroduced."""
+    cols = [r[1] for r in db.execute(text("PRAGMA table_info(venues)")).fetchall()]
+    assert "email" not in cols
+
+
+# ── admin visibility ────────────────────────────────────────────────
+
+def test_ach_in_flight_route_precedes_the_txn_id_route():
+    """FastAPI matches in declaration order: if /{txn_id} came first it
+    would swallow 'ach-in-flight' and try to parse it as an integer."""
+    src = (Path(__file__).resolve().parents[1] / "backend" / "routes"
+           / "admin_payments.py").read_text()
+    assert (src.index('"/api/admin/payments/ach-in-flight"')
+            < src.index('"/api/admin/payments/{txn_id}"'))
+
+
+def test_ach_in_flight_reports_held_payouts_and_staleness(db, seed_entities):
+    """The numbers an admin actually acts on: how much artist money is held,
+    and which charges are past the normal settlement window."""
+    from backend.routes.admin_payments import ach_in_flight
+    from datetime import datetime, timedelta
+
+    db.execute(text("""INSERT INTO gigs (id, venue_id, date, pay, status)
+                       VALUES (500, 20, '2026-09-01', 200, 'completed')"""))
+    old = (datetime.utcnow() - timedelta(days=12)).isoformat()
+    db.execute(text("""
+        INSERT INTO transactions (id, gig_id, from_user_id, to_user_id, amount_cents,
+                                  venue_charge_cents, artist_payout_cents,
+                                  commission_cents, status, transaction_type,
+                                  created_at, stripe_payment_intent_id)
+        VALUES (900, 500, 2, 1, 20000, 22000, 0, 2000, 'charge_processing',
+                'venue_charge', :c, 'pi_test')
+    """), {"c": old})
+    db.execute(text("""
+        INSERT INTO transactions (id, gig_id, from_user_id, to_user_id, artist_id,
+                                  amount_cents, artist_payout_cents, venue_charge_cents,
+                                  commission_cents, status, transaction_type,
+                                  parent_transaction_id)
+        VALUES (901, 500, 2, 1, 10, 20000, 19000, 0, 1000, 'scheduled',
+                'artist_payout', 900)
+    """))
+    db.commit()
+
+    class A: id = 1; is_admin = 'true'
+    out = ach_in_flight(admin=A(), db=db)
+    assert out["count"] == 1
+    row = out["charges"][0]
+    assert row["transaction_id"] == 900
+    assert row["held_payouts"] == 1
+    assert row["held_payout_cents"] == 19000
+    assert row["stale"] is True, "a 12-day-old ACH charge should flag as overdue"
+    assert out["stale_count"] == 1
+    assert out["held_payout_cents"] == 19000
+
+
+def test_ach_in_flight_is_empty_when_nothing_is_processing(db, seed_entities):
+    from backend.routes.admin_payments import ach_in_flight
+    class A: id = 1; is_admin = 'true'
+    out = ach_in_flight(admin=A(), db=db)
+    assert out == {"charges": [], "count": 0, "stale_count": 0, "total_cents": 0,
+                   "held_payout_cents": 0, "pending_verification": []}

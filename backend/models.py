@@ -518,6 +518,12 @@ class EntityPaymentSetting(Base):
     cashapp_cashtag = Column(String)
     bank_account_last4 = Column(String)
     bank_routing_last4 = Column(String)
+    # 2026-09-29 (ACH microdeposits) — mirrors backend/db.py. Held here
+    # rather than in stripe_payment_method_id because a bank awaiting
+    # microdeposit confirmation cannot be charged yet.
+    ach_pending_setup_intent_id = Column(String)
+    ach_pending_verification_url = Column(String)
+    ach_pending_bank_last4 = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

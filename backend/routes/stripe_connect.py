@@ -194,6 +194,26 @@ def create_venue_setup_intent(venue_id: int, user=Depends(get_current_user), db=
             metadata={"venue_id": str(venue_id)},
         )
 
+    # Stripe requires a billing name + email for us_bank_account. Resolved
+    # here rather than in the browser: 2026-09-29, the frontend read them
+    # from /api/venues/{id}, but `venues` has **no email column at all** —
+    # a venue's contact email lives on the owning user (and entity_users
+    # for multi-user accounts). So the client-side lookup always came back
+    # empty and every venue hit the "add a name and email" guard.
+    billing_name, billing_email = "", ""
+    try:
+        vrow = db.execute(
+            text("SELECT venue_name FROM venues WHERE id = :vid"), {"vid": venue_id}
+        ).mappings().first()
+        billing_name = ((vrow or {}).get("venue_name") or "").strip()
+        from backend.utils import get_all_entity_users
+        for u in (get_all_entity_users(db, "venue", venue_id) or []):
+            if u.get("email"):
+                billing_email = u["email"].strip()
+                break
+    except Exception as e:
+        logger.warning(f"Venue {venue_id}: could not resolve ACH billing identity: {e}")
+
     return {
         "client_secret": setup_intent.client_secret,
         "customer_id": customer_id,
@@ -201,6 +221,8 @@ def create_venue_setup_intent(venue_id: int, user=Depends(get_current_user), db=
         # needing its own view of the platform setting.
         "payment_method_types": pm_types,
         "ach_enabled": ach.PM_TYPE in pm_types,
+        "billing_name": billing_name,
+        "billing_email": billing_email,
     }
 
 
@@ -257,6 +279,93 @@ def save_venue_payment_method(venue_id: int, data: dict, user=Depends(get_curren
     db.commit()
     
     return {"ok": True, "reactivated": True}
+
+
+@router.post("/api/stripe/venue/{venue_id}/ach-pending-verification")
+def record_ach_pending_verification(venue_id: int, data: dict,
+                                    user=Depends(get_current_user), db=Depends(get_db)):
+    """Park a bank account that still needs microdeposit confirmation.
+
+    2026-09-29. When Financial Connections can't verify a bank instantly,
+    Stripe falls back to microdeposits: two small amounts land in the
+    account in 1-2 business days and the venue confirms them. The
+    SetupIntent sits in `requires_action` until then.
+
+    A payment method exists at that point but **cannot be charged**, so it
+    must NOT go into `stripe_payment_method_id` — doing that would make the
+    venue look ready to book while every charge failed. We hold the
+    SetupIntent here instead, and `setup_intent.succeeded` promotes it once
+    the venue confirms. Stripe hosts the confirmation page, so we keep its
+    URL rather than building our own amount-entry form.
+    """
+    setup_intent_id = (data or {}).get("setup_intent_id")
+    if not setup_intent_id:
+        raise HTTPException(400, "setup_intent_id required")
+
+    if not check_venue_access(db, user, venue_id):
+        raise HTTPException(403, "Not your venue")
+
+    stripe_mod, _keys = init_stripe(db)
+    try:
+        si = stripe_mod.SetupIntent.retrieve(setup_intent_id, expand=["payment_method"])
+    except Exception as e:
+        raise HTTPException(400, f"Could not read that setup: {str(e)[:160]}")
+
+    # Trust Stripe's copy, never the client's claim about its own state.
+    if si.get("status") != "requires_action":
+        raise HTTPException(400, "That bank setup is not awaiting verification.")
+
+    next_action = si.get("next_action") or {}
+    if (next_action.get("type") or "") != "verify_with_microdeposits":
+        raise HTTPException(400, "That bank setup is not awaiting microdeposits.")
+
+    hosted_url = (next_action.get("verify_with_microdeposits") or {}).get(
+        "hosted_verification_url") or ""
+
+    last4 = ""
+    pm = si.get("payment_method")
+    if isinstance(pm, dict):
+        last4 = ((pm.get("us_bank_account") or {}).get("last4") or "")
+
+    db.execute(
+        text("""
+            UPDATE entity_payment_settings
+            SET ach_pending_setup_intent_id = :sid,
+                ach_pending_verification_url = :url,
+                ach_pending_bank_last4 = :last4,
+                updated_at = :now
+            WHERE entity_type = 'venue' AND entity_id = :vid
+        """),
+        {"sid": setup_intent_id, "url": hosted_url, "last4": last4,
+         "vid": venue_id, "now": utcnow_naive()},
+    )
+    db.commit()
+    logger.info(f"Venue {venue_id}: ACH awaiting microdeposit verification ({setup_intent_id})")
+    return {"status": "pending_verification",
+            "verification_url": hosted_url,
+            "bank_last4": last4}
+
+
+@router.get("/api/stripe/venue/{venue_id}/ach-pending-verification")
+def get_ach_pending_verification(venue_id: int,
+                                 user=Depends(get_current_user), db=Depends(get_db)):
+    """Whether this venue has a bank account still awaiting microdeposits."""
+    if not check_venue_access(db, user, venue_id):
+        raise HTTPException(403, "Not your venue")
+    row = db.execute(
+        text("""SELECT ach_pending_setup_intent_id, ach_pending_verification_url,
+                       ach_pending_bank_last4
+                FROM entity_payment_settings
+                WHERE entity_type = 'venue' AND entity_id = :vid"""),
+        {"vid": venue_id},
+    ).mappings().first()
+    if not row or not row.get("ach_pending_setup_intent_id"):
+        return {"pending": False}
+    return {
+        "pending": True,
+        "verification_url": row.get("ach_pending_verification_url") or "",
+        "bank_last4": row.get("ach_pending_bank_last4") or "",
+    }
 
 
 @router.get("/api/stripe/venue/{venue_id}/payment-method")
@@ -3091,6 +3200,94 @@ async def stripe_webhook(request: Request, db=Depends(get_db)):
         # sweep — which already picks up 'scheduled' children under a
         # 'charged' parent — sends the payouts on its next run. Nothing new
         # schedules the transfer; that machinery was already there.
+        # ----------------------------------------------------------------
+        # setup_intent.succeeded — a microdeposit-verified bank is now usable
+        # ----------------------------------------------------------------
+        # 2026-09-29 (ACH). Only fires for us here after a venue confirms the
+        # two small deposits. Until then the payment method existed but could
+        # not be charged, so it was parked in ach_pending_setup_intent_id
+        # rather than made active. This promotes it.
+        elif event_type == "setup_intent.succeeded":
+            try:
+                obj = _webhook_get_event_obj(event)
+                si_id = _webhook_get(obj, "id")
+                pm_id = _webhook_get(obj, "payment_method")
+                if isinstance(pm_id, dict):
+                    pm_id = pm_id.get("id")
+
+                row = conn.execute("""
+                    SELECT entity_id, stripe_customer_id, ach_pending_bank_last4
+                    FROM entity_payment_settings
+                    WHERE entity_type = 'venue' AND ach_pending_setup_intent_id = ?
+                    LIMIT 1
+                """, (si_id,)).fetchone()
+
+                if not row:
+                    logger.info(
+                        f"Webhook setup_intent.succeeded: {si_id} — no venue awaiting "
+                        f"verification (instant-verified bank or a card setup)"
+                    )
+                elif not pm_id:
+                    logger.warning(f"Webhook setup_intent.succeeded: {si_id} carried no payment_method")
+                else:
+                    venue_id = row["entity_id"]
+                    # Make it the customer's default so off-session charges use it.
+                    try:
+                        stripe_mod, _k = init_stripe(db)
+                        if row["stripe_customer_id"]:
+                            stripe_mod.Customer.modify(
+                                row["stripe_customer_id"],
+                                invoice_settings={"default_payment_method": pm_id},
+                            )
+                    except Exception as _ce:
+                        logger.error(f"Venue {venue_id}: could not set default PM after ACH verify: {_ce}")
+
+                    conn.execute("""
+                        UPDATE entity_payment_settings
+                        SET stripe_payment_method_id = ?,
+                            default_payment_method = 'stripe',
+                            ach_pending_setup_intent_id = NULL,
+                            ach_pending_verification_url = NULL,
+                            ach_pending_bank_last4 = NULL
+                        WHERE entity_type = 'venue' AND entity_id = ?
+                    """, (pm_id, venue_id))
+                    conn.commit()
+                    logger.info(
+                        f"Webhook setup_intent.succeeded: venue {venue_id} bank account "
+                        f"verified via microdeposits — {pm_id} is now the active method"
+                    )
+
+                    # Tell them they can book. Without this the venue is left
+                    # watching a Stripe page with no word from us.
+                    try:
+                        smtp_settings = _wh_smtp_settings(conn)
+                        vrow = conn.execute(
+                            "SELECT venue_name FROM venues WHERE id = ?", (venue_id,)
+                        ).fetchone()
+                        vname = (vrow["venue_name"] if vrow else "") or "your venue"
+                        _erows = conn.execute("""
+                            SELECT u.email FROM users u JOIN venues v ON v.user_id = u.id
+                            WHERE v.id = ?
+                            UNION SELECT u.email FROM users u
+                            JOIN entity_users eu ON u.id = eu.user_id
+                            WHERE eu.entity_type = 'venue' AND eu.entity_id = ?
+                        """, (venue_id, venue_id)).fetchall()
+                        for em in [r[0] for r in _erows if r and r[0]]:
+                            _wh_send_email(smtp_settings, em,
+                                f"Bank account verified — {vname}",
+                                f"""<p>Hi,</p>
+                                <p>The bank account for <strong>{vname}</strong> is verified and
+                                ready to use. Gig payments will be debited from it the day after
+                                each gig.</p>
+                                <p>Bank payments take a few business days to clear, and the artist
+                                is paid once they do — so please keep the account funded.</p>
+                                <p>— The GigsFill Team</p>""")
+                    except Exception as _ne:
+                        logger.warning(f"ACH verified email skipped for venue {venue_id}: {_ne}")
+
+            except Exception as e:
+                logger.error(f"Webhook setup_intent.succeeded error: {e}")
+
         elif event_type == "payment_intent.succeeded":
             try:
                 obj = _webhook_get_event_obj(event)

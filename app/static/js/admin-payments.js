@@ -186,6 +186,84 @@
   // conditional badges after the main row, ONLY when count > 0,
   // so a healthy queue reads as an uncluttered dashboard and any
   // problems immediately draw the eye.
+  // ── ACH in flight (2026-09-29) ─────────────────────────────────────────
+  // Bank debits still clearing, plus venues stuck awaiting microdeposit
+  // confirmation. Card charges resolve synchronously, so before ACH there
+  // was no in-between state to watch — and an ACH debit that neither
+  // settles nor returns holds an artist's payout with nothing on screen
+  // saying so. Hidden entirely when there's nothing in flight.
+  async function renderAchInFlight() {
+    const el = document.getElementById('apAchInFlight');
+    if (!el) return;
+    let d;
+    try {
+      const r = await fetch('/api/admin/payments/ach-in-flight', { credentials: 'include' });
+      if (!r.ok) { el.style.display = 'none'; return; }
+      d = await r.json();
+    } catch (_) { el.style.display = 'none'; return; }
+
+    const charges = d.charges || [];
+    const pending = d.pending_verification || [];
+    if (!charges.length && !pending.length) { el.style.display = 'none'; return; }
+
+    const money = c => '$' + ((c || 0) / 100).toFixed(2);
+    const stale = d.stale_count || 0;
+    const accent = stale > 0 ? '#f59e0b' : 'var(--cyan)';
+
+    let html = '<div style="border:1px solid ' + accent + ';border-left:3px solid ' + accent +
+      ';border-radius:8px;padding:12px 14px;background:rgba(255,255,255,0.02);">';
+
+    if (charges.length) {
+      html += '<div style="font-size:0.72rem;font-weight:700;color:' + accent +
+        ';text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">' +
+        'Bank payments clearing — ' + charges.length + ' · ' + money(d.total_cents) +
+        ' · ' + money(d.held_payout_cents) + ' of artist payouts held' +
+        (stale ? ' · ' + stale + ' overdue' : '') + '</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:0.72rem;">' +
+        '<tr style="color:var(--text-muted);text-align:left;">' +
+        '<th style="padding:3px 6px;">Venue</th><th style="padding:3px 6px;">Gig date</th>' +
+        '<th style="padding:3px 6px;">Amount</th><th style="padding:3px 6px;">Age</th>' +
+        '<th style="padding:3px 6px;">Held payouts</th><th style="padding:3px 6px;">Payment Intent</th></tr>';
+      charges.forEach(c => {
+        const age = c.age_days == null ? '—' : c.age_days + 'd';
+        html += '<tr style="border-top:1px solid rgba(255,255,255,0.06);' +
+          (c.stale ? 'background:rgba(245,158,11,0.07);' : '') + '">' +
+          '<td style="padding:4px 6px;">' + esc(c.venue_name || ('Venue ' + c.venue_id)) + '</td>' +
+          '<td style="padding:4px 6px;">' + esc(c.gig_date) + '</td>' +
+          '<td style="padding:4px 6px;">' + money(c.amount_cents) + '</td>' +
+          '<td style="padding:4px 6px;' + (c.stale ? 'color:#f59e0b;font-weight:600;' : '') + '">' + age + '</td>' +
+          '<td style="padding:4px 6px;">' + c.held_payouts + ' · ' + money(c.held_payout_cents) + '</td>' +
+          '<td style="padding:4px 6px;font-family:monospace;font-size:0.68rem;color:var(--text-muted);">' +
+          esc(c.payment_intent_id) + '</td></tr>';
+      });
+      html += '</table>';
+      if (stale) {
+        html += '<p style="margin:8px 0 0 0;font-size:0.7rem;color:#f59e0b;">' +
+          'Highlighted rows are past 7 days. ACH normally settles in 3–5 business days — ' +
+          'check the Payment Intent in Stripe, and confirm the ' +
+          '<code>payment_intent.succeeded</code> webhook is reaching us.</p>';
+      }
+    }
+
+    if (pending.length) {
+      html += '<div style="font-size:0.72rem;font-weight:700;color:var(--cyan);text-transform:uppercase;' +
+        'letter-spacing:.05em;margin:' + (charges.length ? '12px' : '0') + ' 0 6px 0;">' +
+        'Awaiting microdeposit confirmation — ' + pending.length + '</div>';
+      html += '<p style="margin:0 0 6px 0;font-size:0.7rem;color:var(--text-muted);">' +
+        'These venues added a bank account but have not confirmed the two test deposits. ' +
+        'They cannot be charged on it until they do.</p>';
+      pending.forEach(v => {
+        html += '<div style="font-size:0.72rem;padding:3px 0;">• ' +
+          esc(v.venue_name || ('Venue ' + v.venue_id)) +
+          (v.bank_last4 ? ' — bank ••••' + esc(v.bank_last4) : '') + '</div>';
+      });
+    }
+
+    html += '</div>';
+    el.innerHTML = html;
+    el.style.display = 'block';
+  }
+
   function renderHeroStats(stats) {
     // Legacy hero container from earlier design — clear it so nothing
     // renders in that slot. Kept as a no-op function so apReload's
@@ -327,6 +405,7 @@
       apTotal = data.total || 0;
       renderHeroStats(stats);
       renderStats(stats);
+      renderAchInFlight();
       renderTable(data.items || []);
       renderPagination();
     } catch (e) {
