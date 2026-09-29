@@ -3044,12 +3044,21 @@
       <p style="color: var(--text-gray); font-size: 0.85rem; margin-bottom: 14px; text-align: left;" id="venuePmIntro">
         Choose how you'd like to pay for gig bookings.
       </p>
-      <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
-        <button type="button" id="venuePickCardBtn" onclick="venuePickMethod('card')" class="btn primary" style="font-size: 0.85rem;">
-          💳 Pay by Credit Card
-        </button>
-        <button type="button" id="venuePickBankBtn" onclick="venuePickMethod('bank')" class="btn ghost" style="font-size: 0.85rem; display:none;">
-          🏦 Pay by Bank
+      <!-- 2026-09-29: was two buttons where the active one was styled
+           differently. A select states the current choice outright, which is
+           what the styling was straining to convey. -->
+      <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px;">
+        <label for="venuePmChoice" style="font-size: 0.8rem; color: var(--text-gray); white-space: nowrap;">Payment method</label>
+        <select id="venuePmChoice" onchange="venuePickMethod(this.value)"
+                style="padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;min-width:220px;">
+          <option value="">Choose…</option>
+          <option value="card">💳 Credit or Debit Card</option>
+          <option value="bank" id="venuePmChoiceBank" hidden>🏦 Bank Account</option>
+        </select>
+        <!-- Only shown when there's an existing method to go back to.
+             Without it, "Change" was a one-way door. -->
+        <button type="button" id="venueCancelChangeBtn" onclick="venueCancelChange()" class="btn ghost" style="font-size: 0.85rem; display:none;">
+          Cancel
         </button>
       </div>
 
@@ -3916,7 +3925,7 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
-<script src="/app/static/js/venue-stripe-payment.js?v=22" defer></script>
+<script src="/app/static/js/venue-stripe-payment.js?v=24" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/messages.js?v=8"></script>

@@ -182,6 +182,8 @@ function venueRenderSavedMethod(data) {
     saved.style.display = 'none';
     chooser.style.display = 'block';
     if (intro) intro.textContent = "Choose how you'd like to pay for gig bookings.";
+    var cancelBtn = document.getElementById('venueCancelChangeBtn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
     venueCollapsePanes();
     venueCheckAchAvailable();
   }
@@ -213,41 +215,33 @@ async function venueRenderAchPending() {
   } catch (e) { box.style.display = 'none'; }
 }
 
+// The select states the current choice outright, so there's no active/
+// inactive styling to maintain — which is what the two-button version was
+// straining to express.
 function venueCollapsePanes() {
   ['venueCardPane', 'venueBankPane'].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
-  venueSetPickActive(null);
+  var sel = document.getElementById('venuePmChoice');
+  if (sel) sel.value = '';
 }
 
-// The chooser buttons read as selected/unselected via the site's own
-// primary/ghost classes rather than bespoke styling.
-function venueSetPickActive(which) {
-  var card = document.getElementById('venuePickCardBtn');
-  var bank = document.getElementById('venuePickBankBtn');
-  if (card) card.className = (which === 'card') ? 'btn primary' : 'btn ghost';
-  if (bank) bank.className = (which === 'bank') ? 'btn primary' : 'btn ghost';
-  if (which === null && card) card.className = 'btn primary';
-  if (which === null && bank) bank.className = 'btn ghost';
-}
+window.venueCancelChange = function () {
+  loadVenueCard();
+};
 
 window.venuePickMethod = function (which) {
   var cardPane = document.getElementById('venueCardPane');
   var bankPane = document.getElementById('venueBankPane');
   if (!cardPane || !bankPane) return;
 
-  var opening = (which === 'card') ? cardPane : bankPane;
-  var other   = (which === 'card') ? bankPane : cardPane;
-  var isOpen  = opening.style.display === 'block';
+  cardPane.style.display = (which === 'card') ? 'block' : 'none';
+  bankPane.style.display = (which === 'bank') ? 'block' : 'none';
 
-  other.style.display = 'none';
-  opening.style.display = isOpen ? 'none' : 'block';
-  venueSetPickActive(isOpen ? null : which);
-
-  // Mount the Stripe card Element only once the card pane is actually open —
-  // mounting into a hidden container gives Stripe a zero-height iframe.
-  if (which === 'card' && !isOpen) initVenueStripeCard();
+  // Mount the Stripe card Element only once its pane is actually visible —
+  // mounting into a hidden container gives a zero-height iframe.
+  if (which === 'card') initVenueStripeCard();
 };
 
 // Save card via SetupIntent
@@ -307,8 +301,8 @@ async function venueCheckAchAvailable() {
     });
     if (!res.ok) return;
     var setup = await res.json();
-    var btn = document.getElementById('venuePickBankBtn');
-    if (btn && setup.ach_enabled) btn.style.display = 'inline-block';
+    var opt = document.getElementById('venuePmChoiceBank');
+    if (opt && setup.ach_enabled) opt.hidden = false;
   } catch (e) { /* bank option simply stays hidden */ }
 }
 
@@ -431,6 +425,8 @@ function venueUpdateCard() {
   document.getElementById('venueAddCardSection').style.display = 'block';
   var intro = document.getElementById('venuePmIntro');
   if (intro) intro.textContent = 'Choose a different payment method. Your current one stays active until you save the new one.';
+  var cancelBtn = document.getElementById('venueCancelChangeBtn');
+  if (cancelBtn) cancelBtn.style.display = 'inline-block';
   var succ = document.getElementById('venueCardSuccess');
   var err  = document.getElementById('venueCardError');
   if (succ) succ.style.display = 'none';

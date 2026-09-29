@@ -391,7 +391,7 @@ def test_payment_method_endpoint_does_not_hide_unknown_types():
 def test_saved_method_stays_visible_and_both_rails_are_offered():
     """The UI contract the rewrite is built on."""
     html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
-    for el in ("venuePickCardBtn", "venuePickBankBtn", "venueCardPane",
+    for el in ("venuePmChoice", "venueCardPane",
                "venueBankPane", "venueAchPending"):
         assert f'id="{el}"' in html, f"{el} missing from the payment section"
     # The old always-expanded card form + buried bank divider is gone.
@@ -406,7 +406,7 @@ def test_card_element_is_only_mounted_into_a_visible_pane():
     idx = js.index("window.venuePickMethod")
     block = js[idx:idx + 900]
     assert "initVenueStripeCard()" in block
-    assert "!isOpen" in block
+    assert "which === 'card'" in block
 
 
 def test_stripe_config_error_cannot_wipe_the_bank_option():
@@ -417,3 +417,67 @@ def test_stripe_config_error_cannot_wipe_the_bank_option():
     idx = js.index("async function initVenueStripeCard")
     block = js[idx:idx + 600]
     assert "getElementById('venueCardPane')" in block
+
+
+def test_payment_method_is_chosen_from_a_select():
+    """Was two buttons where the active one was styled differently. A select
+    states the current choice outright, which is what that styling was
+    straining to convey."""
+    html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
+    assert 'id="venuePmChoice"' in html
+    assert 'id="venuePmChoiceBank"' in html
+    # The button-era ids are gone from both sides.
+    assert "venuePickCardBtn" not in html
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    assert "venueSetPickActive" not in js
+    assert "venuePickCardBtn" not in js
+
+
+def test_bank_option_is_hidden_until_ach_is_enabled():
+    html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
+    i = html.index('id="venuePmChoiceBank"')
+    assert "hidden" in html[i:i + 80], "bank option must start hidden"
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    assert "opt.hidden = false" in js
+
+
+def test_changing_payment_method_never_deletes_the_existing_one():
+    """"Change" must be display-only. Wiping the stored method before a new
+    one is saved would leave the venue unable to book, and bookings already
+    scheduled would fail to charge."""
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    start = js.index("function venueUpdateCard")
+    block = js[start:js.index("\n}", start)]
+    assert "DELETE" not in block, "venueUpdateCard must not delete the saved method"
+    assert "save-payment-method" not in block
+    assert "payment-method'" not in block.replace("save-payment-method", "")
+
+    # The only DELETE is behind the explicit Remove button.
+    assert js.count("method: 'DELETE'") == 1
+    di = js.index("method: 'DELETE'")
+    assert "venueRemoveCard" in js[max(0, di - 900):di]
+
+
+def test_cancelling_a_change_restores_the_saved_method():
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    start = js.index("window.venueCancelChange")
+    assert "loadVenueCard()" in js[start:start + 200]
+
+
+def test_changing_payment_method_can_be_cancelled(): 
+    """"Change" hid the saved method with no way back short of a reload."""
+    html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
+    assert 'id="venueCancelChangeBtn"' in html
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "js"
+          / "venue-stripe-payment.js").read_text()
+    assert "window.venueCancelChange" in js
+    # Shown when changing an existing method...
+    idx = js.index("function venueUpdateCard")
+    assert "venueCancelChangeBtn" in js[idx:idx + 900]
+    # ...and hidden on first-time setup, where there's nothing to cancel to.
+    idx2 = js.index("Choose how you'd like to pay")
+    assert "cancelBtn.style.display = 'none'" in js[idx2:idx2 + 300]

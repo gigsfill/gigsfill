@@ -15,14 +15,15 @@ The list below tracks meaningful changes after the initial sync from the codebas
   The bare `except` is what made this expensive to find: it turned a one-line attribute error into a plausible-looking "no card" answer. Worth remembering when reading the other `except Exception: return` blocks in that module.
 
   **Payment Method section rewritten.** It previously showed the card form always expanded, with the bank option buried beneath it behind a divider, and the saved method was *replaced* by the form once you went to change it:
-  - Two peer buttons — **Pay by Credit Card** / **Pay by Bank** — in the site's standard `btn primary` / `btn ghost` styling, the selected one taking `primary`. Clicking expands that method's detail below; clicking again collapses it.
+  - A **Payment method select** (Credit or Debit Card / Bank Account) whose detail pane expands below. This went through two iterations first: two peer buttons styled `primary` when active and `ghost` when not, which made Pay by Bank read as the lesser option; then both `primary` with a ring and chevron, which cost the at-a-glance read of which was selected. A select just states the current choice, which is what the styling was straining to convey. The Bank option stays `hidden` until ACH is enabled platform-wide.
   - The saved method now **always stays on screen** with its own card, showing bank name + account type for ACH or brand + expiry for cards.
   - A separate amber panel for a bank awaiting microdeposits, with the Stripe confirmation link — distinct from "saved", because that account exists but **cannot be charged yet** and silence would let the venue assume they were finished.
-  - The Pay by Bank button only appears when ACH is enabled platform-wide.
+  - A **Cancel** button, shown only when there's an existing method to return to. "Change" was otherwise a one-way door: it hid the saved method with no way back short of reloading the page.
+  - **"Change" never deletes the stored method** — it only toggles visibility, and the current method stays chargeable until a new one is saved. The sole `DELETE` is behind the explicit Remove button. A test pins this, because wiping the method on "Change" would leave already-scheduled bookings unable to charge.
 
   Three implementation traps handled: `initVenueStripeCard` writes error HTML into its container, so it now targets `venueCardPane` rather than the whole chooser — pointed at the chooser, a Stripe config failure would have deleted the working bank rail along with the broken card one; the Stripe card Element mounts only when its pane is actually visible, since mounting into a hidden container gives a zero-height iframe; and re-opening the pane no longer stacks a second Element on a live iframe.
 
-  - 5 new tests (`tests/test_ach.py` now 53).
+  - 10 new tests (`tests/test_ach.py` now 58).
 
 - **2026-09-29 (ACH follow-ups: microdeposits, billing identity, admin visibility):** Closing the three gaps left open by the ACH ship, plus one live bug the first real attempt surfaced.
 
