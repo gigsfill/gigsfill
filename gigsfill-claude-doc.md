@@ -3362,10 +3362,10 @@ This is what to check before launch (you mentioned a few things to fix — these
 | `platform_timezone` correct for the audience | admin panel |
 | `signups_enabled` actually enabled (defaults open but worth verifying) | admin panel |
 | `maintenance_mode` is OFF | admin panel |
-| Stripe Connect Express onboarding URLs in `stripe_connect.py` (lines ~348-349) are **hardcoded to `https://gigsfill.com/...`** — verify this is correct for the live domain or move to a setting | `routes/stripe_connect.py:348` |
+| ~~Stripe Connect onboarding URLs hardcoded~~ — **resolved 2026-09-29.** Both `AccountLink.create` calls now use `_resolve_site_url(db)` (site_url → base_url → production, trailing slash stripped, localhost rejected). A May 2026 audit had fixed one and missed the other. |  |
 | Robots.txt and sitemap.xml have correct domain | `app/static/robots.txt`, `sitemap.xml` |
 | The `.secret_key` file pattern is for **dev only** — production should error if `GIGSFILL_SECRET_KEY` not set, which it does — verify the env var is actually loaded |  |
-| Two separate `venue.edit.js` and `venue_edit.js` files exist — verify only one is loaded by `venue-edit.html` (see Known issues below) |  |
+| ~~Two separate `venue.edit.js` / `venue_edit.js` files~~ — **resolved.** Verified 2026-09-29: only `venue.edit.js` (and `venue-edit-init.js`) exist; there is no `venue_edit.js`. |  |
 | CSP `unsafe-inline` is still active — known accepted risk pending Phase 6 |  |
 | Redis is running so the rate limiter has persistent storage (otherwise falls back to in-memory and resets per worker) | `systemctl status redis` on the droplet |
 | Email verification: confirm the verify-email banner / hard-redirect on `auth.guard.js` is the experience you want; users without verified email are blocked from most pages | `app/static/js/auth.guard.js` VERIFY_EXEMPT list |

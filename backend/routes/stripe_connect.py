@@ -18,6 +18,30 @@ from backend.services.email_dispatch import format_email_date
 logger = logging.getLogger("gigsfill.stripe")
 
 
+def _resolve_site_url(db):
+    """Public base URL for Stripe redirect targets.
+
+    2026-09-29: extracted. A May 2026 audit fixed one AccountLink to read
+    `site_url` from platform_settings but left the onboarding-redirect
+    endpoint hardcoded to https://gigsfill.com. Both call sites now share
+    this, so they can't drift apart again — a domain change or staging deploy
+    would otherwise have sent artists to production mid-onboarding, silently
+    and only for one of the two paths.
+
+    Localhost is rejected on purpose: Stripe must be able to reach the URL,
+    and a dev value leaking into a live AccountLink would dead-end the artist.
+    """
+    url = (
+        db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='site_url'")).scalar()
+        or db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='base_url'")).scalar()
+        or "https://gigsfill.com"
+    )
+    url = url.rstrip("/") if url else "https://gigsfill.com"
+    if "127.0.0.1" in url or "localhost" in url:
+        url = "https://gigsfill.com"
+    return url
+
+
 # ── webhook event contract ───────────────────────────────────────────
 # Every event the handler below implements. This must match what the Stripe
 # endpoint is actually subscribed to, and nothing enforces that automatically:
@@ -670,14 +694,7 @@ def create_artist_connect_account(artist_id: int, user=Depends(get_current_user)
     # Audit fix (May 2026 part 5): pull from platform_settings.site_url with
     # legacy base_url fallback so staging / custom-domain deploys route
     # artists back to themselves after onboarding instead of production.
-    _su = (
-        db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='site_url'")).scalar()
-        or db.execute(text("SELECT setting_value FROM platform_settings WHERE setting_key='base_url'")).scalar()
-        or "https://gigsfill.com"
-    )
-    _su = _su.rstrip("/") if _su else "https://gigsfill.com"
-    if "127.0.0.1" in _su or "localhost" in _su:
-        _su = "https://gigsfill.com"
+    _su = _resolve_site_url(db)
     account_link = stripe.AccountLink.create(
         account=account_id,
         refresh_url=f"{_su}/app/artist-book-gigs.html?artist_id={artist_id}&tab=payments&stripe_refresh=1",
@@ -753,8 +770,8 @@ def stripe_onboarding_redirect(token: str, db=Depends(get_db)):
             # finished). Pointing it BACK at this redirect endpoint
             # makes the loop self-repair — they get a fresh link and
             # never hit our login page.
-            refresh_url=f"https://gigsfill.com/api/stripe/onboarding/{token}",
-            return_url="https://gigsfill.com/app/user-profile.html",
+            refresh_url=f"{_resolve_site_url(db)}/api/stripe/onboarding/{token}",
+            return_url=f"{_resolve_site_url(db)}/app/user-profile.html",
         )
         return RedirectResponse(url=link.url, status_code=302)
     except Exception as e:
