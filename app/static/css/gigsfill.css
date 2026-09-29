@@ -196,6 +196,27 @@ body {
   box-shadow: 0 4px 16px rgba(139,92,246,0.4);
   transform: translateY(-1px);
 }
+/* Solid Danger Button
+   2026-09-29. The filled-red treatment used for destructive and back-out
+   actions (Remove payment method, Cancel) was pasted inline wherever it was
+   wanted, because `.btn.danger` elsewhere is transparent-with-red-border and
+   reads as secondary. This makes it a class so it stays consistent. Lives
+   here rather than gigsfill-modern.css because this sheet is loaded by 19
+   pages against that one's 7. */
+.btn.danger-solid,
+button.danger-solid {
+  background: #ef4444;
+  border: 1px solid #ef4444;
+  color: #fff;
+  font-weight: 600;
+}
+.btn.danger-solid:hover,
+button.danger-solid:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
 .btn.ghost { 
   background: transparent;
   color: var(--text-gray);

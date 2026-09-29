@@ -470,14 +470,14 @@ def test_cancelling_a_change_restores_the_saved_method():
     assert "loadVenueCard()" in js[start:start + 200]
 
 
-def test_cancel_uses_the_site_button_convention_and_sits_at_the_foot():
-    """Plain `btn ghost`, matching every other Cancel on the page, and placed
+def test_cancel_uses_the_shared_button_class_and_sits_at_the_foot():
+    """Solid-red `btn danger-solid` rather than inline colours, and placed
     below the panes so it reads as "back out of this section"."""
     html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
     i = html.index('id="venueCancelChangeBtn"')
     btn = html[i:i + 200]
-    assert 'class="btn ghost"' in btn
-    assert "font-size" not in btn, "should not override the shared button styling"
+    assert 'class="btn danger-solid"' in btn
+    assert "#ef4444" not in btn, "colours belong in the stylesheet, not inline"
     # Below both panes, not up in the select row.
     assert html.index('id="venueBankPane"') < html.index('id="venueCancelChangeRow"')
     assert html.index('id="venuePmChoice"') < html.index('id="venueCancelChangeRow"')
@@ -552,3 +552,24 @@ def test_card_element_only_mounts_when_the_form_is_actually_shown():
         "must not mount the card Element while the form is hidden"
     )
     assert "initVenueStripeCard()" in block
+
+
+def test_solid_danger_button_is_a_shared_class_not_inline_styles():
+    """`.btn.danger` is transparent-with-red-border, so the filled-red look
+    was being pasted inline each time it was wanted. It's a class now.
+
+    It lives in gigsfill.css rather than gigsfill-modern.css because the
+    former is loaded by far more pages — defining it in the narrower sheet
+    would have made it silently do nothing on most of the site.
+    """
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "app" / "static" / "css" / "gigsfill.css").read_text()
+    assert ".btn.danger-solid" in css
+    assert "#ef4444" in css
+
+    html = (root / "app" / "venue-create-gigs.html").read_text()
+    # The page must actually load the sheet that defines it.
+    assert "css/gigsfill.css" in html
+    # Both buttons use the class; neither re-pastes the colours inline.
+    assert html.count('class="btn danger-solid"') == 2
+    assert "background:#ef4444;border:1px solid #ef4444" not in html

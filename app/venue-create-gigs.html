@@ -2279,7 +2279,7 @@
 <script src="/app/static/js/timezone-utils.js"></script>
 <script src="/app/static/js/auth.guard.js?v=4"></script>
 <script src="/app/static/js/time-format.js"></script>
-<link href="/app/static/css/gigsfill.css?v=14" rel="stylesheet"/>
+<link href="/app/static/css/gigsfill.css?v=15" rel="stylesheet"/>
 
 <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet"/>
   <link href="/app/static/css/mobile.css?v=6" rel="stylesheet"/>
@@ -3017,7 +3017,7 @@
         </div>
         <div style="display: flex; gap: 8px;">
           <button onclick="venueUpdateCard()" class="btn primary" style="font-size: 0.75rem;">Change</button>
-          <button onclick="venueRemoveCard()" style="font-size: 0.75rem;padding:8px 16px;background:#ef4444;border:1px solid #ef4444;color:#fff;border-radius:6px;cursor:pointer;font-weight:600;" onmouseover="this.style.background='#dc2626';this.style.borderColor='#dc2626';" onmouseout="this.style.background='#ef4444';this.style.borderColor='#ef4444';">Remove</button>
+          <button onclick="venueRemoveCard()" class="btn danger-solid" style="font-size: 0.75rem;">Remove</button>
         </div>
       </div>
       <p style="color: var(--text-gray); font-size: 0.7rem; margin-top: 8px; margin-bottom: 0;">🔒 Stored securely by <a href="https://stripe.com/security" target="_blank" style="color: var(--cyan);">Stripe</a>. GigsFill never sees or stores your full account details.</p>
@@ -3122,7 +3122,7 @@
            Only shown when there's an existing method to return to —
            without it, "Change" was a one-way door. -->
       <div id="venueCancelChangeRow" style="display:none;margin-top:16px;">
-        <button type="button" id="venueCancelChangeBtn" onclick="venueCancelChange()" class="btn ghost">Cancel</button>
+        <button type="button" id="venueCancelChangeBtn" onclick="venueCancelChange()" class="btn danger-solid">Cancel</button>
       </div>
     </div>
   </div>
