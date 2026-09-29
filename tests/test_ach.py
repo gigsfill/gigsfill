@@ -476,7 +476,10 @@ def test_cancel_uses_the_shared_button_class_and_sits_at_the_foot():
     html = (Path(__file__).resolve().parents[1] / "app" / "venue-create-gigs.html").read_text()
     i = html.index('id="venueCancelChangeBtn"')
     btn = html[i:i + 200]
-    assert 'class="btn danger-solid"' in btn
+    # Matches the Create Gig modal's Close button: neutral with a border at
+    # rest, highlighting on hover. Plain `.btn.ghost` is borderless outside a
+    # modal, which is why this needs its own class.
+    assert 'class="btn ghost-outline"' in btn
     assert "#ef4444" not in btn, "colours belong in the stylesheet, not inline"
     # Below both panes, not up in the select row.
     assert html.index('id="venueBankPane"') < html.index('id="venueCancelChangeRow"')
@@ -565,11 +568,13 @@ def test_solid_danger_button_is_a_shared_class_not_inline_styles():
     root = Path(__file__).resolve().parents[1]
     css = (root / "app" / "static" / "css" / "gigsfill.css").read_text()
     assert ".btn.danger-solid" in css
+    assert ".btn.ghost-outline" in css
     assert "#ef4444" in css
 
     html = (root / "app" / "venue-create-gigs.html").read_text()
     # The page must actually load the sheet that defines it.
     assert "css/gigsfill.css" in html
     # Both buttons use the class; neither re-pastes the colours inline.
-    assert html.count('class="btn danger-solid"') == 2
+    # Remove keeps the solid-red treatment; Cancel is not destructive.
+    assert html.count('class="btn danger-solid"') == 1
     assert "background:#ef4444;border:1px solid #ef4444" not in html

@@ -196,6 +196,27 @@ body {
   box-shadow: 0 4px 16px rgba(139,92,246,0.4);
   transform: translateY(-1px);
 }
+/* Outlined Ghost Button
+   2026-09-29. Site-wide `.btn.ghost` is intentionally borderless plain text,
+   which reads as bare when it's a standalone action rather than one of a
+   modal's footer buttons. Inside a modal, modals-legacy.css re-styles it
+   with a border plus a cyan hover — the Create Gig "Close" button. This
+   class makes that same treatment available OUTSIDE a modal. */
+.btn.ghost-outline,
+button.ghost-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 16px;
+  border-radius: 6px;
+}
+.btn.ghost-outline:hover,
+button.ghost-outline:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
 /* Solid Danger Button
    2026-09-29. The filled-red treatment used for destructive and back-out
    actions (Remove payment method, Cancel) was pasted inline wherever it was
