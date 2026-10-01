@@ -126,7 +126,10 @@
     $("v2Cta").appendChild(slot);
 
     function fallback() {
-      slot.outerHTML = '<a class="v2-btn primary" href="#sec-contact">Contact for Booking</a>';
+      // Anchors down to the contact block. Marked so it is NOT mirrored
+      // there — beside the actual phone number and email it would read
+      // "Contact for Booking" directly under "Contact: ...".
+      slot.outerHTML = '<a class="v2-btn primary" data-noMirror="1" href="#sec-contact">Contact for Booking</a>';
     }
 
     var me = await getJSON("/api/me");
@@ -400,7 +403,13 @@
         "</div></div>";
     }).join("");
 
-    $("v2CalDayTitle").textContent = pretty;
+    // Header carries the date now. Month navigation is meaningless once
+    // you've picked a specific night, and "Availability" is the wrong
+    // title for a single booking.
+    $("v2ModalTitle").textContent = pretty;
+    $("v2CalNavGroup").style.display = "none";
+    $("v2BackBtn").style.display = "inline-flex";
+
     $("v2CalDayBody").innerHTML = rows;
     $("v2CalMain").style.display = "none";
     $("v2CalDay").style.display = "block";
@@ -409,6 +418,9 @@
   window.v2BackToCal = function () {
     $("v2CalDay").style.display = "none";
     $("v2CalMain").style.display = "block";
+    $("v2ModalTitle").textContent = "Availability";
+    $("v2CalNavGroup").style.display = "inline-flex";
+    $("v2BackBtn").style.display = "none";
   };
 
   window.v2OpenCal = function () {
@@ -496,11 +508,34 @@
     });
     $("v2Social").innerHTML = html || '<span class="v2-empty">No links yet.</span>';
 
-    var booking = a.booking_contact || "";
+    // "Book <artist>" restated what the page is for. The useful content is
+    // the contact itself, so lead with it.
+    var booking = (a.booking_contact || "").trim();
     $("v2Contact").innerHTML =
-      "<h3>Book " + esc(a.name || "this artist") + "</h3>" +
-      "<p>" + (booking ? esc(booking) : "Contact details not listed.") + "</p>" +
+      '<div class="v2-contact-line">' +
+        '<span class="v2-contact-label">Contact</span>' +
+        '<span class="v2-contact-value">' +
+          (booking ? linkifyContact(booking) : "Not listed") +
+        "</span>" +
+      "</div>" +
       '<span id="v2ContactAction"></span>';
+  }
+
+  // Make the email and phone inside a freeform contact string tappable.
+  // It's one field the artist types however they like, so this matches
+  // rather than parses — anything unrecognised is left as escaped text.
+  function linkifyContact(raw) {
+    var out = esc(raw);
+    out = out.replace(/([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/gi, function (m) {
+      return '<a href="mailto:' + m + '">' + m + "</a>";
+    });
+    // US-ish numbers: (805) 231-0046, 805-231-0046, 805.231.0046
+    out = out.replace(/(\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/g, function (m) {
+      var digits = m.replace(/\D/g, "");
+      if (digits.length !== 10) return m;
+      return '<a href="tel:+1' + digits + '">' + m + "</a>";
+    });
+    return out;
   }
 
   // ── nav ─────────────────────────────────────────────────────────────
@@ -593,6 +628,8 @@
     // different answers to "what can I do about this artist".
     var mirror = $("v2ContactAction");
     var heroAction = $("v2Cta").lastElementChild;
-    if (mirror && heroAction) mirror.innerHTML = heroAction.outerHTML;
+    if (mirror && heroAction && !heroAction.hasAttribute("data-noMirror")) {
+      mirror.innerHTML = heroAction.outerHTML;
+    }
   })();
 })();

@@ -340,8 +340,17 @@
     background: var(--v2-raise-2); border: 1px solid var(--v2-line);
     border-radius: 14px; padding: 26px; text-align: center;
   }
-  .v2-contact h3 { margin: 0 0 8px; font-size: 1.2rem; }
-  .v2-contact p { margin: 0 0 18px; color: var(--v2-dim); font-size: 0.9rem; }
+  .v2-contact-line {
+    display: flex; align-items: baseline; justify-content: center;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 18px;
+  }
+  .v2-contact-label {
+    font-family: 'Oswald', sans-serif; font-size: 0.72rem; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan);
+  }
+  .v2-contact-value { font-size: 1rem; color: var(--text); }
+  .v2-contact-value a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid rgba(6,182,212,0.4); }
+  .v2-contact-value a:hover { border-bottom-color: var(--cyan); }
 
   .v2-empty { color: var(--v2-dimmer); font-size: 0.87rem; padding: 14px 0; }
 
@@ -411,9 +420,17 @@
   .v2-chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
   .v2-chip-row + .v2-chip-row { margin-top: 7px; }
 
+  /* Badge rides beside the name, vertically centred against it. baseline
+     would hang it off the cap-height of a 3rem display face and read as
+     misaligned. */
+  .v2-name-line {
+    display: flex; align-items: center; gap: 14px;
+    flex-wrap: wrap; margin-bottom: 6px;
+  }
+  .v2-name-line .v2-name { margin-bottom: 0; }
   .v2-name-badge {
     display: inline-flex; align-items: center; gap: 6px;
-    margin: 0 0 10px; padding: 5px 13px; border-radius: 999px;
+    margin: 0; padding: 5px 13px; border-radius: 999px;
     font-family: 'Oswald', sans-serif; font-size: 0.72rem; font-weight: 600;
     letter-spacing: 0.09em; text-transform: uppercase;
     background: rgba(16,185,129,0.18); border: 1px solid rgba(16,185,129,0.5); color: #34d399;
@@ -450,18 +467,19 @@
      the normal case, and a card grid would run for pages. */
   .v2-songs {
     display: block;
-    columns: 3; column-gap: 34px;
+    columns: 4; column-gap: 26px;
   }
   .v2-song {
     break-inside: avoid;
-    padding: 5px 0;
+    padding: 4px 0;
     border: none; background: none; border-radius: 0;
     font-size: 0.88rem; line-height: 1.45;
   }
   .v2-song-t { font-weight: 600; }
   .v2-song-a { color: var(--v2-dim); font-size: 0.82rem; }
   .v2-song-more { margin-top: 18px; }
-  @media (max-width: 900px) { .v2-songs { columns: 2; } }
+  @media (max-width: 1100px) { .v2-songs { columns: 3; } }
+  @media (max-width: 860px)  { .v2-songs { columns: 2; } }
   @media (max-width: 560px) { .v2-songs { columns: 1; } }
 
   .v2-back {
@@ -523,8 +541,10 @@
       <div class="v2-hero-grid">
         <img id="v2Logo" class="v2-logo" src="/app/static/img/profile-placeholder.svg" alt="">
         <div class="v2-head">
-          <h1 class="v2-name" id="v2Name">Artist</h1>
-          <span class="v2-name-badge" id="v2NameBadge" style="display:none;"></span>
+          <div class="v2-name-line">
+            <h1 class="v2-name" id="v2Name">Artist</h1>
+            <span class="v2-name-badge" id="v2NameBadge" style="display:none;"></span>
+          </div>
           <div class="v2-sub" id="v2Sub"></div>
           <div class="v2-chips" id="v2Chips"></div>
           <div class="v2-cta-row" id="v2Cta"></div>
@@ -593,13 +613,19 @@
 
 <div class="v2-modal" id="v2CalModal">
   <div class="v2-modal-box">
+    <!-- One header, two states. Month navigation belongs to the grid; once
+         you've clicked into a specific date it's noise, and "Availability"
+         is the wrong title for "here is one night's booking". -->
     <div class="v2-modal-head">
-      <h3>Availability</h3>
+      <h3 id="v2ModalTitle">Availability</h3>
       <div class="v2-cal-nav">
-        <button type="button" onclick="v2CalStep(-1)" aria-label="Previous month">&#9664;</button>
-        <span class="v2-cal-month" id="v2CalMonth"></span>
-        <button type="button" onclick="v2CalStep(1)" aria-label="Next month">&#9654;</button>
-        <button type="button" onclick="v2CloseCal()" style="margin-left:6px;">&times;</button>
+        <span id="v2CalNavGroup" style="display:inline-flex;align-items:center;gap:10px;">
+          <button type="button" onclick="v2CalStep(-1)" aria-label="Previous month">&#9664;</button>
+          <span class="v2-cal-month" id="v2CalMonth"></span>
+          <button type="button" onclick="v2CalStep(1)" aria-label="Next month">&#9654;</button>
+        </span>
+        <button type="button" id="v2BackBtn" onclick="v2BackToCal()" style="display:none;">&#9664; All dates</button>
+        <button type="button" onclick="v2CloseCal()" style="margin-left:6px;" aria-label="Close">&times;</button>
       </div>
     </div>
     <div class="v2-cal-body" id="v2CalMain">
@@ -610,8 +636,6 @@
     <!-- Day detail replaces the grid in place. Stacking a second modal on
          the first gives two close buttons and an unclear back path. -->
     <div class="v2-cal-body" id="v2CalDay" style="display:none;">
-      <button type="button" class="v2-back" onclick="v2BackToCal()">&#9664; Back to calendar</button>
-      <h4 id="v2CalDayTitle" style="margin:12px 0 14px;font-family:'Oswald',sans-serif;letter-spacing:0.05em;font-size:1rem;"></h4>
       <div id="v2CalDayBody"></div>
     </div>
   </div>
@@ -630,6 +654,6 @@
 <script src="/app/static/js/time-format.js"></script>
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
 <script src="/app/static/js/social-icons.js?v=1"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=8"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=11"></script>
 </body>
 </html>
