@@ -37,9 +37,12 @@ def test_newly_exposed_fields_are_not_sensitive():
     Rating already appears on venue cards; the hero fields point at one of
     the venue's own public images."""
     src = VENUES.read_text()
-    i = src.index("hero_focal_y\n            FROM venues")
-    added = src[i - 400:i]
-    assert "avg_rating" in added and "hero_media_id" in added
+    # Anchor on the SELECT block rather than whichever column happens to be
+    # last — adding a field shouldn't break this test, only removing a gate
+    # should.
+    i = src.index("FROM venues\n            WHERE id = :id")
+    select_block = src[src.rindex("SELECT", 0, i):i]
+    assert "avg_rating" in select_block and "hero_media_id" in select_block
     # The gated list must not have shrunk to let something through.
     gate = src[src.index("if not viewer_is_artist:"):][:900]
     assert "artist_frequency_days" in gate

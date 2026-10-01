@@ -25,6 +25,17 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   };
 
+  // Browsers restore the previous scroll position on reload, which on a
+  // long single-scroll profile drops you into the middle of the page with
+  // no context. Opt out and start at the top — unless the URL carries an
+  // explicit #section, which the visitor chose and should still win.
+  if ("scrollRestoration" in history) {
+    try { history.scrollRestoration = "manual"; } catch (e) {}
+  }
+  if (!window.location.hash) {
+    window.addEventListener("load", function () { window.scrollTo(0, 0); });
+  }
+
   var params = new URLSearchParams(window.location.search);
   // window._VANITY is injected by the slug resolver for pretty URLs like
   // gigsfill.com/venuedemo, which carry no query string. It takes
@@ -75,7 +86,13 @@
       $("v2HeroBg").style.backgroundImage = 'url("' + heroSrc + '")';
       var fx = (v.hero_focal_x == null) ? 50 : Number(v.hero_focal_x);
       var fy = (v.hero_focal_y == null) ? 50 : Number(v.hero_focal_y);
+      var z = (v.hero_zoom == null) ? 1 : Math.max(1, Math.min(4, Number(v.hero_zoom)));
       $("v2HeroBg").style.backgroundPosition = fx + "% " + fy + "%";
+      // Zoom via transform with the focal point as origin, so pushing in
+      // keeps the chosen subject where the user put it instead of drifting
+      // toward the centre. 1 = exactly "cover", so the default is a no-op.
+      $("v2HeroBg").style.transformOrigin = fx + "% " + fy + "%";
+      $("v2HeroBg").style.transform = (z > 1) ? "scale(" + z + ")" : "none";
     } else {
       $("v2Hero").classList.add("no-photo");
     }

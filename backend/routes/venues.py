@@ -290,7 +290,8 @@ def get_venue_public(venue_id: int, request: Request,
                 review_count,
                 hero_media_id,
                 hero_focal_x,
-                hero_focal_y
+                hero_focal_y,
+                hero_zoom
             FROM venues
             WHERE id = :id
               AND deleted_at IS NULL
@@ -537,11 +538,23 @@ def update_venue(venue_id: int, data: dict, request: Request,
     _focal_x = _focal("hero_focal_x")
     _focal_y = _focal("hero_focal_y")
 
+    # Floor of 1.0 = exactly "cover"; below it the hero would show bare
+    # background at the edges.
+    _zoom = None
+    if "hero_zoom" in data:
+        _raw_z = data.get("hero_zoom")
+        if _raw_z not in (None, ""):
+            try:
+                _zoom = max(1.0, min(4.0, float(_raw_z)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_zoom must be a number")
+
     params = {
         "id": venue_id,
         "hero_media_id": _hero_media_id,
         "hero_focal_x": _focal_x,
         "hero_focal_y": _focal_y,
+        "hero_zoom": _zoom,
         "venue_name": data.get("venue_name"),
         "description": data.get("description"),
         "address_line_1": data.get("address_line_1"),
@@ -626,6 +639,7 @@ def update_venue(venue_id: int, data: dict, request: Request,
             hero_media_id = COALESCE(:hero_media_id, hero_media_id),
             hero_focal_x = COALESCE(:hero_focal_x, hero_focal_x),
             hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
+            hero_zoom = COALESCE(:hero_zoom, hero_zoom),
             venue_name = COALESCE(:venue_name, venue_name),
             description = COALESCE(:description, description),
             address_line_1 = COALESCE(:address_line_1, address_line_1),

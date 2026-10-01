@@ -242,6 +242,7 @@ async function loadArtist() {
   window.__gfHeroMediaId = artist.hero_media_id || null;
   window.__gfFocalX = (artist.hero_focal_x == null) ? 50 : artist.hero_focal_x;
   window.__gfFocalY = (artist.hero_focal_y == null) ? 50 : artist.hero_focal_y;
+  window.__gfZoom   = (artist.hero_zoom == null) ? 1 : artist.hero_zoom;
 
   // POPULATE
   qs("name").value = artist.name || "";
@@ -1540,14 +1541,30 @@ document.addEventListener("DOMContentLoaded", () => {
 // background-position on the profile.
 (function () {
   var focal = { x: 50, y: 50 };
+  var zoom = 1;   // 1 = exactly "cover", matching the profile default
   var currentSrc = null;
   var saveTimer = null;
 
   function el(id) { return document.getElementById(id); }
 
+  // Must mirror the profile's hero exactly — same position, same
+  // transform-origin, same scale — or the preview shows a crop the
+  // visitor never sees.
   function apply() {
     var box = el("coverPreview");
-    if (box) box.style.backgroundPosition = focal.x + "% " + focal.y + "%";
+    if (!box) return;
+    box.style.backgroundPosition = focal.x + "% " + focal.y + "%";
+    box.style.transformOrigin = focal.x + "% " + focal.y + "%";
+    box.style.transform = (zoom > 1) ? "scale(" + zoom + ")" : "none";
+    var slider = el("coverZoom"), label = el("coverZoomVal");
+    if (slider) slider.value = Math.round(zoom * 100);
+    if (label) label.textContent = Math.round(zoom * 100) + "%";
+  }
+
+  function setZoom(z) {
+    zoom = Math.max(1, Math.min(4, z));
+    apply();
+    save();
   }
 
   function artistId() {
@@ -1576,7 +1593,8 @@ document.addEventListener("DOMContentLoaded", () => {
           credentials: "include",
           body: JSON.stringify({
             hero_focal_x: Math.round(focal.x * 10) / 10,
-            hero_focal_y: Math.round(focal.y * 10) / 10
+            hero_focal_y: Math.round(focal.y * 10) / 10,
+            hero_zoom: Math.round(zoom * 100) / 100
           })
         });
         if (r.ok) flashSaved();
@@ -1591,6 +1609,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentSrc = src;
     focal.x = (fx == null) ? 50 : Number(fx);
     focal.y = (fy == null) ? 50 : Number(fy);
+    zoom = (window.__gfZoom == null) ? 1 : Math.max(1, Math.min(4, Number(window.__gfZoom)));
     box.style.backgroundImage = 'url("' + src + '")';
     apply();
     wrap.style.display = "block";
@@ -1644,9 +1663,25 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("touchend", pointerUp);
 
   document.addEventListener("click", function (e) {
+    if (e.target && e.target.id === "coverZoomIn")  { setZoom(zoom + 0.1); return; }
+    if (e.target && e.target.id === "coverZoomOut") { setZoom(zoom - 0.1); return; }
     if (e.target && e.target.id === "coverCenterBtn") {
+      zoom = 1;
       focal.x = 50; focal.y = 50;
       apply(); save();
     }
   });
+
+  // Slider + wheel. The wheel is the one people reach for on an image, and
+  // preventDefault stops the page scrolling out from under them mid-adjust.
+  document.addEventListener("input", function (e) {
+    if (e.target && e.target.id === "coverZoom") setZoom(Number(e.target.value) / 100);
+  });
+  document.addEventListener("wheel", function (e) {
+    var box = el("coverPreview");
+    if (!box || !currentSrc) return;
+    if (!(e.target === box || box.contains(e.target))) return;
+    e.preventDefault();
+    setZoom(zoom + (e.deltaY < 0 ? 0.08 : -0.08));
+  }, { passive: false });
 })();

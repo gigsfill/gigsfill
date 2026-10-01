@@ -173,3 +173,72 @@ def test_profile_pages_resolve_vanity_urls():
         js = (ROOT / "app" / "static" / "js" / name).read_text()
         assert "window._VANITY" in js, name
         assert f'_VANITY.type === "{kind}"' in js, name
+
+
+# ── zoom ────────────────────────────────────────────────────────────
+
+def test_zoom_floor_is_one():
+    """1.0 is exactly "cover". Below it the image stops filling the hero and
+    bare page background shows at the edges, so the floor is a correctness
+    bound rather than a preference."""
+    for route in ("artists.py", "venues.py"):
+        src = (ROOT / "backend" / "routes" / route).read_text()
+        idx = src.index('if "hero_zoom" in data:')
+        block = src[idx:idx + 500]
+        assert "max(1.0, min(4.0" in block, route
+
+
+def test_zoom_rejects_non_numeric():
+    for route in ("artists.py", "venues.py"):
+        src = (ROOT / "backend" / "routes" / route).read_text()
+        idx = src.index('if "hero_zoom" in data:')
+        assert "must be a number" in src[idx:idx + 500], route
+
+
+def test_zoom_uses_the_focal_point_as_origin():
+    """Scaling from the centre would drag the chosen subject out of frame
+    as you zoom, which defeats having picked it."""
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        idx = js.index("transformOrigin")
+        block = js[idx - 300:idx + 300]
+        assert "fx" in block and "fy" in block, name
+        assert "scale(" in block, name
+
+
+def test_preview_mirrors_the_profile_transform():
+    """The preview has to apply the same origin and scale, or zooming makes
+    the framing control lie again — the exact bug the fixed 1.06 zoom caused."""
+    for name in ("artist.edit.js", "venue.edit.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        idx = js.index("function apply()")
+        block = js[idx:idx + 700]
+        assert "transformOrigin" in block, name
+        assert "scale(" in block, name
+
+
+def test_zoom_defaults_to_no_transform():
+    """Most heroes will never be zoomed; 1 must emit no transform at all
+    rather than scale(1), which would create a needless compositing layer."""
+    js = (ROOT / "app" / "static" / "js" / "artist-profile-v2.js").read_text()
+    idx = js.index('style.transform = ')
+    assert '"none"' in js[idx:idx + 120]
+
+
+# ── scroll position ─────────────────────────────────────────────────
+
+def test_profiles_start_at_the_top_on_reload():
+    """These are long single-scroll pages; a restored scroll position drops
+    the visitor into the middle with no context."""
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        assert 'history.scrollRestoration = "manual"' in js, name
+        assert "window.scrollTo(0, 0)" in js, name
+
+
+def test_explicit_hash_still_wins():
+    """Someone who followed a #section link chose that position."""
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        idx = js.index("window.scrollTo(0, 0)")
+        assert "window.location.hash" in js[idx - 300:idx], name

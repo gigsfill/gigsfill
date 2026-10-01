@@ -626,7 +626,7 @@
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=28"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=29"></script>
   
 </head>
 
@@ -849,7 +849,12 @@
         </div>
         <div id="coverPreview" title="Drag to reposition"></div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
-          <button type="button" id="coverCenterBtn" class="hero-btn">Re-centre</button>
+          <button type="button" id="coverZoomOut" class="hero-btn" title="Zoom out">&minus;</button>
+          <input type="range" id="coverZoom" min="100" max="400" step="5" value="100"
+                 title="Zoom" style="width:150px;accent-color:var(--cyan);">
+          <button type="button" id="coverZoomIn" class="hero-btn" title="Zoom in">+</button>
+          <span id="coverZoomVal" style="font-size:0.74rem;color:var(--text-gray);min-width:38px;font-variant-numeric:tabular-nums;">100%</span>
+          <button type="button" id="coverCenterBtn" class="hero-btn">Reset</button>
           <span id="coverSaveMsg" style="font-size:0.76rem;color:#10b981;display:none;">Saved</span>
         </div>
       </div>

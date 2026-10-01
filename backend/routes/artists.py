@@ -265,7 +265,8 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 social_order,
                 hero_media_id,
                 hero_focal_x,
-                hero_focal_y
+                hero_focal_y,
+                hero_zoom
             FROM artists
             WHERE id=:id
               AND deleted_at IS NULL
@@ -374,6 +375,18 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
     _focal_x = _focal("hero_focal_x")
     _focal_y = _focal("hero_focal_y")
 
+    # Zoom multiplier. Floor is 1.0 = exactly "cover": below that the image
+    # would no longer fill the hero and the page would show bare background
+    # at the edges. Ceiling keeps it from being pushed into mush.
+    _zoom = None
+    if "hero_zoom" in data:
+        _raw_z = data.get("hero_zoom")
+        if _raw_z not in (None, ""):
+            try:
+                _zoom = max(1.0, min(4.0, float(_raw_z)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_zoom must be a number")
+
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     # 2026-09-14: same 0/1/None coercion for website_public. None →
@@ -394,6 +407,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 hero_media_id = COALESCE(:hero_media_id, hero_media_id),
                 hero_focal_x = COALESCE(:hero_focal_x, hero_focal_x),
                 hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
+                hero_zoom = COALESCE(:hero_zoom, hero_zoom),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -420,6 +434,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "hero_media_id": _hero_media_id,
             "hero_focal_x": _focal_x,
             "hero_focal_y": _focal_y,
+            "hero_zoom": _zoom,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),

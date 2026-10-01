@@ -517,6 +517,11 @@ def setup_database():
     # say which part must stay visible. NULL = 50/50 (centre).
     "hero_focal_x REAL",
     "hero_focal_y REAL",
+    # 2026-10-01: hero zoom as a multiplier (1.0 = exactly "cover"). Lets
+    # the user push in past the default crop. Applied as a transform on the
+    # hero background, with the focal point as the transform origin so
+    # zooming keeps the chosen subject centred rather than drifting.
+    "hero_zoom REAL",
 ])
     
     # ==========================================
@@ -609,6 +614,11 @@ def setup_database():
     "hero_media_id INTEGER",
     "hero_focal_x REAL",
     "hero_focal_y REAL",
+    # 2026-10-01: hero zoom as a multiplier (1.0 = exactly "cover"). Lets
+    # the user push in past the default crop. Applied as a transform on the
+    # hero background, with the focal point as the transform origin so
+    # zooming keeps the chosen subject centred rather than drifting.
+    "hero_zoom REAL",
 ])
     
     # ==========================================
