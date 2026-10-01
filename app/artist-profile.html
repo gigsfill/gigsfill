@@ -137,6 +137,14 @@ try {
   }
   /* No photo yet — don't fall back to a flat block; a quiet gradient still
      reads as designed. */
+  /* No cover chosen: drop the fixed ratio and the min-height so the band
+     shrinks to its own content. A tall empty panel above the name is dead
+     space, and most new profiles have no photo yet. */
+  .v2-hero.no-photo {
+    aspect-ratio: auto;
+    min-height: 0;
+  }
+  .v2-hero.no-photo .v2-hero-inner { padding: 28px 0 22px; }
   .v2-hero.no-photo .v2-hero-bg {
     background: radial-gradient(900px 400px at 25% 0%, rgba(139,92,246,0.22), transparent 65%),
                 radial-gradient(900px 400px at 85% 100%, rgba(6,182,212,0.16), transparent 65%),
@@ -758,7 +766,7 @@ try {
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/artist-venues-played.js?v=2"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=25"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=27"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>

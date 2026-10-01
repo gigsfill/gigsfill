@@ -633,7 +633,7 @@
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=31"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=32"></script>
   
 </head>
 
@@ -868,6 +868,17 @@
           <button type="button" id="coverZoomIn" class="hero-btn" title="Zoom in">+</button>
           <span id="coverZoomVal" style="font-size:0.74rem;color:var(--text-gray);min-width:38px;font-variant-numeric:tabular-nums;">100%</span>
           <button type="button" id="coverCenterBtn" class="hero-btn">Reset</button>
+        </div>
+        <!-- Band height. Stored as width/height, so the slider runs
+             backwards: dragging right makes the number smaller and the band
+             taller. Labelled by what it does, not by the stored value. -->
+        <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+          <span style="font-size:0.74rem;color:var(--text-gray);">Height</span>
+          <span style="font-size:0.7rem;color:var(--text-gray);">Short</span>
+          <input type="range" id="coverHeight" min="160" max="500" step="10" value="305"
+                 title="How tall the cover band is on your profile"
+                 style="width:170px;accent-color:var(--cyan);direction:rtl;">
+          <span style="font-size:0.7rem;color:var(--text-gray);">Tall</span>
           <span id="coverSaveMsg" style="font-size:0.76rem;color:#10b981;display:none;">Saved</span>
         </div>
       </div>

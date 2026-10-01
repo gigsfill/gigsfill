@@ -291,7 +291,8 @@ def get_venue_public(venue_id: int, request: Request,
                 hero_media_id,
                 hero_focal_x,
                 hero_focal_y,
-                hero_zoom
+                hero_zoom,
+                hero_ratio
             FROM venues
             WHERE id = :id
               AND deleted_at IS NULL
@@ -551,12 +552,25 @@ def update_venue(venue_id: int, data: dict, request: Request,
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_zoom must be a number")
 
+    # Hero height as width/height. 5.0 is a thin letterbox strip, 1.6 is
+    # nearly square — beyond that the band pushes the whole page below the
+    # fold on a laptop.
+    _ratio = None
+    if "hero_ratio" in data:
+        _raw_r = data.get("hero_ratio")
+        if _raw_r not in (None, ""):
+            try:
+                _ratio = max(1.6, min(5.0, float(_raw_r)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_ratio must be a number")
+
     params = {
         "id": venue_id,
         "hero_media_id": _hero_media_id,
         "hero_focal_x": _focal_x,
         "hero_focal_y": _focal_y,
         "hero_zoom": _zoom,
+        "hero_ratio": _ratio,
         "venue_name": data.get("venue_name"),
         "description": data.get("description"),
         "address_line_1": data.get("address_line_1"),
@@ -642,6 +656,7 @@ def update_venue(venue_id: int, data: dict, request: Request,
             hero_focal_x = COALESCE(:hero_focal_x, hero_focal_x),
             hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
             hero_zoom = COALESCE(:hero_zoom, hero_zoom),
+            hero_ratio = COALESCE(:hero_ratio, hero_ratio),
             venue_name = COALESCE(:venue_name, venue_name),
             description = COALESCE(:description, description),
             address_line_1 = COALESCE(:address_line_1, address_line_1),

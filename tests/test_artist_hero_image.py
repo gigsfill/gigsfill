@@ -58,15 +58,17 @@ def test_public_artist_endpoint_exposes_hero_media_id():
     assert "hero_media_id" in src[max(0, idx - 900):idx]
 
 
-def test_profile_falls_back_when_no_hero_chosen():
-    """Most artists won't set one, so the fallback chain has to hold:
-    chosen -> first picture -> profile image -> gradient."""
+def test_no_hero_chosen_means_no_hero_image():
+    """Superseded the old fallback chain. Falling back to the first picture
+    gave every profile a band it never asked for and could not remove; the
+    band is now opt-in and collapses without one."""
     js = (ROOT / "app" / "static" / "js" / "artist-profile-v2.js").read_text()
-    idx = js.index("var chosen = null;")
-    block = js[idx:idx + 700]
-    assert "a.hero_media_id" in block
-    assert "pics[0]" in block
-    assert "profile.file_path" in block
+    idx = js.index("var heroSrc =")
+    line = js[idx:js.index(";", idx)]
+    assert "chosen" in line
+    assert "profile.file_path" not in line
+    # And the collapse path must still be reachable.
+    assert 'classList.add("no-photo")' in js
 
 
 def test_profile_hero_only_uses_this_artists_media():
@@ -319,3 +321,58 @@ def test_edit_page_get_returns_the_cover_fields():
     block = src[idx:src.index("FROM artists a", idx)]
     for col in ("hero_media_id", "hero_focal_x", "hero_focal_y", "hero_zoom"):
         assert col in block, f"{col} missing from the edit GET"
+
+
+# ── hero band: opt-in and height ─────────────────────────────────────
+
+def test_cover_is_explicit_opt_in():
+    """Falling back to "whatever picture is first" meant a profile that had
+    never chosen a cover still got a 420px band built from an arbitrary
+    image, with no way to turn it off."""
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        idx = js.index("var heroSrc =")
+        line = js[idx:js.index(";", idx)]
+        assert "pics[0]" not in line, f"{name} still falls back to the first picture"
+        assert "chosen" in line
+
+
+def test_no_cover_collapses_the_band():
+    """A tall empty panel above the name is dead space, and most new
+    profiles have no cover yet."""
+    for page in ("artist-profile.html", "venue-profile.html"):
+        html = (ROOT / "app" / page).read_text()
+        idx = html.index(".v2-hero.no-photo {")
+        block = html[idx:idx + 200]
+        assert "aspect-ratio: auto" in block, page
+        assert "min-height: 0" in block, page
+
+
+def test_hero_ratio_is_clamped_to_a_usable_range():
+    """Past about 1.6 the band pushes the whole page below the fold; past 5
+    it is a sliver."""
+    for route in ("artists.py", "venues.py"):
+        src = (ROOT / "backend" / "routes" / route).read_text()
+        idx = src.index('if "hero_ratio" in data:')
+        assert "max(1.6, min(5.0" in src[idx:idx + 500], route
+
+
+def test_preview_follows_the_chosen_height():
+    """Framing against a fixed shape while the profile uses another is the
+    same class of bug as the old fixed 32/9 preview."""
+    for name in ("artist.edit.js", "venue.edit.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        idx = js.index("function apply()")
+        block = js[idx:idx + 1100]
+        assert "aspectRatio" in block, name
+        assert "coverPreview" in block, name
+
+
+def test_height_control_is_labelled_by_effect_not_value():
+    """The stored number is width/height, so it runs backwards — a bigger
+    number is a shorter band. The control says Short/Tall instead."""
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        idx = html.index('id="coverHeight"')
+        block = html[max(0, idx - 400):idx + 300]
+        assert "Short" in block and "Tall" in block, page

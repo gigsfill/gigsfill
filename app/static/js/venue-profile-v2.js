@@ -86,7 +86,11 @@
         return Number(m.id) === Number(v.hero_media_id) && m.file_path;
       })[0] || null;
     }
-    var heroSrc = (chosen && chosen.file_path) || (pics[0] && pics[0].file_path) || "";
+    // Explicit opt-in only. Falling back to "whatever picture is first"
+    // meant a profile that had never chosen a cover still got a 420px band
+    // built from an arbitrary image — and no way to turn it off. No cover
+    // selected now means no band at all.
+    var heroSrc = (chosen && chosen.file_path) || "";
     if (heroSrc) {
       $("v2HeroBg").style.backgroundImage = 'url("' + heroSrc + '")';
       var fx = (v.hero_focal_x == null) ? 50 : Number(v.hero_focal_x);
@@ -98,7 +102,13 @@
       // toward the centre. 1 = exactly "cover", so the default is a no-op.
       $("v2HeroBg").style.transformOrigin = fx + "% " + fy + "%";
       $("v2HeroBg").style.transform = (z > 1) ? "scale(" + z + ")" : "none";
+      // Chosen hero height, as width/height. Lower is taller.
+      var r = (v.hero_ratio == null) ? null : Math.max(1.6, Math.min(5, Number(v.hero_ratio)));
+      if (r) $("v2Hero").style.aspectRatio = String(r);
     } else {
+      // No cover chosen: collapse the band entirely rather than render a
+      // tall empty panel. The name, chips and action still need somewhere
+      // to live, so the hero shrinks to its content instead of vanishing.
       $("v2Hero").classList.add("no-photo");
     }
     // Venues have no logo, so the hero plate carries their first photo —

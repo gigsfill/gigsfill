@@ -189,7 +189,8 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.hero_media_id,
                 a.hero_focal_x,
                 a.hero_focal_y,
-                a.hero_zoom
+                a.hero_zoom,
+                a.hero_ratio
             FROM artists a
             WHERE a.id = :id
               AND (
@@ -275,7 +276,8 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 hero_media_id,
                 hero_focal_x,
                 hero_focal_y,
-                hero_zoom
+                hero_zoom,
+                hero_ratio
             FROM artists
             WHERE id=:id
               AND deleted_at IS NULL
@@ -396,6 +398,18 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_zoom must be a number")
 
+    # Hero height as width/height. 5.0 is a thin letterbox strip, 1.6 is
+    # nearly square — beyond that the band pushes the whole page below the
+    # fold on a laptop.
+    _ratio = None
+    if "hero_ratio" in data:
+        _raw_r = data.get("hero_ratio")
+        if _raw_r not in (None, ""):
+            try:
+                _ratio = max(1.6, min(5.0, float(_raw_r)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_ratio must be a number")
+
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     # 2026-09-14: same 0/1/None coercion for website_public. None →
@@ -417,6 +431,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 hero_focal_x = COALESCE(:hero_focal_x, hero_focal_x),
                 hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
                 hero_zoom = COALESCE(:hero_zoom, hero_zoom),
+                hero_ratio = COALESCE(:hero_ratio, hero_ratio),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -444,6 +459,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "hero_focal_x": _focal_x,
             "hero_focal_y": _focal_y,
             "hero_zoom": _zoom,
+            "hero_ratio": _ratio,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),

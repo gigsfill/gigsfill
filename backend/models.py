@@ -72,6 +72,7 @@ class Artist(Base):
     hero_focal_x = Column(Float)
     hero_focal_y = Column(Float)
     hero_zoom = Column(Float)
+    hero_ratio = Column(Float)
     # Jul 1 2026: MC-type equipment gate (see db.py notes).
     has_own_equipment = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -140,6 +141,7 @@ class Venue(Base):
     hero_focal_x = Column(Float)
     hero_focal_y = Column(Float)
     hero_zoom = Column(Float)
+    hero_ratio = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # PRO / Payment status

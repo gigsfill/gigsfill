@@ -410,6 +410,7 @@ async function loadVenue() {
   window.__gfFocalX = (venueData.hero_focal_x == null) ? 50 : venueData.hero_focal_x;
   window.__gfFocalY = (venueData.hero_focal_y == null) ? 50 : venueData.hero_focal_y;
   window.__gfZoom   = (venueData.hero_zoom == null) ? 1 : venueData.hero_zoom;
+  window.__gfRatio  = venueData.hero_ratio;
 
   const fields = [
     { id: "venue_name", field: "venue_name" },
@@ -1384,6 +1385,7 @@ document.addEventListener("DOMContentLoaded", init);
 (function () {
   var focal = { x: 50, y: 50 };
   var zoom = 1;   // 1 = exactly "cover", matching the profile default
+  var ratio = 64 / 21;   // hero width/height; lower is taller
   var currentSrc = null;
   var saveTimer = null;
 
@@ -1405,6 +1407,13 @@ document.addEventListener("DOMContentLoaded", init);
     var slider = el("coverZoom"), label = el("coverZoomVal");
     if (slider) slider.value = Math.round(zoom * 100);
     if (label) label.textContent = Math.round(zoom * 100) + "%";
+
+    // The preview box takes the chosen height too, or the artist would be
+    // framing against proportions the profile never uses.
+    var outer = el("coverPreview");
+    if (outer) outer.style.aspectRatio = String(ratio);
+    var h = el("coverHeight");
+    if (h) h.value = Math.round(ratio * 100);
   }
 
   function setZoom(z) {
@@ -1442,7 +1451,8 @@ document.addEventListener("DOMContentLoaded", init);
       if (await put({
         hero_focal_x: Math.round(focal.x * 10) / 10,
         hero_focal_y: Math.round(focal.y * 10) / 10,
-        hero_zoom: Math.round(zoom * 100) / 100
+        hero_zoom: Math.round(zoom * 100) / 100,
+        hero_ratio: Math.round(ratio * 1000) / 1000
       })) flashSaved();
     }, 450);
   }
@@ -1494,6 +1504,8 @@ document.addEventListener("DOMContentLoaded", init);
     focal.x = (fx == null) ? 50 : Number(fx);
     focal.y = (fy == null) ? 50 : Number(fy);
     zoom = (window.__gfZoom == null) ? 1 : Math.max(1, Math.min(4, Number(window.__gfZoom)));
+    ratio = (window.__gfRatio == null) ? 64 / 21
+          : Math.max(1.6, Math.min(5, Number(window.__gfRatio)));
     var img = el("coverPreviewImg");
     if (img) img.style.backgroundImage = 'url("' + src + '")';
     apply();
@@ -1517,6 +1529,7 @@ document.addEventListener("DOMContentLoaded", init);
     if (e.target && e.target.id === "coverZoomOut") { setZoom(zoom - 0.1); return; }
     if (e.target && e.target.id === "coverCenterBtn") {
       zoom = 1;
+      ratio = 64 / 21;
       focal.x = 50; focal.y = 50; apply(); save();
     }
   });
@@ -1563,6 +1576,11 @@ document.addEventListener("DOMContentLoaded", init);
   // preventDefault stops the page scrolling out from under them mid-adjust.
   document.addEventListener("input", function (e) {
     if (e.target && e.target.id === "coverZoom") setZoom(Number(e.target.value) / 100);
+    if (e.target && e.target.id === "coverHeight") {
+      ratio = Math.max(1.6, Math.min(5, Number(e.target.value) / 100));
+      apply();
+      save();
+    }
   });
   document.addEventListener("wheel", function (e) {
     var box = el("coverPreview");

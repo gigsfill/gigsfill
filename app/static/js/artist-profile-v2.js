@@ -90,9 +90,11 @@
         return Number(m.id) === Number(a.hero_media_id) && m.file_path;
       })[0] || null;
     }
-    var heroSrc = (chosen && chosen.file_path) ||
-                  (pics[0] && pics[0].file_path) ||
-                  (profile && profile.file_path) || "";
+    // Explicit opt-in only. Falling back to "whatever picture is first"
+    // meant a profile that had never chosen a cover still got a 420px band
+    // built from an arbitrary image — and no way to turn it off. No cover
+    // selected now means no band at all.
+    var heroSrc = (chosen && chosen.file_path) || "";
     if (heroSrc) {
       $("v2HeroBg").style.backgroundImage = 'url("' + heroSrc + '")';
       // The hero is a wide band and uploads are usually 4:3, so `cover`
@@ -107,7 +109,13 @@
       // toward the centre. 1 = exactly "cover", so the default is a no-op.
       $("v2HeroBg").style.transformOrigin = fx + "% " + fy + "%";
       $("v2HeroBg").style.transform = (z > 1) ? "scale(" + z + ")" : "none";
+      // Chosen hero height, as width/height. Lower is taller.
+      var r = (a.hero_ratio == null) ? null : Math.max(1.6, Math.min(5, Number(a.hero_ratio)));
+      if (r) $("v2Hero").style.aspectRatio = String(r);
     } else {
+      // No cover chosen: collapse the band entirely rather than render a
+      // tall empty panel. The name, chips and action still need somewhere
+      // to live, so the hero shrinks to its content instead of vanishing.
       $("v2Hero").classList.add("no-photo");
     }
     if (profile && profile.file_path) $("v2Logo").src = profile.file_path;

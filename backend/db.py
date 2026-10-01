@@ -522,6 +522,11 @@ def setup_database():
     # hero background, with the focal point as the transform origin so
     # zooming keeps the chosen subject centred rather than drifting.
     "hero_zoom REAL",
+    # 2026-10-01: how tall the hero band is, stored as width/height. The
+    # default 64/21 (~3.05) is a wide letterbox; lower is taller. NULL uses
+    # the default. Stored as a ratio rather than pixels so it holds its
+    # proportions across viewport widths.
+    "hero_ratio REAL",
 ])
     
     # ==========================================
@@ -619,6 +624,11 @@ def setup_database():
     # hero background, with the focal point as the transform origin so
     # zooming keeps the chosen subject centred rather than drifting.
     "hero_zoom REAL",
+    # 2026-10-01: how tall the hero band is, stored as width/height. The
+    # default 64/21 (~3.05) is a wide letterbox; lower is taller. NULL uses
+    # the default. Stored as a ratio rather than pixels so it holds its
+    # proportions across viewport widths.
+    "hero_ratio REAL",
 ])
     
     # ==========================================
