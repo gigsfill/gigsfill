@@ -68,6 +68,9 @@ class Artist(Base):
     # 2026-10-01 — mirrors backend/db.py. Which artist_media picture fills
     # the profile hero; NULL falls back to the first picture.
     hero_media_id = Column(Integer)
+    # Focal point percentages for the hero crop; NULL = centred.
+    hero_focal_x = Column(Float)
+    hero_focal_y = Column(Float)
     # Jul 1 2026: MC-type equipment gate (see db.py notes).
     has_own_equipment = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)

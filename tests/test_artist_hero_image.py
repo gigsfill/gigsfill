@@ -76,3 +76,48 @@ def test_profile_hero_only_uses_this_artists_media():
     idx = js.index("var chosen = null;")
     block = js[idx:idx + 700]
     assert "media.filter" in block
+
+
+# ── focal point ─────────────────────────────────────────────────────
+
+def test_focal_values_are_clamped_not_rejected():
+    """These come from a drag, so a value a hair past the edge is a UI
+    rounding artefact rather than an attack. Clamp, don't 400."""
+    src = ARTISTS.read_text()
+    idx = src.index("def _focal(key):")
+    block = src[idx:idx + 900]
+    assert "max(0.0, min(100.0" in block
+    assert "must be a number" in block     # non-numeric still rejected
+
+
+def test_focal_columns_in_schema_and_orm():
+    for col in ("hero_focal_x", "hero_focal_y"):
+        assert col in (ROOT / "backend" / "db.py").read_text(), col
+        assert col in (ROOT / "backend" / "models.py").read_text(), col
+
+
+def test_focal_defaults_to_centre_when_unset():
+    """Most artists will never touch this, so NULL must render as centred
+    rather than as 0% (which would pin every hero to the top-left)."""
+    js = (ROOT / "app" / "static" / "js" / "artist-profile-v2.js").read_text()
+    idx = js.index("hero_focal_x == null")
+    block = js[idx - 200:idx + 400]
+    assert "? 50 :" in block
+    assert "backgroundPosition" in block
+
+
+def test_drag_saves_are_debounced():
+    """A drag fires continuously; one PUT per mousemove would hammer the API."""
+    js = (ROOT / "app" / "static" / "js" / "artist.edit.js").read_text()
+    idx = js.index("function save() {")
+    block = js[idx:idx + 500]
+    assert "clearTimeout(saveTimer)" in block
+    assert "setTimeout" in block
+
+
+def test_framer_preview_matches_the_hero_aspect():
+    """If the preview isn't the hero's shape, framing it there tells the
+    artist nothing about what actually renders."""
+    html = (ROOT / "app" / "artist-edit.html").read_text()
+    idx = html.index("#coverPreview {")
+    assert "aspect-ratio" in html[idx:idx + 400]

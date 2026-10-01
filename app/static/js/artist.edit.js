@@ -236,6 +236,13 @@ async function loadArtist() {
 
   const artist = await res.json();
 
+  // 2026-10-01: stash the saved cover choice so loadMedia() can mark the
+  // right picture and open the framer at the saved position. Media loads
+  // after this, so the values have to wait for it rather than apply here.
+  window.__gfHeroMediaId = artist.hero_media_id || null;
+  window.__gfFocalX = (artist.hero_focal_x == null) ? 50 : artist.hero_focal_x;
+  window.__gfFocalY = (artist.hero_focal_y == null) ? 50 : artist.hero_focal_y;
+
   // POPULATE
   qs("name").value = artist.name || "";
   bindAutosave(qs("name"), "name", artistId);
@@ -1244,6 +1251,13 @@ async function loadArtist() {
       }
     });
 
+    // 2026-10-01: mark the saved cover photo and open the framer at the
+    // stored position. Runs after the cards exist, since markHero walks
+    // them.
+    if (window.__gfHeroMediaId && typeof window.gfMarkHeroPicture === "function") {
+      window.gfMarkHeroPicture(window.__gfHeroMediaId);
+    }
+
     // Surface MP3 count on the upload button (e.g. "+ Add MP3 File (2/3)")
     const audioCount = items.filter(m => m.media_type === "audio").length;
     const countEl = document.getElementById("addAudioBtnCount");
@@ -1472,11 +1486,22 @@ document.addEventListener("DOMContentLoaded", () => {
 // on the artist row; the server checks the image actually belongs to them.
 (function () {
   function markHero(id) {
+    if (!id) {
+      var wrap = document.getElementById('coverFramer');
+      if (wrap) wrap.style.display = 'none';
+    }
     document.querySelectorAll('#pictures .media-card').forEach(function (card) {
       var on = String(card.dataset.id) === String(id);
       card.classList.toggle('is-hero', on);
       var btn = card.querySelector('.hero-btn');
       if (btn) btn.textContent = on ? '\u2605 Cover photo' : 'Use as cover';
+      if (on) {
+        var img = card.querySelector('img');
+        if (img && window.gfShowCoverFramer) {
+          window.gfShowCoverFramer(img.getAttribute('src'),
+            window.__gfFocalX, window.__gfFocalY);
+        }
+      }
     });
   }
   window.gfMarkHeroPicture = markHero;
@@ -1503,6 +1528,125 @@ document.addEventListener("DOMContentLoaded", () => {
       markHero(clearing ? null : mediaId);
     } catch (err) {
       alert('Could not set the cover photo: ' + (err.message || 'please try again'));
+    }
+  });
+})();
+
+// ── Cover framing (2026-10-01) ──────────────────────────────────────────
+// The profile hero is a wide band; uploads are usually 4:3, so `cover`
+// crops top and bottom and heads get cut off. This previews the exact crop
+// and lets the artist drag the image until the right part is in frame.
+// Stored as hero_focal_x / hero_focal_y percentages, applied verbatim as
+// background-position on the profile.
+(function () {
+  var focal = { x: 50, y: 50 };
+  var currentSrc = null;
+  var saveTimer = null;
+
+  function el(id) { return document.getElementById(id); }
+
+  function apply() {
+    var box = el("coverPreview");
+    if (box) box.style.backgroundPosition = focal.x + "% " + focal.y + "%";
+  }
+
+  function artistId() {
+    return new URLSearchParams(window.location.search).get("artist_id");
+  }
+
+  function flashSaved() {
+    var m = el("coverSaveMsg");
+    if (!m) return;
+    m.style.display = "inline";
+    clearTimeout(m._t);
+    m._t = setTimeout(function () { m.style.display = "none"; }, 1600);
+  }
+
+  // Debounced: dragging fires continuously and each move is not worth a
+  // round trip.
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async function () {
+      var aid = artistId();
+      if (!aid) return;
+      try {
+        var r = await fetch("/api/artists/" + aid, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            hero_focal_x: Math.round(focal.x * 10) / 10,
+            hero_focal_y: Math.round(focal.y * 10) / 10
+          })
+        });
+        if (r.ok) flashSaved();
+      } catch (e) { /* leave the UI as-is; next drag retries */ }
+    }, 450);
+  }
+
+  window.gfShowCoverFramer = function (src, fx, fy) {
+    var wrap = el("coverFramer"), box = el("coverPreview");
+    if (!wrap || !box) return;
+    if (!src) { wrap.style.display = "none"; return; }
+    currentSrc = src;
+    focal.x = (fx == null) ? 50 : Number(fx);
+    focal.y = (fy == null) ? 50 : Number(fy);
+    box.style.backgroundImage = 'url("' + src + '")';
+    apply();
+    wrap.style.display = "block";
+  };
+
+  // Drag maps cursor movement to focal movement INVERSELY: dragging the
+  // image left should reveal what's on its right, which means increasing
+  // the focal x. Matching the direction of a physical photo under glass.
+  var dragging = false, startX = 0, startY = 0, startFx = 50, startFy = 50;
+
+  function pointerDown(e) {
+    var box = el("coverPreview");
+    if (!box || !currentSrc) return;
+    if (!(e.target === box || box.contains(e.target))) return;
+    dragging = true;
+    box.classList.add("dragging");
+    var pt = e.touches ? e.touches[0] : e;
+    startX = pt.clientX; startY = pt.clientY;
+    startFx = focal.x; startFy = focal.y;
+    e.preventDefault();
+  }
+
+  function pointerMove(e) {
+    if (!dragging) return;
+    var box = el("coverPreview");
+    var pt = e.touches ? e.touches[0] : e;
+    var rect = box.getBoundingClientRect();
+    // Scale the drag by the box size so a full-width drag sweeps the whole
+    // image rather than nudging it.
+    var dx = ((pt.clientX - startX) / rect.width) * 100;
+    var dy = ((pt.clientY - startY) / rect.height) * 100;
+    focal.x = Math.max(0, Math.min(100, startFx - dx));
+    focal.y = Math.max(0, Math.min(100, startFy - dy));
+    apply();
+    e.preventDefault();
+  }
+
+  function pointerUp() {
+    if (!dragging) return;
+    dragging = false;
+    var box = el("coverPreview");
+    if (box) box.classList.remove("dragging");
+    save();
+  }
+
+  document.addEventListener("mousedown", pointerDown);
+  document.addEventListener("mousemove", pointerMove);
+  document.addEventListener("mouseup", pointerUp);
+  document.addEventListener("touchstart", pointerDown, { passive: false });
+  document.addEventListener("touchmove", pointerMove, { passive: false });
+  document.addEventListener("touchend", pointerUp);
+
+  document.addEventListener("click", function (e) {
+    if (e.target && e.target.id === "coverCenterBtn") {
+      focal.x = 50; focal.y = 50;
+      apply(); save();
     }
   });
 })();

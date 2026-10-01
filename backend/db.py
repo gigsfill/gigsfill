@@ -511,6 +511,12 @@ def setup_database():
     # band meant a dark backstage shot while their best photo sat further
     # down the gallery. NULL = fall back to first picture, then profile pic.
     "hero_media_id INTEGER",
+    # 2026-10-01: focal point for the hero image, as percentages. The hero
+    # is a wide band and uploads are usually 4:3 or 3:2, so `cover` crops
+    # top and bottom -- which is how heads get cut off. These let the artist
+    # say which part must stay visible. NULL = 50/50 (centre).
+    "hero_focal_x REAL",
+    "hero_focal_y REAL",
 ])
     
     # ==========================================

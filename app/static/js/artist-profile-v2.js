@@ -74,6 +74,12 @@
                   (profile && profile.file_path) || "";
     if (heroSrc) {
       $("v2HeroBg").style.backgroundImage = 'url("' + heroSrc + '")';
+      // The hero is a wide band and uploads are usually 4:3, so `cover`
+      // crops top and bottom -- which is how heads get cut off. The focal
+      // point says which part has to stay in frame. Unset = centred.
+      var fx = (a.hero_focal_x == null) ? 50 : Number(a.hero_focal_x);
+      var fy = (a.hero_focal_y == null) ? 50 : Number(a.hero_focal_y);
+      $("v2HeroBg").style.backgroundPosition = fx + "% " + fy + "%";
     } else {
       $("v2Hero").classList.add("no-photo");
     }

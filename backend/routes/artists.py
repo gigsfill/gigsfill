@@ -263,7 +263,9 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 website_url,
                 COALESCE(website_public, 0) as website_public,
                 social_order,
-                hero_media_id
+                hero_media_id,
+                hero_focal_x,
+                hero_focal_y
             FROM artists
             WHERE id=:id
               AND deleted_at IS NULL
@@ -354,6 +356,24 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 raise HTTPException(400, "That image does not belong to this artist")
             _hero_media_id = _cand
 
+    # Focal point, 0-100 on each axis. Clamped rather than rejected: this
+    # comes from a drag, and a few pixels past the edge is a UI rounding
+    # artefact, not an attack.
+    def _focal(key):
+        if key not in data:
+            return None
+        raw = data.get(key)
+        if raw in (None, ""):
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(400, key + " must be a number")
+        return max(0.0, min(100.0, val))
+
+    _focal_x = _focal("hero_focal_x")
+    _focal_y = _focal("hero_focal_y")
+
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     # 2026-09-14: same 0/1/None coercion for website_public. None →
@@ -372,6 +392,8 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 styles = COALESCE(:styles, styles),
                 has_own_equipment = COALESCE(:has_own_equipment, has_own_equipment),
                 hero_media_id = COALESCE(:hero_media_id, hero_media_id),
+                hero_focal_x = COALESCE(:hero_focal_x, hero_focal_x),
+                hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -396,6 +418,8 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "styles": data.get("styles"),
             "has_own_equipment": _hoe,
             "hero_media_id": _hero_media_id,
+            "hero_focal_x": _focal_x,
+            "hero_focal_y": _focal_y,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),
