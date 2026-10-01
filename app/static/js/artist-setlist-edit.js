@@ -84,53 +84,32 @@
     const jsA = window.jsAttr || JSON.stringify;
 
     root.innerHTML = `
-      <!-- Bulk paste — pasting a copied list is the fastest way to seed a
-           big setlist. Backend /bulk splits on tab, hyphen, em/en-dash,
-           " by ", " | ", and "," so most formats work as-is. -->
-      <div style="background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;padding:10px 12px;margin-bottom:14px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
-          <strong style="font-size:0.78rem;color:var(--cyan);">Bulk paste</strong>
-          <button id="setlistBulkToggle"
-            style="background:none;border:none;color:var(--text-gray);font-size:0.7rem;cursor:pointer;text-decoration:underline;">Show / hide</button>
+      <!-- 2026-10-01: paste is now the only way to add songs. There was
+           also a one-at-a-time title/artist form, which duplicated this for
+           a worse experience — a 200-song setlist is the normal case and
+           nobody types that in two fields at a time. The paste box accepts
+           a single line just as happily, so nothing was lost. Expanded by
+           default now it is the only input; a show/hide toggle on the sole
+           control was just a step to reach it. -->
+      <div style="background:rgba(6,182,212,0.05);border:1px solid rgba(6,182,212,0.2);border-radius:8px;padding:12px 14px;margin-bottom:16px;">
+        <p style="color:var(--text-gray);font-size:0.72rem;margin:0 0 8px;line-height:1.55;">
+          Paste one song per line — a whole setlist at once is fine. Accepted formats:
+          <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall - Oasis</code> (any dash works),
+          <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall by Oasis</code>,
+          <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall, Oasis</code>,
+          copy-pasted straight from Excel (extra columns are dropped), or just
+          <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall</code> (title only).
+          Numbered lists (<code style="color:var(--cyan);font-size:0.68rem;">1. Wonderwall - Oasis</code>) work too.
+        </p>
+        <textarea id="setlistBulkText" rows="6" placeholder="Wonderwall - Oasis&#10;Sweet Caroline - Neil Diamond&#10;Purple Rain - Prince"
+          style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:8px 10px;font-size:0.8rem;font-family:monospace;resize:vertical;"></textarea>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+          <button id="setlistBulkGo"
+            style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:6px 16px;font-size:0.82rem;cursor:pointer;font-weight:600;">
+            Add Songs
+          </button>
+          <span id="setlistBulkStatus" style="font-size:0.72rem;color:var(--text-gray);"></span>
         </div>
-        <div id="setlistBulkBody" style="display:none;">
-          <p style="color:var(--text-gray);font-size:0.7rem;margin:4px 0 6px;line-height:1.5;">
-            Paste one song per line. Accepted formats:
-            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall - Oasis</code> (any dash works),
-            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall by Oasis</code>,
-            <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall, Oasis</code>,
-            copy-pasted straight from Excel (extra columns are dropped), or just <code style="color:var(--cyan);font-size:0.68rem;">Wonderwall</code> (title only).
-            Numbered lists (<code style="color:var(--cyan);font-size:0.68rem;">1. Wonderwall - Oasis</code>) work too.
-          </p>
-          <textarea id="setlistBulkText" rows="6" placeholder="Wonderwall - Oasis&#10;Sweet Caroline - Neil Diamond&#10;Purple Rain - Prince"
-            style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:8px 10px;font-size:0.8rem;font-family:monospace;resize:vertical;"></textarea>
-          <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
-            <button id="setlistBulkGo"
-              style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:5px 12px;font-size:0.78rem;cursor:pointer;font-weight:600;">
-              Parse & Add
-            </button>
-            <span id="setlistBulkStatus" style="font-size:0.72rem;color:var(--text-gray);"></span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Add one -->
-      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px;">
-        <div style="flex:2;min-width:180px;">
-          <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Song title</label>
-          <input type="text" id="setlistAddTitle" maxlength="200"
-            style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.85rem;">
-        </div>
-        <div style="flex:2;min-width:180px;">
-          <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Original artist (optional)</label>
-          <input type="text" id="setlistAddArtist" maxlength="200"
-            style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.85rem;">
-        </div>
-        <button id="setlistAddBtn"
-          style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:6px 16px;font-size:0.85rem;cursor:pointer;font-weight:600;">
-          Add Song
-        </button>
-        <span id="setlistAddStatus" style="font-size:0.78rem;color:var(--text-gray);"></span>
       </div>
 
       <!-- List header — sort dropdown mirrors the public tab so what you
@@ -227,14 +206,6 @@
       });
     }
 
-    const bulkToggle = $('setlistBulkToggle');
-    if (bulkToggle) {
-      bulkToggle.addEventListener('click', () => {
-        const body = $('setlistBulkBody');
-        if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
-      });
-    }
-
     const bulkGo = $('setlistBulkGo');
     if (bulkGo) {
       bulkGo.addEventListener('click', async () => {
@@ -261,36 +232,6 @@
           status.textContent = '✗ ' + e.message; status.style.color = '#ef4444';
         } finally {
           bulkGo.disabled = false;
-        }
-      });
-    }
-
-    const addBtn = $('setlistAddBtn');
-    if (addBtn) {
-      addBtn.addEventListener('click', async () => {
-        const t = ($('setlistAddTitle')?.value || '').trim();
-        const a = ($('setlistAddArtist')?.value || '').trim();
-        const status = $('setlistAddStatus');
-        if (!t) { status.textContent = 'Enter a song title.'; status.style.color = '#ef4444'; return; }
-        status.textContent = 'Adding…'; status.style.color = 'var(--text-gray)';
-        try {
-          const res = await fetch(`/api/artists/${_artistId}/setlist`, {
-            method: 'POST', credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ song_title: t, original_artist: a }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.detail || 'Add failed');
-          $('setlistAddTitle').value = '';
-          $('setlistAddArtist').value = '';
-          status.textContent = '✓ Added.'; status.style.color = '#10b981';
-          await _fetchSetlist();
-          _render();
-          // Refocus the title box for rapid-fire manual entry
-          const again = document.getElementById('setlistAddTitle');
-          if (again) again.focus();
-        } catch (e) {
-          status.textContent = '✗ ' + e.message; status.style.color = '#ef4444';
         }
       });
     }
