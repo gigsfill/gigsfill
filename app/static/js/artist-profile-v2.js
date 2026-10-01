@@ -24,6 +24,7 @@
   // Nav is built from what actually rendered, so a band with no setlist
   // doesn't get a "What They Play" link that scrolls to an empty block.
   var SECTIONS = [
+    { id: "__cal",       label: "Calendar", action: "v2OpenCal()" },
     { id: "sec-watch",   label: "Watch" },
     { id: "sec-photos",  label: "Photos" },
     { id: "sec-about",   label: "About" },
@@ -92,9 +93,73 @@
              "</span><strong>" + rating.toFixed(1) + "</strong>" +
              '<span style="color:var(--v2-dim);">(' + count + ")</span></span>";
     }
-    cta += '<a class="v2-btn primary" href="#sec-contact">Book This Artist</a>';
-    $("v2Cta").innerHTML = cta;
+    $("v2Cta").innerHTML = cta;   // action is appended by renderAction()
   }
+
+  // ── the action ──────────────────────────────────────────────────────
+  // What this says depends entirely on who's reading it. A generic "Book
+  // This Artist" is wrong for everyone: a venue that already works with
+  // them doesn't want to be sold, and a logged-out visitor can't act on it.
+  //
+  //   venue, already approved  → state the relationship, no action
+  //   venue, invitation sent   → say so; nothing more to do
+  //   venue, artist applied    → send them to the approval screen
+  //   venue, no relationship   → invite
+  //   anyone else              → point at the contact details
+  async function renderAction(a) {
+    var slot = document.createElement("span");
+    $("v2Cta").appendChild(slot);
+
+    function fallback() {
+      slot.outerHTML = '<a class="v2-btn primary" href="#sec-contact">Contact for Booking</a>';
+    }
+
+    var me = await getJSON("/api/me");
+    var venues = (me && me.venues) || [];
+    if (!venues.length) { fallback(); return; }
+
+    var venueId = me.venue_id || venues[0].id;
+    var rel = await getJSON("/api/venues/" + venueId + "/preferred-artists-with-gigs");
+    if (!rel) { fallback(); return; }
+
+    var row = rel.filter(function (r) {
+      return Number(r.artist_id) === Number(artistId);
+    })[0];
+    var status = row ? row.preferred_status : null;
+
+    if (status === "approved") {
+      slot.outerHTML = '<span class="v2-status">★ Your Preferred Artist</span>';
+    } else if (status === "invited") {
+      slot.outerHTML = '<span class="v2-status wait">Invitation Sent</span>';
+    } else if (status === "pending") {
+      // They asked first — approving is the right move, not inviting.
+      slot.outerHTML = '<a class="v2-btn primary" href="/app/venue-create-gigs.html?venue_id=' +
+        encodeURIComponent(venueId) + '&tab=artists">Review Their Request</a>';
+    } else {
+      slot.outerHTML = '<button class="v2-btn primary" id="v2InviteBtn" ' +
+        'onclick="v2Invite(' + Number(venueId) + ')">Invite as Preferred Artist</button>';
+    }
+  }
+
+  window.v2Invite = async function (venueId) {
+    var btn = $("v2InviteBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+    try {
+      var r = await fetch("/api/venues/" + venueId + "/artists/" + artistId + "/make-preferred", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ message: "" })
+      });
+      if (!r.ok) throw new Error((await r.json().catch(function () { return {}; })).detail || "Failed");
+      // Invitations grant nothing until the artist accepts, so the label
+      // says "sent", not "preferred".
+      if (btn) btn.outerHTML = '<span class="v2-status wait">Invitation Sent</span>';
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = "Invite as Preferred Artist"; }
+      alert("Could not send the invitation: " + (e.message || "please try again"));
+    }
+  };
 
   // Which platform a video lives on, and whether it serves a public still.
   function platformOf(url) {
@@ -209,6 +274,65 @@
     }).join("");
   }
 
+
+  // ── availability calendar ───────────────────────────────────────────
+  // Opens from the nav. Keeps the month grid, because "are they free on
+  // the 17th" is a spatial question, without letting an empty month own
+  // the page the way the old layout did.
+  var calGigs = [];
+  var calCursor = new Date();
+  var CAL_MONTHS = ["January","February","March","April","May","June",
+                    "July","August","September","October","November","December"];
+
+  function iso(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+           "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  function renderCal() {
+    var y = calCursor.getFullYear(), m = calCursor.getMonth();
+    $("v2CalMonth").textContent = CAL_MONTHS[m] + " " + y;
+
+    var first = new Date(y, m, 1).getDay();
+    var days = new Date(y, m + 1, 0).getDate();
+    var prevLast = new Date(y, m, 0).getDate();
+    var todayStr = iso(new Date());
+    var html = "";
+
+    // Leading days carry real numbers rather than blanks, so the grid reads
+    // as a continuous month rather than starting with holes.
+    for (var i = first - 1; i >= 0; i--) {
+      html += '<div class="v2-cal-cell other"><div class="v2-cal-num">' +
+              (prevLast - i) + "</div></div>";
+    }
+    for (var d = 1; d <= days; d++) {
+      var ds = y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+      var onDay = calGigs.filter(function (g) { return String(g.date) === ds; });
+      var cls = "v2-cal-cell" + (onDay.length ? " booked" : "") + (ds === todayStr ? " today" : "");
+      html += '<div class="' + cls + '"><div class="v2-cal-num">' + d + "</div>";
+      onDay.forEach(function (g) {
+        var t = g.start_time && window.formatTime12Hour ? window.formatTime12Hour(g.start_time) : "";
+        html += '<div class="v2-cal-gig" title="' + esc((g.venue_name || "") + " " + t) + '">' +
+                esc(t || "Booked") + "</div>";
+      });
+      html += "</div>";
+    }
+    // Trailing days so the final week isn't a ragged row.
+    var cells = first + days;
+    var trail = (7 - (cells % 7)) % 7;
+    for (var k = 1; k <= trail; k++) {
+      html += '<div class="v2-cal-cell other"><div class="v2-cal-num">' + k + "</div></div>";
+    }
+    $("v2CalGrid").innerHTML = html;
+  }
+
+  window.v2OpenCal = function () { renderCal(); $("v2CalModal").classList.add("open"); };
+  window.v2CloseCal = function () { $("v2CalModal").classList.remove("open"); };
+  window.v2CalStep = function (n) {
+    calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() + n, 1);
+    renderCal();
+  };
+
   // ── setlist ─────────────────────────────────────────────────────────
   function renderSetlist(data) {
     var songs = (data && data.songs) || [];
@@ -259,13 +383,19 @@
     $("v2Contact").innerHTML =
       "<h3>Book " + esc(a.name || "this artist") + "</h3>" +
       "<p>" + (booking ? esc(booking) : "Contact details not listed.") + "</p>" +
-      '<a class="v2-btn primary" href="/app/venue-create-gigs.html">Invite as Preferred Artist</a>';
+      '<span id="v2ContactAction"></span>';
   }
 
   // ── nav ─────────────────────────────────────────────────────────────
   function renderNav() {
     var html = "";
     SECTIONS.forEach(function (s) {
+      // Calendar is an action, not an anchor — it opens the modal.
+      if (s.action) {
+        html += '<a role="button" tabindex="0" class="act" onclick="' + s.action + '">' +
+                esc(s.label) + "</a>";
+        return;
+      }
       if (!present[s.id]) {
         var el = $(s.id);
         if (el) el.style.display = "none";   // hide the empty section too
@@ -277,7 +407,11 @@
 
     // Highlight whichever section is in view. Cheap scroll handler rather
     // than IntersectionObserver so behaviour is obvious when debugging.
-    var links = Array.prototype.slice.call($("v2NavInner").querySelectorAll("a"));
+    var links = Array.prototype.slice.call($("v2NavInner").querySelectorAll("a"))
+      .filter(function (l) {
+        var h = l.getAttribute("href") || "";
+        return h.charAt(0) === "#" && h.length > 1;
+      });
     function sync() {
       var best = null, bestTop = -Infinity;
       links.forEach(function (l) {
@@ -335,5 +469,13 @@
     renderSetlist(setlist);
     renderContact(artist);
     renderNav();
+
+    calGigs = gigs;
+    await renderAction(artist);
+    // Mirror whatever the hero resolved to, so the page doesn't offer two
+    // different answers to "what can I do about this artist".
+    var mirror = $("v2ContactAction");
+    var heroAction = $("v2Cta").lastElementChild;
+    if (mirror && heroAction) mirror.innerHTML = heroAction.outerHTML;
   })();
 })();

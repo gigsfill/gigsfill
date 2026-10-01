@@ -24,6 +24,15 @@
      in a tenth of the space.
    • One primary action. "Booking: name - email - phone" was a line of text.
 -->
+<!-- Oswald (condensed display) + Barlow (body). Oswald carries the
+     gig-poster register the site's Inter default doesn't; Barlow is a
+     slightly condensed grotesk that sits with it without fighting, and
+     stays readable at body size where Oswald would not. Both are allowed
+     by the CSP (style-src includes fonts.googleapis.com, font-src
+     fonts.gstatic.com). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="/app/static/css/gigsfill.css?v=16" rel="stylesheet"/>
 <link href="/app/static/css/mobile.css?v=6" rel="stylesheet"/>
 <style>
@@ -47,7 +56,19 @@
     background: var(--v2-ground);
     color: var(--text);
     margin: 0;
+    font-family: 'Barlow', 'Inter', -apple-system, sans-serif;
   }
+  /* Display face on the things that set the page's voice. Oswald is
+     narrow, so it takes a little tracking at small sizes to stay legible. */
+  .v2-name, .v2-sec-head h2, .v2-date-day, .v2-date-mon,
+  .v2-contact h3, .v2-btn, .v2-nav a, .v2-chip, .v2-badge {
+    font-family: 'Oswald', 'Barlow', sans-serif;
+  }
+  .v2-name { letter-spacing: 0.005em; text-transform: uppercase; }
+  .v2-sec-head h2 { letter-spacing: 0.16em; }
+  .v2-nav a { letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.8rem; }
+  .v2-btn { letter-spacing: 0.06em; text-transform: uppercase; }
+  .v2-chip { letter-spacing: 0.07em; text-transform: uppercase; }
 
   .v2-wrap { max-width: var(--v2-max); margin: 0 auto; }
 
@@ -173,6 +194,7 @@
     border-bottom: 2px solid transparent;
   }
   .v2-nav a:hover { color: var(--text); }
+  .v2-nav a.act { cursor: pointer; }
   .v2-nav a.on { color: var(--cyan); border-bottom-color: var(--cyan); }
 
   /* ── sections ───────────────────────────────────────────────────────
@@ -321,6 +343,68 @@
 
   .v2-empty { color: var(--v2-dimmer); font-size: 0.87rem; padding: 14px 0; }
 
+  /* ── calendar modal ─────────────────────────────────────────────────
+     Availability stays a month grid, because "are they free on the 17th"
+     is a spatial question — but it opens on demand instead of occupying
+     two thirds of the page while mostly empty. */
+  .v2-modal {
+    position: fixed; inset: 0; z-index: 130; display: none;
+    background: rgba(3,5,10,0.88); align-items: center; justify-content: center; padding: 20px;
+  }
+  .v2-modal.open { display: flex; }
+  .v2-modal-box {
+    background: var(--v2-raise); border: 1px solid var(--v2-line);
+    border-radius: 14px; width: min(820px, 100%); max-height: 88vh; overflow: auto;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .v2-modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--v2-line); gap: 12px;
+  }
+  .v2-modal-head h3 { margin: 0; font-size: 1rem; font-family: 'Oswald', sans-serif;
+                      letter-spacing: 0.08em; text-transform: uppercase; }
+  .v2-cal-nav { display: flex; align-items: center; gap: 10px; }
+  .v2-cal-nav button {
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line); color: var(--text);
+    border-radius: 7px; padding: 5px 11px; cursor: pointer; font-size: 0.85rem;
+  }
+  .v2-cal-nav button:hover { border-color: var(--cyan); color: var(--cyan); }
+  .v2-cal-month { font-family: 'Oswald', sans-serif; letter-spacing: 0.06em;
+                  min-width: 165px; text-align: center; font-size: 0.95rem; }
+  .v2-cal-body { padding: 16px 20px 22px; }
+  .v2-cal-dow, .v2-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .v2-cal-dow div {
+    text-align: center; font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--v2-dimmer); padding-bottom: 7px; font-family: 'Oswald', sans-serif;
+  }
+  .v2-cal-cell {
+    min-height: 74px; border-radius: 8px; padding: 6px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line-soft);
+    font-size: 0.74rem;
+  }
+  .v2-cal-cell.other { opacity: 0.32; }
+  .v2-cal-cell.today { border-color: var(--cyan); }
+  .v2-cal-num { color: var(--v2-dim); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .v2-cal-cell.booked { background: rgba(139,92,246,0.14); border-color: rgba(139,92,246,0.45); }
+  .v2-cal-gig {
+    background: rgba(139,92,246,0.35); border-radius: 4px; padding: 2px 5px;
+    font-size: 0.66rem; line-height: 1.3; margin-bottom: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .v2-cal-legend { display: flex; gap: 16px; margin-top: 14px; font-size: 0.74rem; color: var(--v2-dim); }
+  .v2-cal-key { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+                background: rgba(139,92,246,0.45); margin-right: 6px; vertical-align: -1px; }
+
+  .v2-status {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 20px; border-radius: 8px; font-size: 0.85rem; font-weight: 700;
+    font-family: 'Oswald', sans-serif; letter-spacing: 0.06em; text-transform: uppercase;
+    background: rgba(16,185,129,0.16); border: 1px solid rgba(16,185,129,0.45); color: #34d399;
+  }
+  .v2-status.wait {
+    background: rgba(139,92,246,0.16); border-color: rgba(139,92,246,0.45); color: #c4b5fd;
+  }
+
   /* ── lightbox ───────────────────────────────────────────────────── */
   .v2-lb {
     position: fixed; inset: 0; z-index: 120; display: none;
@@ -426,6 +510,25 @@
   </section>
 </main>
 
+<div class="v2-modal" id="v2CalModal">
+  <div class="v2-modal-box">
+    <div class="v2-modal-head">
+      <h3>Availability</h3>
+      <div class="v2-cal-nav">
+        <button type="button" onclick="v2CalStep(-1)" aria-label="Previous month">&#9664;</button>
+        <span class="v2-cal-month" id="v2CalMonth"></span>
+        <button type="button" onclick="v2CalStep(1)" aria-label="Next month">&#9654;</button>
+        <button type="button" onclick="v2CloseCal()" style="margin-left:6px;">&times;</button>
+      </div>
+    </div>
+    <div class="v2-cal-body">
+      <div class="v2-cal-dow"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
+      <div class="v2-cal-grid" id="v2CalGrid"></div>
+      <div class="v2-cal-legend"><span><span class="v2-cal-key"></span>Booked</span></div>
+    </div>
+  </div>
+</div>
+
 <div class="v2-lb" id="v2Lb">
   <button class="v2-lb-close" onclick="v2CloseLb()" aria-label="Close">&times;</button>
   <img id="v2LbImg" src="" alt="">
@@ -438,6 +541,6 @@
 <script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/time-format.js"></script>
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=3"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=5"></script>
 </body>
 </html>
