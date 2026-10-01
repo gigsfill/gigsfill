@@ -381,6 +381,10 @@
     letter-spacing: 0.06em; text-transform: uppercase;
   }
   .v2-allbtn:hover { border-color: var(--cyan); color: var(--cyan); }
+  /* Day view: the date owns the left, so push the all-dates control over
+     to sit beside the close button rather than floating mid-header.
+     margin-right keeps it off the X. */
+  .v2-modal-head.day .v2-allbtn { margin-left: auto; margin-right: 12px; }
   .v2-cal-nav { display: flex; align-items: center; gap: 10px; }
   .v2-cal-nav button {
     background: var(--v2-raise-2); border: 1px solid var(--v2-line); color: var(--text);
@@ -630,7 +634,7 @@
     <!-- One header, two states. Month navigation belongs to the grid; once
          you've clicked into a specific date it's noise, and "Availability"
          is the wrong title for "here is one night's booking". -->
-    <div class="v2-modal-head">
+    <div class="v2-modal-head" id="v2ModalHead">
       <h3 id="v2ModalTitle" style="display:none;"></h3>
       <button type="button" class="v2-allbtn" id="v2AllDatesBtn" onclick="v2ShowAllBooked()">
         &#128197; Show All Booked Dates
@@ -671,6 +675,6 @@
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
 <script src="/app/static/js/social-icons.js?v=1"></script>
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=14"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=15"></script>
 </body>
 </html>

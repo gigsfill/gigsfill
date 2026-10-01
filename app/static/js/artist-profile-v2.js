@@ -413,6 +413,7 @@
     // reopening Calendar returns to the grid.
     $("v2ModalTitle").textContent = pretty;
     $("v2ModalTitle").style.display = "block";
+    $("v2ModalHead").classList.add("day");
     $("v2CalNavGroup").style.display = "none";
 
     $("v2CalDayBody").innerHTML = rows;
@@ -424,6 +425,7 @@
     $("v2CalDay").style.display = "none";
     $("v2CalMain").style.display = "block";
     $("v2ModalTitle").style.display = "none";
+    $("v2ModalHead").classList.remove("day");
     $("v2CalNavGroup").style.display = "inline-flex";
   };
 
