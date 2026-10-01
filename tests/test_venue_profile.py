@@ -112,7 +112,7 @@ def test_spec_body_text_is_one_treatment():
     row with both looked like a different kind of row from one with only a
     detail. Stage and Arrival read unlike Load in / out for no reason the
     content justified."""
-    html = (ROOT / "app" / "venue-profile-v2.html").read_text()
+    html = (ROOT / "app" / "venue-profile.html").read_text()
     assert ".v2-spec-sub" not in html, "second body style still defined"
     idx = html.index(".v2-spec-value {")
     block = html[idx:idx + 420]

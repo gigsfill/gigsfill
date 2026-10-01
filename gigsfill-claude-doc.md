@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-01 (The `-v2` prototype profile URLs were public and uncanonicalised):** The redesigned profiles were prototyped as `artist-profile-v2.html` / `venue-profile-v2.html` and promoted by **copying** them over the canonical filenames. The `-v2` files were left behind as byte-identical duplicates.
+
+  **Why this hid:** the prototype URL kept serving a perfectly working page. It was not a 404 and nothing errored — it was the right page at the wrong address. The site-wide vanity rewriter in [vanity-url-editor.js](app/static/js/vanity-url-editor.js) matches `/app/(artist|venue)-profile\.html\?(artist_id|venue_id)=(\d+)`, which the `-v2` spelling does not satisfy, so it was never upgraded to the slug. Anyone who bookmarked or shared the prototype URL was handing out `gigsfill.com/app/artist-profile-v2.html?artist_id=1` instead of `gigsfill.com/fridayspast`. The venue side looked correct only because that URL had been reached through a vanity link.
+
+  Both duplicates are deleted. `main.py` gains `_redirect_prototype_profile_urls`, registered **before** the `/app` StaticFiles mount (same ordering trick as the contract-PDF block above it) — once the files are gone the mount answers 404, so a route registered after it would never run. It resolves `vanity_urls` and 301s to the slug, falling back to the canonical page URL when the entity has no slug or the lookup raises, so no link already in the wild can break. The hand-rolled `next(get_db())` session is closed in a `finally`, since it sits outside FastAPI's dependency lifecycle and nothing else would.
+
+  Verified live after `systemctl restart gigsfill`: artist 1 → `/fridayspast`, venue 1 → `/venuedemo`, artist 3 → `/fiftyproof`, no-id → the canonical page, unknown id 999 → canonical page with the id preserved. A real browser following the old URL ends on `/fridayspast` with the hero rendering all ten saved settings. `tests/test_prototype_url_redirect.py`, 5 tests.
+
 - **2026-10-01 (Background-image dialog: typed logo position, clickable thumbnail):** Follow-on polish to the cover picker ([cover-picker.js](app/static/js/cover-picker.js), shared by artist-edit and venue-edit).
 
   - **Logo Position is now two editable fields, not a readout.** Dragging already worked, but drag has no undo and nudging a logo back to dead centre by hand is near impossible. The row shows `X: [ 50 ] %  Y: [ 50 ] %` with **Reset Position** immediately to their right, inside the same grid cell so it reads as belonging to the numbers it resets.

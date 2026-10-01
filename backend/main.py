@@ -685,6 +685,55 @@ def _block_direct_contract_pdf_access(rest: str):
     from fastapi import HTTPException as _HE
     raise _HE(403, "Contract PDFs must be downloaded via the authenticated download endpoint.")
 
+# 2026-10-01: the redesigned profiles were prototyped as
+# `artist-profile-v2.html` / `venue-profile-v2.html` and then promoted by
+# copying them over `artist-profile.html` / `venue-profile.html`. The `-v2`
+# files were left behind as byte-identical duplicates, so the prototype URL
+# kept serving a working page — and because it is not the canonical filename,
+# the site-wide vanity rewriter in `vanity-url-editor.js` (which matches
+# `/app/(artist|venue)-profile.html?...`) never upgraded it. Anyone who
+# bookmarked or shared the prototype URL was handing out
+# `gigsfill.com/app/artist-profile-v2.html?artist_id=1` instead of
+# `gigsfill.com/fridayspast`.
+#
+# The duplicates are deleted; this sends their old URLs to the vanity slug so
+# links already in the wild land on the pretty page rather than a 404.
+# Registered BEFORE the mount so the route match wins.
+@app.get("/app/{entity_type}-profile-v2.html", include_in_schema=False)
+def _redirect_prototype_profile_urls(entity_type: str, request: Request):
+    from fastapi.responses import RedirectResponse
+    from sqlalchemy import text as _text
+
+    if entity_type not in ("artist", "venue"):
+        raise HTTPException(404)
+
+    raw = request.query_params.get(f"{entity_type}_id")
+    try:
+        entity_id = int(raw)
+    except (TypeError, ValueError):
+        # No usable id — send them to the canonical page and let it complain
+        # in its own words rather than 404ing on a filename.
+        return RedirectResponse(f"/app/{entity_type}-profile.html", status_code=301)
+
+    target = f"/app/{entity_type}-profile.html?{entity_type}_id={entity_id}"
+    try:
+        db = next(get_db())
+        try:
+            row = db.execute(
+                _text("SELECT slug FROM vanity_urls WHERE entity_type=:t AND entity_id=:i"),
+                {"t": entity_type, "i": entity_id},
+            ).first()
+            if row and row[0]:
+                target = f"/{row[0]}"
+        finally:
+            db.close()
+    except Exception:
+        # A lookup failure must not break the link; the canonical URL works.
+        logger.warning("vanity lookup failed redirecting %s-profile-v2 for id=%s",
+                       entity_type, entity_id, exc_info=True)
+
+    return RedirectResponse(target, status_code=301)
+
 # Mount static files
 app.mount("/app", StaticFiles(directory="app", html=True), name="app")
 
