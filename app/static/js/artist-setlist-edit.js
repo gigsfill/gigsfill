@@ -159,7 +159,7 @@
     _bindHandlers();
   }
 
-  function _renderRow(song) {
+  function _renderRow(song, pos) {
     const t = _esc(song.song_title);
     const a = _esc(song.original_artist || '');
     if (_editingId === song.id) {
@@ -181,7 +181,10 @@
     return `
       <div class="setlist-row" ${canDrag ? 'draggable="true"' : ''} data-id="${song.id}"
         style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.05);${canDrag ? 'cursor:move;' : ''}">
-        ${canDrag ? '<span style="color:var(--text-muted);font-size:0.82rem;user-select:none;">⋮⋮</span>' : ''}
+        ${canDrag ? '<span style="color:var(--text-muted);font-size:0.82rem;user-select:none;cursor:move;">⋮⋮</span>' : ''}
+        ${canDrag ? `<input type="number" min="1" max="${_songs.length}" value="${pos + 1}"
+            data-setlist-pos="${song.id}" title="Type a position and press Enter"
+            style="width:52px;flex:0 0 auto;background:#151b28;border:1px solid #333;color:var(--text-gray);border-radius:4px;padding:3px 5px;font-size:0.72rem;text-align:center;font-variant-numeric:tabular-nums;">` : ''}
         <div style="flex:1;min-width:0;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t}</div>
         <div style="flex:1;min-width:0;font-size:0.78rem;color:var(--text-gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${a}</div>
         <button data-setlist-edit="${song.id}"
@@ -190,6 +193,35 @@
           style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);color:#ef4444;border-radius:4px;padding:3px 10px;font-size:0.72rem;cursor:pointer;">Delete</button>
       </div>
     `;
+  }
+
+
+  // Move one song to a 1-based position and persist the new order.
+  async function _moveToPosition(songId, target) {
+    if (!songId || !target || isNaN(target)) { _render(); return; }
+    const from = _songs.findIndex(x => x.id === songId);
+    if (from < 0) { _render(); return; }
+    // Clamp rather than reject: typing 999 in a 200-song list plainly means
+    // "put it last".
+    const to = Math.max(0, Math.min(_songs.length - 1, target - 1));
+    if (to === from) { _render(); return; }
+    const copy = _songs.slice();
+    const [moved] = copy.splice(from, 1);
+    copy.splice(to, 0, moved);
+    _songs = copy;
+    _render();
+    try {
+      await fetch(`/api/artists/${_artistId}/setlist/reorder`, {
+        method: 'PUT', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: _songs.map(x => x.id) }),
+      });
+    } catch (e) {
+      // Re-sync from the server so the UI never shows an order that
+      // wasn't saved.
+      await _fetchSetlist();
+      _render();
+    }
   }
 
   function _bindHandlers() {
@@ -233,6 +265,26 @@
         } finally {
           bulkGo.disabled = false;
         }
+      });
+    }
+
+
+    // Position jump. Dragging is fine for a short list, but a covers band
+    // with 200 songs cannot drag row 180 to position 3 inside a 600px
+    // scroller. Typing the number moves it, and the reorder endpoint takes
+    // the whole ordered id list either way.
+    const rowsEl = $('setlistRows');
+    if (rowsEl) {
+      rowsEl.addEventListener('keydown', async (ev) => {
+        const input = ev.target.closest('input[data-setlist-pos]');
+        if (!input || ev.key !== 'Enter') return;
+        ev.preventDefault();
+        await _moveToPosition(parseInt(input.dataset.setlistPos, 10), parseInt(input.value, 10));
+      });
+      rowsEl.addEventListener('change', async (ev) => {
+        const input = ev.target.closest('input[data-setlist-pos]');
+        if (!input) return;
+        await _moveToPosition(parseInt(input.dataset.setlistPos, 10), parseInt(input.value, 10));
       });
     }
 

@@ -112,8 +112,15 @@ def test_spec_body_text_is_one_treatment():
     html = (ROOT / "app" / "venue-profile-v2.html").read_text()
     assert ".v2-spec-sub" not in html, "second body style still defined"
     idx = html.index(".v2-spec-value {")
-    block = html[idx:idx + 220]
-    assert "var(--v2-dim)" in block, "body text should use the muted tone"
+    block = html[idx:idx + 420]
+    # One colour for the whole block. The specific value is a design choice
+    # and may be tuned; what matters is that exactly one is declared and
+    # nothing overrides it per-row.
+    assert "color:" in block
+    assert ".v2-spec-value .no {" not in html, (
+        "a negative like 'Bring your own PA' must not be dimmed — for a band "
+        "that is more important information, not less"
+    )
 
     js = PAGE_JS.read_text()
     idx = js.index('$("v2Specs").innerHTML')

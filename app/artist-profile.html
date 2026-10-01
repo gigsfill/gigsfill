@@ -90,7 +90,12 @@
      than hoping the image cooperates. */
   .v2-hero {
     position: relative;
-    min-height: 420px;
+    /* Fixed ratio, not just a min-height: the cover-framing preview on
+       the edit page has to show the same crop, and it cannot match a box
+       whose proportions depend on the viewport. min-height is kept as a
+       floor so narrow screens don't collapse the hero to a strip. */
+    aspect-ratio: 64 / 21;
+    min-height: 340px;
     display: flex;
     align-items: flex-end;
     overflow: hidden;
@@ -99,7 +104,9 @@
   .v2-hero-bg {
     position: absolute; inset: 0;
     background-size: cover; background-position: center;
-    transform: scale(1.06);
+    /* Removed a scale(1.06) zoom here: it cropped ~6% off every edge, so
+       what the artist framed on the edit page was not what rendered. A
+       subtle effect is not worth the framing control lying. */
     filter: saturate(0.9);
   }
   .v2-hero-scrim {
@@ -732,7 +739,7 @@
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/artist-venues-played.js?v=2"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=21"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=22"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>

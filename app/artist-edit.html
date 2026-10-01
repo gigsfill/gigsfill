@@ -242,7 +242,11 @@
     #coverPreview {
       /* Matches the profile hero's proportions so what you frame here is
          what renders there. */
-      aspect-ratio: 32 / 9;
+      /* Must match .v2-hero on the profile exactly, or this previews a
+         crop the visitor never sees. The hero is full-width with a 420px
+         min-height, i.e. 1280/420 at a typical desktop. The profile's
+         background zoom was removed for the same reason. */
+      aspect-ratio: 64 / 21;
       width: 100%; max-width: 640px;
       border-radius: 10px; border: 1px solid var(--border);
       background-size: cover; background-repeat: no-repeat;
@@ -622,7 +626,7 @@
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=27"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=28"></script>
   
 </head>
 
@@ -733,6 +737,14 @@
       </div>
     </div>
 
+    <!-- Booking Contact sits with Artist Type: both answer "who are you
+         and how do I reach you", and it was previously stranded below the
+         media sections. -->
+    <div class="content-card">
+      <h2>Booking Contact</h2>
+      <select id="booking_contact" style="width: 100%;"></select>
+    </div>
+
     <!-- SECTION 4: BIO — autosaves on blur (Aug 2026 change) so an
          artist who navigates away without clicking the button doesn't
          lose the edit. Manual button kept for discoverability + as an
@@ -761,12 +773,6 @@
       <div id="setlistEditRoot" style="min-height:120px;">
         <div style="color:var(--text-gray);font-size:0.85rem;">Loading setlist…</div>
       </div>
-    </div>
-
-    <!-- SECTION 5: BOOKING CONTACT -->
-    <div class="content-card">
-      <h2>Booking Contact</h2>
-      <select id="booking_contact" style="width: 100%;"></select>
     </div>
 
     <!-- SECTION 6: SOCIAL MEDIA -->
@@ -899,7 +905,7 @@
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <!-- 2026-08-01: availability JS moved to artist-book-gigs.html (Availability tab). -->
 <script src="/app/static/js/messages.js?v=8"></script>
-<script src="/app/static/js/artist-setlist-edit.js?v=7"></script>
+<script src="/app/static/js/artist-setlist-edit.js?v=8"></script>
 <script src="/app/static/js/artist-edit-init.js?v=3"></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>

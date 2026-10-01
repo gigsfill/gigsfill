@@ -120,7 +120,24 @@ def test_framer_preview_matches_the_hero_aspect():
     artist nothing about what actually renders."""
     html = (ROOT / "app" / "artist-edit.html").read_text()
     idx = html.index("#coverPreview {")
-    assert "aspect-ratio" in html[idx:idx + 400]
+    block = html[idx:idx + 900]          # comment pushed the rule down
+    assert "aspect-ratio: 64 / 21" in block
+
+    # And it must be the SAME ratio the hero uses, or the preview shows a
+    # crop the visitor never sees.
+    profile = (ROOT / "app" / "artist-profile.html").read_text()
+    hidx = profile.index(".v2-hero {")
+    assert "aspect-ratio: 64 / 21" in profile[hidx:hidx + 700]
+
+
+def test_hero_has_no_background_zoom():
+    """A scale() on the hero background crops every edge, so whatever the
+    artist frames on the edit page is not what renders."""
+    for page in ("artist-profile.html", "venue-profile.html"):
+        src = (ROOT / "app" / page).read_text()
+        idx = src.index(".v2-hero-bg {")
+        block = src[idx:src.index("}", idx)]
+        assert "transform:" not in block, f"{page} hero background is transformed"
 
 
 def test_cover_photo_saves_to_the_route_that_actually_accepts_put():

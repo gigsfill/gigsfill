@@ -931,7 +931,7 @@ async function loadVenueMedia(venueId) {
               rows="2"
               data-id="${m.id}"
             >${escapeHtml(caption)}</textarea>
-            <button class="hero-btn" data-id="${m.id}">Use as cover</button>
+            <button class="hero-btn" data-id="${m.id}">Use as Cover</button>
             <button class="delete-btn" data-id="${m.id}">Delete</button>
           </div>
         </div>
@@ -1432,7 +1432,7 @@ document.addEventListener("DOMContentLoaded", init);
       var on = String(card.dataset.id) === String(id);
       card.classList.toggle("is-hero", on);
       var btn = card.querySelector(".hero-btn");
-      if (btn) btn.textContent = on ? "\u2605 Cover photo" : "Use as cover";
+      if (btn) btn.textContent = on ? "\u2605 Cover photo" : "Use as Cover";
       if (on) {
         var img = card.querySelector("img");
         if (img) showFramer(img.getAttribute("src"), window.__gfFocalX, window.__gfFocalY);
