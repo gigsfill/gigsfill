@@ -604,7 +604,12 @@ def setup_database():
         # Comma-separated brand keys for the order of social tiles on the
         # public venue profile. NULL = fallback to natural order.
         "social_order TEXT",
-    ])
+        # 2026-10-01: venue cover photo + framing, mirroring artists. Same
+    # reason: the profile hero is a wide band, uploads are not.
+    "hero_media_id INTEGER",
+    "hero_focal_x REAL",
+    "hero_focal_y REAL",
+])
     
     # ==========================================
     # GIGS

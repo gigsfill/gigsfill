@@ -404,6 +404,12 @@ async function loadVenue() {
 
   const venueData = await res.json();
 
+  // 2026-10-01: stash the saved cover choice. Media loads separately, so
+  // the values wait for loadVenueMedia() to build the cards.
+  window.__gfHeroMediaId = venueData.hero_media_id || null;
+  window.__gfFocalX = (venueData.hero_focal_x == null) ? 50 : venueData.hero_focal_x;
+  window.__gfFocalY = (venueData.hero_focal_y == null) ? 50 : venueData.hero_focal_y;
+
   const fields = [
     { id: "venue_name", field: "venue_name" },
     { id: "description", field: "description" },
@@ -925,6 +931,7 @@ async function loadVenueMedia(venueId) {
               rows="2"
               data-id="${m.id}"
             >${escapeHtml(caption)}</textarea>
+            <button class="hero-btn" data-id="${m.id}">Use as cover</button>
             <button class="delete-btn" data-id="${m.id}">Delete</button>
           </div>
         </div>
@@ -965,6 +972,12 @@ async function loadVenueMedia(venueId) {
       `;
     }
   });
+
+  // Mark the saved cover and open the framer at the stored position. Runs
+  // here because markHero walks the cards, which only exist by now.
+  if (window.__gfHeroMediaId && typeof window.gfMarkHeroPicture === "function") {
+    window.gfMarkHeroPicture(window.__gfHeroMediaId);
+  }
 
   initMediaDragAndDrop("pictures");
   initMediaDragAndDrop("videos");
@@ -1358,3 +1371,140 @@ async function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+
+// ── Cover photo + framing (2026-10-01) ──────────────────────────────────
+// Same contract as the artist page: pick which picture fills the profile
+// hero, then drag to choose what stays in frame. The hero is a wide band
+// and uploads are not, so `cover` crops top and bottom without this.
+(function () {
+  var focal = { x: 50, y: 50 };
+  var currentSrc = null;
+  var saveTimer = null;
+
+  function el(id) { return document.getElementById(id); }
+  function venueId() { return new URLSearchParams(window.location.search).get("venue_id"); }
+
+  function apply() {
+    var box = el("coverPreview");
+    if (box) box.style.backgroundPosition = focal.x + "% " + focal.y + "%";
+  }
+
+  function flashSaved() {
+    var m = el("coverSaveMsg");
+    if (!m) return;
+    m.style.display = "inline";
+    clearTimeout(m._t);
+    m._t = setTimeout(function () { m.style.display = "none"; }, 1600);
+  }
+
+  async function put(body) {
+    var vid = venueId();
+    if (!vid) return false;
+    try {
+      var r = await fetch("/api/venues/" + vid, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body)
+      });
+      return r.ok;
+    } catch (e) { return false; }
+  }
+
+  // Debounced: a drag fires continuously and each move isn't worth a PUT.
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async function () {
+      if (await put({
+        hero_focal_x: Math.round(focal.x * 10) / 10,
+        hero_focal_y: Math.round(focal.y * 10) / 10
+      })) flashSaved();
+    }, 450);
+  }
+
+  function markHero(id) {
+    if (!id) {
+      var wrap = el("coverFramer");
+      if (wrap) wrap.style.display = "none";
+    }
+    document.querySelectorAll("#pictures .media-card").forEach(function (card) {
+      var on = String(card.dataset.id) === String(id);
+      card.classList.toggle("is-hero", on);
+      var btn = card.querySelector(".hero-btn");
+      if (btn) btn.textContent = on ? "\u2605 Cover photo" : "Use as cover";
+      if (on) {
+        var img = card.querySelector("img");
+        if (img) showFramer(img.getAttribute("src"), window.__gfFocalX, window.__gfFocalY);
+      }
+    });
+  }
+  window.gfMarkHeroPicture = markHero;
+
+  function showFramer(src, fx, fy) {
+    var wrap = el("coverFramer"), box = el("coverPreview");
+    if (!wrap || !box || !src) return;
+    currentSrc = src;
+    focal.x = (fx == null) ? 50 : Number(fx);
+    focal.y = (fy == null) ? 50 : Number(fy);
+    box.style.backgroundImage = 'url("' + src + '")';
+    apply();
+    wrap.style.display = "block";
+  }
+
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest && e.target.closest(".hero-btn");
+    if (btn) {
+      e.preventDefault();
+      var card = btn.closest(".media-card");
+      var clearing = card && card.classList.contains("is-hero");
+      if (await put({ hero_media_id: clearing ? 0 : Number(btn.dataset.id) })) {
+        markHero(clearing ? null : btn.dataset.id);
+      } else {
+        alert("Could not set the cover photo. Please try again.");
+      }
+      return;
+    }
+    if (e.target && e.target.id === "coverCenterBtn") {
+      focal.x = 50; focal.y = 50; apply(); save();
+    }
+  });
+
+  // Drag maps inversely — moving the image left reveals what's to its
+  // right — matching a physical photo under glass.
+  var dragging = false, startX = 0, startY = 0, startFx = 50, startFy = 50;
+
+  function down(e) {
+    var box = el("coverPreview");
+    if (!box || !currentSrc) return;
+    if (!(e.target === box || box.contains(e.target))) return;
+    dragging = true; box.classList.add("dragging");
+    var pt = e.touches ? e.touches[0] : e;
+    startX = pt.clientX; startY = pt.clientY;
+    startFx = focal.x; startFy = focal.y;
+    e.preventDefault();
+  }
+  function move(e) {
+    if (!dragging) return;
+    var box = el("coverPreview"), rect = box.getBoundingClientRect();
+    var pt = e.touches ? e.touches[0] : e;
+    focal.x = Math.max(0, Math.min(100, startFx - ((pt.clientX - startX) / rect.width) * 100));
+    focal.y = Math.max(0, Math.min(100, startFy - ((pt.clientY - startY) / rect.height) * 100));
+    apply();
+    e.preventDefault();
+  }
+  function up() {
+    if (!dragging) return;
+    dragging = false;
+    var box = el("coverPreview");
+    if (box) box.classList.remove("dragging");
+    save();
+  }
+
+  document.addEventListener("mousedown", down);
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+  document.addEventListener("touchstart", down, { passive: false });
+  document.addEventListener("touchmove", move, { passive: false });
+  document.addEventListener("touchend", up);
+})();

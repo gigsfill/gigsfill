@@ -134,6 +134,10 @@ class Venue(Base):
     social_order = Column(Text)
 
     display_order = Column(Integer, default=0)
+    # 2026-10-01 — mirrors backend/db.py. Venue cover photo + framing.
+    hero_media_id = Column(Integer)
+    hero_focal_x = Column(Float)
+    hero_focal_y = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # PRO / Payment status

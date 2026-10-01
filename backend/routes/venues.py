@@ -282,7 +282,15 @@ def get_venue_public(venue_id: int, request: Request,
                 yelp_url,
                 google_maps_url,
                 social_order,
-                pro_certified
+                pro_certified,
+                -- 2026-10-01: safe to expose publicly. Rating already
+                -- appears on venue cards, and the hero fields are just a
+                -- pointer to one of the venue's own public images.
+                avg_rating,
+                review_count,
+                hero_media_id,
+                hero_focal_x,
+                hero_focal_y
             FROM venues
             WHERE id = :id
               AND deleted_at IS NULL
@@ -491,8 +499,49 @@ def update_venue(venue_id: int, data: dict, request: Request,
     # Use current values if not provided in update
     current_city, current_state, _prior_venue_name, _stripe_customer_id = current_venue
 
+    # 2026-10-01: cover photo + framing, same contract as artists. The
+    # media id is validated below against THIS venue's own uploads before
+    # it reaches the UPDATE.
+    _hero_media_id = None
+    if "hero_media_id" in data:
+        _raw = data.get("hero_media_id")
+        if _raw in (None, "", 0, "0"):
+            db.execute(text("UPDATE venues SET hero_media_id = NULL WHERE id = :id"),
+                       {"id": venue_id})
+        else:
+            try:
+                _cand = int(_raw)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_media_id must be a number")
+            _owned = db.execute(
+                text("SELECT id FROM venue_media WHERE id = :mid AND venue_id = :vid "
+                     "AND media_type = 'picture'"),
+                {"mid": _cand, "vid": venue_id},
+            ).first()
+            if not _owned:
+                raise HTTPException(400, "That image does not belong to this venue")
+            _hero_media_id = _cand
+
+    def _focal(key):
+        if key not in data:
+            return None
+        raw = data.get(key)
+        if raw in (None, ""):
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(400, key + " must be a number")
+        return max(0.0, min(100.0, val))
+
+    _focal_x = _focal("hero_focal_x")
+    _focal_y = _focal("hero_focal_y")
+
     params = {
         "id": venue_id,
+        "hero_media_id": _hero_media_id,
+        "hero_focal_x": _focal_x,
+        "hero_focal_y": _focal_y,
         "venue_name": data.get("venue_name"),
         "description": data.get("description"),
         "address_line_1": data.get("address_line_1"),
@@ -574,6 +623,9 @@ def update_venue(venue_id: int, data: dict, request: Request,
     db.execute(
     text("""
         UPDATE venues SET
+            hero_media_id = COALESCE(:hero_media_id, hero_media_id),
+            hero_focal_x = COALESCE(:hero_focal_x, hero_focal_x),
+            hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
             venue_name = COALESCE(:venue_name, venue_name),
             description = COALESCE(:description, description),
             address_line_1 = COALESCE(:address_line_1, address_line_1),

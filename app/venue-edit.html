@@ -468,8 +468,28 @@
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/gf-modals.js?v=8"></script>
-  <script defer src="/app/static/js/venue.edit.js?v=13"></script>
+  <script defer src="/app/static/js/venue.edit.js?v=14"></script>
   
+<style>
+    .hero-btn {
+      background: rgba(6,182,212,0.15); border: 1px solid rgba(6,182,212,0.45);
+      color: #67e8f9; border-radius: 6px; padding: 5px 10px; font-size: 0.72rem;
+      cursor: pointer; font-weight: 600; margin-bottom: 4px;
+    }
+    .hero-btn:hover { background: rgba(6,182,212,0.28); }
+    .media-card.is-hero { outline: 2px solid var(--cyan); outline-offset: 2px; }
+    .media-card.is-hero .hero-btn { background: var(--cyan); color: #06121a; border-color: var(--cyan); }
+    #coverPreview {
+      /* Matches the profile hero's proportions, so framing here reflects
+         what actually renders there. */
+      aspect-ratio: 32 / 9; width: 100%; max-width: 640px;
+      border-radius: 10px; border: 1px solid var(--border);
+      background-size: cover; background-repeat: no-repeat; background-position: 50% 50%;
+      cursor: grab; position: relative; overflow: hidden;
+      user-select: none; touch-action: none;
+    }
+    #coverPreview.dragging { cursor: grabbing; }
+  </style>
 </head>
 
 <body>
@@ -872,6 +892,18 @@
       <div class="add-media-row">
         <button id="addPicBtn" class="btn primary">+ Add Picture</button>
         <input id="picInput" type="file" accept="image/*" hidden />
+      </div>
+      <!-- 2026-10-01: cover framing. The profile hero is a wide band, so a
+           4:3 upload loses its top and bottom. Drag to choose what shows. -->
+      <div id="coverFramer" style="display:none;margin-bottom:18px;">
+        <div style="font-size:0.8rem;color:var(--text-gray);margin-bottom:8px;">
+          <strong style="color:var(--text);">Cover framing</strong> — drag the image to choose what shows on your profile.
+        </div>
+        <div id="coverPreview" title="Drag to reposition"></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+          <button type="button" id="coverCenterBtn" class="hero-btn">Re-centre</button>
+          <span id="coverSaveMsg" style="font-size:0.76rem;color:#10b981;display:none;">Saved</span>
+        </div>
       </div>
       <div id="pictures" class="media-grid"></div>
     </div>
