@@ -26,7 +26,7 @@ The list below tracks meaningful changes after the initial sync from the codebas
 
   Cache-buster at `cover-picker.js?v=13`. 41 tests in `tests/test_cover_picker.py`.
 
-- **2026-10-01 (Artist profile redesigned and promoted; artist-chosen cover photo):** The artist profile was rebuilt and is now live at the existing URL. The old page is preserved as `app/artist-profile-legacy.html` for rollback; 34 files link to `artist-profile.html` so the URL was kept rather than redirected.
+- **2026-10-01 (Artist profile redesigned and promoted; artist-chosen cover photo):** The artist profile was rebuilt and is now live at the existing URL. 34 files link to `artist-profile.html` so the URL was kept rather than redirected. The old page was preserved as `app/artist-profile-legacy.html` for rollback and **deleted on 2026-10-01** once the redesign had settled, along with `venue-profile-legacy.html` and `artist-setlist-public.js`, which only the legacy artist page loaded. Nothing else referenced any of the three; git history holds them if they are ever wanted.
 
   **What was wrong:** everything persuasive sat behind tabs and the default tab was a month calendar. For Fridays Past that meant ~65% of a 1409px page was empty calendar cells and **none of their 11 media items were visible without a click**. The rebuilt page is ~2900px of actual content.
 
