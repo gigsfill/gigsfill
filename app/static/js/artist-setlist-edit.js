@@ -185,7 +185,7 @@
         ${canDrag ? `<input type="number" min="1" max="${_songs.length}" value="${pos + 1}"
             data-setlist-pos="${song.id}" title="Type a position and press Enter"
             style="width:52px;flex:0 0 auto;background:#151b28;border:1px solid #333;color:var(--text-gray);border-radius:4px;padding:3px 5px;font-size:0.72rem;text-align:center;font-variant-numeric:tabular-nums;">` : ''}
-        <div style="flex:1;min-width:0;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t}</div>
+        <div style="flex:1;min-width:0;font-size:0.78rem;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t}</div>
         <div style="flex:1;min-width:0;font-size:0.78rem;color:var(--text-gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${a}</div>
         <button data-setlist-edit="${song.id}"
           style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.3);color:var(--cyan);border-radius:4px;padding:3px 10px;font-size:0.72rem;cursor:pointer;">Edit</button>
