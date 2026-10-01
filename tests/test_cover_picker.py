@@ -352,11 +352,14 @@ def test_control_rows_are_ordered_and_named_for_what_they_do():
 
 
 def test_logo_controls_read_as_one_group():
-    """Rules on the first and last row rather than a wrapper, which would
-    have broken the shared grid alignment."""
+    """A rule on the first row rather than a wrapper, which would have
+    broken the shared grid alignment. No closing rule — the dialog footer's
+    own border lands immediately below the last row and closes the group,
+    so a second line there was just a double rule."""
     for page in ("artist-edit.html", "venue-edit.html"):
         html = (ROOT / "app" / page).read_text()
-        assert "gf-group-top" in html and "gf-group-end" in html, page
+        assert "gf-group-top" in html, page
+        assert "gf-group-end" not in html, f"{page}: stray closing rule"
         i = html.index(".gf-row.gf-group-top {")
         assert "border-top" in html[i:i + 200], page
 
@@ -396,7 +399,7 @@ def test_dialog_rules_are_visible_against_the_dialog():
         alpha = float(re.search(r"--gf-rule: rgba\([\d, ]+,\s*([\d.]+)\)", html).group(1))
         assert alpha > 0.1, f"{page}: rule no brighter than --border"
         for sel in (r"\.gf-cover-head", r"\.gf-cover-foot",
-                    r"\.gf-row\.gf-group-top", r"\.gf-row\.gf-group-end"):
+                    r"\.gf-row\.gf-group-top"):
             blk = re.search(sel + r" \{(.*?)\}", html, re.S).group(1)
             assert "var(--gf-rule)" in blk, f"{page}: {sel}"
 

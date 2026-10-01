@@ -752,13 +752,13 @@
      same kind of thing as "Artist Name" or "City" and were reading as a
      heavier, brighter second style for no reason. */
   .gf-row-lbl { font-size: 0.8rem; font-weight: 500; color: var(--text-gray); }
-  /* Rules on the first and last row of the logo group, so the toggle and
-     the sliders it reveals read as one block. */
+  /* One rule above the logo group, so the toggle and the sliders it reveals
+     read as one block. It needs no closing rule: the dialog footer's own
+     border lands immediately below the last row and closes the group. */
   .gf-row.gf-group-top {
     border-top: 1px solid var(--gf-rule);
     padding-top: 12px; margin-top: 6px;
   }
-  .gf-row.gf-group-end { border-bottom: 1px solid var(--gf-rule); padding-bottom: 12px; }
   .gf-row-end { font-size: 0.7rem; color: var(--text-gray); white-space: nowrap; }
   .gf-row-val {
     font-size: 0.73rem; color: var(--text-gray); text-align: right;
@@ -1191,7 +1191,7 @@
           <!-- Drag has no undo, so the numbers are shown and a one-click
                re-centre is offered. Nudging a logo back to dead centre by
                hand is near impossible. -->
-          <div class="gf-row gf-group-end" id="gfCoverLogoPosRow" style="display:none;">
+          <div class="gf-row" id="gfCoverLogoPosRow" style="display:none;">
             <span class="gf-row-lbl">Logo Position</span>
             <div class="gf-pos" style="grid-column: 2 / span 3;">
               <label for="gfCoverLogoX">X:</label>
