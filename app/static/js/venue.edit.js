@@ -1391,7 +1391,10 @@ document.addEventListener("DOMContentLoaded", init);
   // transform-origin, same scale — or the preview shows a crop the
   // visitor never sees.
   function apply() {
-    var box = el("coverPreview");
+    // The inner layer carries the image and the transform; the outer box
+    // only clips. Transforming the box scaled the preview itself rather
+    // than zooming the picture inside it.
+    var box = el("coverPreviewImg");
     if (!box) return;
     box.style.backgroundPosition = focal.x + "% " + focal.y + "%";
     box.style.transformOrigin = focal.x + "% " + focal.y + "%";
@@ -1466,7 +1469,8 @@ document.addEventListener("DOMContentLoaded", init);
     focal.x = (fx == null) ? 50 : Number(fx);
     focal.y = (fy == null) ? 50 : Number(fy);
     zoom = (window.__gfZoom == null) ? 1 : Math.max(1, Math.min(4, Number(window.__gfZoom)));
-    box.style.backgroundImage = 'url("' + src + '")';
+    var img = el("coverPreviewImg");
+    if (img) img.style.backgroundImage = 'url("' + src + '")';
     apply();
     wrap.style.display = "block";
   }

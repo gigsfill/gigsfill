@@ -242,3 +242,34 @@ def test_explicit_hash_still_wins():
         js = (ROOT / "app" / "static" / "js" / name).read_text()
         idx = js.index("window.scrollTo(0, 0)")
         assert "window.location.hash" in js[idx - 300:idx], name
+
+
+def test_zoom_scales_the_image_not_the_preview_box():
+    """The transform must sit on an inner layer that the outer box clips.
+    Applied to the box itself it grew the whole preview instead of zooming
+    the picture — the box is the viewport, it must not move."""
+    for page, js_name in (("artist-edit.html", "artist.edit.js"),
+                          ("venue-edit.html", "venue.edit.js")):
+        html = (ROOT / "app" / page).read_text()
+        assert 'id="coverPreviewImg"' in html, f"{page} has no inner layer"
+        # Outer box clips; inner layer carries the image.
+        idx = html.index("#coverPreview {")
+        outer = html[idx:html.index("}", idx)]
+        assert "overflow: hidden" in outer, page
+        assert "background-size: cover" not in outer, (
+            f"{page}: the image is still painted on the box being transformed"
+        )
+
+        js = (ROOT / "app" / "static" / "js" / js_name).read_text()
+        idx = js.index("function apply()")
+        block = js[idx:idx + 600]
+        assert 'el("coverPreviewImg")' in block, f"{js_name} transforms the wrong element"
+
+
+def test_both_previews_match_their_hero_ratio():
+    """venue-edit was left at 32/9 when the artist side was corrected to
+    64/21, so the venue preview showed a crop the profile never rendered."""
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        idx = html.index("#coverPreview {")
+        assert "aspect-ratio: 64 / 21" in html[idx:idx + 900], page

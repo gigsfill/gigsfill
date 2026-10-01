@@ -468,7 +468,7 @@
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
   <script src="/app/static/js/gf-modals.js?v=8"></script>
-  <script defer src="/app/static/js/venue.edit.js?v=16"></script>
+  <script defer src="/app/static/js/venue.edit.js?v=17"></script>
   
 <style>
     .hero-btn {
@@ -480,13 +480,22 @@
     .media-card.is-hero { outline: 2px solid var(--cyan); outline-offset: 2px; }
     .media-card.is-hero .hero-btn { background: var(--cyan); color: #06121a; border-color: var(--cyan); }
     #coverPreview {
-      /* Matches the profile hero's proportions, so framing here reflects
-         what actually renders there. */
-      aspect-ratio: 32 / 9; width: 100%; max-width: 640px;
+      /* Must match .v2-hero on the venue profile exactly (64/21), or this
+         previews a crop the visitor never sees. This was left at 32/9 when
+         the artist side was corrected. */
+      aspect-ratio: 64 / 21; width: 100%; max-width: 640px;
       border-radius: 10px; border: 1px solid var(--border);
-      background-size: cover; background-repeat: no-repeat; background-position: 50% 50%;
       cursor: grab; position: relative; overflow: hidden;
       user-select: none; touch-action: none;
+      background: #0d1220;
+    }
+    /* The image sits on an inner layer so the outer box can clip it —
+       exactly how .v2-hero / .v2-hero-bg work on the profile. Transforming
+       the box itself scaled the whole preview rather than the picture. */
+    #coverPreviewImg {
+      position: absolute; inset: 0;
+      background-size: cover; background-repeat: no-repeat;
+      background-position: 50% 50%;
     }
     #coverPreview.dragging { cursor: grabbing; }
   </style>
@@ -899,7 +908,7 @@
         <div style="font-size:0.8rem;color:var(--text-gray);margin-bottom:8px;">
           <strong style="color:var(--text);">Cover framing</strong> — drag the image to choose what shows on your profile.
         </div>
-        <div id="coverPreview" title="Drag to reposition"></div>
+        <div id="coverPreview" title="Drag to reposition"><div id="coverPreviewImg"></div></div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
           <button type="button" id="coverZoomOut" class="hero-btn" title="Zoom out">&minus;</button>
           <input type="range" id="coverZoom" min="100" max="400" step="5" value="100"
