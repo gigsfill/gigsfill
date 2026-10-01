@@ -29,7 +29,8 @@
   var cfg = null;
   var media = [];          // candidate images, logo first
   var state = { mediaId: null, x: 50, y: 50, zoom: 1, ratio: 64 / 21,
-              logoOverlay: false, logoOpacity: 1, logoScale: 0.46 };
+              logoOverlay: false, logoOpacity: 1, logoScale: 0.46,
+              logoX: 50, logoY: 50 };
   var saveTimer = null;
   var DEFAULT_RATIO = 64 / 21;
 
@@ -90,7 +91,9 @@
         hero_ratio: Math.round(state.ratio * 1000) / 1000,
         hero_logo_overlay: state.logoOverlay ? 1 : 0,
         hero_logo_opacity: Math.round(state.logoOpacity * 100) / 100,
-        hero_logo_scale: Math.round(state.logoScale * 100) / 100
+        hero_logo_scale: Math.round(state.logoScale * 100) / 100,
+        hero_logo_x: Math.round(state.logoX * 10) / 10,
+        hero_logo_y: Math.round(state.logoY * 10) / 10
       });
       setStatus(ok ? "saved" : "error");
     }, 450);
@@ -190,6 +193,8 @@
         ovImg.style.maxWidth = Math.round(state.logoScale * 100) + "%";
         // Height tracks width so a tall badge can't overflow the band.
         ovImg.style.maxHeight = Math.round(state.logoScale * 135) + "%";
+        ovImg.style.left = state.logoX + "%";
+        ovImg.style.top = state.logoY + "%";
         ovImg.style.display = "block";
       } else {
         ovImg.style.display = "none";
@@ -239,37 +244,57 @@
     state.mediaId = null;
     state.x = 50; state.y = 50; state.zoom = 1; state.ratio = DEFAULT_RATIO;
     state.logoOverlay = false; state.logoOpacity = 1; state.logoScale = 0.46;
+    state.logoX = 50; state.logoY = 50;
     var ok = await put({
       hero_media_id: 0,
       hero_focal_x: 50, hero_focal_y: 50, hero_zoom: 1,
       hero_ratio: Math.round(DEFAULT_RATIO * 1000) / 1000,
-      hero_logo_overlay: 0, hero_logo_opacity: 1, hero_logo_scale: 0.46
+      hero_logo_overlay: 0, hero_logo_opacity: 1, hero_logo_scale: 0.46,
+      hero_logo_x: 50, hero_logo_y: 50
     });
     setStatus(ok ? "saved" : "error");
     refresh();
   }
 
   // ── drag ────────────────────────────────────────────────────────────
-  var dragging = false, sx = 0, sy = 0, sfx = 50, sfy = 50;
+  var dragging = false, dragWhat = null, sx = 0, sy = 0, sfx = 50, sfy = 50;
 
   function onDown(e) {
     var box = $("gfCoverPreview");
     if (!box || !currentImage()) return;
     if (!(e.target === box || box.contains(e.target))) return;
+
+    // Grab the logo and the logo moves; grab anywhere else and the
+    // background pans. No mode to remember — you drag the thing you want.
+    var logoEl = $("gfCoverPreviewLogo");
+    dragWhat = (logoEl && logoEl.style.display !== "none" && e.target === logoEl)
+      ? "logo" : "bg";
+
     dragging = true;
     box.classList.add("dragging");
     var pt = e.touches ? e.touches[0] : e;
-    sx = pt.clientX; sy = pt.clientY; sfx = state.x; sfy = state.y;
+    sx = pt.clientX; sy = pt.clientY;
+    sfx = (dragWhat === "logo") ? state.logoX : state.x;
+    sfy = (dragWhat === "logo") ? state.logoY : state.y;
     e.preventDefault();
   }
   function onMove(e) {
     if (!dragging) return;
     var box = $("gfCoverPreview"), rect = box.getBoundingClientRect();
     var pt = e.touches ? e.touches[0] : e;
-    // Inverse: dragging the image left reveals what's to its right, like a
-    // physical photo under glass.
-    state.x = Math.max(0, Math.min(100, sfx - ((pt.clientX - sx) / rect.width) * 100));
-    state.y = Math.max(0, Math.min(100, sfy - ((pt.clientY - sy) / rect.height) * 100));
+    var dx = ((pt.clientX - sx) / rect.width) * 100;
+    var dy = ((pt.clientY - sy) / rect.height) * 100;
+
+    if (dragWhat === "logo") {
+      // Direct: you're moving the object itself, so it follows the cursor.
+      state.logoX = Math.max(0, Math.min(100, sfx + dx));
+      state.logoY = Math.max(0, Math.min(100, sfy + dy));
+    } else {
+      // Inverse: panning behind a window, so dragging left reveals what is
+      // to the image's right — like a photo under glass.
+      state.x = Math.max(0, Math.min(100, sfx - dx));
+      state.y = Math.max(0, Math.min(100, sfy - dy));
+    }
     applyPreview();
     e.preventDefault();
   }
@@ -318,6 +343,7 @@
         // a confusing half-measure.
         state.x = 50; state.y = 50; state.zoom = 1; state.ratio = DEFAULT_RATIO;
         state.logoOpacity = 1; state.logoScale = 0.46;
+        state.logoX = 50; state.logoY = 50;
         applyPreview(); saveFraming(); renderSummary();
         return;
       }
@@ -357,6 +383,8 @@
       if (!box || !currentImage()) return;
       if (!(e.target === box || box.contains(e.target))) return;
       e.preventDefault();
+      // Wheel always zooms the background, including over the logo — the
+      // logo has its own Size slider.
       setZoom(state.zoom + (e.deltaY < 0 ? 0.08 : -0.08));
     }, { passive: false });
   }
@@ -397,6 +425,8 @@
         ? 1 : Math.max(0.1, Math.min(1, Number(s.hero_logo_opacity)));
       state.logoScale = (s.hero_logo_scale == null)
         ? 0.46 : Math.max(0.15, Math.min(1, Number(s.hero_logo_scale)));
+      state.logoX = (s.hero_logo_x == null) ? 50 : Math.max(0, Math.min(100, Number(s.hero_logo_x)));
+      state.logoY = (s.hero_logo_y == null) ? 50 : Math.max(0, Math.min(100, Number(s.hero_logo_y)));
       refresh();
     }
   };

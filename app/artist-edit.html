@@ -715,7 +715,10 @@
   }
   #gfCoverPreviewLogo {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    max-width: 46%; max-height: 62%; object-fit: contain; pointer-events: none;
+    max-width: 46%; max-height: 62%; object-fit: contain;
+    /* Draggable here, unlike on the profile: grabbing the logo moves the
+       logo, grabbing anywhere else pans the background. */
+    pointer-events: auto; cursor: grab;
     filter: drop-shadow(0 6px 18px rgba(0,0,0,0.55));
   }
 
@@ -1080,7 +1083,7 @@
         <div class="gf-step">
           <span class="gf-step-n">2</span>
           <span class="gf-step-t">Position and size it</span>
-          <span class="gf-step-hint">Drag the image · scroll to zoom</span>
+          <span class="gf-step-hint">Drag either image to move it · scroll to zoom</span>
         </div>
 
         <div class="gf-cover-preview" id="gfCoverPreview">
@@ -1149,7 +1152,7 @@
     </div>
   </div>
 </div>
-<script src="/app/static/js/cover-picker.js?v=7"></script>
+<script src="/app/static/js/cover-picker.js?v=8"></script>
 <script>
   (function () {
     var id = new URLSearchParams(window.location.search).get("artist_id");

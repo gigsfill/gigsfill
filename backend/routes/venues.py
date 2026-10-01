@@ -295,7 +295,9 @@ def get_venue_public(venue_id: int, request: Request,
                 hero_ratio,
                 hero_logo_overlay,
                 hero_logo_opacity,
-                hero_logo_scale
+                hero_logo_scale,
+                hero_logo_x,
+                hero_logo_y
             FROM venues
             WHERE id = :id
               AND deleted_at IS NULL
@@ -593,6 +595,11 @@ def update_venue(venue_id: int, data: dict, request: Request,
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_logo_scale must be a number")
 
+    # Overlay position. Clamped like the background focal point — this
+    # comes from a drag, so a few pixels past the edge is a UI artefact.
+    _logo_x = _focal("hero_logo_x")
+    _logo_y = _focal("hero_logo_y")
+
     params = {
         "id": venue_id,
         "hero_media_id": _hero_media_id,
@@ -603,6 +610,8 @@ def update_venue(venue_id: int, data: dict, request: Request,
         "hero_logo_overlay": _logo_overlay,
         "hero_logo_opacity": _logo_opacity,
         "hero_logo_scale": _logo_scale,
+        "hero_logo_x": _logo_x,
+        "hero_logo_y": _logo_y,
         "venue_name": data.get("venue_name"),
         "description": data.get("description"),
         "address_line_1": data.get("address_line_1"),
@@ -692,6 +701,8 @@ def update_venue(venue_id: int, data: dict, request: Request,
             hero_logo_overlay = COALESCE(:hero_logo_overlay, hero_logo_overlay),
             hero_logo_opacity = COALESCE(:hero_logo_opacity, hero_logo_opacity),
             hero_logo_scale = COALESCE(:hero_logo_scale, hero_logo_scale),
+            hero_logo_x = COALESCE(:hero_logo_x, hero_logo_x),
+            hero_logo_y = COALESCE(:hero_logo_y, hero_logo_y),
             venue_name = COALESCE(:venue_name, venue_name),
             description = COALESCE(:description, description),
             address_line_1 = COALESCE(:address_line_1, address_line_1),

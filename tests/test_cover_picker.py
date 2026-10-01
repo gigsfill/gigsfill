@@ -237,3 +237,51 @@ def test_logo_sits_above_the_scrim_in_the_preview():
         scrim = html.index('id="gfCoverPreviewScrim"')
         logo = html.index('id="gfCoverPreviewLogo"')
         assert img < scrim < logo, page
+
+
+# ── logo positioning ────────────────────────────────────────────────
+
+def test_grabbing_the_logo_moves_the_logo_not_the_background():
+    """One preview, two draggable things. Which one moves is decided by
+    what was grabbed, so there's no mode to remember."""
+    src = JS.read_text()
+    idx = src.index("function onDown(")
+    block = src[idx:src.index("function onMove(", idx)]
+    assert 'e.target === logoEl' in block
+    assert '"logo"' in block and '"bg"' in block
+
+
+def test_logo_follows_the_cursor_but_background_inverts():
+    """Dragging an object moves it with you; panning a background behind a
+    window moves the other way, like a photo under glass. Getting these the
+    same way round would make one of them feel broken."""
+    src = JS.read_text()
+    idx = src.index("function onMove(")
+    block = src[idx:src.index("function onUp(", idx)]
+    assert "sfx + dx" in block, "logo should track the cursor"
+    assert "sfx - dx" in block, "background should pan inversely"
+
+
+def test_logo_position_is_persisted_and_clamped():
+    src = JS.read_text()
+    assert "hero_logo_x" in src and "hero_logo_y" in src
+    for route in ("artists.py", "venues.py"):
+        rsrc = (ROOT / "backend" / "routes" / route).read_text()
+        # Reuses the focal clamp, which bounds 0-100.
+        assert '_logo_x = _focal("hero_logo_x")' in rsrc, route
+
+
+def test_profile_places_the_logo_where_it_was_put():
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        assert "hero_logo_x" in js, name
+        idx = js.index("hero_logo_x")
+        block = js[idx:idx + 500]
+        assert 'ov.style.left' in block and 'ov.style.top' in block, name
+
+
+def test_logo_position_resets_with_everything_else():
+    src = JS.read_text()
+    idx = src.index("async function clearMedia()")
+    block = src[idx:src.index("}", src.index("});", idx))]
+    assert "hero_logo_x" in block and "hero_logo_y" in block

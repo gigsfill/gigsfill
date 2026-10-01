@@ -537,6 +537,11 @@ def setup_database():
     # wide wordmark and a square badge need very different sizes to read
     # well over the same photo.
     "hero_logo_scale REAL",
+    # 2026-10-01: where the overlay logo sits, as percentages of the hero
+    # box. Centre is the sensible default, but a wordmark often reads
+    # better off to one side of whatever the photo's subject is.
+    "hero_logo_x REAL",
+    "hero_logo_y REAL",
 ])
     
     # ==========================================
@@ -649,6 +654,11 @@ def setup_database():
     # wide wordmark and a square badge need very different sizes to read
     # well over the same photo.
     "hero_logo_scale REAL",
+    # 2026-10-01: where the overlay logo sits, as percentages of the hero
+    # box. Centre is the sensible default, but a wordmark often reads
+    # better off to one side of whatever the photo's subject is.
+    "hero_logo_x REAL",
+    "hero_logo_y REAL",
 ])
     
     # ==========================================

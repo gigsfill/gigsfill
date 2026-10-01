@@ -193,7 +193,9 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.hero_ratio,
                 a.hero_logo_overlay,
                 a.hero_logo_opacity,
-                a.hero_logo_scale
+                a.hero_logo_scale,
+                a.hero_logo_x,
+                a.hero_logo_y
             FROM artists a
             WHERE a.id = :id
               AND (
@@ -283,7 +285,9 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 hero_ratio,
                 hero_logo_overlay,
                 hero_logo_opacity,
-                hero_logo_scale
+                hero_logo_scale,
+                hero_logo_x,
+                hero_logo_y
             FROM artists
             WHERE id=:id
               AND deleted_at IS NULL
@@ -442,6 +446,11 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_logo_scale must be a number")
 
+    # Overlay position. Clamped like the background focal point — this
+    # comes from a drag, so a few pixels past the edge is a UI artefact.
+    _logo_x = _focal("hero_logo_x")
+    _logo_y = _focal("hero_logo_y")
+
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     # 2026-09-14: same 0/1/None coercion for website_public. None →
@@ -467,6 +476,8 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 hero_logo_overlay = COALESCE(:hero_logo_overlay, hero_logo_overlay),
                 hero_logo_opacity = COALESCE(:hero_logo_opacity, hero_logo_opacity),
                 hero_logo_scale = COALESCE(:hero_logo_scale, hero_logo_scale),
+                hero_logo_x = COALESCE(:hero_logo_x, hero_logo_x),
+                hero_logo_y = COALESCE(:hero_logo_y, hero_logo_y),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -498,6 +509,8 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "hero_logo_overlay": _logo_overlay,
             "hero_logo_opacity": _logo_opacity,
             "hero_logo_scale": _logo_scale,
+            "hero_logo_x": _logo_x,
+            "hero_logo_y": _logo_y,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),

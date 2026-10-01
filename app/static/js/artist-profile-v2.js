@@ -133,6 +133,12 @@
             ? 0.46 : Math.max(0.15, Math.min(1, Number(a.hero_logo_scale)));
           ov.style.maxWidth = Math.round(_ls * 100) + "%";
           ov.style.maxHeight = Math.round(_ls * 135) + "%";
+          // Placement, defaulting to centre. A wordmark often reads better
+          // off to one side of whatever the photo's subject is.
+          var _lx = (a.hero_logo_x == null) ? 50 : Math.max(0, Math.min(100, Number(a.hero_logo_x)));
+          var _ly = (a.hero_logo_y == null) ? 50 : Math.max(0, Math.min(100, Number(a.hero_logo_y)));
+          ov.style.left = _lx + "%";
+          ov.style.top = _ly + "%";
           ov.style.display = "block";
           // The small corner plate would then show the same mark twice.
           var plate = $("v2Logo");
