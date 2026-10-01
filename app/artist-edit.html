@@ -619,9 +619,21 @@
   .gf-cover-none { color: var(--text-gray); font-size: 0.8rem; }
   .gf-cover-current { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .gf-cover-thumb {
+    display: block;
     width: 120px; height: 40px; border-radius: 6px; background-size: cover;
     border: 1px solid var(--border); flex: 0 0 auto;
   }
+  /* The thumbnail and the image's name open the dialog as well as the
+     button does — people click the picture they mean to change before
+     they go looking for a control. */
+  .gf-cover-pick {
+    display: flex; align-items: center; gap: 12px; cursor: pointer;
+    background: none; border: 0; padding: 0; text-align: left;
+    color: var(--text); border-radius: 8px;
+  }
+  .gf-cover-pick:hover .gf-cover-thumb { border-color: var(--cyan); }
+  .gf-cover-pick:hover .gf-cover-meta strong { color: var(--cyan); }
+  .gf-cover-pick:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
   .gf-cover-meta { display: flex; flex-direction: column; font-size: 0.8rem; }
   .gf-cover-meta span { color: var(--text-gray); font-size: 0.72rem; }
   .gf-cover-clear {
@@ -754,6 +766,20 @@
   .gf-step-btn.gf-wide {
     width: auto; padding: 0 12px; height: 26px; font-size: 0.73rem; white-space: nowrap;
   }
+
+  /* Typed as well as dragged. A value you can read but not set is a tease
+     when you want one axis back at 50 and the other left where it is. */
+  .gf-pos { display: flex; align-items: center; gap: 6px; }
+  .gf-pos label { font-size: 0.73rem; color: var(--text-gray); font-weight: 600; }
+  .gf-pos input[type=number] {
+    width: 58px; padding: 3px 6px; font-size: 0.75rem;
+    background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-variant-numeric: tabular-nums;
+  }
+  .gf-pos input[type=number]:focus { outline: none; border-color: var(--cyan); }
+  .gf-pos-pct { font-size: 0.73rem; color: var(--text-gray); margin-right: 4px; }
+  /* Right beside the numbers it resets, not flung to the far edge. */
+  .gf-pos #gfCoverLogoCenter { margin-left: 6px; }
 
   .gf-switch { display: flex; align-items: center; gap: 7px; cursor: pointer; }
   .gf-switch span { font-size: 0.76rem; color: var(--text-gray); }
@@ -1159,8 +1185,17 @@
                hand is near impossible. -->
           <div class="gf-row gf-group-end" id="gfCoverLogoPosRow" style="display:none;">
             <span class="gf-row-lbl">Logo Position</span>
-            <span class="gf-row-end" id="gfCoverLogoPosVal" style="grid-column: 2 / span 2;">X 50% &middot; Y 50%</span>
-            <button type="button" class="gf-step-btn gf-wide" id="gfCoverLogoCenter">Reset Position</button>
+            <div class="gf-pos" style="grid-column: 2 / span 3;">
+              <label for="gfCoverLogoX">X:</label>
+              <input type="number" id="gfCoverLogoX" min="0" max="100" step="1" value="50"
+                     aria-label="Logo horizontal position, percent from the left">
+              <span class="gf-pos-pct">%</span>
+              <label for="gfCoverLogoY">Y:</label>
+              <input type="number" id="gfCoverLogoY" min="0" max="100" step="1" value="50"
+                     aria-label="Logo vertical position, percent from the top">
+              <span class="gf-pos-pct">%</span>
+              <button type="button" class="gf-step-btn gf-wide" id="gfCoverLogoCenter">Reset Position</button>
+            </div>
             <span class="gf-row-val"></span>
           </div>
         </div>
@@ -1176,7 +1211,7 @@
     </div>
   </div>
 </div>
-<script src="/app/static/js/cover-picker.js?v=10"></script>
+<script src="/app/static/js/cover-picker.js?v=12"></script>
 <script>
   (function () {
     var id = new URLSearchParams(window.location.search).get("artist_id");

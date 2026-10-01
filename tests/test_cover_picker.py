@@ -287,19 +287,56 @@ def test_logo_position_resets_with_everything_else():
     assert "hero_logo_x" in block and "hero_logo_y" in block
 
 
-def test_logo_position_is_shown_and_resettable():
-    """Drag has no undo, and nudging a logo back to dead centre by hand is
-    near impossible — so the numbers are visible and re-centring is one
-    click."""
+def test_logo_position_is_editable_and_resettable():
+    """Drag has no undo and nudging a logo back to dead centre by hand is
+    near impossible, so the numbers are editable fields and re-centring is
+    one click."""
     for page in ("artist-edit.html", "venue-edit.html"):
         html = (ROOT / "app" / page).read_text()
-        assert 'id="gfCoverLogoPosVal"' in html, page
-        assert 'id="gfCoverLogoCenter"' in html, page
+        row = html[html.index('id="gfCoverLogoPosRow"'):]
+        row = row[:row.index("</div>", row.index("gf-row-val"))]
+        for need in ('id="gfCoverLogoX"', 'id="gfCoverLogoY"',
+                     'id="gfCoverLogoCenter"', 'type="number"',
+                     'min="0"', 'max="100"'):
+            assert need in row, f"{page}: {need}"
+        # The button sits with the values it resets, inside the same cell.
+        assert row.index("gfCoverLogoY") < row.index("gfCoverLogoCenter"), page
+
     src = JS.read_text()
-    assert "gfCoverLogoCenter" in src
-    idx = src.index("gfCoverLogoCenter")
-    block = src[idx:idx + 300]
-    assert "state.logoX = 50" in block and "state.logoY = 50" in block
+    centre = src[src.index('t.closest("#gfCoverLogoCenter")'):][:300]
+    assert "state.logoX = 50" in centre and "state.logoY = 50" in centre
+
+
+def test_typed_position_is_clamped_and_tolerates_mid_edit():
+    """A half-typed field parses to NaN and an out-of-range number would
+    push the logo outside the band; neither may move the logo."""
+    src = JS.read_text()
+    blk = src[src.index('e.target.id === "gfCoverLogoX"'):][:700]
+    assert "isFinite" in blk and 'e.target.value === ""' in blk
+    assert "Math.max(0, Math.min(100, n))" in blk
+
+
+def test_drag_writes_the_fields_but_not_while_typing():
+    """Otherwise typing "5" on the way to "50" gets rewritten to 5% under
+    the cursor."""
+    src = JS.read_text()
+    blk = src[src.index('var xi = $("gfCoverLogoX")'):][:400]
+    assert "document.activeElement !== xi" in blk
+    assert "document.activeElement !== yi" in blk
+
+
+def test_background_thumbnail_and_name_open_the_dialog():
+    """People click the picture they mean to change before they look for a
+    button."""
+    src = JS.read_text()
+    assert 'id="gfCoverPick"' in src
+    # Remove must still remove: its check comes first and returns.
+    assert src.index('t.closest("#gfCoverClear")') < src.index('t.closest("#gfCoverPick")')
+    pick = src[src.index('t.closest("#gfCoverPick")'):][:120]
+    assert "open()" in pick
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        assert ".gf-cover-pick {" in html, page
 
 
 def test_control_rows_are_ordered_and_named_for_what_they_do():
@@ -307,7 +344,8 @@ def test_control_rows_are_ordered_and_named_for_what_they_do():
     box whose proportions are about to change is backwards. Labels say which
     thing they affect, since Zoom/Size/Fade alone did not."""
     html = (ROOT / "app" / "artist-edit.html").read_text()
-    rows = html[html.index('<div class="gf-rows">'):html.index("gf-cover-foot")]
+    start = html.index('<div class="gf-rows">')
+    rows = html[start:html.index('class="gf-cover-foot"', start)]
     order = [rows.index(x) for x in ("Height", "Image Zoom", "Logo on Top?",
                                      "Logo Size", "Logo Fade", "Logo Position")]
     assert order == sorted(order), "control rows are out of order"
@@ -321,3 +359,13 @@ def test_logo_controls_read_as_one_group():
         assert "gf-group-top" in html and "gf-group-end" in html, page
         i = html.index(".gf-row.gf-group-top {")
         assert "border-top" in html[i:i + 200], page
+
+
+def test_out_of_range_entry_is_corrected_on_leaving_the_field():
+    """A number input holds "480" or "" quite happily while the logo has
+    already clamped to the edge, so the field is rewritten on focusout to
+    what the logo actually did."""
+    src = JS.read_text()
+    blk = src[src.index('addEventListener("focusout"'):][:500]
+    assert "gfCoverLogoX" in blk and "gfCoverLogoY" in blk
+    assert "Math.round(state.logoX)" in blk and "Math.round(state.logoY)" in blk

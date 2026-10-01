@@ -129,14 +129,19 @@
     }
     box.innerHTML =
       '<div class="gf-cover-current">' +
-        '<div class="gf-cover-thumb" style="background-image:url(\'' + esc(img.file_path) + '\');' +
-          "background-position:" + state.x + "% " + state.y + "%;\"></div>" +
+        // The thumbnail and the name are the obvious things to click when
+        // you want a different image, so they open the dialog too.
+        '<button type="button" class="gf-cover-pick" id="gfCoverPick" ' +
+          'title="Change the background image">' +
+          '<span class="gf-cover-thumb" style="background-image:url(\'' + esc(img.file_path) + '\');' +
+            "background-position:" + state.x + "% " + state.y + "%;\"></span>" +
         // Just which image is set. The zoom and band-height readout here
         // restated settings the dialog already shows, in a place where
         // nothing can be done about them.
-        '<div class="gf-cover-meta">' +
-          "<strong>" + esc(img.media_type === "profile" ? "Logo" : (img.title || "Photo")) + "</strong>" +
-        "</div>" +
+          '<span class="gf-cover-meta">' +
+            "<strong>" + esc(img.media_type === "profile" ? "Logo" : (img.title || "Photo")) + "</strong>" +
+          "</span>" +
+        "</button>" +
         '<button type="button" class="gf-cover-clear" id="gfCoverClear">Remove</button>' +
       "</div>";
   }
@@ -187,11 +192,12 @@
     if (sizeRow) sizeRow.style.display = showSub ? "grid" : "none";
     if (fadeRow) fadeRow.style.display = showSub ? "grid" : "none";
     if (posRow) posRow.style.display = showSub ? "grid" : "none";
-    var posVal = $("gfCoverLogoPosVal");
-    if (posVal) {
-      posVal.textContent = "X " + Math.round(state.logoX) + "%  \u00B7  Y " +
-                           Math.round(state.logoY) + "%";
-    }
+    // Drag and typing drive the same two numbers, so the fields follow the
+    // drag — except while one is focused, or typing "5" on the way to "50"
+    // would be rewritten under the cursor.
+    var xi = $("gfCoverLogoX"), yi = $("gfCoverLogoY");
+    if (xi && document.activeElement !== xi) xi.value = Math.round(state.logoX);
+    if (yi && document.activeElement !== yi) yi.value = Math.round(state.logoY);
     if (chk) chk.checked = !!state.logoOverlay;
     if (ovImg) {
       if (avail && state.logoOverlay) {
@@ -334,6 +340,8 @@
       }
       if (t.id === "gfCoverModal") { close(); return; }      // backdrop
       if (t.closest && t.closest("#gfCoverClear")) { e.preventDefault(); clearMedia(); return; }
+      // After Remove, which sits outside this button.
+      if (t.closest && t.closest("#gfCoverPick")) { e.preventDefault(); open(); return; }
 
       var tile = t.closest && t.closest(".gf-tile");
       if (tile) { e.preventDefault(); selectMedia(tile.dataset.media); return; }
@@ -375,10 +383,29 @@
         applyPreview(); saveFraming();
         return;
       }
+      if (e.target.id === "gfCoverLogoX" || e.target.id === "gfCoverLogoY") {
+        // Empty or mid-edit ("-", "1e") parses to NaN; hold the current
+        // value rather than snapping the logo to a corner mid-keystroke.
+        var n = Number(e.target.value);
+        if (e.target.value === "" || !isFinite(n)) return;
+        n = Math.max(0, Math.min(100, n));
+        if (e.target.id === "gfCoverLogoX") state.logoX = n; else state.logoY = n;
+        applyPreview(); saveFraming();
+        return;
+      }
       if (e.target.id === "gfCoverHeight") {
         state.ratio = Math.max(1.6, Math.min(5, Number(e.target.value) / 100));
         applyPreview(); saveFraming(); renderSummary();
       }
+    });
+
+    // A number input happily holds "480" or "" while the logo itself has
+    // already clamped to the edge. On leaving the field, show what the logo
+    // actually did with the value rather than what was typed.
+    document.addEventListener("focusout", function (e) {
+      if (!e.target) return;
+      if (e.target.id === "gfCoverLogoX") e.target.value = Math.round(state.logoX);
+      if (e.target.id === "gfCoverLogoY") e.target.value = Math.round(state.logoY);
     });
 
     document.addEventListener("keydown", function (e) {

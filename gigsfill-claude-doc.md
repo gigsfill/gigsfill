@@ -8,6 +8,18 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-01 (Background-image dialog: typed logo position, clickable thumbnail):** Follow-on polish to the cover picker ([cover-picker.js](app/static/js/cover-picker.js), shared by artist-edit and venue-edit).
+
+  - **Logo Position is now two editable fields, not a readout.** Dragging already worked, but drag has no undo and nudging a logo back to dead centre by hand is near impossible. The row shows `X: [ 50 ] %  Y: [ 50 ] %` with **Reset Position** immediately to their right, inside the same grid cell so it reads as belonging to the numbers it resets.
+
+    Three states had to be handled, and each was verified in a browser rather than reasoned about. A **half-typed value** (`""`, `-`, `1e`) parses to `NaN` and must not snap the logo into a corner mid-keystroke, so those return early. An **out-of-range value** clamps the logo to 0–100 but leaves the typed `480` sitting in the field — the field no longer agrees with the logo — so a `focusout` handler rewrites it to what the logo actually did. And `applyPreview()` writes both fields as the drag moves, **except while one is focused**, or typing `5` on the way to `50` gets rewritten to 5% under the cursor.
+
+  - **The summary thumbnail and the image's name open the dialog.** People click the picture they mean to change before they go looking for a button. The thumb and name are wrapped in one `#gfCoverPick` button (keyboard-reachable, with a focus ring); **Remove** stays outside it, and its handler is checked first in the delegated click dispatch so it still removes rather than opening.
+
+  - **Control rows reordered and relabelled.** Height moved to the top — it sets the shape of the band, and framing an image inside a box whose proportions you are about to change is backwards. `Zoom`/`Size`/`Fade` became **Image Zoom** / **Logo Size** / **Logo Fade**; with a logo overlay in the same list the bare words did not say which of the two images they acted on. The logo rows are fenced as a group with rules on the first and last row rather than a wrapper, which would have broken the shared grid that keeps every label aligned.
+
+  Cache-buster at `cover-picker.js?v=12`. 38 tests in `tests/test_cover_picker.py`.
+
 - **2026-10-01 (Artist profile redesigned and promoted; artist-chosen cover photo):** The artist profile was rebuilt and is now live at the existing URL. The old page is preserved as `app/artist-profile-legacy.html` for rollback; 34 files link to `artist-profile.html` so the URL was kept rather than redirected.
 
   **What was wrong:** everything persuasive sat behind tabs and the default tab was a month calendar. For Fridays Past that meant ~65% of a 1409px page was empty calendar cells and **none of their 11 media items were visible without a click**. The rebuilt page is ~2900px of actual content.
