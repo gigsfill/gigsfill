@@ -190,7 +190,9 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.hero_focal_x,
                 a.hero_focal_y,
                 a.hero_zoom,
-                a.hero_ratio
+                a.hero_ratio,
+                a.hero_logo_overlay,
+                a.hero_logo_opacity
             FROM artists a
             WHERE a.id = :id
               AND (
@@ -277,7 +279,9 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 hero_focal_x,
                 hero_focal_y,
                 hero_zoom,
-                hero_ratio
+                hero_ratio,
+                hero_logo_overlay,
+                hero_logo_opacity
             FROM artists
             WHERE id=:id
               AND deleted_at IS NULL
@@ -410,6 +414,21 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_ratio must be a number")
 
+    # Logo overlay. Opacity floors at 0.1 rather than 0 — a mark at zero is
+    # indistinguishable from the overlay being off, and the toggle already
+    # expresses that.
+    _logo_overlay = None
+    if "hero_logo_overlay" in data:
+        _logo_overlay = 1 if data.get("hero_logo_overlay") in (True, 1, "1", "true", "True") else 0
+    _logo_opacity = None
+    if "hero_logo_opacity" in data:
+        _raw_o = data.get("hero_logo_opacity")
+        if _raw_o not in (None, ""):
+            try:
+                _logo_opacity = max(0.1, min(1.0, float(_raw_o)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_logo_opacity must be a number")
+
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     # 2026-09-14: same 0/1/None coercion for website_public. None →
@@ -432,6 +451,8 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
                 hero_zoom = COALESCE(:hero_zoom, hero_zoom),
                 hero_ratio = COALESCE(:hero_ratio, hero_ratio),
+                hero_logo_overlay = COALESCE(:hero_logo_overlay, hero_logo_overlay),
+                hero_logo_opacity = COALESCE(:hero_logo_opacity, hero_logo_opacity),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -460,6 +481,8 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "hero_focal_y": _focal_y,
             "hero_zoom": _zoom,
             "hero_ratio": _ratio,
+            "hero_logo_overlay": _logo_overlay,
+            "hero_logo_opacity": _logo_opacity,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),

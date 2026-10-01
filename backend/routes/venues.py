@@ -292,7 +292,9 @@ def get_venue_public(venue_id: int, request: Request,
                 hero_focal_x,
                 hero_focal_y,
                 hero_zoom,
-                hero_ratio
+                hero_ratio,
+                hero_logo_overlay,
+                hero_logo_opacity
             FROM venues
             WHERE id = :id
               AND deleted_at IS NULL
@@ -564,6 +566,21 @@ def update_venue(venue_id: int, data: dict, request: Request,
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_ratio must be a number")
 
+    # Logo overlay. Opacity floors at 0.1 rather than 0 — a mark at zero is
+    # indistinguishable from the overlay being off, and the toggle already
+    # expresses that.
+    _logo_overlay = None
+    if "hero_logo_overlay" in data:
+        _logo_overlay = 1 if data.get("hero_logo_overlay") in (True, 1, "1", "true", "True") else 0
+    _logo_opacity = None
+    if "hero_logo_opacity" in data:
+        _raw_o = data.get("hero_logo_opacity")
+        if _raw_o not in (None, ""):
+            try:
+                _logo_opacity = max(0.1, min(1.0, float(_raw_o)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_logo_opacity must be a number")
+
     params = {
         "id": venue_id,
         "hero_media_id": _hero_media_id,
@@ -571,6 +588,8 @@ def update_venue(venue_id: int, data: dict, request: Request,
         "hero_focal_y": _focal_y,
         "hero_zoom": _zoom,
         "hero_ratio": _ratio,
+        "hero_logo_overlay": _logo_overlay,
+        "hero_logo_opacity": _logo_opacity,
         "venue_name": data.get("venue_name"),
         "description": data.get("description"),
         "address_line_1": data.get("address_line_1"),
@@ -657,6 +676,8 @@ def update_venue(venue_id: int, data: dict, request: Request,
             hero_focal_y = COALESCE(:hero_focal_y, hero_focal_y),
             hero_zoom = COALESCE(:hero_zoom, hero_zoom),
             hero_ratio = COALESCE(:hero_ratio, hero_ratio),
+            hero_logo_overlay = COALESCE(:hero_logo_overlay, hero_logo_overlay),
+            hero_logo_opacity = COALESCE(:hero_logo_opacity, hero_logo_opacity),
             venue_name = COALESCE(:venue_name, venue_name),
             description = COALESCE(:description, description),
             address_line_1 = COALESCE(:address_line_1, address_line_1),

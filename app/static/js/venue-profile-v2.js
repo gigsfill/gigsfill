@@ -105,6 +105,29 @@
       // Chosen hero height, as width/height. Lower is taller.
       var r = (v.hero_ratio == null) ? null : Math.max(1.6, Math.min(5, Number(v.hero_ratio)));
       if (r) $("v2Hero").style.aspectRatio = String(r);
+
+      // Logo laid over the background — the standard EPK header, letting
+      // one band carry both identity and atmosphere. Only when a logo
+      // actually exists and the background isn't already that logo.
+      var _logo = media.filter(function (m) {
+        return m.media_type === "profile" && m.file_path;
+      })[0];
+      var _overlayOn = !!v.hero_logo_overlay && _logo &&
+                       Number(_logo.id) !== Number(v.hero_media_id);
+      var ov = $("v2HeroLogo");
+      if (ov) {
+        if (_overlayOn) {
+          ov.src = _logo.file_path;
+          ov.style.opacity = (v.hero_logo_opacity == null)
+            ? 1 : Math.max(0.1, Math.min(1, Number(v.hero_logo_opacity)));
+          ov.style.display = "block";
+          // The small corner plate would then show the same mark twice.
+          var plate = $("v2Logo");
+          if (plate) plate.style.display = "none";
+        } else {
+          ov.style.display = "none";
+        }
+      }
     } else {
       // No cover chosen: collapse the band entirely rather than render a
       // tall empty panel. The name, chips and action still need somewhere

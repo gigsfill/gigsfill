@@ -527,6 +527,12 @@ def setup_database():
     # the default. Stored as a ratio rather than pixels so it holds its
     # proportions across viewport widths.
     "hero_ratio REAL",
+    # 2026-10-01: lay the logo over the background image. A wordmark on a
+    # stage photo is the standard EPK header, and it lets one image carry
+    # both identity and atmosphere. Opacity is stored separately so a busy
+    # photo can take a softer mark.
+    "hero_logo_overlay INTEGER",
+    "hero_logo_opacity REAL",
 ])
     
     # ==========================================
@@ -629,6 +635,12 @@ def setup_database():
     # the default. Stored as a ratio rather than pixels so it holds its
     # proportions across viewport widths.
     "hero_ratio REAL",
+    # 2026-10-01: lay the logo over the background image. A wordmark on a
+    # stage photo is the standard EPK header, and it lets one image carry
+    # both identity and atmosphere. Opacity is stored separately so a busy
+    # photo can take a softer mark.
+    "hero_logo_overlay INTEGER",
+    "hero_logo_opacity REAL",
 ])
     
     # ==========================================

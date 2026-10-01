@@ -239,34 +239,9 @@
     /* ========================================
        MEDIA GRID - Pictures & Videos
        ======================================== */
-    #coverPreview {
-      /* Matches the profile hero's proportions so what you frame here is
-         what renders there. */
-      /* Must match .v2-hero on the profile exactly, or this previews a
-         crop the visitor never sees. The hero is full-width with a 420px
-         min-height, i.e. 1280/420 at a typical desktop. The profile's
-         background zoom was removed for the same reason. */
-      aspect-ratio: 64 / 21;
-      width: 100%; max-width: 640px;
-      border-radius: 10px; border: 1px solid var(--border);
-      cursor: grab; position: relative; overflow: hidden;
-      user-select: none; touch-action: none;
-      background: #0d1220;
-    }
     /* The image lives on an inner layer so the outer box can clip it —
        exactly how .v2-hero / .v2-hero-bg work on the profile. Transforming
        the box itself scaled the whole preview rather than the picture. */
-    #coverPreviewImg {
-      position: absolute; inset: 0;
-      background-size: cover; background-repeat: no-repeat;
-      background-position: 50% 50%;
-    }
-    #coverPreview.dragging { cursor: grabbing; }
-    #coverPreview::after {
-      content: ""; position: absolute; inset: 0;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
-      border-radius: 10px; pointer-events: none;
-    }
     .hero-btn {
       background: rgba(6,182,212,0.15);
       border: 1px solid rgba(6,182,212,0.45);
@@ -633,8 +608,81 @@
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=32"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=33"></script>
   
+<style>
+  .gf-cover-none { color: var(--text-gray); font-size: 0.8rem; }
+  .gf-cover-current { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .gf-cover-thumb {
+    width: 120px; height: 40px; border-radius: 6px; background-size: cover;
+    border: 1px solid var(--border); flex: 0 0 auto;
+  }
+  .gf-cover-meta { display: flex; flex-direction: column; font-size: 0.8rem; }
+  .gf-cover-meta span { color: var(--text-gray); font-size: 0.72rem; }
+  .gf-cover-clear {
+    background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+    color: #ef4444; border-radius: 6px; padding: 4px 12px; font-size: 0.74rem; cursor: pointer;
+  }
+  .gf-cover-modal {
+    position: fixed; inset: 0; z-index: 9000; display: none;
+    background: rgba(3,5,10,0.9); align-items: center; justify-content: center; padding: 20px;
+  }
+  .gf-cover-modal.open { display: flex; }
+  .gf-cover-box {
+    background: #151b28; border: 1px solid var(--border); border-radius: 12px;
+    width: min(720px, 100%); max-height: 88vh; overflow: auto;
+  }
+  .gf-cover-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+  }
+  .gf-cover-head h3 { margin: 0; font-size: 0.95rem; }
+  .gf-cover-head button {
+    background: none; border: none; color: var(--text-gray);
+    font-size: 1.5rem; cursor: pointer; line-height: 1;
+  }
+  .gf-cover-body { padding: 16px 18px 20px; }
+  .gf-cover-tiles {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px; margin-bottom: 18px;
+  }
+  .gf-tile {
+    background: none; border: 2px solid transparent; border-radius: 8px;
+    padding: 0; cursor: pointer; text-align: left; overflow: hidden;
+  }
+  .gf-tile.on { border-color: var(--cyan); }
+  .gf-tile-img {
+    display: block; width: 100%; aspect-ratio: 16/10;
+    background-size: cover; background-position: center;
+    border-radius: 6px; border: 1px solid var(--border);
+  }
+  .gf-tile-label {
+    display: block; font-size: 0.72rem; color: var(--text-gray); padding: 4px 2px 0;
+  }
+  .gf-cover-hint { font-size: 0.76rem; color: var(--text-gray); margin-bottom: 8px; }
+  .gf-cover-preview {
+    aspect-ratio: 64/21; width: 100%; border-radius: 8px;
+    border: 1px solid var(--border); position: relative; overflow: hidden;
+    cursor: grab; user-select: none; touch-action: none; background: #0d1220;
+  }
+  .gf-cover-preview.dragging { cursor: grabbing; }
+  #gfCoverPreviewLogo {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 46%; max-height: 62%; object-fit: contain;
+    pointer-events: none;
+    filter: drop-shadow(0 6px 18px rgba(0,0,0,0.55));
+  }
+  #gfCoverPreviewImg {
+    position: absolute; inset: 0;
+    background-size: cover; background-repeat: no-repeat; background-position: 50% 50%;
+  }
+  .gf-cover-controls {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px;
+  }
+  .gf-cover-controls input[type=range] { width: 160px; accent-color: var(--cyan); }
+  .gf-cover-val, .gf-cover-lbl { font-size: 0.74rem; color: var(--text-gray); }
+</style>
 </head>
 
 <body>
@@ -672,12 +720,6 @@
           alt="Profile picture"
           onerror="this.onerror=null;this.src='/app/static/img/profile-placeholder.svg';"
         />
-      </div>
-      <!-- 2026-10-01: a logo or wordmark often makes a better hero than any
-           stage photo, so it gets the same cover control as the gallery.
-           Hidden until an image actually exists. -->
-      <div style="text-align:center;margin-top:10px;">
-        <button type="button" id="useLogoAsCover" class="hero-btn" style="display:none;">Use as Cover</button>
       </div>
       <input id="profilePicInput" type="file" accept="image/*" hidden />
     </div>
@@ -756,6 +798,21 @@
     <div class="content-card">
       <h2>Booking Contact</h2>
       <select id="booking_contact" style="width: 100%;"></select>
+    </div>
+
+    <!-- SECTION: PUBLIC PROFILE BACKGROUND IMAGE
+         2026-10-01. Replaces per-tile "Use as Cover" buttons, which never
+         said what they did. One named section, one button, one dialog. -->
+    <div class="content-card">
+      <h2>Public Profile Page Background Image</h2>
+      <p style="color:var(--text-gray);font-size:0.78rem;margin:0 0 12px;line-height:1.55;">
+        Choose an image for the band across the top of your public profile. Your logo
+        or any uploaded photo can be used. Optional &mdash; leave it unset and your
+        profile header shows just your name and details, with no image band.
+      </p>
+      <div id="gfCoverSummary" style="margin-bottom:12px;"></div>
+      <button type="button" id="gfCoverOpen" class="hero-btn">Set Background Image</button>
+      <span id="gfCoverSaved" style="display:none;font-size:0.76rem;color:#10b981;margin-left:10px;">Saved</span>
     </div>
 
     <!-- SECTION 4: BIO — autosaves on blur (Aug 2026 change) so an
@@ -853,35 +910,6 @@
       <h2>Pictures</h2>
       <button id="addPicBtn" class="btn primary">+ Add Picture</button>
       <input id="picInput" type="file" accept="image/*" hidden />
-      <!-- 2026-10-01: cover framing. The profile hero is a wide band, so a
-           4:3 upload loses its top and bottom. This shows the exact crop and
-           lets the artist drag the image until the right part is in frame. -->
-      <div id="coverFramer" style="display:none;margin-bottom:18px;">
-        <div style="font-size:0.8rem;color:var(--text-gray);margin-bottom:8px;">
-          <strong style="color:var(--text);">Cover framing</strong> — drag the image to choose what shows on your profile.
-        </div>
-        <div id="coverPreview" title="Drag to reposition"><div id="coverPreviewImg"></div></div>
-        <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
-          <button type="button" id="coverZoomOut" class="hero-btn" title="Zoom out">&minus;</button>
-          <input type="range" id="coverZoom" min="100" max="400" step="5" value="100"
-                 title="Zoom" style="width:150px;accent-color:var(--cyan);">
-          <button type="button" id="coverZoomIn" class="hero-btn" title="Zoom in">+</button>
-          <span id="coverZoomVal" style="font-size:0.74rem;color:var(--text-gray);min-width:38px;font-variant-numeric:tabular-nums;">100%</span>
-          <button type="button" id="coverCenterBtn" class="hero-btn">Reset</button>
-        </div>
-        <!-- Band height. Stored as width/height, so the slider runs
-             backwards: dragging right makes the number smaller and the band
-             taller. Labelled by what it does, not by the stored value. -->
-        <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
-          <span style="font-size:0.74rem;color:var(--text-gray);">Height</span>
-          <span style="font-size:0.7rem;color:var(--text-gray);">Short</span>
-          <input type="range" id="coverHeight" min="160" max="500" step="10" value="305"
-                 title="How tall the cover band is on your profile"
-                 style="width:170px;accent-color:var(--cyan);direction:rtl;">
-          <span style="font-size:0.7rem;color:var(--text-gray);">Tall</span>
-          <span id="coverSaveMsg" style="font-size:0.76rem;color:#10b981;display:none;">Saved</span>
-        </div>
-      </div>
       <div id="pictures" class="media-grid"></div>
     </div>
 
@@ -951,5 +979,68 @@
 </script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>
+
+<!-- Background image picker. Tiles first, framing controls once something
+     is chosen, previewing at the exact proportions the profile renders. -->
+<div class="gf-cover-modal" id="gfCoverModal">
+  <div class="gf-cover-box">
+    <div class="gf-cover-head">
+      <h3>Public Profile Page Background Image</h3>
+      <button type="button" id="gfCoverClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="gf-cover-body">
+      <div class="gf-cover-tiles" id="gfCoverTiles"></div>
+
+      <div id="gfCoverFraming" style="display:none;">
+        <div class="gf-cover-hint">Drag the image to choose what shows. Scroll to zoom.</div>
+        <div class="gf-cover-preview" id="gfCoverPreview">
+          <div id="gfCoverPreviewImg"></div>
+          <img id="gfCoverPreviewLogo" alt="" style="display:none;">
+        </div>
+
+        <div class="gf-cover-controls">
+          <button type="button" id="gfCoverZoomOut" class="hero-btn">&minus;</button>
+          <input type="range" id="gfCoverZoom" min="100" max="400" step="5" value="100">
+          <button type="button" id="gfCoverZoomIn" class="hero-btn">+</button>
+          <span id="gfCoverZoomVal" class="gf-cover-val">100%</span>
+        </div>
+        <!-- Only shown when a logo exists and isn't already the background. -->
+        <div class="gf-cover-controls" id="gfCoverLogoRow" style="display:none;">
+          <label class="gf-cover-lbl" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="gfCoverLogoOn"> Show logo on top
+          </label>
+          <span class="gf-cover-lbl">Faint</span>
+          <input type="range" id="gfCoverLogoOpacity" min="10" max="100" step="5" value="100">
+          <span class="gf-cover-lbl">Solid</span>
+          <span id="gfCoverLogoOpacityVal" class="gf-cover-val">100%</span>
+        </div>
+
+        <div class="gf-cover-controls">
+          <span class="gf-cover-lbl">Height</span>
+          <span class="gf-cover-lbl">Short</span>
+          <!-- Stored as width/height, so the slider runs backwards: right
+               is a smaller number and a taller band. -->
+          <input type="range" id="gfCoverHeight" min="160" max="500" step="10" value="305" style="direction:rtl;">
+          <span class="gf-cover-lbl">Tall</span>
+          <button type="button" id="gfCoverReset" class="hero-btn">Reset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/app/static/js/cover-picker.js?v=2"></script>
+<script>
+  (function () {
+    var id = new URLSearchParams(window.location.search).get("artist_id");
+    if (!id || !window.gfCoverPicker) return;
+    // NOTE the artist update route has no /api prefix; the venue one does.
+    window.gfCoverPicker.init({
+      entity: "artist",
+      id: id,
+      putUrl: "/artists/" + id,
+      mediaUrl: "/api/artists/" + id + "/media"
+    });
+  })();
+</script>
 </body>
 </html>

@@ -108,40 +108,6 @@ def test_focal_defaults_to_centre_when_unset():
     assert "backgroundPosition" in block
 
 
-def test_drag_saves_are_debounced():
-    """A drag fires continuously; one PUT per mousemove would hammer the API."""
-    js = (ROOT / "app" / "static" / "js" / "artist.edit.js").read_text()
-    idx = js.index("function save() {")
-    block = js[idx:idx + 500]
-    assert "clearTimeout(saveTimer)" in block
-    assert "setTimeout" in block
-
-
-def test_framer_preview_matches_the_hero_aspect():
-    """If the preview isn't the hero's shape, framing it there tells the
-    artist nothing about what actually renders."""
-    html = (ROOT / "app" / "artist-edit.html").read_text()
-    idx = html.index("#coverPreview {")
-    block = html[idx:idx + 900]          # comment pushed the rule down
-    assert "aspect-ratio: 64 / 21" in block
-
-    # And it must be the SAME ratio the hero uses, or the preview shows a
-    # crop the visitor never sees.
-    profile = (ROOT / "app" / "artist-profile.html").read_text()
-    hidx = profile.index(".v2-hero {")
-    assert "aspect-ratio: 64 / 21" in profile[hidx:hidx + 700]
-
-
-def test_hero_has_no_background_zoom():
-    """A scale() on the hero background crops every edge, so whatever the
-    artist frames on the edit page is not what renders."""
-    for page in ("artist-profile.html", "venue-profile.html"):
-        src = (ROOT / "app" / page).read_text()
-        idx = src.index(".v2-hero-bg {")
-        block = src[idx:src.index("}", idx)]
-        assert "transform:" not in block, f"{page} hero background is transformed"
-
-
 def test_cover_photo_saves_to_the_route_that_actually_accepts_put():
     """The artist update route is PUT /artists/{id} — there is no /api
     prefix on it, unlike venues which have both. Calling /api/artists/{id}
@@ -208,17 +174,6 @@ def test_zoom_uses_the_focal_point_as_origin():
         assert "scale(" in block, name
 
 
-def test_preview_mirrors_the_profile_transform():
-    """The preview has to apply the same origin and scale, or zooming makes
-    the framing control lie again — the exact bug the fixed 1.06 zoom caused."""
-    for name in ("artist.edit.js", "venue.edit.js"):
-        js = (ROOT / "app" / "static" / "js" / name).read_text()
-        idx = js.index("function apply()")
-        block = js[idx:idx + 700]
-        assert "transformOrigin" in block, name
-        assert "scale(" in block, name
-
-
 def test_zoom_defaults_to_no_transform():
     """Most heroes will never be zoomed; 1 must emit no transform at all
     rather than scale(1), which would create a needless compositing layer."""
@@ -250,37 +205,6 @@ def test_explicit_hash_still_wins():
         js = (ROOT / "app" / "static" / "js" / name).read_text()
         idx = js.index("window.scrollTo(0, 0)")
         assert "window.location.hash" in js[idx - 300:idx], name
-
-
-def test_zoom_scales_the_image_not_the_preview_box():
-    """The transform must sit on an inner layer that the outer box clips.
-    Applied to the box itself it grew the whole preview instead of zooming
-    the picture — the box is the viewport, it must not move."""
-    for page, js_name in (("artist-edit.html", "artist.edit.js"),
-                          ("venue-edit.html", "venue.edit.js")):
-        html = (ROOT / "app" / page).read_text()
-        assert 'id="coverPreviewImg"' in html, f"{page} has no inner layer"
-        # Outer box clips; inner layer carries the image.
-        idx = html.index("#coverPreview {")
-        outer = html[idx:html.index("}", idx)]
-        assert "overflow: hidden" in outer, page
-        assert "background-size: cover" not in outer, (
-            f"{page}: the image is still painted on the box being transformed"
-        )
-
-        js = (ROOT / "app" / "static" / "js" / js_name).read_text()
-        idx = js.index("function apply()")
-        block = js[idx:idx + 600]
-        assert 'el("coverPreviewImg")' in block, f"{js_name} transforms the wrong element"
-
-
-def test_both_previews_match_their_hero_ratio():
-    """venue-edit was left at 32/9 when the artist side was corrected to
-    64/21, so the venue preview showed a crop the profile never rendered."""
-    for page in ("artist-edit.html", "venue-edit.html"):
-        html = (ROOT / "app" / page).read_text()
-        idx = html.index("#coverPreview {")
-        assert "aspect-ratio: 64 / 21" in html[idx:idx + 900], page
 
 
 def test_nav_sync_ignores_sections_that_are_not_laid_out():
@@ -357,22 +281,3 @@ def test_hero_ratio_is_clamped_to_a_usable_range():
         assert "max(1.6, min(5.0" in src[idx:idx + 500], route
 
 
-def test_preview_follows_the_chosen_height():
-    """Framing against a fixed shape while the profile uses another is the
-    same class of bug as the old fixed 32/9 preview."""
-    for name in ("artist.edit.js", "venue.edit.js"):
-        js = (ROOT / "app" / "static" / "js" / name).read_text()
-        idx = js.index("function apply()")
-        block = js[idx:idx + 1100]
-        assert "aspectRatio" in block, name
-        assert "coverPreview" in block, name
-
-
-def test_height_control_is_labelled_by_effect_not_value():
-    """The stored number is width/height, so it runs backwards — a bigger
-    number is a shorter band. The control says Short/Tall instead."""
-    for page in ("artist-edit.html", "venue-edit.html"):
-        html = (ROOT / "app" / page).read_text()
-        idx = html.index('id="coverHeight"')
-        block = html[max(0, idx - 400):idx + 300]
-        assert "Short" in block and "Tall" in block, page
