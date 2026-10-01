@@ -74,12 +74,17 @@
 
     // Styles and lineups as chips. These are what a venue filters on, so
     // they belong beside the name rather than inside a tab.
-    var chips = "";
-    (a.styles || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean)
-      .forEach(function (s) { chips += '<span class="v2-chip accent">' + esc(s) + "</span>"; });
-    (a.band_formats || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean)
-      .forEach(function (s) { chips += '<span class="v2-chip">' + esc(s) + "</span>"; });
-    $("v2Chips").innerHTML = chips;
+    // Two rows, styles above lineups. They answer different questions —
+    // "what do they sound like" then "how many of them turn up" — and
+    // running them together as one wrapped row blurs the distinction.
+    function chipRow(csv, cls) {
+      var items = (csv || "").split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+      if (!items.length) return "";
+      return '<div class="v2-chip-row">' + items.map(function (x) {
+        return '<span class="v2-chip ' + cls + '">' + esc(x) + "</span>";
+      }).join("") + "</div>";
+    }
+    $("v2Chips").innerHTML = chipRow(a.styles, "accent") + chipRow(a.band_formats, "");
 
     // Rating only when it exists. "0 reviews" reads as a negative signal
     // for a new artist who simply hasn't been reviewed yet.
@@ -94,6 +99,16 @@
              '<span style="color:var(--v2-dim);">(' + count + ")</span></span>";
     }
     $("v2Cta").innerHTML = cta;   // action is appended by renderAction()
+  }
+
+  // Relationship badge sits with the name, where a venue reads it as a fact
+  // about this artist rather than as another button to weigh up.
+  function setNameBadge(text, tone) {
+    var el = $("v2NameBadge");
+    if (!el) return;
+    el.className = "v2-name-badge" + (tone ? " " + tone : "");
+    el.textContent = text;
+    el.style.display = "inline-flex";
   }
 
   // ── the action ──────────────────────────────────────────────────────
@@ -128,9 +143,13 @@
     var status = row ? row.preferred_status : null;
 
     if (status === "approved") {
-      slot.outerHTML = '<span class="v2-status">★ Your Preferred Artist</span>';
+      // Already a fact beside the name — repeating it as a CTA-sized block
+      // would be the page telling them something they just read.
+      setNameBadge("★ Your Preferred Artist", "");
+      slot.outerHTML = "";
     } else if (status === "invited") {
-      slot.outerHTML = '<span class="v2-status wait">Invitation Sent</span>';
+      setNameBadge("Invitation Sent", "wait");
+      slot.outerHTML = "";
     } else if (status === "pending") {
       // They asked first — approving is the right move, not inviting.
       slot.outerHTML = '<a class="v2-btn primary" href="/app/venue-create-gigs.html?venue_id=' +
@@ -266,11 +285,21 @@
       } else if (g.start_time) {
         time = g.start_time;
       }
+      // Which lineup is booked for this date — a venue comparing dates
+      // cares whether it's a solo set or the full band, and the gig row
+      // already carries it.
+      var fmt = (g.band_formats || g.artist_band_formats || "")
+        .split(",").map(function (x) { return x.trim(); }).filter(Boolean).join(" / ");
+      // Format lives in the pill on the right, so keep it out of the meta
+      // line — it was printing twice on the same row.
+      var meta = time;
       return '<div class="v2-date">' +
         '<div class="v2-date-when"><div class="v2-date-mon">' + MON[d.getMonth()] + "</div>" +
         '<div class="v2-date-day">' + d.getDate() + "</div></div>" +
         '<div class="v2-date-main"><div class="v2-date-venue">' + esc(where || "Private booking") + "</div>" +
-        '<div class="v2-date-meta">' + esc(time) + "</div></div></div>";
+        '<div class="v2-date-meta">' + esc(meta) + "</div></div>" +
+        (fmt ? '<span class="v2-date-fmt">' + esc(fmt) + "</span>" : "") +
+        "</div>";
     }).join("");
   }
 
@@ -309,7 +338,8 @@
       var ds = y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
       var onDay = calGigs.filter(function (g) { return String(g.date) === ds; });
       var cls = "v2-cal-cell" + (onDay.length ? " booked" : "") + (ds === todayStr ? " today" : "");
-      html += '<div class="' + cls + '"><div class="v2-cal-num">' + d + "</div>";
+      var click = onDay.length ? ' onclick="v2OpenDay(\'' + ds + '\')"' : "";
+      html += '<div class="' + cls + '"' + click + '><div class="v2-cal-num">' + d + "</div>";
       onDay.forEach(function (g) {
         var t = g.start_time && window.formatTime12Hour ? window.formatTime12Hour(g.start_time) : "";
         html += '<div class="v2-cal-gig" title="' + esc((g.venue_name || "") + " " + t) + '">' +
@@ -326,7 +356,66 @@
     $("v2CalGrid").innerHTML = html;
   }
 
-  window.v2OpenCal = function () { renderCal(); $("v2CalModal").classList.add("open"); };
+
+  // Clicking a booked day swaps the modal body for that day's detail rather
+  // than stacking a second modal on top of the first — one layer, with a way
+  // back. Slots are fetched per gig so multi-slot nights list every artist.
+  window.v2OpenDay = async function (ds) {
+    var dayGigs = calGigs.filter(function (g) { return String(g.date) === ds; });
+    if (!dayGigs.length) return;
+
+    await Promise.all(dayGigs.map(async function (g) {
+      if (g._slots) return;
+      var r = await getJSON("/api/gigs/" + g.id + "/slots/public");
+      g._slots = r || [];
+    }));
+
+    var parts = ds.split("-").map(Number);
+    var pretty = new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString("en-US", {
+      weekday: "long", month: "long", day: "numeric", year: "numeric"
+    });
+
+    var rows = dayGigs.map(function (g) {
+      var t = g.start_time && window.formatTime12Hour ? window.formatTime12Hour(g.start_time) : "";
+      if (g.end_time && window.formatTime12Hour) t += " – " + window.formatTime12Hour(g.end_time);
+      var where = [g.city, g.state].filter(Boolean).join(", ");
+      var venue = g.venue_id
+        ? '<a href="/app/venue-profile.html?venue_id=' + Number(g.venue_id) +
+          '" target="_blank" rel="noopener">' + esc(g.venue_name || "") + "</a>"
+        : esc(g.venue_name || "");
+      var who = (g._slots || []).filter(function (sl) {
+        return sl.status === "booked" && sl.artist_name;
+      }).map(function (sl) { return esc(sl.artist_name); });
+      var fmt = (g.band_formats || "").split(",").map(function (x) { return x.trim(); })
+                .filter(Boolean).join(" / ");
+
+      return '<div class="v2-day-gig">' +
+        '<div class="v2-day-time">' + esc(t || "Time TBC") + "</div>" +
+        '<div class="v2-day-main">' +
+          '<div class="v2-day-venue">' + venue + "</div>" +
+          '<div class="v2-day-meta">' + esc(where) +
+            (fmt ? '<span class="v2-day-sep">·</span>' + esc(fmt) : "") +
+            (who.length ? '<span class="v2-day-sep">·</span>' + who.join(", ") : "") +
+          "</div>" +
+        "</div></div>";
+    }).join("");
+
+    $("v2CalDayTitle").textContent = pretty;
+    $("v2CalDayBody").innerHTML = rows;
+    $("v2CalMain").style.display = "none";
+    $("v2CalDay").style.display = "block";
+  };
+
+  window.v2BackToCal = function () {
+    $("v2CalDay").style.display = "none";
+    $("v2CalMain").style.display = "block";
+  };
+
+  window.v2OpenCal = function () {
+    window.v2BackToCal();
+    renderCal();
+    $("v2CalModal").classList.add("open");
+  };
   window.v2CloseCal = function () { $("v2CalModal").classList.remove("open"); };
   window.v2CalStep = function (n) {
     calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() + n, 1);
@@ -334,18 +423,37 @@
   };
 
   // ── setlist ─────────────────────────────────────────────────────────
+  var SETLIST_PREVIEW = 60;   // enough to judge range without a wall of text
+
   function renderSetlist(data) {
     var songs = (data && data.songs) || [];
     $("v2SongCount").textContent = songs.length ? songs.length + " songs" : "";
     if (!songs.length) { show("v2SongsEmpty", true); return; }
     present["sec-setlist"] = true;
 
-    $("v2Songs").innerHTML = songs.map(function (s, i) {
-      return '<div class="v2-song"><span class="v2-song-n">' + (i + 1) + "</span>" +
-        '<span><span class="v2-song-t">' + esc(s.song_title || "") + "</span>" +
-        (s.original_artist ? '<br><span class="v2-song-a">' + esc(s.original_artist) + "</span>" : "") +
-        "</span></div>";
-    }).join("");
+    function line(s) {
+      return '<div class="v2-song">' +
+        '<span class="v2-song-t">' + esc(s.song_title || "") + "</span>" +
+        (s.original_artist ? ' <span class="v2-song-a">(' + esc(s.original_artist) + ")</span>" : "") +
+        "</div>";
+    }
+
+    // Long lists collapse. Bands with 200 songs shouldn't push every other
+    // section off the page, but the count is visible so nothing looks hidden.
+    if (songs.length > SETLIST_PREVIEW) {
+      $("v2Songs").innerHTML = songs.slice(0, SETLIST_PREVIEW).map(line).join("");
+      var more = document.createElement("div");
+      more.className = "v2-song-more";
+      more.innerHTML = '<button type="button" class="v2-btn ghost" id="v2SongMore">' +
+                       "Show all " + songs.length + " songs</button>";
+      $("v2Songs").parentNode.insertBefore(more, $("v2Songs").nextSibling);
+      document.getElementById("v2SongMore").addEventListener("click", function () {
+        $("v2Songs").innerHTML = songs.map(line).join("");
+        more.remove();
+      });
+    } else {
+      $("v2Songs").innerHTML = songs.map(line).join("");
+    }
   }
 
   // ── social + contact ────────────────────────────────────────────────
@@ -369,13 +477,22 @@
       return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy);
     });
 
+    var icon = window.gfSocialIcon || function () { return ""; };
+    var color = window.gfBrandColor || function () { return "#9ca3af"; };
+    var safe = window.gfSafeHref || function (u) { return u; };
+
     var html = "";
     list.forEach(function (s) {
-      var url = a[s[1]];
+      var url = safe(a[s[1]]);
       if (!url) return;
-      // website_public gates the website link only — socials are public.
       if (s[0] === "website" && !a.website_public) return;
-      html += '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(s[2]) + "</a>";
+      // Website tile carries the artist's name — "this is who you'll
+      // reach" reads better than the generic word.
+      var label = (s[0] === "website") ? (a.name || "Website") : s[2];
+      html += '<a class="v2-social-tile" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer" ' +
+              'style="--brand:' + color(s[0]) + '" title="' + esc(label) + '">' +
+              '<span class="v2-social-ico">' + icon(s[0]) + "</span>" +
+              "<span>" + esc(label) + "</span></a>";
     });
     $("v2Social").innerHTML = html || '<span class="v2-empty">No links yet.</span>';
 

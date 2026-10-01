@@ -139,7 +139,9 @@
   .v2-sub { color: #c7d2e1; font-size: 0.98rem; margin-bottom: 14px; }
   .v2-sub .dot { color: var(--v2-dimmer); margin: 0 7px; }
 
-  .v2-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 16px; }
+  /* Block, not flex: the rows inside do their own wrapping. As a flex
+     container this laid the two rows side by side instead of stacking. */
+  .v2-chips { display: block; margin-bottom: 16px; }
   .v2-chip {
     font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em;
     padding: 5px 11px; border-radius: 999px;
@@ -405,6 +407,84 @@
     background: rgba(139,92,246,0.16); border-color: rgba(139,92,246,0.45); color: #c4b5fd;
   }
 
+  /* ── bits added for chips / badge / dates / social / setlist ────── */
+  .v2-chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
+  .v2-chip-row + .v2-chip-row { margin-top: 7px; }
+
+  .v2-name-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 0 0 10px; padding: 5px 13px; border-radius: 999px;
+    font-family: 'Oswald', sans-serif; font-size: 0.72rem; font-weight: 600;
+    letter-spacing: 0.09em; text-transform: uppercase;
+    background: rgba(16,185,129,0.18); border: 1px solid rgba(16,185,129,0.5); color: #34d399;
+  }
+  .v2-name-badge.wait {
+    background: rgba(139,92,246,0.18); border-color: rgba(139,92,246,0.5); color: #c4b5fd;
+  }
+
+  .v2-date-fmt {
+    flex: 0 0 auto; font-family: 'Oswald', sans-serif; font-size: 0.72rem;
+    letter-spacing: 0.07em; text-transform: uppercase; color: #c4b5fd;
+    background: rgba(139,92,246,0.16); border: 1px solid rgba(139,92,246,0.4);
+    padding: 4px 11px; border-radius: 999px;
+  }
+
+  /* Brand marks rather than plain text. Colour on hover only — seven
+     saturated logos at rest would out-shout the content they point to. */
+  .v2-social-tile {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 9px 16px; border-radius: 10px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+    color: #dbe4f0; text-decoration: none; font-size: 0.84rem; font-weight: 600;
+    transition: border-color .15s ease, color .15s ease, transform .15s ease;
+  }
+  .v2-social-tile:hover {
+    border-color: var(--brand, var(--cyan)); color: var(--brand, var(--cyan));
+    transform: translateY(-2px);
+  }
+  .v2-social-ico { display: inline-flex; color: var(--brand, #9ca3af); }
+  .v2-social-ico svg { width: 19px; height: 19px; display: block; }
+  .v2-social-tile:hover .v2-social-ico { color: var(--brand, var(--cyan)); }
+
+  /* One line per song, flowed into columns. A covers band with 200 songs is
+     the normal case, and a card grid would run for pages. */
+  .v2-songs {
+    display: block;
+    columns: 3; column-gap: 34px;
+  }
+  .v2-song {
+    break-inside: avoid;
+    padding: 5px 0;
+    border: none; background: none; border-radius: 0;
+    font-size: 0.88rem; line-height: 1.45;
+  }
+  .v2-song-t { font-weight: 600; }
+  .v2-song-a { color: var(--v2-dim); font-size: 0.82rem; }
+  .v2-song-more { margin-top: 18px; }
+  @media (max-width: 900px) { .v2-songs { columns: 2; } }
+  @media (max-width: 560px) { .v2-songs { columns: 1; } }
+
+  .v2-back {
+    background: none; border: none; color: var(--cyan); cursor: pointer;
+    font-size: 0.82rem; padding: 0; font-family: 'Oswald', sans-serif;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .v2-day-gig {
+    display: flex; gap: 16px; align-items: flex-start;
+    padding: 13px 15px; margin-bottom: 9px; border-radius: 10px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+  }
+  .v2-day-time {
+    flex: 0 0 140px; font-family: 'Oswald', sans-serif; font-size: 0.86rem;
+    letter-spacing: 0.04em; color: var(--cyan);
+  }
+  .v2-day-venue { font-weight: 650; font-size: 0.93rem; }
+  .v2-day-venue a { color: inherit; text-decoration: underline; }
+  .v2-day-meta { font-size: 0.8rem; color: var(--v2-dim); margin-top: 3px; }
+  .v2-day-sep { margin: 0 8px; opacity: 0.55; }
+  .v2-cal-cell.booked { cursor: pointer; }
+  .v2-cal-cell.booked:hover { border-color: var(--cyan); }
+
   /* ── lightbox ───────────────────────────────────────────────────── */
   .v2-lb {
     position: fixed; inset: 0; z-index: 120; display: none;
@@ -444,6 +524,7 @@
         <img id="v2Logo" class="v2-logo" src="/app/static/img/profile-placeholder.svg" alt="">
         <div class="v2-head">
           <h1 class="v2-name" id="v2Name">Artist</h1>
+          <span class="v2-name-badge" id="v2NameBadge" style="display:none;"></span>
           <div class="v2-sub" id="v2Sub"></div>
           <div class="v2-chips" id="v2Chips"></div>
           <div class="v2-cta-row" id="v2Cta"></div>
@@ -521,10 +602,17 @@
         <button type="button" onclick="v2CloseCal()" style="margin-left:6px;">&times;</button>
       </div>
     </div>
-    <div class="v2-cal-body">
+    <div class="v2-cal-body" id="v2CalMain">
       <div class="v2-cal-dow"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
       <div class="v2-cal-grid" id="v2CalGrid"></div>
-      <div class="v2-cal-legend"><span><span class="v2-cal-key"></span>Booked</span></div>
+      <div class="v2-cal-legend"><span><span class="v2-cal-key"></span>Booked — click a date for details</span></div>
+    </div>
+    <!-- Day detail replaces the grid in place. Stacking a second modal on
+         the first gives two close buttons and an unclear back path. -->
+    <div class="v2-cal-body" id="v2CalDay" style="display:none;">
+      <button type="button" class="v2-back" onclick="v2BackToCal()">&#9664; Back to calendar</button>
+      <h4 id="v2CalDayTitle" style="margin:12px 0 14px;font-family:'Oswald',sans-serif;letter-spacing:0.05em;font-size:1rem;"></h4>
+      <div id="v2CalDayBody"></div>
     </div>
   </div>
 </div>
@@ -541,6 +629,7 @@
 <script src="/app/static/js/security.js?v=2"></script>
 <script src="/app/static/js/time-format.js"></script>
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=5"></script>
+<script src="/app/static/js/social-icons.js?v=1"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=8"></script>
 </body>
 </html>
