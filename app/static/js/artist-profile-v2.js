@@ -49,6 +49,7 @@
   // ── hero ────────────────────────────────────────────────────────────
   function renderHero(a, media) {
     document.title = (a.name || "Artist") + " – GigsFill";
+    window.__v2ArtistName = a.name || "Artist";
     $("v2Name").textContent = a.name || "Artist";
 
     // The artist's own photo becomes the page, not a thumbnail on ours.
@@ -406,9 +407,13 @@
     // Header carries the date now. Month navigation is meaningless once
     // you've picked a specific night, and "Availability" is the wrong
     // title for a single booking.
+    // Day view keeps the same "Show All Booked Dates" control as the grid,
+    // so the full list is reachable from here too. Month stepping goes —
+    // it means nothing once a specific night is on screen. Closing and
+    // reopening Calendar returns to the grid.
     $("v2ModalTitle").textContent = pretty;
+    $("v2ModalTitle").style.display = "block";
     $("v2CalNavGroup").style.display = "none";
-    $("v2BackBtn").style.display = "inline-flex";
 
     $("v2CalDayBody").innerHTML = rows;
     $("v2CalMain").style.display = "none";
@@ -418,9 +423,53 @@
   window.v2BackToCal = function () {
     $("v2CalDay").style.display = "none";
     $("v2CalMain").style.display = "block";
-    $("v2ModalTitle").textContent = "Availability";
+    $("v2ModalTitle").style.display = "none";
     $("v2CalNavGroup").style.display = "inline-flex";
-    $("v2BackBtn").style.display = "none";
+  };
+
+
+  // "Show All Booked Dates" — hands off to the shared public gigs list
+  // modal (the same one the live profile uses), so the sortable/exportable
+  // list isn't reimplemented here. Multi-slot gigs expand to one row per
+  // slot this artist actually holds, otherwise a four-slot night would
+  // look like four of their bookings.
+  window.v2ShowAllBooked = function () {
+    if (typeof window.openPublicGigsListModal !== "function") return;
+    var rows = [];
+    (calGigs || []).forEach(function (g) {
+      var slots = Array.isArray(g.slots) ? g.slots : [];
+      var multi = slots.length > 1;
+      if (slots.length) {
+        slots.forEach(function (sl) {
+          if (sl.status !== "booked") return;
+          if (String(sl.artist_id) !== String(artistId)) return;
+          rows.push({
+            date: g.date, venue_id: g.venue_id, venue_name: g.venue_name || "",
+            address_line_1: g.address_line_1 || "", address_line_2: g.address_line_2 || "",
+            city: g.city || "", state: g.state || "",
+            start_time: sl.start_time || g.start_time,
+            end_time: sl.end_time || g.end_time,
+            title: g.title || "", is_multi_slot: multi, slot_number: sl.slot_number
+          });
+        });
+      } else if (g.status === "booked") {
+        rows.push({
+          date: g.date, venue_id: g.venue_id, venue_name: g.venue_name || "",
+          address_line_1: g.address_line_1 || "", address_line_2: g.address_line_2 || "",
+          city: g.city || "", state: g.state || "",
+          start_time: g.start_time, end_time: g.end_time,
+          title: g.title || "", is_multi_slot: false, slot_number: null
+        });
+      }
+    });
+    var name = (window.__v2ArtistName || "artist");
+    var slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    window.openPublicGigsListModal({
+      title: "\uD83D\uDCC5 All Booked Gigs — " + name,
+      rows: rows,
+      exportBasename: slug + "_booked_gigs",
+      columns: ["date", "time", "venue", "address"]
+    });
   };
 
   window.v2OpenCal = function () {
@@ -513,7 +562,7 @@
     var booking = (a.booking_contact || "").trim();
     $("v2Contact").innerHTML =
       '<div class="v2-contact-line">' +
-        '<span class="v2-contact-label">Contact</span>' +
+        '<span class="v2-contact-label">Contact:</span>' +
         '<span class="v2-contact-value">' +
           (booking ? linkifyContact(booking) : "Not listed") +
         "</span>" +

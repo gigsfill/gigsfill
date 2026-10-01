@@ -374,6 +374,13 @@
   }
   .v2-modal-head h3 { margin: 0; font-size: 1rem; font-family: 'Oswald', sans-serif;
                       letter-spacing: 0.08em; text-transform: uppercase; }
+  .v2-allbtn {
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+    color: var(--text); border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    font-family: 'Oswald', sans-serif; font-size: 0.78rem;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .v2-allbtn:hover { border-color: var(--cyan); color: var(--cyan); }
   .v2-cal-nav { display: flex; align-items: center; gap: 10px; }
   .v2-cal-nav button {
     background: var(--v2-raise-2); border: 1px solid var(--v2-line); color: var(--text);
@@ -430,6 +437,13 @@
   .v2-name-line .v2-name { margin-bottom: 0; }
   .v2-name-badge {
     display: inline-flex; align-items: center; gap: 6px;
+    /* Flex centres the pill against the h1's LINE BOX. The name is
+       uppercase Oswald, so its glyphs occupy only the cap height and sit
+       high in that box — a box-centred pill reads as floating above the
+       letters. 2px aligns the pill to the rendered glyph centre; measured
+       off the screenshot, not guessed (4px overshot by the same margin
+       the original undershot). */
+    transform: translateY(2px);
     margin: 0; padding: 5px 13px; border-radius: 999px;
     font-family: 'Oswald', sans-serif; font-size: 0.72rem; font-weight: 600;
     letter-spacing: 0.09em; text-transform: uppercase;
@@ -617,14 +631,16 @@
          you've clicked into a specific date it's noise, and "Availability"
          is the wrong title for "here is one night's booking". -->
     <div class="v2-modal-head">
-      <h3 id="v2ModalTitle">Availability</h3>
+      <h3 id="v2ModalTitle" style="display:none;"></h3>
+      <button type="button" class="v2-allbtn" id="v2AllDatesBtn" onclick="v2ShowAllBooked()">
+        &#128197; Show All Booked Dates
+      </button>
       <div class="v2-cal-nav">
         <span id="v2CalNavGroup" style="display:inline-flex;align-items:center;gap:10px;">
           <button type="button" onclick="v2CalStep(-1)" aria-label="Previous month">&#9664;</button>
           <span class="v2-cal-month" id="v2CalMonth"></span>
           <button type="button" onclick="v2CalStep(1)" aria-label="Next month">&#9654;</button>
         </span>
-        <button type="button" id="v2BackBtn" onclick="v2BackToCal()" style="display:none;">&#9664; All dates</button>
         <button type="button" onclick="v2CloseCal()" style="margin-left:6px;" aria-label="Close">&times;</button>
       </div>
     </div>
@@ -654,6 +670,7 @@
 <script src="/app/static/js/time-format.js"></script>
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
 <script src="/app/static/js/social-icons.js?v=1"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=11"></script>
+<script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=14"></script>
 </body>
 </html>
