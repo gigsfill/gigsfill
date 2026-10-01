@@ -498,14 +498,14 @@
   }
   /* The thumbnail and the image's name open the dialog as well as the
      button does — people click the picture they mean to change before
-     they go looking for a control. */
+     they go looking for a control. No hover treatment: it just opens the
+     dialog, and a thumbnail that restyles itself on the way past is noise.
+     Keyboard focus still gets a ring, which a mouse never shows. */
   .gf-cover-pick {
     display: flex; align-items: center; gap: 12px; cursor: pointer;
     background: none; border: 0; padding: 0; text-align: left;
     color: var(--text); border-radius: 8px;
   }
-  .gf-cover-pick:hover .gf-cover-thumb { border-color: var(--cyan); }
-  .gf-cover-pick:hover .gf-cover-meta strong { color: var(--cyan); }
   .gf-cover-pick:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
   .gf-cover-meta { display: flex; flex-direction: column; font-size: 0.8rem; }
   .gf-cover-meta span { color: var(--text-gray); font-size: 0.72rem; }
