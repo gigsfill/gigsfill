@@ -601,10 +601,17 @@
     display: grid;
     /* Wide enough for the longest label so every row's controls
        start at the same x. */
-    grid-template-columns: 104px auto 1fr auto 46px;
+    grid-template-columns: 118px auto 1fr auto 46px;
     align-items: center; gap: 8px;
   }
   .gf-row-lbl { font-size: 0.76rem; color: var(--text); font-weight: 600; }
+  /* Rules on the first and last row of the logo group, so the toggle and
+     the sliders it reveals read as one block. */
+  .gf-row.gf-group-top {
+    border-top: 1px solid var(--border);
+    padding-top: 12px; margin-top: 6px;
+  }
+  .gf-row.gf-group-end { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
   .gf-row-end { font-size: 0.7rem; color: var(--text-gray); white-space: nowrap; }
   .gf-row-val {
     font-size: 0.73rem; color: var(--text-gray); text-align: right;
@@ -617,6 +624,9 @@
     color: var(--text); font-size: 0.9rem; line-height: 1; padding: 0;
   }
   .gf-step-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+  .gf-step-btn.gf-wide {
+    width: auto; padding: 0 12px; height: 26px; font-size: 0.73rem; white-space: nowrap;
+  }
 
   .gf-switch { display: flex; align-items: center; gap: 7px; cursor: pointer; }
   .gf-switch span { font-size: 0.76rem; color: var(--text-gray); }
@@ -1132,14 +1142,9 @@
         <!-- Fixed label column so every control lines up; before, each row
              started with a different element and nothing aligned. -->
         <div class="gf-rows">
-          <div class="gf-row">
-            <label class="gf-row-lbl" for="gfCoverZoom">Zoom</label>
-            <button type="button" class="gf-step-btn" id="gfCoverZoomOut" aria-label="Zoom out">&minus;</button>
-            <input type="range" id="gfCoverZoom" min="100" max="400" step="5" value="100">
-            <button type="button" class="gf-step-btn" id="gfCoverZoomIn" aria-label="Zoom in">+</button>
-            <span class="gf-row-val" id="gfCoverZoomVal">100%</span>
-          </div>
-
+          <!-- Height first: it sets the shape of the band, and framing
+               inside a box whose proportions you're about to change is
+               backwards. -->
           <div class="gf-row">
             <label class="gf-row-lbl" for="gfCoverHeight">Height</label>
             <span class="gf-row-end">Short</span>
@@ -1150,10 +1155,19 @@
             <span class="gf-row-val"></span>
           </div>
 
-          <!-- Logo rows live in the SAME grid as Zoom and Height so every
-               label and every control lines up. They were previously a
-               separate header block, which left the toggle floating. -->
-          <div class="gf-row" id="gfCoverLogoRow" style="display:none;">
+          <div class="gf-row">
+            <label class="gf-row-lbl" for="gfCoverZoom">Image Zoom</label>
+            <button type="button" class="gf-step-btn" id="gfCoverZoomOut" aria-label="Zoom out">&minus;</button>
+            <input type="range" id="gfCoverZoom" min="100" max="400" step="5" value="100">
+            <button type="button" class="gf-step-btn" id="gfCoverZoomIn" aria-label="Zoom in">+</button>
+            <span class="gf-row-val" id="gfCoverZoomVal">100%</span>
+          </div>
+
+          <!-- The logo rows stay in this same grid so every label and
+               control still lines up; the group is marked by rules on the
+               first and last row rather than a wrapper, which would have
+               broken that alignment. -->
+          <div class="gf-row gf-group-top" id="gfCoverLogoRow" style="display:none;">
             <label class="gf-row-lbl" for="gfCoverLogoOn">Logo on Top?</label>
             <label class="gf-switch" style="grid-column: 2 / span 3;">
               <input type="checkbox" id="gfCoverLogoOn"><span>Show your logo over the image</span>
@@ -1162,7 +1176,7 @@
           </div>
 
           <div class="gf-row" id="gfCoverLogoSizeRow" style="display:none;">
-            <label class="gf-row-lbl" for="gfCoverLogoSize">Size</label>
+            <label class="gf-row-lbl" for="gfCoverLogoSize">Logo Size</label>
             <span class="gf-row-end">Small</span>
             <input type="range" id="gfCoverLogoSize" min="15" max="100" step="5" value="46">
             <span class="gf-row-end">Full</span>
@@ -1170,11 +1184,21 @@
           </div>
 
           <div class="gf-row" id="gfCoverLogoFadeRow" style="display:none;">
-            <label class="gf-row-lbl" for="gfCoverLogoOpacity">Fade</label>
+            <label class="gf-row-lbl" for="gfCoverLogoOpacity">Logo Fade</label>
             <span class="gf-row-end">Faint</span>
             <input type="range" id="gfCoverLogoOpacity" min="10" max="100" step="5" value="100">
             <span class="gf-row-end">Solid</span>
             <span class="gf-row-val" id="gfCoverLogoOpacityVal">100%</span>
+          </div>
+
+          <!-- Drag has no undo, so the numbers are shown and a one-click
+               re-centre is offered. Nudging a logo back to dead centre by
+               hand is near impossible. -->
+          <div class="gf-row gf-group-end" id="gfCoverLogoPosRow" style="display:none;">
+            <span class="gf-row-lbl">Logo Position</span>
+            <span class="gf-row-end" id="gfCoverLogoPosVal" style="grid-column: 2 / span 2;">X 50% &middot; Y 50%</span>
+            <button type="button" class="gf-step-btn gf-wide" id="gfCoverLogoCenter">Reset Position</button>
+            <span class="gf-row-val"></span>
           </div>
         </div>
       </div>
@@ -1189,7 +1213,7 @@
     </div>
   </div>
 </div>
-<script src="/app/static/js/cover-picker.js?v=8"></script>
+<script src="/app/static/js/cover-picker.js?v=10"></script>
 <script>
   (function () {
     var id = new URLSearchParams(window.location.search).get("venue_id");

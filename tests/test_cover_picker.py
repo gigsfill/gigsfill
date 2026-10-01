@@ -285,3 +285,39 @@ def test_logo_position_resets_with_everything_else():
     idx = src.index("async function clearMedia()")
     block = src[idx:src.index("}", src.index("});", idx))]
     assert "hero_logo_x" in block and "hero_logo_y" in block
+
+
+def test_logo_position_is_shown_and_resettable():
+    """Drag has no undo, and nudging a logo back to dead centre by hand is
+    near impossible — so the numbers are visible and re-centring is one
+    click."""
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        assert 'id="gfCoverLogoPosVal"' in html, page
+        assert 'id="gfCoverLogoCenter"' in html, page
+    src = JS.read_text()
+    assert "gfCoverLogoCenter" in src
+    idx = src.index("gfCoverLogoCenter")
+    block = src[idx:idx + 300]
+    assert "state.logoX = 50" in block and "state.logoY = 50" in block
+
+
+def test_control_rows_are_ordered_and_named_for_what_they_do():
+    """Height first because it sets the band's shape, and framing inside a
+    box whose proportions are about to change is backwards. Labels say which
+    thing they affect, since Zoom/Size/Fade alone did not."""
+    html = (ROOT / "app" / "artist-edit.html").read_text()
+    rows = html[html.index('<div class="gf-rows">'):html.index("gf-cover-foot")]
+    order = [rows.index(x) for x in ("Height", "Image Zoom", "Logo on Top?",
+                                     "Logo Size", "Logo Fade", "Logo Position")]
+    assert order == sorted(order), "control rows are out of order"
+
+
+def test_logo_controls_read_as_one_group():
+    """Rules on the first and last row rather than a wrapper, which would
+    have broken the shared grid alignment."""
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        assert "gf-group-top" in html and "gf-group-end" in html, page
+        i = html.index(".gf-row.gf-group-top {")
+        assert "border-top" in html[i:i + 200], page

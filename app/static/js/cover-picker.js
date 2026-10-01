@@ -182,9 +182,16 @@
     // — a wrapper would have broken the column alignment with Zoom/Height.
     if (row) row.style.display = avail ? "grid" : "none";
     var sizeRow = $("gfCoverLogoSizeRow"), fadeRow = $("gfCoverLogoFadeRow");
+    var posRow = $("gfCoverLogoPosRow");
     var showSub = avail && state.logoOverlay;
     if (sizeRow) sizeRow.style.display = showSub ? "grid" : "none";
     if (fadeRow) fadeRow.style.display = showSub ? "grid" : "none";
+    if (posRow) posRow.style.display = showSub ? "grid" : "none";
+    var posVal = $("gfCoverLogoPosVal");
+    if (posVal) {
+      posVal.textContent = "X " + Math.round(state.logoX) + "%  \u00B7  Y " +
+                           Math.round(state.logoY) + "%";
+    }
     if (chk) chk.checked = !!state.logoOverlay;
     if (ovImg) {
       if (avail && state.logoOverlay) {
@@ -287,6 +294,7 @@
 
     if (dragWhat === "logo") {
       // Direct: you're moving the object itself, so it follows the cursor.
+      // applyPreview() below refreshes the X/Y readout as it goes.
       state.logoX = Math.max(0, Math.min(100, sfx + dx));
       state.logoY = Math.max(0, Math.min(100, sfy + dy));
     } else {
@@ -333,6 +341,11 @@
       if (t.id === "gfCoverLogoOn") {
         state.logoOverlay = !!t.checked;
         applyPreview(); saveFraming(); renderSummary();
+        return;
+      }
+      if (t.closest && t.closest("#gfCoverLogoCenter")) {
+        state.logoX = 50; state.logoY = 50;
+        applyPreview(); saveFraming();
         return;
       }
       if (t.closest && t.closest("#gfCoverZoomIn"))  { setZoom(state.zoom + 0.1); return; }
