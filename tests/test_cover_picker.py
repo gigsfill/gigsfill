@@ -177,7 +177,8 @@ def test_media_grids_match_between_profile_and_editor():
         edi = (ROOT / "app" / editor).read_text()
         for sel in (".v2-media-grid {", ".v2-photo-grid {"):
             i = pro.index(sel)
-            assert "repeat(4, 1fr)" in pro[i:i + 300], f"{profile} {sel}"
+            # Window has to clear the explanatory comment inside the rule.
+            assert "repeat(4, 1fr)" in pro[i:i + 700], f"{profile} {sel}"
         i = edi.index(".media-grid {")
         assert "repeat(4, 1fr)" in edi[i:i + 400], editor
 
