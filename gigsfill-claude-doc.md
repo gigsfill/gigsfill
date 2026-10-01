@@ -8,6 +8,22 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-01 (Artist profile redesigned and promoted; artist-chosen cover photo):** The artist profile was rebuilt and is now live at the existing URL. The old page is preserved as `app/artist-profile-legacy.html` for rollback; 34 files link to `artist-profile.html` so the URL was kept rather than redirected.
+
+  **What was wrong:** everything persuasive sat behind tabs and the default tab was a month calendar. For Fridays Past that meant ~65% of a 1409px page was empty calendar cells and **none of their 11 media items were visible without a click**. The rebuilt page is ~2900px of actual content.
+
+  - One scroll with an anchored section nav. Sections with no content remove themselves from the nav rather than offering a link to an empty block.
+  - The artist's own photo is the hero. `object-fit: contain`, not `cover` — a band logo is usually a wide wordmark and cover crops the name clean off, which it did on the first pass.
+  - **Calendar kept**, listed first, but opens in a modal. "Are they free on the 17th" is a spatial question so the month grid stays; it just doesn't own the page. Booked dates are clickable; external (non-GigsFill) gigs render as muted dashed chips so availability is honest without implying a booking we hold.
+  - The action is **context-aware**: approved venues see a "Your Preferred Artist" badge beside the name, invited sees "Invitation Sent", an artist who applied routes to the approval screen, a venue with no relationship gets an invite button, and everyone else gets the contact details.
+  - Typography moved to **Oswald + Barlow**. Inter read as anonymous for content that is essentially gig-poster material.
+  - Setlist is single lines in four columns — a covers band with 200 songs is the normal case — collapsing past 60 behind "Show all N".
+  - Brand marks extracted to [social-icons.js](app/static/js/social-icons.js) so the venue page and this one share one set. **The URL guard there had a flaw**: it prepended `https://` to anything without a scheme, turning `javascript:alert(1)` into `https://javascript:alert(1)` — a safe scheme wrapping a payload rather than a rejection. Now an existing scheme must be http(s).
+
+  **Artist-chosen cover photo** ([artist-edit](app/artist-edit.html) → each picture gets "Use as cover"). New `artists.hero_media_id`, added to `db.py` and the `models.py` mirror. The id is client-supplied and points into `artist_media`, so the PUT **verifies the row belongs to that artist** — without it a crafted request could publish another artist's upload. Clearing needs its own `UPDATE` because `COALESCE` ignores a NULL bind. Fallback chain: chosen → first picture → profile image → gradient.
+
+  **Several bugs here were found by screenshotting, not by reading code**: the cropped logo; a `href="javascript:void(0)"` nav item that threw inside the scroll-sync's `querySelector` and killed the boot before the CTA rendered; `#v2Chips` being a flex container so two chip rows sat side by side; and badge alignment where the DOM box model said "centred" to within 0.7px while the rendered glyphs were visibly 2px off. Headless Chromium is installed at `/opt/tools/pw-venv`, outside the project venv and run under a 600M cap.
+
 - **2026-09-29 (Stripe was subscribed to 4 of 9 webhook events — ACH settlement was among the missing):** Found while auditing the go-live checklist. The handler in `stripe_connect.py` implements **9** event types; the live endpoint at `https://gigsfill.com/api/stripe/webhook` was subscribed to **4**.
 
   Stripe delivers only what an endpoint subscribes to, so a handler for an unsubscribed event is dead code that *looks* alive — nothing errors, no log line appears, the event simply never arrives. That makes this class of bug invisible until someone notices a downstream effect.

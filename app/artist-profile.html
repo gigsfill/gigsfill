@@ -1,1816 +1,742 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Artist Profile – GigsFill</title>
-  <meta name="description" content="View this artist's profile, upcoming gigs, videos, and booking info on GigsFill.">
-  <meta name="robots" content="index, follow">
-  <link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
-  <link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
-  <link rel="manifest" href="/app/static/manifest.json">
-  <link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
-  <meta name="theme-color" content="#0f1419">
-  <meta property="og:type" content="profile">
-  <meta property="og:title" content="Artist Profile – GigsFill">
-  <meta property="og:description" content="View this artist's profile, upcoming gigs, videos, and booking info on GigsFill.">
-  <meta property="og:site_name" content="GigsFill">
-  <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Artist Profile – GigsFill">
-  <meta name="twitter:description" content="View this artist's profile on GigsFill.">
-  <link href="/app/static/css/gigsfill.css?v=14" rel="stylesheet">
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Artist – GigsFill</title>
+<meta name="description" content="View this artist's profile, upcoming gigs, videos, and booking info on GigsFill.">
+<meta name="robots" content="index, follow">
+<link rel="icon" type="image/svg+xml" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR.svg">
+<link rel="icon" type="image/png" href="/app/static/img/GIGSFILL-LOGO-BRANDMARK-FULLCOLOR-SMALL.png">
+<link rel="manifest" href="/app/static/manifest.json">
+<link rel="apple-touch-icon" href="/app/static/img/gigsfill-logo_square.png">
+<meta name="theme-color" content="#0f1419">
+<meta property="og:type" content="profile">
+<meta property="og:title" content="Artist Profile – GigsFill">
+<meta property="og:description" content="View this artist's profile, upcoming gigs, videos, and booking info on GigsFill.">
+<meta property="og:site_name" content="GigsFill">
+<meta name="twitter:card" content="summary">
+<!--
+  PROTOTYPE — artist profile redesign, 2026-10-01.
+  Lives alongside the current artist-profile.html rather than replacing it,
+  so the two can be compared on the same data. Same endpoints, no backend
+  changes.
 
-  <link href="/app/static/css/gig-hover-card.css?v=10" rel="stylesheet">
-  <link href="/app/static/css/mobile.css" rel="stylesheet">
-  <link href="/app/static/css/modals.css?v=4" rel="stylesheet">
-  <style>
-    :root { --card-padding: 16px 20px; --card-gap: 10px; --section-title-size: 0.7rem; }
-    .profile-container { max-width: var(--container-max); margin: 0 auto; padding: 0 20px 20px; }
+  What this changes and why:
+   • The current page hides six of seven sections behind tabs and opens on a
+     month calendar grid. For Fridays Past that means ~65% of the page is
+     empty cells and none of their 11 media items are visible without a
+     click. A venue evaluating an artist wants to see and hear them first.
+     So: one scroll, media near the top, nav anchors instead of tab panels.
+   • The artist's own artwork becomes the page identity rather than a
+     bordered thumbnail sitting on our background.
+   • Upcoming dates render as a compact list. A month grid with one booking
+     advertises an empty diary; a list answers "are they free on the 17th"
+     in a tenth of the space.
+   • One primary action. "Booking: name - email - phone" was a line of text.
+-->
+<!-- Oswald (condensed display) + Barlow (body). Oswald carries the
+     gig-poster register the site's Inter default doesn't; Barlow is a
+     slightly condensed grotesk that sits with it without fighting, and
+     stays readable at body size where Oswald would not. Both are allowed
+     by the CSP (style-src includes fonts.googleapis.com, font-src
+     fonts.gstatic.com). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="/app/static/css/gigsfill.css?v=16" rel="stylesheet"/>
+<link href="/app/static/css/mobile.css?v=6" rel="stylesheet"/>
+<style>
+  /* ── tokens ─────────────────────────────────────────────────────────
+     Built on the site palette (--bg/--card/--cyan/--purple). The additions
+     are a deeper ground than --bg so the hero can sit above it, and two
+     neutrals biased slightly toward the cyan accent so greys read as
+     chosen rather than defaulted. */
+  :root {
+    --v2-ground: #070a11;
+    --v2-raise: #121826;
+    --v2-raise-2: #182031;
+    --v2-line: rgba(148, 163, 184, 0.14);
+    --v2-line-soft: rgba(148, 163, 184, 0.08);
+    --v2-dim: #8a98ad;
+    --v2-dimmer: #64748b;
+    --v2-max: min(1180px, calc(100vw - 32px));
+  }
 
-    /* LOGO HERO — always visible.
-       Logo slot behavior: shows the uploaded logo image when has-logo is
-       set on the hero container; otherwise the image is hidden and the
-       gradient artist name renders CENTERED inside the same-sized frame
-       so the box never sits empty. Handled by has-logo class toggle
-       driven by loadMedia in the script below. */
-    .logo-hero { text-align: center; padding: 20px 20px 16px; }
-    .logo-slot {
-      position: relative; width: 100%; max-width: 500px; height: 140px;
-      margin: 0 auto 12px; background: var(--card, #111); border: 2px solid var(--border);
-      border-radius: 8px; display: flex; align-items: center; justify-content: center;
-      overflow: hidden;
-    }
-    .profile-pic {
-      max-width: 100%; max-height: 100%; object-fit: contain;
-      display: none; /* revealed via .has-logo below */
-    }
-    .logo-slot-name {
-      display: block; font-size: 2rem; font-weight: 700; margin: 0; padding: 0 16px;
-      background: linear-gradient(135deg, var(--purple), var(--cyan));
-      background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      text-align: center; line-height: 1.15; word-break: break-word;
-    }
-    .logo-hero.has-logo .profile-pic { display: block; }
-    .logo-hero.has-logo .logo-slot-name { display: none; }
-    /* When there's no logo, the whole slot IS the name — no separate
-       border card behind the image; keep the frame subtle. */
-    .logo-hero:not(.has-logo) .logo-slot { border-color: rgba(255,255,255,0.06); background: rgba(255,255,255,0.02); }
-    .artist-location { font-size: 0.85rem; color: var(--text-gray); margin: 0; }
+  body.v2 {
+    background: var(--v2-ground);
+    color: var(--text);
+    margin: 0;
+    font-family: 'Barlow', 'Inter', -apple-system, sans-serif;
+  }
+  /* Display face on the things that set the page's voice. Oswald is
+     narrow, so it takes a little tracking at small sizes to stay legible. */
+  .v2-name, .v2-sec-head h2, .v2-date-day, .v2-date-mon,
+  .v2-contact h3, .v2-btn, .v2-nav a, .v2-chip, .v2-badge {
+    font-family: 'Oswald', 'Barlow', sans-serif;
+  }
+  .v2-name { letter-spacing: 0.005em; text-transform: uppercase; }
+  .v2-sec-head h2 { letter-spacing: 0.16em; }
+  .v2-nav a { letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.8rem; }
+  .v2-btn { letter-spacing: 0.06em; text-transform: uppercase; }
+  .v2-chip { letter-spacing: 0.07em; text-transform: uppercase; }
 
-    /* TABS */
-    /* 2026-08-11: sticky under the app-header. --app-header-height is
-       defined in gigsfill-modern.css and adapts for mobile. z-index:90
-       sits under the header (100). Opaque background so page content
-       doesn't bleed through as it scrolls under the tab bar. */
-    .profile-tabs {
-      display: flex; gap: 0; border-bottom: 1px solid var(--border);
-      margin-bottom: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch;
-      /* Center tabs in the row when they all fit (>~700px wide). On
-         narrower viewports the overflow-x:auto kicks in for horizontal
-         scrolling, and justify-content:center is ignored anyway because
-         content overflows. */
-      justify-content: center;
-      position: fixed;
-      top: 60px;
-      left: 0;
-      right: 0;
-      z-index: 90;
-      background: var(--bg);
-      height: 50px;
-      /* Align first tab under the logo — see gigsfill.css .tabs comment. */
-      padding-left: calc((100vw - var(--container-max)) / 2 + 20px);
-      padding-right: calc((100vw - var(--container-max)) / 2 + 20px);
-      box-sizing: border-box;
-      align-items: center;
-    }
-    .profile-container:has(.profile-tabs) {
-      padding-top: 66px !important;
-    }
-    .profile-tabs button {
-      flex-shrink: 0; padding: 10px 16px; background: none; border: none;
-      border-bottom: 2px solid transparent; color: var(--text-gray);
-      font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.2s;
-      white-space: nowrap;
-    }
-    .profile-tabs button:hover { color: var(--text); }
-    .profile-tabs button.active { color: var(--cyan); border-bottom-color: var(--cyan); }
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
+  .v2-wrap { max-width: var(--v2-max); margin: 0 auto; }
 
-    /* Cards */
-    .content-card {
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: var(--card-padding); margin-bottom: var(--card-gap);
-    }
-    .content-card > h2 {
-      font-size: var(--section-title-size); font-weight: 700; color: var(--cyan);
-      text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 12px;
-      padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
+  /* ── hero ───────────────────────────────────────────────────────────
+     The artist's photo fills the band; their logo sits on top of it. A
+     two-stop scrim keeps the name legible over whatever they uploaded —
+     we can't predict brightness, so the gradient does the work rather
+     than hoping the image cooperates. */
+  .v2-hero {
+    position: relative;
+    min-height: 420px;
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+    border-bottom: 1px solid var(--v2-line);
+  }
+  .v2-hero-bg {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+    transform: scale(1.06);
+    filter: saturate(0.9);
+  }
+  .v2-hero-scrim {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, rgba(7,10,17,0.30) 0%, rgba(7,10,17,0.70) 48%, rgba(7,10,17,0.97) 100%),
+      linear-gradient(90deg, rgba(7,10,17,0.80) 0%, rgba(7,10,17,0.30) 55%, transparent 100%),
+      radial-gradient(1200px 400px at 20% 100%, rgba(139,92,246,0.20), transparent 70%);
+  }
+  /* No photo yet — don't fall back to a flat block; a quiet gradient still
+     reads as designed. */
+  .v2-hero.no-photo .v2-hero-bg {
+    background: radial-gradient(900px 400px at 25% 0%, rgba(139,92,246,0.22), transparent 65%),
+                radial-gradient(900px 400px at 85% 100%, rgba(6,182,212,0.16), transparent 65%),
+                var(--v2-raise);
+    transform: none;
+  }
+  .v2-hero-inner {
+    position: relative;
+    width: 100%;
+    padding: 92px 0 40px;
+  }
+  .v2-hero-grid {
+    display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap;
+  }
+  .v2-logo {
+    width: 150px; height: 112px; flex: 0 0 auto;
+    border-radius: 12px;
+    /* `contain`, not `cover`: a band logo is usually a wide wordmark and
+       cover crops the name clean off. Padding + a dark plate means a
+       transparent PNG still reads against the hero photo. */
+    object-fit: contain;
+    padding: 10px;
+    background: rgba(8, 11, 18, 0.72);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(255,255,255,0.16);
+    box-shadow: 0 18px 40px rgba(0,0,0,0.55);
+  }
+  .v2-head { flex: 1 1 320px; min-width: 0; }
+  .v2-name {
+    margin: 0 0 6px;
+    font-size: clamp(2rem, 4.6vw, 3.1rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.02;
+    text-wrap: balance;
+  }
+  .v2-sub { color: #c7d2e1; font-size: 0.98rem; margin-bottom: 14px; }
+  .v2-sub .dot { color: var(--v2-dimmer); margin: 0 7px; }
 
-    /* Info section */
-    .artist-type-badge {
-      display: inline-block; padding: 5px 14px; background: rgba(139,92,246,0.12);
-      border: 1px solid rgba(139,92,246,0.25); border-radius: 20px;
-      color: var(--purple); font-size: 0.75rem; font-weight: 600; margin-top: 6px;
-    }
-    .artist-type-badge:empty { display: none; }
-    .artist-bio { margin-top: 14px; font-size: 0.875rem; line-height: 1.6; color: var(--text); white-space: pre-line; }
-    .artist-bio:empty { display: none; }
-    .booking-contact {
-      margin-top: 14px; padding: 10px 18px; background: rgba(6,182,212,0.08);
-      border: 1px solid rgba(6,182,212,0.2); border-radius: 8px;
-      color: var(--cyan); font-size: 0.8rem; font-weight: 500; display: inline-block;
-    }
-    .booking-contact:empty { display: none; }
+  /* Block, not flex: the rows inside do their own wrapping. As a flex
+     container this laid the two rows side by side instead of stacking. */
+  .v2-chips { display: block; margin-bottom: 16px; }
+  .v2-chip {
+    font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em;
+    padding: 5px 11px; border-radius: 999px;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #dbe4f0;
+  }
+  .v2-chip.accent {
+    background: rgba(139,92,246,0.18);
+    border-color: rgba(139,92,246,0.45);
+    color: #cbb8ff;
+  }
 
-    /* Calendar */
-    .cal-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-    .cal-toolbar h3 { margin: 0; font-size: 1.3rem; color: var(--text); font-weight: 600; }
-    .cal-toolbar button {
-      background: transparent; border: 1px solid var(--border);
-      color: var(--text); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 500; transition: all 0.2s;
-    }
-    .cal-toolbar button:hover { background: rgba(255,255,255,0.05); border-color: var(--cyan); color: var(--cyan); }
-    .cal-header {
-      display: grid; grid-template-columns: repeat(7, 1fr); text-align: center;
-      color: var(--text-gray); font-size: 0.75rem; font-weight: 600;
-      text-transform: uppercase; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
-    }
-    .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
-    .cal-day {
-      background: rgba(8, 11, 22, 0.97); border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 10px; min-height: 130px; padding: 8px 4px;
-      cursor: pointer; position: relative; transition: all 0.2s;
-      display: flex; flex-direction: column;
-      width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden;
-    }
-    .cal-day:hover { background: rgba(18, 22, 38, 0.98); border-color: rgba(124, 107, 255, 0.45); }
-    .cal-day.empty { background: rgba(14, 17, 28, 0.6); border-color: rgba(255,255,255,0.04); cursor: default; }
-    /* Out-of-month days — only the day-num is muted (Jul 2026).
-       Past-vs-future is the only axis that blackens (.past). */
-    /* Three-tier hierarchy matching every other calendar on the site.
-       Spillover cells get a darker bg + heavily muted numbers; current-
-       month bumps brighter so it clearly dominates. Month-boundary
-       label ("Aug 1", "Jul 26" top-left) uses solid cyan bold. */
-    .cal-day.other-month { background: rgba(0,0,0,0.22); }
-    .cal-day.other-month:hover { background: rgba(0,0,0,0.08); }
-    .cal-day.other-month .day-num { color: rgba(255,255,255,0.18); }
-    .cal-day .day-num { position: absolute; top: 8px; right: 10px; font-size: 0.75rem; color: rgba(255,255,255,0.88); font-weight: 500; margin-bottom: 0; }
-    .cal-day .day-num.month-boundary { font-weight: 700; letter-spacing: 0.01em; color: #06b6d4; }
-    /* Uniform dimness — boundary matches plain spillover numbers. */
-    .cal-day.other-month .day-num.month-boundary { color: rgba(255, 255, 255, 0.18); }
-    .cal-day.today { border-color: var(--cyan); }
-    .cal-day.past { opacity: 0.5; background: rgba(0,0,0,0.2); cursor: default; }
-    .cal-day.past:hover { background: rgba(0,0,0,0.2); border-color: rgba(255,255,255,0.08); }
-    .cal-day.past .day-num { color: rgba(255,255,255,0.3); }
-    /* Gig pills */
-    .cal-gig {
-      padding: 2px 8px; border-radius: 6px; margin-bottom: 4px;
-      font-size: 0.65rem; font-weight: 600; color: #fff;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
-      transition: all 0.2s; max-width: 100%;
-    }
-    .cal-gig:hover { transform: translateY(-1px); filter: brightness(1.05); }
-    .cal-gig.booked { background: linear-gradient(135deg, #ef4444, #b91c1c); }
-    .cal-gig.open { background: linear-gradient(135deg, #10b981, #059669); color: #000 !important; }
-    /* Scrollable gigs container */
-    .cal-gigs-container {
-      max-height: 100px; overflow-y: auto; overflow-x: hidden; margin-top: 26px; padding-right: 4px;
-      scrollbar-width: thin; scrollbar-color: var(--accent-purple) rgba(0,0,0,0.2);
-    }
-    .cal-gigs-container::-webkit-scrollbar { width: 6px; }
-    .cal-gigs-container::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 3px; }
-    .cal-gigs-container::-webkit-scrollbar-thumb { background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink)); border-radius: 3px; }
-    .cal-gigs-container .cal-gig { margin-top: 0; }
-    .cal-gigs-container .cal-gig:last-child { margin-bottom: 0; }
+  .v2-cta-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .v2-btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 22px; border-radius: 8px;
+    font-size: 0.9rem; font-weight: 700; cursor: pointer;
+    border: 1px solid transparent; text-decoration: none;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  }
+  .v2-btn:active { transform: translateY(1px); }
+  .v2-btn.primary {
+    background: linear-gradient(135deg, var(--purple), var(--cyan));
+    color: #06121a;
+  }
+  .v2-btn.primary:hover { box-shadow: 0 8px 26px rgba(6,182,212,0.32); }
+  .v2-btn.ghost {
+    background: rgba(255,255,255,0.05);
+    border-color: rgba(255,255,255,0.18);
+    color: var(--text);
+  }
+  .v2-btn.ghost:hover { background: rgba(255,255,255,0.1); border-color: var(--cyan); color: var(--cyan); }
 
-    /* Gig Detail Modal */
-    .gig-modal-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
-      display: flex; align-items: center; justify-content: center; z-index: 10000;
-    }
-    .gig-modal-overlay.hidden { display: none; }
-    .gig-modal {
-      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-      padding: 28px 32px; max-width: 480px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-      max-height: 90vh; overflow-y: auto;
-    }
-    .gig-modal.day-modal {
-      max-width: min(980px, 96vw);
-      width: fit-content;
-      min-width: min(900px, 96vw);
-      padding: 24px;
-    }
-    .gig-modal.day-modal .gig-row {
-      font-size: 0.7rem;
-      font-weight: 700;
-    }
-    .gig-modal.day-modal h3 {
-      margin: 0 0 18px; font-size: 1rem; font-weight: 700; color: var(--text);
-      padding-bottom: 12px; border-bottom: 1px solid var(--border);
-    }
-    .gig-modal-row {
-      display: flex; justify-content: space-between; padding: 7px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.03);
-    }
-    .gig-modal-row:last-of-type { border-bottom: none; }
-    .gig-modal-label { font-size: 0.75rem; color: var(--text-gray); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-    .gig-modal-value { font-size: 0.8rem; color: var(--text); font-weight: 500; text-align: right; }
-    .gig-modal-close {
-      margin-top: 18px; width: 100%; padding: 10px; background: rgba(255,255,255,0.06);
-      border: 1px solid var(--border); border-radius: 6px; color: var(--text-gray);
-      font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.15s;
-    }
-    .gig-modal-close:hover { background: rgba(255,255,255,0.1); color: var(--text); }
-    .gig-modal-value a { color: var(--cyan); text-decoration: none; }
-    .gig-modal-value a:hover { text-decoration: underline; }
+  .v2-rating { display: inline-flex; align-items: center; gap: 7px; font-size: 0.9rem; }
+  .v2-stars { color: #fbbf24; letter-spacing: 1px; }
 
-    /* Social Media — centered grid of branded tiles. Mirrors the new
-       video/picture grid layout: fixed 110px tiles, auto-fit wrapping,
-       justify-content:center so a partial row sits in the middle of the
-       container instead of left-aligned. Each tile is a square card with
-       the brand's iconic SVG (real logos, not emoji) and label below. */
-    .social-links {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, 110px);
-      justify-content: center;
-      gap: 12px;
-    }
-    .social-link {
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 8px; padding: 18px 8px;
-      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
-      border-radius: 12px; color: var(--text-gray); text-decoration: none;
-      font-size: 0.75rem; font-weight: 600; transition: all 0.18s ease;
-      /* Per-tile brand color set via inline style="--brand:#..." so the same
-         class hovers to whichever color belongs to that tile. */
-    }
-    .social-link svg {
-      width: 34px; height: 34px;
-      color: var(--brand, var(--text-gray));
-      transition: transform 0.18s ease;
-    }
-    .social-link:hover {
-      background: rgba(255,255,255,0.06);
-      border-color: var(--brand, var(--purple));
-      color: var(--text);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 18px rgba(0,0,0,0.35);
-    }
-    .social-link:hover svg { transform: scale(1.1); }
-    @media (max-width: 480px) {
-      .social-links { grid-template-columns: repeat(auto-fit, 90px); gap: 10px; }
-      .social-link { padding: 14px 6px; font-size: 0.7rem; }
-      .social-link svg { width: 28px; height: 28px; }
-    }
+  /* ── section nav ────────────────────────────────────────────────────
+     Replaces the tab bar. Anchors scroll rather than hide, so nothing is
+     discoverable only by clicking. */
+  .v2-nav {
+    position: sticky; top: 0; z-index: 40;
+    background: rgba(7,10,17,0.86);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--v2-line);
+  }
+  .v2-nav-inner { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  .v2-nav-inner::-webkit-scrollbar { display: none; }
+  .v2-nav a {
+    padding: 13px 14px; font-size: 0.82rem; font-weight: 600;
+    color: var(--v2-dim); text-decoration: none; white-space: nowrap;
+    border-bottom: 2px solid transparent;
+  }
+  .v2-nav a:hover { color: var(--text); }
+  .v2-nav a.act { cursor: pointer; }
+  .v2-nav a.on { color: var(--cyan); border-bottom-color: var(--cyan); }
 
-    /* Media */
-    .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
-    .media-card {
-      background: rgba(255,255,255,0.02); border: 1px solid var(--border);
-      border-radius: 8px; overflow: hidden; cursor: pointer; transition: all 0.2s;
-    }
-    .media-card:hover { border-color: var(--purple); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
-    .media-card img { width: 100%; height: 80px; object-fit: cover; display: block; }
-    .media-title-label {
-      padding: 6px 8px; font-size: 0.65rem; color: var(--text-gray);
-      text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(0,0,0,0.3);
-    }
-    /* Caption row beneath the title-label on video/photo cards. Optional —
-       JS only emits this element when the caption is non-empty, so cards
-       without a caption keep their original 2-row look. Multi-line allowed
-       up to 2 lines, then ellipsis (line-clamp). */
-    .media-caption-label {
-      padding: 4px 8px 8px;
-      font-size: 0.7rem;
-      color: var(--text);
-      line-height: 1.35;
-      background: rgba(0,0,0,0.3);
-      text-align: center;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-      word-break: break-word;
-    }
+  /* ── sections ───────────────────────────────────────────────────────
+     Alternating grounds give the long scroll rhythm, so it reads as
+     distinct chapters rather than one undifferentiated column. */
+  .v2-sec { padding: 46px 0; scroll-margin-top: 58px; }
+  .v2-sec.alt { background: var(--v2-raise); border-block: 1px solid var(--v2-line-soft); }
+  .v2-sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .v2-sec-head h2 {
+    margin: 0; font-size: 0.78rem; font-weight: 800;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan);
+  }
+  .v2-sec-head .count { font-size: 0.78rem; color: var(--v2-dimmer); }
 
-    /* Video + Picture grid: bigger cards (4 per row on desktop, wraps to 3/2/1
-       as viewport narrows), centered when a row is partially full. Using
-       `auto-fit` with FIXED column widths + `justify-content: center` is what
-       gives the centered behavior — `auto-fit` keeps as many fixed-width
-       tracks as fit, justify-content centers the resulting tracks when there's
-       leftover space (so 3 videos in a 4-col container render centered, not
-       left-aligned). */
-    /* 2026-09-09: switched from grid auto-fit to flex-wrap +
-       justify-content:center so cards ALWAYS fill from the middle
-       outward — 1 item is centered, 2 sit side-by-side centered,
-       3 form a centered triple, etc. Fixed card width keeps
-       alignment predictable at every viewport; grid auto-fit at
-       responsive breakpoints was falling back to a stretched
-       1fr fill in the 481–600px band. */
-    #videos.media-grid,
-    #pictures.media-grid {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 14px;
-    }
-    #videos .media-card,
-    #pictures .media-card { width: 210px; flex: 0 0 210px; max-width: 100%; }
-    #videos .media-card img,
-    #pictures .media-card img { height: 130px; }
-    #videos .media-title-label,
-    #pictures .media-title-label {
-      font-size: 0.78rem; padding: 8px 10px 4px;
-      white-space: normal; line-height: 1.3;
-      color: var(--text); font-weight: 600;
-      /* 2-line max for title — long names wrap */
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-    #videos .media-caption-label,
-    #pictures .media-caption-label {
-      font-size: 0.72rem; padding: 0 10px 10px;
-      /* 2026-07-26: center caption text under pictures/videos so it
-         aligns with the centered title above. Previously left-aligned. */
-      text-align: center;
-      -webkit-line-clamp: 5;       /* 5 lines now that the card is wider */
-      background: transparent;
-      color: var(--text-gray);
-    }
-    /* Narrow-viewport breakpoints — fewer fixed columns. The same auto-fit
-       behavior applies; we only change the fixed track width / row gap on
-       tiny screens so the card stays comfortably readable. */
-    @media (max-width: 480px) {
-      #videos .media-card,
-      #pictures .media-card {
-        width: 100%;
-        max-width: 360px;
-        flex: 0 0 100%;
-      }
-      #videos .media-card img,
-      #pictures .media-card img { height: 180px; }
-    }
-    .audio-container { display: flex; flex-direction: column; gap: 6px; }
-    /* Audio entry groups an optional caption with its player row. When the
-       caption is empty the entry contains only the row, so visually it looks
-       identical to the old layout (no blank caption row). */
-    .audio-entry {
-      display: flex; flex-direction: column; gap: 6px; padding: 8px 12px;
-      background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px;
-    }
-    .audio-entry:hover { border-color: var(--purple); }
-    .audio-caption-display {
-      font-size: 0.78rem; color: var(--text-gray); line-height: 1.4;
-      white-space: pre-wrap; word-break: break-word;
-    }
-    .audio-row {
-      display: flex; align-items: center; gap: 12px;
-      /* Padding/background/border moved up to .audio-entry. Keep them here as
-         a fallback for any historical row not wrapped in .audio-entry. */
-      padding: 0; background: transparent; border: 0;
-    }
-    .audio-row strong { flex: 0 0 160px; max-width: 160px; font-size: 0.75rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .audio-row audio { flex: 1; height: 28px; }
-    .empty-msg { color: var(--text-gray); font-size: 0.82rem; text-align: center; padding: 24px 0; }
+  /* ── media ──────────────────────────────────────────────────────────
+     Videos carry their own thumbnails via video-thumbnail.js (YouTube
+     maxres, branded fallback for Instagram/TikTok which expose none). */
+  .v2-media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .v2-card {
+    background: var(--v2-raise-2);
+    border: 1px solid var(--v2-line);
+    border-radius: 12px; overflow: hidden;
+    transition: transform .14s ease, border-color .14s ease;
+    text-decoration: none; color: inherit; display: block;
+  }
+  .v2-card:hover { transform: translateY(-3px); border-color: rgba(6,182,212,0.5); }
+  .v2-thumb { position: relative; aspect-ratio: 16/9; background: #0d1220; overflow: hidden; }
+  .v2-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .v2-play {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  }
+  .v2-play span {
+    width: 48px; height: 48px; border-radius: 999px;
+    background: rgba(0,0,0,0.55); border: 2px solid rgba(255,255,255,0.85);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .v2-play span::after {
+    content: ""; width: 0; height: 0;
+    border-left: 13px solid #fff; border-top: 8px solid transparent; border-bottom: 8px solid transparent;
+    margin-left: 4px;
+  }
+  /* Quiet stand-in where a platform serves no public still. Deliberately
+     low-contrast: four of these in a row should recede so the titles read,
+     where four full-bleed brand gradients compete with each other. */
+  .v2-thumb-blank {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(420px 180px at 30% 15%, rgba(139,92,246,0.16), transparent 70%),
+      linear-gradient(145deg, #141b2a 0%, #0e1420 100%);
+    display: flex; align-items: flex-start; justify-content: flex-start;
+    padding: 10px;
+  }
+  .v2-badge {
+    font-size: 0.64rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--v2-dim);
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+    padding: 3px 8px; border-radius: 5px;
+  }
+  .v2-card-body { padding: 12px 14px; }
+  .v2-card-title { font-size: 0.88rem; font-weight: 650; margin-bottom: 3px; }
+  .v2-card-sub { font-size: 0.76rem; color: var(--v2-dim); }
 
-    /* Media Modal */
-    #mediaModal { position: fixed; inset: 0; background: rgba(0,0,0,0.92); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 9999; cursor: pointer; }
-    #mediaModal.hidden { display: none; }
-    #mediaModalContent img, #mediaModalContent video { max-width: 90vw; max-height: 90vh; border-radius: 10px; }
-    #mediaModalContent iframe { border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+  .v2-photo-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px;
+  }
+  /* With only a couple of photos, auto-fill leaves small tiles stranded in a
+     wide row. Give them room instead. */
+  .v2-photo-grid.few { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .v2-photo {
+    aspect-ratio: 4/3; border-radius: 12px; overflow: hidden;
+    border: 1px solid var(--v2-line); cursor: pointer; position: relative;
+  }
+  .v2-photo img { width: 100%; height: 100%; object-fit: cover; display: block;
+                  transition: transform .25s ease; }
+  .v2-photo:hover img { transform: scale(1.05); }
+  .v2-photo figcaption {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 18px 12px 9px; font-size: 0.76rem;
+    background: linear-gradient(transparent, rgba(0,0,0,0.78));
+  }
 
-    @media (max-width: 600px) {
-      .logo-slot { height: 110px; }
-      .logo-slot-name { font-size: 1.5rem; }
-      .artist-name { font-size: 1.4rem; }
-      .media-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
-      .audio-row { flex-wrap: wrap; }
-      .audio-row strong { flex: 1 1 100%; max-width: none; }
-      .audio-row audio { flex: 1 1 100%; }
-      .cal-gig { font-size: 0.55rem; }
-      .cal-day { min-height: 90px; padding: 6px; }
-      .cal-gigs-container { margin-top: 20px; max-height: 70px; }
-      .gig-modal { padding: 20px 24px; }
-      .profile-tabs button { padding: 8px 10px; font-size: 0.7rem; }
-    }
-  </style>
-  <script src="/app/static/js/security.js?v=2"></script>
-  <script src="/app/static/js/time-format.js"></script>
+  /* ── about ──────────────────────────────────────────────────────── */
+  .v2-about { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 40px; align-items: start; }
+  .v2-bio { font-size: 1.02rem; line-height: 1.75; color: #d7dfea; max-width: 62ch; white-space: pre-line; }
+  .v2-facts { display: grid; gap: 10px; }
+  .v2-fact {
+    display: flex; justify-content: space-between; gap: 14px;
+    padding: 11px 14px; border-radius: 9px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+    font-size: 0.84rem;
+  }
+  .v2-fact dt { color: var(--v2-dim); margin: 0; }
+  .v2-fact dd { margin: 0; font-weight: 650; text-align: right; }
+
+  /* ── dates ──────────────────────────────────────────────────────────
+     A list, not a month grid. One booking in a 35-cell grid reads as an
+     empty diary; a list of real dates reads as a working band. */
+  .v2-dates { display: grid; gap: 9px; }
+  .v2-date {
+    display: flex; align-items: center; gap: 16px;
+    padding: 13px 16px; border-radius: 10px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+  }
+  .v2-date-when {
+    flex: 0 0 62px; text-align: center; line-height: 1.1;
+  }
+  .v2-date-mon { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--cyan); font-weight: 700; }
+  .v2-date-day { font-size: 1.45rem; font-weight: 800; }
+  .v2-date-main { flex: 1 1 auto; min-width: 0; }
+  .v2-date-venue { font-weight: 650; font-size: 0.95rem; }
+  .v2-date-meta { font-size: 0.79rem; color: var(--v2-dim); margin-top: 2px; }
+
+  /* ── setlist ────────────────────────────────────────────────────────
+     Distinctive to us — a covers band is largely judged on what they
+     play, and no comparable site surfaces it. */
+  .v2-songs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+  .v2-song {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 10px 14px; border-radius: 9px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line-soft);
+  }
+  .v2-song-n { font-size: 0.72rem; color: var(--v2-dimmer); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+  .v2-song-t { font-weight: 600; font-size: 0.89rem; }
+  .v2-song-a { font-size: 0.78rem; color: var(--v2-dim); }
+
+  /* ── social + contact ───────────────────────────────────────────── */
+  .v2-social { display: flex; flex-wrap: wrap; gap: 9px; }
+  .v2-social a {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 15px; border-radius: 999px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+    color: #dbe4f0; text-decoration: none; font-size: 0.83rem; font-weight: 600;
+  }
+  .v2-social a:hover { border-color: var(--cyan); color: var(--cyan); }
+
+  .v2-contact {
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+    border-radius: 14px; padding: 26px; text-align: center;
+  }
+  .v2-contact-line {
+    display: flex; align-items: baseline; justify-content: center;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 18px;
+  }
+  .v2-contact-label {
+    font-family: 'Oswald', sans-serif; font-size: 0.72rem; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan);
+  }
+  .v2-contact-value { font-size: 1rem; color: var(--text); }
+  .v2-contact-value a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid rgba(6,182,212,0.4); }
+  .v2-contact-value a:hover { border-bottom-color: var(--cyan); }
+
+  .v2-empty { color: var(--v2-dimmer); font-size: 0.87rem; padding: 14px 0; }
+
+  /* Audio: native players, one row each. A track list is read top to
+     bottom, so a card grid would fight it. */
+  .v2-track {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 12px 16px; margin-bottom: 9px; border-radius: 10px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+  }
+  .v2-track-name { flex: 1 1 200px; font-weight: 600; font-size: 0.9rem; min-width: 0; }
+  .v2-track audio { flex: 2 1 320px; height: 36px; max-width: 100%; }
+  .v2-track-link { font-size: 0.82rem; color: var(--cyan); text-decoration: none; }
+  .v2-track-link:hover { text-decoration: underline; }
+
+  /* ── calendar modal ─────────────────────────────────────────────────
+     Availability stays a month grid, because "are they free on the 17th"
+     is a spatial question — but it opens on demand instead of occupying
+     two thirds of the page while mostly empty. */
+  .v2-modal {
+    position: fixed; inset: 0; z-index: 130; display: none;
+    background: rgba(3,5,10,0.88); align-items: center; justify-content: center; padding: 20px;
+  }
+  .v2-modal.open { display: flex; }
+  .v2-modal-box {
+    background: var(--v2-raise); border: 1px solid var(--v2-line);
+    border-radius: 14px; width: min(820px, 100%); max-height: 88vh; overflow: auto;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .v2-modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--v2-line); gap: 12px;
+  }
+  .v2-modal-head h3 { margin: 0; font-size: 1rem; font-family: 'Oswald', sans-serif;
+                      letter-spacing: 0.08em; text-transform: uppercase; }
+  .v2-allbtn {
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+    color: var(--text); border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    font-family: 'Oswald', sans-serif; font-size: 0.78rem;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .v2-allbtn:hover { border-color: var(--cyan); color: var(--cyan); }
+  /* Day view: the date owns the left, so push the all-dates control over
+     to sit beside the close button rather than floating mid-header.
+     margin-right keeps it off the X. */
+  .v2-modal-head.day .v2-allbtn { margin-left: auto; margin-right: 12px; }
+  .v2-cal-nav { display: flex; align-items: center; gap: 10px; }
+  .v2-cal-nav button {
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line); color: var(--text);
+    border-radius: 7px; padding: 5px 11px; cursor: pointer; font-size: 0.85rem;
+  }
+  .v2-cal-nav button:hover { border-color: var(--cyan); color: var(--cyan); }
+  .v2-cal-month { font-family: 'Oswald', sans-serif; letter-spacing: 0.06em;
+                  min-width: 165px; text-align: center; font-size: 0.95rem; }
+  .v2-cal-body { padding: 16px 20px 22px; }
+  .v2-cal-dow, .v2-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .v2-cal-dow div {
+    text-align: center; font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--v2-dimmer); padding-bottom: 7px; font-family: 'Oswald', sans-serif;
+  }
+  .v2-cal-cell {
+    min-height: 74px; border-radius: 8px; padding: 6px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line-soft);
+    font-size: 0.74rem;
+  }
+  .v2-cal-cell.other { opacity: 0.32; }
+  .v2-cal-cell.today { border-color: var(--cyan); }
+  .v2-cal-num { color: var(--v2-dim); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .v2-cal-cell.booked { background: rgba(139,92,246,0.14); border-color: rgba(139,92,246,0.45); }
+  .v2-cal-gig {
+    background: rgba(139,92,246,0.35); border-radius: 4px; padding: 2px 5px;
+    font-size: 0.66rem; line-height: 1.3; margin-bottom: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Self-reported dates the artist plays elsewhere. Muted and greyed so
+     they read as "unavailable" without implying a GigsFill booking. */
+  .v2-cal-gig.ext {
+    background: rgba(148,163,184,0.22); color: var(--v2-dim);
+    border: 1px dashed rgba(148,163,184,0.35);
+  }
+  .v2-cal-key.ext { background: rgba(148,163,184,0.3); border: 1px dashed rgba(148,163,184,0.5); }
+  .v2-cal-legend { display: flex; gap: 16px; margin-top: 14px; font-size: 0.74rem; color: var(--v2-dim); }
+  .v2-cal-key { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+                background: rgba(139,92,246,0.45); margin-right: 6px; vertical-align: -1px; }
+
+  .v2-status {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 20px; border-radius: 8px; font-size: 0.85rem; font-weight: 700;
+    font-family: 'Oswald', sans-serif; letter-spacing: 0.06em; text-transform: uppercase;
+    background: rgba(16,185,129,0.16); border: 1px solid rgba(16,185,129,0.45); color: #34d399;
+  }
+  .v2-status.wait {
+    background: rgba(139,92,246,0.16); border-color: rgba(139,92,246,0.45); color: #c4b5fd;
+  }
+
+  /* ── bits added for chips / badge / dates / social / setlist ────── */
+  .v2-chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
+  .v2-chip-row + .v2-chip-row { margin-top: 7px; }
+
+  /* Badge rides beside the name, vertically centred against it. baseline
+     would hang it off the cap-height of a 3rem display face and read as
+     misaligned. */
+  .v2-name-line {
+    display: flex; align-items: center; gap: 14px;
+    flex-wrap: wrap; margin-bottom: 6px;
+  }
+  .v2-name-line .v2-name { margin-bottom: 0; }
+  .v2-name-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    /* Flex centres the pill against the h1's LINE BOX. The name is
+       uppercase Oswald, so its glyphs occupy only the cap height and sit
+       high in that box — a box-centred pill reads as floating above the
+       letters. 2px aligns the pill to the rendered glyph centre; measured
+       off the screenshot, not guessed (4px overshot by the same margin
+       the original undershot). */
+    transform: translateY(2px);
+    margin: 0; padding: 5px 13px; border-radius: 999px;
+    font-family: 'Oswald', sans-serif; font-size: 0.72rem; font-weight: 600;
+    letter-spacing: 0.09em; text-transform: uppercase;
+    background: rgba(16,185,129,0.18); border: 1px solid rgba(16,185,129,0.5); color: #34d399;
+  }
+  .v2-name-badge.wait {
+    background: rgba(139,92,246,0.18); border-color: rgba(139,92,246,0.5); color: #c4b5fd;
+  }
+
+  .v2-date-fmt {
+    flex: 0 0 auto; font-family: 'Oswald', sans-serif; font-size: 0.72rem;
+    letter-spacing: 0.07em; text-transform: uppercase; color: #c4b5fd;
+    background: rgba(139,92,246,0.16); border: 1px solid rgba(139,92,246,0.4);
+    padding: 4px 11px; border-radius: 999px;
+  }
+
+  /* Brand marks rather than plain text. Colour on hover only — seven
+     saturated logos at rest would out-shout the content they point to. */
+  .v2-social-tile {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 9px 16px; border-radius: 10px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+    color: #dbe4f0; text-decoration: none; font-size: 0.84rem; font-weight: 600;
+    transition: border-color .15s ease, color .15s ease, transform .15s ease;
+  }
+  .v2-social-tile:hover {
+    border-color: var(--brand, var(--cyan)); color: var(--brand, var(--cyan));
+    transform: translateY(-2px);
+  }
+  .v2-social-ico { display: inline-flex; color: var(--brand, #9ca3af); }
+  .v2-social-ico svg { width: 19px; height: 19px; display: block; }
+  .v2-social-tile:hover .v2-social-ico { color: var(--brand, var(--cyan)); }
+
+  /* One line per song, flowed into columns. A covers band with 200 songs is
+     the normal case, and a card grid would run for pages. */
+  .v2-songs {
+    display: block;
+    columns: 4; column-gap: 26px;
+  }
+  .v2-song {
+    break-inside: avoid;
+    padding: 4px 0;
+    border: none; background: none; border-radius: 0;
+    font-size: 0.88rem; line-height: 1.45;
+  }
+  .v2-song-t { font-weight: 600; }
+  .v2-song-a { color: var(--v2-dim); font-size: 0.82rem; }
+  .v2-song-more { margin-top: 18px; }
+  @media (max-width: 1100px) { .v2-songs { columns: 3; } }
+  @media (max-width: 860px)  { .v2-songs { columns: 2; } }
+  @media (max-width: 560px) { .v2-songs { columns: 1; } }
+
+  .v2-back {
+    background: none; border: none; color: var(--cyan); cursor: pointer;
+    font-size: 0.82rem; padding: 0; font-family: 'Oswald', sans-serif;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .v2-day-gig {
+    display: flex; gap: 16px; align-items: flex-start;
+    padding: 13px 15px; margin-bottom: 9px; border-radius: 10px;
+    background: var(--v2-raise-2); border: 1px solid var(--v2-line);
+  }
+  .v2-day-time {
+    flex: 0 0 140px; font-family: 'Oswald', sans-serif; font-size: 0.86rem;
+    letter-spacing: 0.04em; color: var(--cyan);
+  }
+  .v2-day-venue { font-weight: 650; font-size: 0.93rem; }
+  .v2-day-venue a { color: inherit; text-decoration: underline; }
+  .v2-day-meta { font-size: 0.8rem; color: var(--v2-dim); margin-top: 3px; }
+  .v2-day-sep { margin: 0 8px; opacity: 0.55; }
+  .v2-cal-cell.booked { cursor: pointer; }
+  .v2-cal-cell.booked:hover { border-color: var(--cyan); }
+
+  /* ── lightbox ───────────────────────────────────────────────────── */
+  .v2-lb {
+    position: fixed; inset: 0; z-index: 120; display: none;
+    background: rgba(3,5,10,0.94); align-items: center; justify-content: center; padding: 24px;
+  }
+  .v2-lb.open { display: flex; }
+  .v2-lb img { max-width: 92vw; max-height: 88vh; border-radius: 10px; }
+  .v2-lb-close {
+    position: absolute; top: 18px; right: 22px; font-size: 1.8rem;
+    color: #fff; background: none; border: none; cursor: pointer; line-height: 1;
+  }
+
+  @media (max-width: 760px) {
+    .v2-about { grid-template-columns: 1fr; gap: 24px; }
+    .v2-logo { width: 92px; height: 92px; }
+    .v2-hero { min-height: 280px; }
+    .v2-hero-inner { padding: 40px 0 22px; }
+  }
+</style>
 </head>
-<body>
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
-      <div class="header-actions"><a class="btn ghost" href="/app/index.html">Home</a></div>
-    </div>
-  </header>
+<body class="dark-ui v2">
 
-  <main class="profile-container">
-    <div class="logo-hero" id="logoHero">
-      <div class="logo-slot" id="logoSlot">
-        <img id="artistLogo" class="profile-pic" src="/app/static/img/profile-placeholder.svg" alt="Artist photo"
-          onerror="this.onerror=null;this.src='/app/static/img/profile-placeholder.svg';">
-        <h1 class="artist-name logo-slot-name" id="artistName">Artist</h1>
-      </div>
-      <!-- Info moved out of its own tab (2026-07-25) — mirrors venue-profile
-           pattern where About lives directly under the hero. -->
-      <div class="artist-location" id="artistLocation"></div>
-      <div class="artist-type-badge" id="artistType" style="margin-top:8px;"></div>
-      <div class="artist-bio" id="artistBio" style="max-width:640px;margin-left:auto;margin-right:auto;text-align:center;"></div>
-      <!-- 2026-09-14: opt-in Website link. Populated (or hidden) by
-           the loadArtist init block. Sits under the bio, above Booking
-           Contact — a natural spot for "how to reach me". -->
-      <div id="artistPublicWebsite" style="display:none;margin-top:10px;text-align:center;font-size:0.85rem;color:var(--text-gray);"></div>
-      <div class="booking-contact" id="artistBooking" style="margin-top:12px;"></div>
-    </div>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="logo"><img src="/app/static/img/gigsfill-logo.png" alt="GigsFill" style="height:44px;width:auto;flex-shrink:0;"></div>
+    <div class="header-actions"><a class="btn ghost" href="/app/index.html">Home</a></div>
+  </div>
+</header>
 
-    <div class="profile-tabs" id="profileTabs">
-      <button class="active" onclick="switchTab('calendar')">Calendar</button>
-      <button onclick="switchTab('pictures')">Pictures</button>
-      <button onclick="switchTab('videos')">Videos</button>
-      <button onclick="switchTab('social')">Social Media</button>
-      <button onclick="switchTab('audio')">Audio</button>
-      <button onclick="switchTab('setlist')">Setlist <span id="setlistBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
-      <button onclick="switchTab('venues')">Venues <span id="venuesPlayedBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
-      <button onclick="switchTab('reviews')">Reviews <span id="reviewsBadge" style="font-size:0.7rem;color:var(--text-muted);"></span></button>
-    </div>
-
-    <div class="tab-panel active" id="tab-calendar">
-      <div class="content-card">
-        <div class="cal-toolbar">
-          <button onclick="changeMonth(-1)">◀ Prev</button>
-          <h3 id="calMonth"></h3>
-          <button onclick="changeMonth(1)">Next ▶</button>
+<!-- HERO -->
+<section class="v2-hero" id="v2Hero">
+  <div class="v2-hero-bg" id="v2HeroBg"></div>
+  <div class="v2-hero-scrim"></div>
+  <div class="v2-hero-inner">
+    <div class="v2-wrap">
+      <div class="v2-hero-grid">
+        <img id="v2Logo" class="v2-logo" src="/app/static/img/profile-placeholder.svg" alt="">
+        <div class="v2-head">
+          <div class="v2-name-line">
+            <h1 class="v2-name" id="v2Name">Artist</h1>
+            <span class="v2-name-badge" id="v2NameBadge" style="display:none;"></span>
+          </div>
+          <div class="v2-sub" id="v2Sub"></div>
+          <div class="v2-chips" id="v2Chips"></div>
+          <div class="v2-cta-row" id="v2Cta"></div>
         </div>
-        <!-- "Show All Booked Gigs" — parity with the artist book-gigs
-             page's own list. Public view: no pay, no cancel, just the
-             sortable table with CSV / PDF export. -->
-        <div style="display:flex; justify-content:flex-end; margin-top:8px;">
-          <button id="publicArtistShowAllGigsBtn" type="button" onclick="openArtistPublicGigsList()"
-            style="font-size:0.75rem; color:var(--text-muted); background:transparent; padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; cursor:pointer;"
-            onmouseover="this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#22c55e'"
-            onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-muted)'">📋 Show All Booked Gigs</button>
-        </div>
-        <div class="cal-header"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
-        <div class="cal-grid" id="calGrid"></div>
       </div>
-    </div>
-
-    <div class="tab-panel" id="tab-videos">
-      <div class="content-card"><div class="media-grid" id="videos"></div><div class="empty-msg" id="videosEmpty" style="display:none;">No videos uploaded yet.</div></div>
-    </div>
-    <div class="tab-panel" id="tab-pictures">
-      <div class="content-card"><div class="media-grid" id="pictures"></div><div class="empty-msg" id="picturesEmpty" style="display:none;">No pictures uploaded yet.</div></div>
-    </div>
-    <div class="tab-panel" id="tab-audio">
-      <div class="content-card"><div class="audio-container" id="audio"></div><div class="empty-msg" id="audioEmpty" style="display:none;">No audio uploaded yet.</div></div>
-    </div>
-    <div class="tab-panel" id="tab-setlist">
-      <div class="content-card" id="setlistCard">
-        <!-- Rendered by artist-setlist-public.js on first activation of
-             this tab (lazy-loaded via switchTab). Header row (count +
-             sort dropdown + search when the list is long) then a
-             multi-column song grid + pager. -->
-        <div id="setlistRoot" style="min-height:120px;"></div>
-      </div>
-    </div>
-    <div class="tab-panel" id="tab-venues">
-      <div class="content-card" id="venuesPlayedCard">
-        <!-- Rendered by artist-venues-played.js on first activation of
-             this tab. Grid of venue cards showing hero image + name +
-             city + gig count, ordered most-recent-first, each linking
-             to that venue's public profile. -->
-        <div id="venuesPlayedRoot" style="min-height:120px;"></div>
-      </div>
-    </div>
-    <div class="tab-panel" id="tab-social">
-      <div class="content-card"><div class="social-links" id="socialMedia"></div><div class="empty-msg" id="socialEmpty" style="display:none;">No social media links added yet.</div></div>
-    </div>
-    <div class="tab-panel" id="tab-reviews">
-      <div class="content-card">
-        <div id="ratingSummaryContainer" style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);"></div>
-        <div id="reviewsListContainer"></div>
-      </div>
-    </div>
-  </main>
-
-  <div class="hidden" id="mediaModal"><div id="mediaModalContent"></div></div>
-  <div class="gig-modal-overlay hidden" id="gigModal">
-    <div class="gig-modal">
-      <h3>Gig Details</h3>
-      <div id="gigModalBody"></div>
-      <div class="modal-actions" style="margin-top:16px;display:flex;justify-content:flex-end;"><button class="btn ghost" onclick="closeGigModal()">Close</button></div>
     </div>
   </div>
+</section>
 
-<!-- Lightbox modal (required by openModal/closeModal JS).
-     2026-07-26: prev/next arrows + keyboard + touch-swipe navigation
-     between pictures (and inline-embeddable videos). Arrows are siblings
-     of #lightboxContent so they persist when the content re-renders on
-     navigation. Hidden when the current list has <2 items. -->
-<div id="lightboxOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);z-index:9999;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
-  <button onclick="closeModal()" aria-label="Close" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:1.8rem;cursor:pointer;line-height:1;z-index:2;">✕</button>
-  <button id="lbPrevBtn" onclick="_lbPrev()" aria-label="Previous" style="display:none;position:absolute;top:50%;left:12px;transform:translateY(-50%);background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;cursor:pointer;width:44px;height:44px;border-radius:50%;padding:0;z-index:2;transition:background 0.15s,border-color 0.15s;align-items:center;justify-content:center;" onmouseover="this.style.background='rgba(0,0,0,0.75)';this.style.borderColor='rgba(255,255,255,0.35)';" onmouseout="this.style.background='rgba(0,0,0,0.55)';this.style.borderColor='rgba(255,255,255,0.18)';"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
-  <button id="lbNextBtn" onclick="_lbNext()" aria-label="Next"     style="display:none;position:absolute;top:50%;right:12px;transform:translateY(-50%);background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;cursor:pointer;width:44px;height:44px;border-radius:50%;padding:0;z-index:2;transition:background 0.15s,border-color 0.15s;align-items:center;justify-content:center;" onmouseover="this.style.background='rgba(0,0,0,0.75)';this.style.borderColor='rgba(255,255,255,0.35)';" onmouseout="this.style.background='rgba(0,0,0,0.55)';this.style.borderColor='rgba(255,255,255,0.18)';"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;"><polyline points="9 18 15 12 9 6"></polyline></svg></button>
-  <div id="lbCounter" style="display:none;position:absolute;bottom:16px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.65);font-size:0.75rem;letter-spacing:0.05em;z-index:2;"></div>
-  <div id="lightboxContent"></div>
+<!-- SECTION NAV -->
+<nav class="v2-nav" id="v2Nav">
+  <div class="v2-wrap v2-nav-inner" id="v2NavInner"></div>
+</nav>
+
+<main>
+  <section class="v2-sec" id="sec-listen">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>Listen</h2><span class="count" id="v2AudioCount"></span></div>
+      <div id="v2Audio"></div>
+    </div>
+  </section>
+
+  <section class="v2-sec alt" id="sec-watch">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>Watch &amp; Listen</h2><span class="count" id="v2VideoCount"></span></div>
+      <div class="v2-media-grid" id="v2Videos"></div>
+      <div class="v2-empty" id="v2VideosEmpty" style="display:none;">No videos yet.</div>
+    </div>
+  </section>
+
+  <section class="v2-sec" id="sec-photos">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>Photos</h2><span class="count" id="v2PhotoCount"></span></div>
+      <div class="v2-photo-grid" id="v2Photos"></div>
+      <div class="v2-empty" id="v2PhotosEmpty" style="display:none;">No photos yet.</div>
+    </div>
+  </section>
+
+  <section class="v2-sec alt" id="sec-about">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>About</h2></div>
+      <div class="v2-about">
+        <div class="v2-bio" id="v2Bio"></div>
+        <dl class="v2-facts" id="v2Facts"></dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="v2-sec" id="sec-dates">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>Upcoming Dates</h2><span class="count" id="v2DateCount"></span></div>
+      <div class="v2-dates" id="v2Dates"></div>
+      <div class="v2-empty" id="v2DatesEmpty" style="display:none;">No public dates on the calendar right now.</div>
+    </div>
+  </section>
+
+  <section class="v2-sec alt" id="sec-setlist">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>What They Play</h2><span class="count" id="v2SongCount"></span></div>
+      <div class="v2-songs" id="v2Songs"></div>
+      <div class="v2-empty" id="v2SongsEmpty" style="display:none;">No setlist posted yet.</div>
+    </div>
+  </section>
+
+  <section class="v2-sec" id="sec-reviews">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>Reviews</h2></div>
+      <div id="v2RatingSummary" style="margin-bottom:18px;"></div>
+      <div id="v2ReviewsList"></div>
+    </div>
+  </section>
+
+  <section class="v2-sec alt" id="sec-venues">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>Venues Played</h2></div>
+      <div id="v2VenuesPlayed"></div>
+    </div>
+  </section>
+
+  <section class="v2-sec" id="sec-contact">
+    <div class="v2-wrap">
+      <div class="v2-sec-head"><h2>Find Them</h2></div>
+      <div class="v2-social" id="v2Social" style="margin-bottom:26px;"></div>
+      <div class="v2-contact" id="v2Contact"></div>
+    </div>
+  </section>
+</main>
+
+<div class="v2-modal" id="v2CalModal">
+  <div class="v2-modal-box">
+    <!-- One header, two states. Month navigation belongs to the grid; once
+         you've clicked into a specific date it's noise, and "Availability"
+         is the wrong title for "here is one night's booking". -->
+    <div class="v2-modal-head" id="v2ModalHead">
+      <h3 id="v2ModalTitle" style="display:none;"></h3>
+      <button type="button" class="v2-allbtn" id="v2AllDatesBtn" onclick="v2ShowAllBooked()">
+        &#128197; Show All Booked Dates
+      </button>
+      <div class="v2-cal-nav">
+        <span id="v2CalNavGroup" style="display:inline-flex;align-items:center;gap:10px;">
+          <button type="button" onclick="v2CalStep(-1)" aria-label="Previous month">&#9664;</button>
+          <span class="v2-cal-month" id="v2CalMonth"></span>
+          <button type="button" onclick="v2CalStep(1)" aria-label="Next month">&#9654;</button>
+        </span>
+        <button type="button" onclick="v2CloseCal()" style="margin-left:6px;" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div class="v2-cal-body" id="v2CalMain">
+      <div class="v2-cal-dow"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
+      <div class="v2-cal-grid" id="v2CalGrid"></div>
+      <div class="v2-cal-legend">
+        <span><span class="v2-cal-key"></span>Booked on GigsFill — click for details</span>
+        <span><span class="v2-cal-key ext"></span>Other dates the artist has listed</span>
+      </div>
+    </div>
+    <!-- Day detail replaces the grid in place. Stacking a second modal on
+         the first gives two close buttons and an unclear back path. -->
+    <div class="v2-cal-body" id="v2CalDay" style="display:none;">
+      <div id="v2CalDayBody"></div>
+    </div>
+  </div>
 </div>
-  <script>
-    /* ───────────────────────────────────────────────────────────────────────
-       Brand icon helpers — inline SVGs (no external deps) + brand colors.
-       Used by the Social Media tab to render real brand logos instead of
-       emoji. Each path is single-color (fill="currentColor"); the tile sets
-       `style="--brand:#hex"` and the SVG inherits it via `color: var(--brand)`.
-       Paths are minified silhouettes — recognizable but compact. Keep the
-       map name -> svg in sync with the BRAND_COLORS map below.
-       ─────────────────────────────────────────────────────────────────────── */
-    const BRAND_COLORS = {
-      spotify:    '#1DB954',
-      instagram:  '#E1306C',
-      facebook:   '#1877F2',
-      youtube:    '#FF0000',
-      twitter:    '#e5e7eb',  /* X branding is mono — use light gray on dark theme */
-      tiktok:     '#69C9D0',  /* TikTok cyan accent */
-      website:    '#06b6d4',
-      yelp:       '#D32323',
-      google_maps:'#EA4335'
-    };
-    function brandIcon(name) {
-      const ICONS = {
-        spotify:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.52 17.34c-.24.36-.66.48-1.02.24-2.82-1.74-6.36-2.1-10.56-1.14-.42.12-.78-.18-.9-.54-.12-.42.18-.78.54-.9 4.56-1.02 8.52-.6 11.64 1.32.42.18.48.66.3 1.02zm1.44-3.3c-.3.42-.84.6-1.26.3-3.24-1.98-8.16-2.58-11.94-1.38-.48.12-1.02-.12-1.14-.6-.12-.48.12-1.02.6-1.14C9.6 9.9 15 10.56 18.72 12.84c.36.18.54.78.24 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.3c-.6.18-1.2-.18-1.38-.72-.18-.6.18-1.2.72-1.38 4.26-1.26 11.28-1.02 15.72 1.62.54.3.72 1.02.42 1.56-.3.42-1.02.6-1.56.3z"/></svg>',
-        instagram: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.16c3.2 0 3.58.01 4.85.07 3.25.15 4.77 1.69 4.92 4.92.06 1.27.07 1.65.07 4.85 0 3.21-.01 3.58-.07 4.85-.15 3.23-1.66 4.77-4.92 4.92-1.27.06-1.64.07-4.85.07-3.2 0-3.58-.01-4.85-.07-3.26-.15-4.77-1.7-4.92-4.92-.06-1.27-.07-1.64-.07-4.85 0-3.2.01-3.58.07-4.85.15-3.23 1.66-4.77 4.92-4.92 1.27-.06 1.65-.07 4.85-.07zM12 0C8.74 0 8.33.01 7.05.07 2.7.27.27 2.69.07 7.05.01 8.33 0 8.74 0 12c0 3.26.01 3.67.07 4.95.2 4.36 2.62 6.78 6.98 6.98C8.33 23.99 8.74 24 12 24c3.26 0 3.67-.01 4.95-.07 4.35-.2 6.78-2.62 6.98-6.98.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95C23.73 2.69 21.31.27 16.95.07 15.67.01 15.26 0 12 0zm0 5.84a6.16 6.16 0 1 0 0 12.32 6.16 6.16 0 0 0 0-12.32zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.41-11.85a1.44 1.44 0 1 0 0 2.88 1.44 1.44 0 0 0 0-2.88z"/></svg>',
-        facebook:  '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M24 12.07C24 5.45 18.63.07 12 .07S0 5.45 0 12.07c0 5.99 4.39 10.96 10.13 11.86V15.5H7.08v-3.47h3.05V9.43c0-3.01 1.79-4.67 4.53-4.67 1.31 0 2.69.23 2.69.23v2.95H15.83c-1.49 0-1.96.93-1.96 1.88v2.25h3.33l-.53 3.47h-2.8v8.43C19.61 23.03 24 18.06 24 12.07z"/></svg>',
-        youtube:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.55 12 3.55 12 3.55s-7.5 0-9.38.5A3.02 3.02 0 0 0 .5 6.2C0 8.07 0 12 0 12s0 3.93.5 5.81a3.02 3.02 0 0 0 2.12 2.14c1.87.5 9.38.5 9.38.5s7.5 0 9.38-.5a3.02 3.02 0 0 0 2.12-2.14C24 15.93 24 12 24 12s0-3.93-.5-5.81zM9.55 15.57V8.43L15.82 12l-6.27 3.57z"/></svg>',
-        twitter:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.24 2.25h3.31l-7.23 8.26 8.5 11.24h-6.65l-5.21-6.82L4.99 21.75H1.68l7.73-8.83L1.25 2.25h6.83l4.71 6.23zM17.08 19.77h1.83L7.08 4.13H5.12L17.08 19.77z"/></svg>',
-        tiktok:    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5.07 20.1a6.34 6.34 0 0 0 10.86-4.43V8.31a8.16 8.16 0 0 0 4.77 1.52V6.42a4.85 4.85 0 0 1-1.11.27z"/></svg>',
-        website:   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM11 19.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>',
-        yelp:      '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14.05 14.42l1.43 4.94c.1.38-.14.78-.5.83-1.66.21-3.24-.16-4.7-.96-.21-.11-.27-.39-.13-.59l3.27-4.45c.2-.28.55-.16.63.23zm-2.06-2.97L7.81 6.05c-.22-.27-.62-.14-.78.18A11.15 11.15 0 0 0 6.4 9.96c-.02.36.26.69.62.71l5.16-.04c.34-.01.5-.41.31-.69zm5.96-.34l-4.7 1.43c-.36.11-.36.62 0 .73l4.7 1.43c.4.13.78-.17.78-.59v-2.41c0-.42-.38-.72-.78-.59zm-3.59-1.6l3.27 4.45c.14.2.42.14.55-.06.84-1.36 1.32-2.86 1.42-4.45.03-.36-.24-.65-.6-.7l-4.31-.63c-.34-.05-.53.4-.33.66zm-3.06 4.71l-3.4-3.85c-.27-.31-.78-.16-.83.25C7 12.16 7 13.71 7.38 15.18c.08.34.46.46.73.23l3.39-3.85c.18-.2.18-.51 0-.71l-.2-.43z"/></svg>',
-        google_maps:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>'
-      };
-      return ICONS[name] || ICONS.website;
-    }
 
-    function switchTab(name) {
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      document.querySelectorAll('.profile-tabs button').forEach(b => b.classList.remove('active'));
-      const panel = document.getElementById('tab-' + name);
-      if (panel) panel.classList.add('active');
-      // Find the button by matching its onclick attribute against the tab name.
-      // Previous version used `TAB_NAMES.indexOf(name)` to index into the button
-      // NodeList — fragile, because any drift between the names array and the
-      // DOM order swapped underlines (the original Pictures/Videos bug). This
-      // approach is order-independent: each button finds itself.
-      document.querySelectorAll('.profile-tabs button').forEach(b => {
-        const oc = b.getAttribute('onclick') || '';
-        if (oc.indexOf("'" + name + "'") !== -1 || oc.indexOf('"' + name + '"') !== -1) {
-          b.classList.add('active');
-        }
-      });
-      // Lazy-load reviews tab
-      if (name === 'reviews' && typeof renderRatingSummary !== 'undefined') {
-        const params = new URLSearchParams(window.location.search);
-        const aid = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
-                  || params.get('artist_id');
-        if (aid) {
-          renderRatingSummary('ratingSummaryContainer', parseInt(aid));
-          renderReviews('reviewsListContainer', parseInt(aid));
-        }
-      }
-      // Lazy-load setlist tab. Rendered by artist-setlist-public.js
-      // which exposes window.renderSetlistPublic(rootId, artistId).
-      if (name === 'setlist' && typeof window.renderSetlistPublic === 'function') {
-        const params = new URLSearchParams(window.location.search);
-        const aid = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
-                  || params.get('artist_id');
-        if (aid) window.renderSetlistPublic('setlistRoot', parseInt(aid));
-      }
-      // Lazy-load "Venues I've Played" tab. Rendered by
-      // artist-venues-played.js which exposes
-      // window.renderVenuesPlayed(rootId, artistId).
-      if (name === 'venues' && typeof window.renderVenuesPlayed === 'function') {
-        const params = new URLSearchParams(window.location.search);
-        const aid = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
-                  || params.get('artist_id');
-        if (aid) window.renderVenuesPlayed('venuesPlayedRoot', parseInt(aid));
-      }
-    }
+<div class="v2-lb" id="v2Lb">
+  <button class="v2-lb-close" onclick="v2CloseLb()" aria-label="Close">&times;</button>
+  <img id="v2LbImg" src="" alt="">
+</div>
 
-    let artist = null, artistGigs = [], calYear, calMonth;
-    const params = new URLSearchParams(window.location.search);
-    // window._VANITY is injected by the slug resolver (gigsfill.com/fridayspast)
-    // and takes precedence over the legacy ?artist_id=N query param.
-    let artistId = (window._VANITY && window._VANITY.type === 'artist' ? window._VANITY.id : null)
-                || params.get("artist_id");
+<footer style="text-align:center;padding:30px 20px;color:var(--v2-dimmer);font-size:0.8rem;border-top:1px solid var(--v2-line-soft);">
+  © 2026 GigsFill · <a href="/app/legal.html" style="color:var(--v2-dimmer);">Terms &amp; Legal</a>
+</footer>
 
-    (async function loadArtist() {
-      if (!artistId) {
-        const meRes = await fetch("/api/me", { credentials: "include" });
-        if (!meRes.ok) return;
-        const me = await meRes.json();
-        if (!me.artist_id) return;
-        artistId = me.artist_id;
-      }
-      const res = await fetch(`/api/artists/${artistId}`, { credentials: "include" });
-      if (!res.ok) return;
-      artist = await res.json();
-
-      document.getElementById("artistName").textContent = artist.name || "";
-      document.getElementById("artistLocation").textContent = [artist.city, artist.state].filter(Boolean).join(", ");
-      document.title = (artist.name || "Artist") + " – GigsFill";
-      // Dynamic SEO updates
-      const seoDesc = `${artist.name || 'Artist'}${artist.city ? ' from ' + artist.city + ', ' + artist.state : ''} – ${artist.artist_type || 'musician'} on GigsFill. View profile, upcoming gigs, and booking info.`;
-      document.querySelector('meta[name="description"]')?.setAttribute('content', seoDesc);
-      document.querySelector('meta[property="og:title"]')?.setAttribute('content', document.title);
-      document.querySelector('meta[property="og:description"]')?.setAttribute('content', seoDesc);
-      document.querySelector('meta[name="twitter:title"]')?.setAttribute('content', document.title);
-      document.querySelector('meta[name="twitter:description"]')?.setAttribute('content', seoDesc);
-
-      let typeText = artist.artist_type || "";
-      if (artist.artist_type === "Live Band" && artist.band_formats) typeText += " • " + artist.band_formats.replace(/,/g, ", ");
-      document.getElementById("artistType").textContent = typeText;
-      document.getElementById("artistBio").textContent = (artist.bio || "").trim();
-      document.getElementById("artistBooking").textContent = artist.booking_contact ? `Booking: ${artist.booking_contact}` : "";
-      // 2026-09-14: opt-in Website link under the bio, only when the
-      // artist explicitly ticked "Display website on Public Profile
-      // page?" in their edit UI. Label uses the artist's display name
-      // per the user's spec ("Website: Fridays Past"). Opens in a new
-      // tab; rel="noopener noreferrer" is standard for external links.
-      (function _renderPublicWebsite() {
-        const host = document.getElementById("artistPublicWebsite");
-        if (!host) return;
-        const url = (artist.website_url || "").trim();
-        const opt = Number(artist.website_public) === 1;
-        if (!opt || !url) { host.innerHTML = ""; host.style.display = "none"; return; }
-        const safeUrl = (url.startsWith('http://') || url.startsWith('https://')) ? url : 'https://' + url;
-        const name = (artist.name || "Website").trim();
-        const escHtml = s => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
-        const escAttrLocal = s => String(s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        host.style.display = "";
-        host.innerHTML = `Website: <a href="${escAttrLocal(safeUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:underline;text-underline-offset:2px;">${escHtml(name)}</a>`;
-      })();
-
-      const ensureProto = u => { if (!u) return ''; const t = u.trim(); return (t.startsWith('http://') || t.startsWith('https://')) ? t : 'https://' + t; };
-      let links = [
-        { url: artist.spotify_url,   label: "Spotify",   brand: "spotify" },
-        { url: artist.instagram_url, label: "Instagram", brand: "instagram" },
-        { url: artist.facebook_url,  label: "Facebook",  brand: "facebook" },
-        { url: artist.youtube_url,   label: "YouTube",   brand: "youtube" },
-        { url: artist.twitter_url,   label: "X",         brand: "twitter" },
-        { url: artist.tiktok_url,    label: "TikTok",    brand: "tiktok" },
-        // 2026-09-14: Website tile label shows the artist's name
-        // instead of the generic word — matches the hero placement
-        // treatment and reads more like "this is who you'll reach".
-        { url: artist.website_url,   label: (artist.name || "Website"),   brand: "website" }
-      ].filter(l => l.url && l.url.trim());
-      // Apply user-chosen social order. Each entry in `social_order` is a
-      // brand key; tiles for those brands move to the front in the saved
-      // sequence. Brands not in the saved order (or with empty URLs) keep
-      // their original natural position relative to each other at the end.
-      if (artist.social_order) {
-        const desired = String(artist.social_order).split(',').map(s => s.trim()).filter(Boolean);
-        const byBrand = Object.fromEntries(links.map(l => [l.brand, l]));
-        const ordered = [];
-        desired.forEach(b => { if (byBrand[b]) { ordered.push(byBrand[b]); delete byBrand[b]; } });
-        links.forEach(l => { if (byBrand[l.brand]) ordered.push(l); });
-        links = ordered;
-      }
-      if (links.length > 0) {
-        // Audit fix (May 2026 part 5): escape the URL with escAttr() before
-        // interpolating into href, and reject non-http(s) schemes so a saved
-        // URL like `javascript:alert(1)` or `"onclick=...` can't execute.
-        const _isSafeHref = (u) => { try { const t = String(u||'').trim().toLowerCase(); return t.startsWith('http://') || t.startsWith('https://'); } catch(_) { return false; } };
-        document.getElementById("socialMedia").innerHTML = links.map(l => {
-          const safeUrl = ensureProto(l.url);
-          if (!_isSafeHref(safeUrl)) return '';
-          const color = BRAND_COLORS[l.brand] || '#9ca3af';
-          return `<a href="${escAttr(safeUrl)}" target="_blank" rel="noopener noreferrer" class="social-link" style="--brand:${color}" title="${esc(l.label)}">${brandIcon(l.brand)}<span>${esc(l.label)}</span></a>`;
-        }).join('');
-      } else {
-        document.getElementById("socialEmpty").style.display = "block";
-        // Hide the Social Media tab when there are no links — see rationale
-        // on _hideEmptyTab. Defined later in the same script block; guard
-        // with typeof in case load order shifts.
-        if (typeof _hideEmptyTab === 'function') _hideEmptyTab('social', true);
-      }
-
-      document.getElementById("artistLogo").src = "/app/static/img/profile-placeholder.svg";
-      loadMedia();
-      loadGigs();
-
-      // Analytics — one page_view per profile load. artist_id lets us
-      // attribute traffic to the artist even before any gig-bubble
-      // click. Fire once per DOMContentLoaded → matches how the city
-      // public calendar tracks page_view.
-      if (typeof window.gfTrackPageView === 'function') {
-        window.gfTrackPageView('artist_profile', {
-          artist_id: parseInt(artistId, 10) || null,
-        });
-      }
-
-      // Populate the Reviews tab badge ("Reviews (N)") on first load — without
-      // this, the badge stays blank until the user actually clicks the Reviews
-      // tab. Cheap one-shot fetch; failure is silent (badge just stays empty).
-      try {
-        const _rsRes = await fetch(`/api/artists/${artistId}/reviews/summary`, { credentials: "include" });
-        if (_rsRes.ok) {
-          const _rs = await _rsRes.json();
-          const _b = document.getElementById("reviewsBadge");
-          if (_b && _rs.review_count > 0) _b.textContent = `(${_rs.review_count})`;
-        }
-      } catch (_) { /* non-fatal */ }
-    })();
-
-    // ========== CALENDAR ==========
-    let artistExternalGigs = [];    // 2026-08-01: non-GigsFill gigs the artist logged themselves
-    async function loadGigs() {
-      try { const r = await fetch(`/api/artists/${artistId}/gigs/public`); if (r.ok) artistGigs = await r.json(); } catch(e) {}
-      // Also fetch external (non-GigsFill) gigs so visitors see the
-      // full picture on the public calendar. Public endpoint — no auth.
-      try {
-        const r2 = await fetch(`/api/public/artists/${artistId}/external-gigs`);
-        if (r2.ok) artistExternalGigs = await r2.json();
-      } catch(e) { artistExternalGigs = []; }
-      // /api/artists/:id/gigs/public now embeds `slots` for multi-slot
-      // gigs in a single batched query (Jun 30 2026 fix) — no per-gig
-      // fan-out needed. Just ensure they're sorted by start_time.
-      (artistGigs || []).forEach(g => {
-        if (g.slots && g.slots.length) {
-          g.slots.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
-        }
-      });
-      const now = new Date(); calYear = now.getFullYear(); calMonth = now.getMonth();
-      renderCalendar();
-    }
-    function changeMonth(d) { calMonth += d; if (calMonth > 11) { calMonth = 0; calYear++; } if (calMonth < 0) { calMonth = 11; calYear--; } renderCalendar(); }
-    function renderCalendar() {
-      const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-      document.getElementById('calMonth').textContent = `${months[calMonth]} ${calYear}`;
-      const firstDay = new Date(calYear, calMonth, 1).getDay();
-      const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
-      const _now = new Date();
-      const todayStr = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
-      const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤', 'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
-
-      // Outlook-style month boundary label — matches every other
-      // calendar on the site. Prefixes month abbreviation on:
-      //   • day 1 of every visible month (target + spillover), AND
-      //   • the very first grid cell so a top-left spillover reads
-      //     its month (e.g. "Jul 26" when viewing August).
-      let _firstCellRendered = false;
-      function _renderDayNum(d, monthIndex) {
-        const isFirst = !_firstCellRendered;
-        _firstCellRendered = true;
-        if (d === 1 || isFirst) {
-          const monAbbr = new Date(2000, monthIndex).toLocaleString("default", { month: "short" });
-          return `<div class="day-num month-boundary">${monAbbr} ${d}</div>`;
-        }
-        return `<div class="day-num">${d}</div>`;
-      }
-
-      let html = '';
-      // Leading days from previous month — render real day numbers,
-      // tagged as `other-month` (muted) and `past` only when actually
-      // past (Jul 2026 fix — match FindMusic, no blank squares).
-      const prevMonthLast = new Date(calYear, calMonth, 0).getDate();
-      const _prevM = calMonth === 0 ? 11 : calMonth - 1;
-      for (let i = firstDay - 1; i >= 0; i--) {
-        const d = prevMonthLast - i;
-        const prevY = calMonth === 0 ? calYear - 1 : calYear;
-        const ds = `${prevY}-${String(_prevM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const isPast = ds < todayStr;
-        html += `<div class="cal-day other-month${isPast ? ' past' : ''}">${_renderDayNum(d, _prevM)}</div>`;
-      }
-      for (let d = 1; d <= daysInMonth; d++) {
-        const ds = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const isToday = ds === todayStr;
-        const isPast = ds < todayStr;
-        const dayGigs = artistGigs.filter(g => g.date === ds);
-        const dayClickAttr = (!isPast && dayGigs.length > 0) ? ` onclick="openDayGigsModal(event,'${ds}')"` : '';
-        // 2026-08-01: also look up any external (non-GigsFill) gigs for this
-        // day. Rendered as muted grey chips below the real gig bubbles so
-        // visitors see a full schedule without confusing them for real
-        // bookable gigs.
-        const dayExt = (artistExternalGigs || []).filter(g => g.date === ds);
-        html += `<div class="cal-day${isToday ? ' today' : ''}${isPast ? ' past' : ''}"${dayClickAttr}>${_renderDayNum(d, calMonth)}`;
-        if (dayGigs.length > 0 || dayExt.length > 0) {
-          html += '<div class="cal-gigs-container">';
-        }
-        if (dayGigs.length > 0) {
-          dayGigs.forEach((g, idx) => {
-            // 2026-09-10: dropped the redundant `g.is_multi_slot &&`
-            // guard — every gig is slot-shaped post-backfill, so
-            // booked_slots_count / total_slots_count are the actual
-            // semantics we care about.
-            const hasBookedSlots = g.booked_slots_count > 0;
-            const cls = (g.status === 'booked' || hasBookedSlots) ? 'booked' : 'open';
-            const t = fmtTime(g.start_time);
-            const icon = (g.total_slots_count > 0) ? (icons[g.artist_type] || '🎵') + ' ' : '';
-            const label = `${icon}${t} ${g.venue_name || g.title || 'Gig'}`;
-            const endStr = g.end_time ? ` – ${fmtTime(g.end_time)}` : '';
-            const venueName = g.venue_name || g.title || 'Gig';
-            const street = [g.address_line_1, g.address_line_2].filter(Boolean).join(' ');
-            const cityState = [g.city, g.state].filter(Boolean).join(', ');
-            const mapsQ = [venueName, street, g.city, g.state].filter(Boolean).join(', ');
-            // Plain bubble — the post-render pass below wires the
-            // shared gig-hover-card (gig-hover-card.js) with the FULL
-            // gig object so the hover renders the same chips, per-slot
-            // breakdown, and status header as the artist-book-gigs
-            // calendar. We used to build a flat hoverData payload here
-            // and stuff it into data-gig-hover, but that path forces
-            // __card:true and bypasses payloadFromGig's chip / slot
-            // logic — so the profile hover was missing everything new.
-            html += `<div class="cal-gig ${cls}" onclick="showGigDetail('${ds}',${idx})" data-cal-date="${ds}" data-cal-idx="${idx}">${esc(label)}</div>`;
-          });
-        }
-        // External-gig bubbles — 2026-08-02: render identically to real
-        // booked gigs (blue `.cal-gig.booked` class) with artist_type icon
-        // + 12-hour time + venue name. Wired to attachGigHoverCard below
-        // with a synthesized __card payload so the hover matches too.
-        // Click opens showExtGigDetail() — a public-safe read-only view.
-        if (dayExt.length > 0) {
-          dayExt.forEach((g, extIdx) => {
-            const t = g.start_time ? fmtTime(g.start_time) : '';
-            const icon = (icons[g.artist_type] || '🎵') + ' ';
-            const label = `${icon}${t}${t ? ' ' : ''}${g.venue_name || 'Gig'}`;
-            html += `<div class="cal-gig booked" onclick="showExtGigDetail('${ds}',${extIdx})" data-ext-cal-date="${ds}" data-ext-cal-idx="${extIdx}">${esc(label)}</div>`;
-          });
-        }
-        if (dayGigs.length > 0 || dayExt.length > 0) {
-          html += '</div>';
-        }
-        html += '</div>';
-      }
-      // Trailing days into next month — fill grid to end of week (Jul 2026).
-      const totalSoFar = firstDay + daysInMonth;
-      const trailing = (7 - (totalSoFar % 7)) % 7;
-      const nextM = calMonth === 11 ? 0 : calMonth + 1;
-      const nextY = calMonth === 11 ? calYear + 1 : calYear;
-      for (let d = 1; d <= trailing; d++) {
-        const ds = `${nextY}-${String(nextM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const isPast = ds < todayStr;
-        html += `<div class="cal-day other-month${isPast ? ' past' : ''}">${_renderDayNum(d, nextM)}</div>`;
-      }
-      document.getElementById('calGrid').innerHTML = html;
-
-      // Wire the shared gig-hover-card on each rendered bubble so the
-      // hover preview matches the artist-book-gigs calendar (per-slot
-      // breakdown, lineup/style chips, status-aware header). Passes
-      // the FULL gig object so payloadFromGig derives the rich payload.
-      if (typeof window.attachGigHoverCard === 'function') {
-        document.querySelectorAll('#calGrid .cal-gig[data-cal-date]').forEach(el => {
-          const ds = el.getAttribute('data-cal-date');
-          const idx = parseInt(el.getAttribute('data-cal-idx'), 10);
-          const g = artistGigs.filter(x => x.date === ds)[idx];
-          if (g) window.attachGigHoverCard(el, g);
-        });
-        // External-gig bubbles: build a __card payload so the same hover
-        // renderer emits the same visual (date/time block + venue/location
-        // + lineup/style chips) as booked-mine bubbles do.
-        document.querySelectorAll('#calGrid .cal-gig[data-ext-cal-date]').forEach(el => {
-          const ds = el.getAttribute('data-ext-cal-date');
-          const idx = parseInt(el.getAttribute('data-ext-cal-idx'), 10);
-          const g = (artistExternalGigs || []).filter(x => x.date === ds)[idx];
-          if (g) window.attachGigHoverCard(el, _extGigHoverPayload(g));
-        });
-      }
-    }
-
-    // Build a hover-card payload for an external gig. `__card:true` tells
-    // gig-hover-card.js the shape is already flattened — it skips
-    // payloadFromGig and renders directly.
-    function _extGigHoverPayload(g) {
-      const start = g.start_time || '';
-      const end = g.end_time || '';
-      const city = g.venue_city || '';
-      const state = g.venue_state || '';
-      const venue = g.venue_name || '';
-      return {
-        __card: true,
-        headerPrefix: 'Booked — ',
-        artistChips: (artist && artist.name) ? [{ id: artistId || null, name: artist.name }] : [],
-        openSlotsSuffix: '',
-        isOpen: false,
-        venue: venue,
-        streetAddress: '',   // address not published on the public payload
-        cityState: city && state ? `${city}, ${state}` : (city || state || ''),
-        date: fmtDate(g.date),
-        time: fmtTime(start) + (end ? ` – ${fmtTime(end)}` : ''),
-        slotLines: null,
-        lineupChips: Array.isArray(g.lineup) ? g.lineup : [],
-        styleChips:  Array.isArray(g.styles) ? g.styles : [],
-        mapsUrl: '',
-        artistType: g.artist_type || '',
-      };
-    }
-
-    // Public details modal for an external gig. Body content mirrors
-    // gig-modal.js renderGigModal EXACTLY (row grid + slot card visual
-    // chrome) minus the pay pill and any Cancel/Countersign actions —
-    // per user's "make it look identical minus the pay field" ask.
-    // Kept in sync by hand with the same helper in artist-external-gigs.js
-    // (different pages, no shared module).
-    window.showExtGigDetail = function (date, idx) {
-      const list = (artistExternalGigs || []).filter(x => x.date === date);
-      const g = list[idx];
-      if (!g) return;
-      // Analytics — external gigs have no numeric gig_id so the helper
-      // sends gig_id:null and stashes the ext_id + is_external:true in
-      // event_data. artist_id is derived from the URL param since the
-      // row shape doesn't carry it.
-      if (typeof window.gfTrackGigClick === 'function') {
-        window.gfTrackGigClick(
-          Object.assign({}, g, {
-            _is_external: true,
-            artist_id: parseInt(artistId, 10) || null,
-            venue_id: null,
-          }),
-          { source: 'artist_profile' }
-        );
-      }
-      const start12 = fmtTime(g.start_time);
-      const end12   = g.end_time ? fmtTime(g.end_time) : '';
-      const timeStr = end12 ? `${start12} – ${end12}` : start12;
-      const artType = g.artist_type || '';
-      const lineup  = Array.isArray(g.lineup) ? g.lineup : [];
-      const styles  = Array.isArray(g.styles) ? g.styles : [];
-      const formats = lineup.join(', ');
-      const stylesStr = styles.join(', ');
-      const icons = { 'Live Band': '🎸', 'DJ': '🎧', 'Comedian': '🎤',
-        'Trivia Host': '🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶' };
-
-      let locHtml = '';
-      if (g.venue_address) locHtml += esc(g.venue_address) + '<br>';
-      if (g.venue_city || g.venue_state) locHtml += esc([g.venue_city, g.venue_state].filter(Boolean).join(', '));
-
-      // Row grid — matches gig-modal.js:108 exactly.
-      const gmRow = (label, val) =>
-        `<div style="font-weight:600;color:var(--text-primary);">${label}:</div>
-         <div style="color:var(--text-primary);">${val}</div>`;
-
-      let html = `<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:0.95rem;line-height:1.6;margin-bottom:16px;">`;
-      html += gmRow('Date', esc(fmtDate(g.date)));
-      if (timeStr) html += gmRow('Time', esc(timeStr));
-      html += gmRow('Venue', esc(g.venue_name || ''));
-      if (locHtml) html += gmRow('Location', locHtml);
-      if (artType) html += gmRow('Artist Type', esc(artType));
-      if (artType === 'Live Band' && formats)   html += gmRow('Lineup', esc(formats));
-      if (artType === 'Live Band' && stylesStr) html += gmRow('Styles', esc(stylesStr));
-      if (g.notes) html += gmRow('Notes', esc(g.notes).replace(/\n/g, '<br>'));
-      html += `</div>`;
-
-      // Slot card — cyan-tinted "my slot" treatment with purple left
-      // stripe, "Slot 1" label in purple, gray time, "✓ Your Slot" on
-      // right, italic type summary as second line. No pay pill.
-      const icon = icons[artType] || '🎵';
-      const summaryParts = [];
-      if (artType) summaryParts.push(`${icon} ${artType}`);
-      if (formats)   summaryParts.push(formats);
-      if (stylesStr) summaryParts.push(stylesStr);
-      const summary = summaryParts.join(' · ');
-
-      html += `<div style="border-top:1px solid rgba(255,255,255,0.1); padding-top:12px; margin-top:4px;">
-        <div style="padding:10px 12px 10px 10px; background:rgba(6,182,212,0.1); border:1px solid rgba(6,182,212,0.4); border-left:3px solid #a855f7; border-radius:6px; margin-bottom:6px;">
-          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-            <span style="font-weight:700; color:#a855f7; font-size:0.85rem; letter-spacing:0.3px;">Slot 1</span>
-            <span style="color:#cbd5e1; font-size:0.85rem;">${esc(timeStr || '')}</span>
-            <span style="flex:1;"></span>
-            <span style="color:#06b6d4; font-weight:600; font-size:0.8rem;">✓ Your Slot</span>
-          </div>
-          ${summary ? `<div style="margin-top:5px; color:var(--text-muted); font-size:0.78rem; line-height:1.4; font-style:italic;">${esc(summary)}</div>` : ''}
-        </div>
-      </div>`;
-
-      // View Event Flyer — server-side gated by flyer_public (public
-      // endpoint returns flyer_url only when the artist opted in).
-      // Click opens a full-screen lightbox overlay.
-      if (g.flyer_url) {
-        const bust = g.flyer_uploaded_at ? `?t=${encodeURIComponent(g.flyer_uploaded_at)}` : '';
-        const src = g.flyer_public_url + bust;
-        html += `<div style="margin-top:14px;text-align:center;">
-          <button onclick="showExtFlyerLightbox('${esc(src)}')" style="padding:8px 20px;border:1px solid rgba(139,92,246,0.4);border-radius:8px;background:rgba(139,92,246,0.15);color:#c4b5fd;cursor:pointer;font-size:0.85rem;font-weight:600;">🎨 View Event Flyer</button>
-        </div>`;
-      }
-
-      document.getElementById('gigModalBody').innerHTML = html;
-      document.getElementById('gigModal').classList.remove('hidden');
-    };
-
-    // Public-profile flyer lightbox — kept local so we don't rely on
-    // artist-external-gigs.js (which isn't loaded on the public profile).
-    window.showExtFlyerLightbox = function (src) {
-      let ov = document.getElementById('extGigFlyerLightbox');
-      if (!ov) {
-        ov = document.createElement('div');
-        ov.id = 'extGigFlyerLightbox';
-        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:100010;display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;';
-        ov.innerHTML = `<img id="extGigFlyerLightboxImg" style="max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">`;
-        ov.addEventListener('click', () => { ov.style.display = 'none'; });
-        document.body.appendChild(ov);
-      }
-      document.getElementById('extGigFlyerLightboxImg').src = src;
-      ov.style.display = 'flex';
-    };
-    function fmtTime(t) { if (!t) return ''; const [h,m] = t.split(':').map(Number); return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h>=12?'PM':'AM'); }
-
-    // "Show All Booked Gigs" launcher for the public artist profile.
-    // Aggregates real GigsFill bookings + external (non-GigsFill) gigs
-    // the artist added, expanding multi-slot gigs into one row per
-    // BOOKED slot the artist actually holds. Passes to the shared
-    // public-gigs-list-modal.js — no pay column exposed, matches the
-    // artist book-gigs page's list-view feature.
-    window.openArtistPublicGigsList = function () {
-      const rows = [];
-      (artistGigs || []).forEach(g => {
-        const slots = Array.isArray(g.slots) ? g.slots : [];
-        const isReallyMulti = slots.length > 1;
-        if (slots.length) {
-          slots.forEach(s => {
-            if (s.status !== 'booked') return;
-            if (String(s.artist_id) !== String(artistId)) return;
-            rows.push({
-              date: g.date,
-              venue_id: g.venue_id,
-              venue_name: g.venue_name || '',
-              address_line_1: g.address_line_1 || '',
-              address_line_2: g.address_line_2 || '',
-              city: g.city || '',
-              state: g.state || '',
-              start_time: s.start_time || g.start_time,
-              end_time:   s.end_time   || g.end_time,
-              title: g.title || '',
-              is_multi_slot: isReallyMulti,
-              slot_number: s.slot_number,
-            });
-          });
-        } else if (g.status === 'booked') {
-          rows.push({
-            date: g.date,
-            venue_id: g.venue_id,
-            venue_name: g.venue_name || '',
-            address_line_1: g.address_line_1 || '',
-            address_line_2: g.address_line_2 || '',
-            city: g.city || '',
-            state: g.state || '',
-            start_time: g.start_time,
-            end_time: g.end_time,
-            title: g.title || '',
-            is_multi_slot: false,
-            slot_number: null,
-          });
-        }
-      });
-      // External (non-GigsFill) gigs — no venue link since they're not
-      // on GigsFill; no slot chip. `venue_address` covers the street
-      // line since these gigs don't have address_line_1/2 fields.
-      (artistExternalGigs || []).forEach(g => {
-        rows.push({
-          date: g.date,
-          venue_id: null,
-          venue_name: g.venue_name || '',
-          venue_address: g.venue_address || '',
-          venue_city: g.venue_city || '', venue_state: g.venue_state || '',
-          city: g.venue_city || '',
-          state: g.venue_state || '',
-          start_time: g.start_time,
-          end_time: g.end_time,
-          title: '',
-          is_multi_slot: false,
-          slot_number: null,
-        });
-      });
-      const artistSlug = (artist && artist.name || 'artist').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-      window.openPublicGigsListModal({
-        title: '📅 All Booked Gigs' + (artist && artist.name ? ' — ' + artist.name : ''),
-        rows: rows,
-        exportBasename: `${artistSlug}_booked_gigs`,
-        // 2026-09-09: reordered to Date · Time · Venue · Address —
-        // matches the sibling venue-profile modal, which now uses
-        // Date · Time · Artist · Address. Both put the identifying
-        // party (venue on the artist page, artist on the venue page)
-        // in the same slot, and Address at the end since it's the
-        // longest field.
-        columns: ['date', 'time', 'venue', 'address'],
-      });
-    };
-    function fmtDate(d) { if (!d) return ''; const [y,mo,dy] = d.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[parseInt(mo)-1]} ${parseInt(dy)}, ${y}`; }
-
-    async function showGigDetail(date, idx) {
-      const dayGigs = artistGigs.filter(g => g.date === date);
-      const g = dayGigs[idx]; if (!g) return;
-      // Analytics — fire once per bubble click. `source` tags the surface
-      // so backend can attribute each click to the right page later.
-      if (typeof window.gfTrackGigClick === 'function') {
-        window.gfTrackGigClick(g, { source: 'artist_profile' });
-      }
-      const timeStr = fmtTime(g.start_time) + (g.end_time ? ' – ' + fmtTime(g.end_time) : '');
-      const loc = [g.city, g.state].filter(Boolean).join(', ');
-      const artType = g.artist_actual_type || g.artist_type || '';
-      let formats = g.artist_band_formats || g.band_formats || '';
-      if (formats) formats = formats.replace(/,/g, ', ');
-
-      const isMultiSlot = g.total_slots_count > 0;
-      const addr1 = g.address_line_1 || '';
-      const addr2 = g.address_line_2 || '';
-      let locHtml = '';
-      if (addr1) locHtml += esc(addr1) + '<br>';
-      if (addr2) locHtml += esc(addr2) + '<br>';
-      if (g.city || g.state) locHtml += esc([g.city, g.state].filter(Boolean).join(', '));
-
-      let rows = '';
-      if (g.title && String(g.title).trim()) rows += modalRow('Event', String(g.title).trim());
-      rows += modalRow('Date', fmtDate(g.date));
-      if (!isMultiSlot) rows += modalRow('Time', timeStr || 'TBD');
-      const venueLink = g.venue_id ? `<a href="/app/venue-profile.html?venue_id=${g.venue_id}" target="_blank">${esc(g.venue_name || '')}</a>` : esc(g.venue_name || '');
-      // 2026-08-07: (Venue Gig Details) placeholder — mountLinks fills it
-      // in when the viewer is an artist.
-      const _vgdSlot = g.venue_id ? `<span class="vgd-link-slot" data-vgd-vid="${parseInt(g.venue_id,10)||0}" data-vgd-name="${(g.venue_name||'').replace(/"/g,'&quot;')}"></span>` : '';
-      rows += modalRowRaw('Venue', venueLink + _vgdSlot);
-      if (locHtml) rows += modalRowRaw('Location', locHtml);
-      if (!isMultiSlot) rows += modalRow('Artist', g.artist_name || artist?.name || '');
-      if (artType) rows += modalRow('Artist Type', artType);
-      if (artType === 'Live Band' && formats) rows += modalRow('Band Formats', formats);
-      
-      // For multi-slot gigs, fetch and display slot details
-      if (isMultiSlot) {
-        try {
-          const slotsRes = await fetch(`/api/gigs/${g.id}/slots/public`);
-          if (slotsRes.ok) {
-            const slots = await slotsRes.json();
-            slots.forEach(s => {
-              const isBooked = s.status === 'booked';
-              const color = isBooked ? '#ef4444' : '#22c55e';
-              const bg = isBooked ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)';
-              const slotLabel = isBooked 
-                ? (String(s.artist_id) === String(artistId)
-                    ? `<span style="color:${color}; font-weight:600;">${esc(s.artist_name || 'Booked')}</span>`
-                    : `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" style="color:${color}; text-decoration:none; font-weight:600;">${esc(s.artist_name || 'Booked')}</a>`)
-                : '<span style="color:#22c55e; font-weight:600;">Open</span>';
-              rows += `<div style="display:flex; align-items:center; padding:9px 14px; margin-bottom:6px; background:${bg}; border:1px solid ${color}33; border-radius:6px; font-size:0.85rem; color:var(--text);">
-                <span style="font-weight:700; min-width:56px;">Slot ${s.slot_number}</span>
-                <span style="min-width:160px;">${fmtTime(s.start_time)} – ${fmtTime(s.end_time)}</span>
-                <span style="margin-left:auto; text-align:right;">${slotLabel}</span>
-              </div>`;
-            });
-          }
-        } catch(e) { console.error('Error loading slots:', e); }
-      }
-      
-      document.getElementById('gigModalBody').innerHTML = rows;
-      if (window.venueGigDetails && window.venueGigDetails.mountLinks) {
-        window.venueGigDetails.mountLinks(document.getElementById('gigModalBody'));
-      }
-      // Only show flyer button for booked gigs
-      const gigIsBooked = g.status === 'booked' || g.booked_slots_count > 0;
-      if (gigIsBooked) {
-        fetch(`/api/gigs/${g.id}/flyer/public`).then(r=>r.json()).then(data=>{
-          if (!data.exists) return;
-          const fd = document.createElement('div');
-          fd.style.cssText = 'margin-top:14px;text-align:center;';
-          fd.innerHTML = `<button onclick="showFlyerModal(${g.id})" style="padding:8px 20px;border:1px solid rgba(139,92,246,0.4);border-radius:8px;background:rgba(139,92,246,0.15);color:#c4b5fd;cursor:pointer;font-size:0.85rem;font-weight:600;">🎨 View Event Flyer</button>`;
-          document.getElementById('gigModalBody').appendChild(fd);
-          window._flyerCache = window._flyerCache || {};
-          window._flyerCache[g.id] = data;
-        }).catch(()=>{});
-      }
-      document.getElementById('gigModal').classList.remove('hidden');
-    }
-    function modalRow(label, value) { return `<div class="gig-modal-row"><span class="gig-modal-label">${label}</span><span class="gig-modal-value">${esc(value)}</span></div>`; }
-    function modalRowRaw(label, html) { return `<div class="gig-modal-row"><span class="gig-modal-label">${label}</span><span class="gig-modal-value">${html}</span></div>`; }
-                function showFlyerModal(gigId) {
-      _showFlyerOverlay((window._flyerCache||{})[gigId], 'flyerFullModal');
-    }
-
-    function _buildBuiltinFlyerJSON(gi) {
-  var cW = 415, cH = 520;
-  var s = cH / 1350;
-  var W = cW * 0.94, L = cW * 0.03;
-  var FONT = 'Trebuchet MS', GREY = 'rgba(200,200,210,0.9)';
-  function ft(t) { if (!t) return ''; var pp = t.split(':').map(Number); return ((pp[0]%12)||12)+':'+String(pp[1]).padStart(2,'0')+(pp[0]>=12?'PM':'AM'); }
-  var dStr = gi.date ? new Date(gi.date+'T00:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}) : '';
-  var tStr = gi.start_time ? ft(gi.start_time)+(gi.end_time?' - '+ft(gi.end_time):'') : '';
-  var loc  = [gi.address_line_1, gi.city&&gi.state?gi.city+', '+gi.state:(gi.city||gi.state)].filter(Boolean).join('\n');
-  var R = Math.round;
-  var objs = [
-    // Dark overlay
-    {type:'rect', left:0, top:0, width:cW, height:cH, fill:'rgba(0,0,0,0.45)', selectable:false, evented:false},
-    // Venue name
-    {type:'textbox', left:L, top:R(cH*0.03), width:W, text:(gi.venue_name||'VENUE NAME').toUpperCase(),
-      fontSize:R(120*s), fontFamily:FONT, fontWeight:'bold', fill:'#ffffff', textAlign:'center',
-      stroke:'#000000', strokeWidth:R(2*s), _tplVar:'venue_name'}
-  ];
-  if (loc) objs.push({type:'textbox', left:L, top:R(cH*0.225), width:W, text:loc,
-    fontSize:R(45*s), fontFamily:FONT, fontWeight:'bold', fill:GREY, textAlign:'center', lineHeight:1.15, _tplVar:'location'});
-  objs.push({type:'textbox', left:L, top:R(cH*0.355), width:W, text:'\u2605  L I V E   M U S I C  \u2605',
-    fontSize:R(72*s), fontFamily:FONT, fontWeight:'bold', fill:GREY, textAlign:'center', charSpacing:100});
-  if (dStr) objs.push({type:'textbox', left:L, top:R(cH*0.44), width:W, text:dStr,
-    fontSize:R(80*s), fontFamily:FONT, fontWeight:'bold', fill:'#ffffff', textAlign:'center',
-    stroke:'#000000', strokeWidth:R(3*s), _tplVar:'date'});
-  if (tStr) objs.push({type:'textbox', left:L, top:R(cH*0.53), width:W, text:tStr,
-    fontSize:R(65*s), fontFamily:FONT, fontWeight:'bold', fill:GREY, textAlign:'center', _tplVar:'time'});
-  // Artist area — tagged artist_logo so the canvas renderer swaps in the real photo
-  objs.push({type:'textbox', left:L, top:R(cH*0.50), width:W,
-    text: gi.artist_picture_url ? '' : (gi.artist_name||'').toUpperCase(),
-    fontSize:R(100*s), fontFamily:FONT, fontWeight:'bold', fill:'#ffffff', textAlign:'center',
-    stroke:'#000000', strokeWidth:R(3*s), _tplVar:'artist_logo'});
-  return JSON.stringify({version:'5.3.1', objects:objs, background:'#0a0a14', width:cW, height:cH});
-}
-
-    function _showFlyerOverlay(data, modalId) {
-  var fm = document.getElementById(modalId);
-  if (!fm) {
-    fm = document.createElement('div');
-    fm.id = modalId;
-    fm.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:99999;align-items:center;justify-content:center;cursor:pointer;padding:20px;box-sizing:border-box;';
-    fm.onclick = function(e) { if (e.target === fm) fm.style.display = 'none'; };
-    document.body.appendChild(fm);
-  }
-  fm.style.display = 'flex';
-  var mid = modalId;
-  var closeBtn = '<button onclick="document.getElementById(\''+mid+'\').style.display=\'none\'" style="padding:9px 22px;background:rgba(255,255,255,0.08);color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:8px;font-size:0.85rem;font-weight:500;cursor:pointer;">&#10005; Close</button>';
-
-  // Build descriptive filename from gig_info
-  var gi0 = (data && data.gig_info) || {};
-  // Hoist artist name from slots if not on root (multi-slot gigs)
-  if (!gi0.artist_name && gi0.slots && gi0.slots.length) {
-    var s0 = gi0.slots.find(function(s){return s.artist_name;}) || gi0.slots[0];
-    if (s0) gi0.artist_name = s0.artist_name;
-  }
-  var _gigFileName = (function() {
-    var v = (gi0.venue_name||'').replace(/[^a-zA-Z0-9]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');
-    var d = gi0.date ? (function(){ var dt=new Date(gi0.date+'T00:00:00'); return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}).replace(/[\s,]+/g,'_'); })() : '';
-    function _ft(t){if(!t)return'';var p=t.split(':').map(Number);return((p[0]%12)||12)+'_'+String(p[1]).padStart(2,'0')+(p[0]>=12?'PM':'AM');}
-    var t = gi0.start_time ? _ft(gi0.start_time)+(gi0.end_time?'-'+_ft(gi0.end_time):'') : '';
-    var a = (gi0.artist_name||'').replace(/[^a-zA-Z0-9]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');
-    return [v,d,t,a].filter(Boolean).join('_') || (data&&data.name) || 'event-flyer';
-  })();
-
-
-  if (data && data.thumbnail_data) {
-    fm.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;" onclick="event.stopPropagation()"><img src="' + data.thumbnail_data + '" style="max-height:520px;max-width:88vw;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.6);object-fit:contain;"><div style="display:flex;gap:12px;"><a href="' + data.thumbnail_data + '" download="' + _gigFileName + '.jpg" style="padding:9px 22px;background:rgba(139,92,246,0.85);color:#fff;border:1px solid rgba(139,92,246,0.6);border-radius:8px;font-size:0.85rem;font-weight:600;text-decoration:none;cursor:pointer;">&#11015; Download Flyer</a>' + closeBtn + '</div></div>';
-    return;
-  }
-
-  if (data && data.canvas_data) {
-    // Container for spinner — Fabric will place its wrapper div inside _pfMount
-    fm.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;" onclick="event.stopPropagation()"><div id="_pfMount" style="position:relative;border-radius:12px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.6);"><canvas id="_pfCanvas"></canvas><div id="_pfSpinner" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,10,20,0.9);"><span style="color:#c4b5fd;font-size:1rem;">Loading flyer...</span></div></div><div id="_pfBtnRow" style="display:flex;gap:12px;"><span id="_pfDlPlaceholder"></span>' + closeBtn + '</div></div>';
-
-    function doRender() {
-      try {
-        var parsed = typeof data.canvas_data === 'string' ? JSON.parse(data.canvas_data) : data.canvas_data;
-
-        // canvas JSON width/height ARE the display dimensions (e.g. 415x520 for instagram_post)
-        var canvasW = parsed.width  || 415;
-        var canvasH = parsed.height || 520;
-
-        // Display at fixed 520px height (matching editor CANVAS_DISPLAY_HEIGHT),
-        // preserving aspect ratio — same size regardless of thumbnail vs canvas path
-        var aspect = canvasW / canvasH;
-        var displayH = Math.min(520, Math.floor(window.innerHeight * 0.80));
-        var displayW = Math.round(displayH * aspect);
-        // If too wide, constrain to viewport width
-        var maxW = Math.floor(window.innerWidth * 0.88);
-        if (displayW > maxW) { displayW = maxW; displayH = Math.round(displayW / aspect); }
-
-        var mount = document.getElementById('_pfMount');
-        if (!mount) return;
-        mount.style.width  = displayW + 'px';
-        mount.style.height = displayH + 'px';
-
-        // Create Fabric canvas at exact display size — no transforms needed
-        var fc = new fabric.StaticCanvas('_pfCanvas', {
-          width: displayW, height: displayH, renderOnAddRemove: false
-        });
-
-        // Gig info
-        var gi = data.gig_info || {};
-        if (!gi.artist_picture_url && gi.slots && gi.slots.length) {
-          var sl = gi.slots.find(function(s) { return s.artist_id; }) || gi.slots[0];
-          if (sl) { gi.artist_id = gi.artist_id || sl.artist_id; gi.artist_name = gi.artist_name || sl.artist_name; gi.artist_picture_url = gi.artist_picture_url || sl.artist_picture_url; }
-        }
-
-        function ft(t) { if (!t) return ''; var p = t.split(':').map(Number); return ((p[0]%12)||12)+':'+String(p[1]).padStart(2,'0')+(p[0]>=12?'PM':'AM'); }
-        var dateStr = gi.date ? new Date(gi.date+'T00:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}) : '';
-        var timeStr = gi.start_time ? ft(gi.start_time)+(gi.end_time?' - '+ft(gi.end_time):'') : '';
-        var loc = [gi.address_line_1, gi.city&&gi.state?gi.city+', '+gi.state:(gi.city||gi.state)].filter(Boolean).join('\n');
-
-        // Use src->_tplVar map + reviver for reliable custom prop restoration
-        var tplVarByIdx = {};
-        var tplVarBySrc = {};
-        (parsed.objects || []).forEach(function(o, i) {
-          if (o._tplVar) { tplVarByIdx[i] = o._tplVar; if (o.src) tplVarBySrc[o.src] = o._tplVar; }
-        });
-        var reviver = function(jsonObj, fabricObj) {
-          var tv = (jsonObj.src && tplVarBySrc[jsonObj.src]) || jsonObj._tplVar;
-          if (tv) fabricObj._tplVar = tv;
-          if (jsonObj._isZoneRect) fabricObj._isZoneRect = true;
-        };
-
-        fc.loadFromJSON(parsed, function() {
-          var objs = fc.getObjects();
-          objs.forEach(function(obj, i) { if (!obj._tplVar && tplVarByIdx[i]) obj._tplVar = tplVarByIdx[i]; });
-
-          // Update text vars
-          objs.forEach(function(obj) {
-            var v = obj._tplVar;
-            if (!v || obj.text === undefined) return;
-            if      (v==='date'        && dateStr)       obj.set('text', dateStr);
-            else if (v==='time'        && timeStr)       obj.set('text', timeStr);
-            else if (v==='venue_name'  && gi.venue_name) obj.set('text', gi.venue_name.toUpperCase());
-            else if (v==='location'    && loc)           obj.set('text', loc);
-            else if (v==='artist_name' && gi.artist_name) obj.set('text', gi.artist_name.toUpperCase());
-          });
-
-          function finish() {
-            fc.renderAll();
-            var sp = document.getElementById('_pfSpinner'); if (sp) sp.style.display='none';
-            var dlPh = document.getElementById('_pfDlPlaceholder');
-            if (dlPh) {
-              var dlUrl = fc.toDataURL({format:'jpeg', quality:0.92, multiplier: Math.round(Math.min(1400/canvasW, 2))});
-              dlPh.outerHTML = '<a href="' + dlUrl + '" download="' + _gigFileName + '.jpg" style="padding:9px 22px;background:rgba(139,92,246,0.85);color:#fff;border:1px solid rgba(139,92,246,0.6);border-radius:8px;font-size:0.85rem;font-weight:600;text-decoration:none;cursor:pointer;">&#11015; Download Flyer</a>';
-            }
-          }
-
-          // Count pending async image loads — call finish() only when all are done
-          var pending = 0;
-          function maybeFinish() { if (--pending <= 0) finish(); }
-
-          // ── Venue Logo ──
-          var vLogoImage = objs.find(function(o) { return o._tplVar==='venue_logo' && o.type==='image'; });
-          var vLogoZone  = objs.find(function(o) { return o._tplVar==='venue_logo' && o._isZoneRect; });
-          if (gi.venue_picture_url && (vLogoImage || vLogoZone)) {
-            pending++;
-            fabric.Image.fromURL(gi.venue_picture_url, function(img) {
-              if (img) {
-                var ref = vLogoImage || vLogoZone;
-                if (vLogoImage) {
-                  img.set({ left:vLogoImage.left, top:vLogoImage.top,
-                    scaleX:vLogoImage.scaleX||1, scaleY:vLogoImage.scaleY||1, angle:vLogoImage.angle||0,
-                    originX:vLogoImage.originX||'left', originY:vLogoImage.originY||'top',
-                    shadow:vLogoImage.shadow, opacity:vLogoImage.opacity!=null?vLogoImage.opacity:1, _tplVar:'venue_logo' });
-                } else {
-                  var vzW = vLogoZone.width*(vLogoZone.scaleX||1), vzH = vLogoZone.height*(vLogoZone.scaleY||1);
-                  var vsc = Math.min(vzW/img.width, vzH/img.height, 1);
-                  img.set({ left:vLogoZone.left+vzW/2, top:vLogoZone.top+vzH/2,
-                    scaleX:vsc, scaleY:vsc, originX:'center', originY:'center',
-                    shadow:new fabric.Shadow({color:'rgba(0,0,0,0.8)',blur:20}), _tplVar:'venue_logo' });
-                }
-                fc.remove(ref); fc.add(img);
-              }
-              // Keep border on top
-              fc.getObjects().filter(function(o){return o._isBorder;}).forEach(function(o){fc.bringToFront(o);});
-              maybeFinish();
-            });
-          }
-
-          // ── Artist Logo ──
-          if (!gi.artist_picture_url) { if (!pending) finish(); return; }
-
-          var logoImage = objs.find(function(o) { return o._tplVar==='artist_logo' && o.type==='image'; });
-          var logoZone  = objs.find(function(o) { return o._tplVar==='artist_logo' && o._isZoneRect; });
-          var logoText  = objs.find(function(o) { return o._tplVar==='artist_logo' && o.text!==undefined; });
-
-          if (logoImage || logoZone || logoText) {
-            pending++;
-            fabric.Image.fromURL(gi.artist_picture_url, function(img) {
-              if (img) {
-                if (logoImage) {
-                  img.set({ left:logoImage.left, top:logoImage.top,
-                    scaleX:logoImage.scaleX||1, scaleY:logoImage.scaleY||1, angle:logoImage.angle||0,
-                    originX:logoImage.originX||'left', originY:logoImage.originY||'top',
-                    shadow:logoImage.shadow, opacity:logoImage.opacity!=null?logoImage.opacity:1, _tplVar:'artist_logo' });
-                  fc.remove(logoImage); fc.add(img);
-                  fc.getObjects().filter(function(o){return o._isBorder;}).forEach(function(o){fc.bringToFront(o);});
-                } else if (logoZone) {
-                  var zoneW = logoZone.width*(logoZone.scaleX||1), zoneH = logoZone.height*(logoZone.scaleY||1);
-                  var sc = Math.min(zoneW/img.width, zoneH/img.height, 1);
-                  img.set({ left:logoZone.left+zoneW/2, top:logoZone.top+zoneH/2,
-                    scaleX:sc, scaleY:sc, originX:'center', originY:'center',
-                    shadow:new fabric.Shadow({color:'rgba(0,0,0,0.8)',blur:20}), _tplVar:'artist_logo' });
-                  fc.remove(logoZone); fc.add(img);
-                  fc.getObjects().filter(function(o){return o._isBorder;}).forEach(function(o){fc.bringToFront(o);});
-                } else {
-                  var tw = canvasW*0.94, th = canvasH-logoText.top-canvasH*0.03;
-                  var s2 = Math.min(tw/img.width, th/img.height, 1);
-                  img.set({ left:canvasW/2, top:logoText.top+th/2, scaleX:s2, scaleY:s2,
-                    originX:'center', originY:'center', shadow:logoText.shadow, _tplVar:'artist_logo' });
-                  fc.remove(logoText); fc.add(img);
-                  fc.getObjects().filter(function(o){return o._isBorder;}).forEach(function(o){fc.bringToFront(o);});
-                }
-                objs.forEach(function(o) { if (o._tplVar==='artist_name') o.visible = false; });
-              }
-              maybeFinish();
-            });
-          }
-
-          if (!pending) finish();
-        }, reviver);
-      } catch(e) {
-        console.error('Flyer render error:', e);
-        var sp = document.getElementById('_pfSpinner'); if (sp) sp.style.display='none';
-            var dlPh = document.getElementById('_pfDlPlaceholder');
-            if (dlPh) {
-              var dlUrl = fc.toDataURL({format:'jpeg', quality:0.92, multiplier: Math.round((window.devicePixelRatio||1) * Math.min(1400/canvasW, 2))});
-              dlPh.outerHTML = '<a href="' + dlUrl + '" download="' + _gigFileName + '.jpg" style="padding:9px 22px;background:rgba(139,92,246,0.85);color:#fff;border:1px solid rgba(139,92,246,0.6);border-radius:8px;font-size:0.85rem;font-weight:600;text-decoration:none;cursor:pointer;">&#11015; Download Flyer</a>';
-            }
-      }
-    }
-
-    if (typeof fabric !== 'undefined') { doRender(); }
-    else { var s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js'; s.onload=doRender; document.head.appendChild(s); }
-    return;
-  }
-
-  // use_builtin: build the default template layout client-side from gig_info, then render via canvas path
-  if (data && data.use_builtin && data.gig_info) {
-    var gi = data.gig_info || {};
-    // Multi-slot hoist
-    if (!gi.artist_picture_url && gi.slots && gi.slots.length) {
-      var sl = gi.slots.find(function(s){return s.artist_id;}) || gi.slots[0];
-      if (sl) { gi.artist_name = gi.artist_name || sl.artist_name; gi.artist_picture_url = gi.artist_picture_url || sl.artist_picture_url; }
-    }
-    _showFlyerOverlay({ canvas_data: _buildBuiltinFlyerJSON(gi), gig_info: gi }, modalId);
-    return;
-  }
-
-  fm.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;" onclick="event.stopPropagation()"><div style="font-size:3rem;">&#127912;</div><div style="color:#e2e8f0;font-size:1.1rem;font-weight:600;">Flyer Coming Soon</div><div style="color:#94a3b8;font-size:0.85rem;">The venue is preparing an event flyer for this gig.</div>' + closeBtn + '</div>';
-}
-
-    function closeGigModal() {
-      const m = document.getElementById('gigModal');
-      m.classList.add('hidden');
-      m.querySelector('.gig-modal').classList.remove('day-modal');
-    }
-    document.getElementById('gigModal').addEventListener('click', function(e) { if (e.target === this) closeGigModal(); });
-
-    async function openDayGigsModal(e, ds) {
-      if (e.target.closest('.cal-gig')) return;
-      const dayGigs = artistGigs.filter(g => g.date === ds);
-      if (!dayGigs.length) return;
-
-      await Promise.all(dayGigs.map(async g => {
-        try {
-          const r = await fetch(`/api/gigs/${g.id}/slots/public`);
-          if (r.ok) g._daySlots = (await r.json()).sort((a,b) => (a.start_time||'').localeCompare(b.start_time||''));
-        } catch(e) {}
-      }));
-
-      const [y, mo, d] = ds.split('-').map(Number);
-      const dateStr = new Date(y, mo-1, d).toLocaleDateString('en-US', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
-      const icons = {'Live Band':'🎸','DJ':'🎧','Comedian':'🎤','Trivia Host':'🧠', 'Open Mic MC':'🎙️', 'Karaoke MC':'🎶'};
-
-      let rows = dayGigs.map(g => {
-        const isBooked = g.status === 'booked' || g.booked_slots_count > 0;
-        const gigBg    = isBooked ? 'linear-gradient(135deg,#ef4444,#b91c1c)' : 'linear-gradient(135deg,#10b981,#059669)';
-        const gigBorder= isBooked ? '#b91c1c' : '#059669';
-        const gigColor = isBooked ? '#ffffff' : '#000000';
-        const icon = icons[g.artist_type] || '🎵';
-        const time = fmtTime(g.start_time) + (g.end_time ? ' – ' + fmtTime(g.end_time) : '');
-        const loc = [g.city, g.state].filter(Boolean).join(', ');
-        let artistTypeDisplay = g.artist_type || 'Any';
-        if (g.artist_type === 'Live Band' && g.band_formats)
-          artistTypeDisplay += ' • ' + g.band_formats.split(',').map(f=>f.trim()).join(', ');
-        const venueDisplay = g.venue_id
-          ? `<a href="/app/venue-profile.html?venue_id=${g.venue_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigColor};text-decoration:underline;font-weight:600;">${esc(g.venue_name||'')}</a>`
-          : esc(g.venue_name||'');
-
-        let artistDisplay = '';
-        if (!isBooked) {
-          artistDisplay = `<span style="opacity:0.75;">OPEN</span>`;
-        } else if (g._daySlots) {
-          const bookedSlots = g._daySlots.filter(s => s.status === 'booked' && s.artist_name);
-          artistDisplay = bookedSlots.length === 0
-            ? '<span style="opacity:0.75;">Booked</span>'
-            : bookedSlots.map(s => `<a href="/app/artist-profile.html?artist_id=${s.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigColor};text-decoration:underline;font-weight:600;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">${esc(s.artist_name)}</a>`).join('<br>');
-        } else if (g.artist_name) {
-          artistDisplay = `<a href="/app/artist-profile.html?artist_id=${g.artist_id}" target="_blank" onclick="event.stopPropagation()" style="color:${gigColor};text-decoration:underline;font-weight:600;">${esc(g.artist_name)}</a>`;
-        } else {
-          artistDisplay = '<span style="opacity:0.75;">Booked</span>';
-        }
-
-        return `<div onclick="openDayGigDetail(${g.id},'${ds}')" style="display:grid;grid-template-columns:130px minmax(130px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(150px,1.5fr);column-gap:12px;align-items:center;padding:6px 10px;margin:0;border:1px solid ${gigBorder};border-radius:6px;background:${gigBg};color:${gigColor};font-weight:700;white-space:nowrap;cursor:pointer;line-height:1.3;">
-          <div>${icon} ${time}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${venueDisplay}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(loc)}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${artistDisplay}</div>
-          <div style="overflow:hidden;text-overflow:ellipsis;">${esc(artistTypeDisplay)}</div>
-        </div>`;
-      }).join('');
-
-      const modal = document.getElementById('gigModal');
-      modal.querySelector('.gig-modal').classList.add('day-modal');
-      modal.querySelector('h3').textContent = dateStr;
-      document.getElementById('gigModalBody').innerHTML =
-        `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;"><div style="display:grid;grid-auto-rows:auto;row-gap:10px;width:100%;min-width:820px;font-size:0.7rem;">${rows}</div></div>`;
-      modal.classList.remove('hidden');
-    }
-
-    function openDayGigDetail(gigId, ds) {
-      const dayGigs = artistGigs.filter(g => g.date === ds);
-      const idx = dayGigs.findIndex(g => g.id === gigId);
-      if (idx >= 0) {
-        document.getElementById('gigModal').querySelector('.gig-modal').classList.remove('day-modal');
-        showGigDetail(ds, idx);
-      }
-    }
-
-    // ========== MEDIA ==========
-    function ytThumb(url) { const m = url.match(/(?:youtube\.com.*v=|youtu\.be\/)([^&]+)/); return m ? `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg` : "/app/static/img/video-placeholder.svg"; }
-    async function loadMedia() {
-      const res = await fetch(`/api/artists/${artistId}/media`, { credentials: "include" }); if (!res.ok) return;
-      const media = await res.json();
-      const pics = document.getElementById("pictures"), audio = document.getElementById("audio"), videos = document.getElementById("videos");
-      // Reset navigable-media lists (populated below). 2026-07-26:
-      // lightbox prev/next arrows and swipe navigate within these lists.
-      // Videos exclude Instagram / TikTok / Facebook because those platforms
-      // open in a new tab from openModal — they're not inline-navigable.
-      _lbPics = [];
-      _lbVids = [];
-      media.forEach(m => {
-        if (m.media_type === "logo" || m.media_type === "profile") {
-          document.getElementById("artistLogo").src = m.file_path;
-          // Reveal the image + hide the big gradient text name — the two
-          // are mutually exclusive in the logo slot (2026-07-25).
-          document.getElementById("logoHero").classList.add("has-logo");
-        }
-        if (m.media_type === "picture") {
-          const cap = (m.caption || "").trim();
-          // Caption row only renders when non-empty — plain pictures keep
-          // their original 2-row look (thumbnail + title only).
-          const capHtml = cap ? `<div class="media-caption-label">${esc(cap)}</div>` : "";
-          const d = document.createElement("div");
-          d.className = "media-card";
-          d.innerHTML = `<img src="${escAttr(m.file_path)}"><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
-          d.onclick = () => openModal(m.file_path, "image");
-          pics.appendChild(d);
-          _lbPics.push(m.file_path);
-        }
-        if (m.media_type === "audio") {
-          const cap = (m.caption || "").trim();
-          const capHtml = cap ? `<div class="audio-caption-display">${esc(cap)}</div>` : "";
-          const d = document.createElement("div");
-          d.className = "audio-entry";
-          d.innerHTML = `${capHtml}<div class="audio-row"><strong>${esc((m.title||"").substring(0,50))}</strong><audio controls src="${escAttr(m.file_path)}"></audio></div>`;
-          audio.appendChild(d);
-          d.querySelector("audio").addEventListener("play", function(){ document.querySelectorAll("#audio audio").forEach(a => { if(a!==this) a.pause(); }); });
-        }
-        if (m.media_type === "audio_link") {
-          const url = m.video_url || '';
-          let player;
-          if (/soundcloud\.com\//i.test(url)) {
-            const src = 'https://w.soundcloud.com/player/?url=' + encodeURIComponent(url)
-                      + '&color=%238b5cf6&inverse=true&auto_play=false&hide_related=true'
-                      + '&show_comments=false&show_user=true&show_reposts=false&show_teaser=false';
-            player = `<iframe class="audio-link-iframe" width="100%" height="100" scrolling="no" frameborder="no" allow="autoplay" src="${escAttr(src)}" style="flex:1;min-width:0;border-radius:6px;"></iframe>`;
-          } else if (/\.(mp3|wav|ogg|m4a|aac|flac)(\?|#|$)/i.test(url)) {
-            player = `<audio controls src="${escAttr(url)}" style="flex:1;"></audio>`;
-          } else {
-            const display = url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-            player = `<a href="${escAttr(url)}" target="_blank" rel="noopener" style="flex:1;min-width:0;color:var(--cyan);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;" title="${escAttr(url)}">🔗 ${esc(display)}</a>`;
-          }
-          const cap = (m.caption || "").trim();
-          const capHtml = cap ? `<div class="audio-caption-display">${esc(cap)}</div>` : "";
-          const d = document.createElement("div");
-          d.className = "audio-entry";
-          d.innerHTML = `${capHtml}<div class="audio-row"><strong>${esc((m.title||"").substring(0,50))}</strong>${player}</div>`;
-          audio.appendChild(d);
-          const aud = d.querySelector("audio");
-          if (aud) aud.addEventListener("play", function(){ document.querySelectorAll("#audio audio").forEach(a => { if(a!==this) a.pause(); }); });
-        }
-        if (m.media_type === "video") {
-          const cap = (m.caption || "").trim();
-          // Caption row only renders when non-empty — no blank line for plain videos.
-          const capHtml = cap ? `<div class="media-caption-label">${esc(cap)}</div>` : "";
-          const d = document.createElement("div");
-          d.className = "media-card";
-          d.innerHTML = `<img alt=""><div class="media-title-label">${esc(m.title||"")}</div>${capHtml}`;
-          d.onclick = () => openModal(m.video_url, "video");
-          videos.appendChild(d);
-          // Smart thumbnail loader (see /app/static/js/video-thumbnail.js):
-          // handles YouTube maxres → hqdefault fallback, Vimeo oEmbed
-          // async lookup, branded fallbacks for IG/TikTok/FB, and adds
-          // the play-triangle overlay.
-          if (typeof window.attachVideoThumb === 'function') {
-            window.attachVideoThumb(d.querySelector('img'), m.video_url);
-          } else {
-            d.querySelector('img').src = ytThumb(m.video_url);
-          }
-          // Only inline-embeddable videos join the navigable list —
-          // Instagram / TikTok / Facebook click straight to a new tab.
-          if (!/instagram\.com|tiktok\.com|facebook\.com|fb\.watch/.test(m.video_url || '')) {
-            _lbVids.push(m.video_url);
-          }
-        }
-      });
-      if (!pics.children.length) document.getElementById('picturesEmpty').style.display = 'block';
-      if (!audio.children.length) document.getElementById('audioEmpty').style.display = 'block';
-      if (!videos.children.length) document.getElementById('videosEmpty').style.display = 'block';
-
-      // Hide empty tabs entirely from the public profile — visitors
-      // shouldn't see a "Pictures" tab that just says "No pictures
-      // uploaded yet." (Info, Calendar, Reviews always show — they're
-      // structural tabs; Social handled below when it renders.)
-      _hideEmptyTab('pictures', !pics.children.length);
-      _hideEmptyTab('audio',    !audio.children.length);
-      _hideEmptyTab('videos',   !videos.children.length);
-    }
-
-    // Hide the tab button for `name` when `isEmpty` is true. If the
-    // currently-active tab is being hidden, fall back to the Calendar
-    // tab so the user sees a valid section instead of a blank panel.
-    // Added 2026-07-25 as part of the public-profile clean-up.
-    function _hideEmptyTab(name, isEmpty) {
-      if (!isEmpty) return;
-      const btn = document.querySelector('.profile-tabs button[onclick*="switchTab(\'' + name + '\')"]');
-      if (btn) btn.style.display = 'none';
-      const panel = document.getElementById('tab-' + name);
-      // If the hidden tab was somehow the active one, activate Calendar.
-      if (panel && panel.classList.contains('active')) {
-        if (typeof switchTab === 'function') switchTab('calendar');
-      }
-    }
-    let lightboxSrc = '', lightboxType = '';
-    // Navigable-media lists (2026-07-26). Populated by loadMedia; read
-    // by openModal to seed _lbList for prev/next navigation.
-    let _lbPics = [];
-    let _lbVids = [];
-    // Builds a per-platform embed URL for the lightbox iframe. Falls
-    // through to a raw <video src> for direct media files (mp4/webm/etc).
-    // Extended 2026-07-25 to cover Instagram / TikTok / Vimeo / Facebook —
-    // previously the fallback was `<video src="{page-url}">` which just
-    // fetched HTML and threw "video can't be played" for any social link.
-    function _buildVideoEmbed(src) {
-      const s = String(src || '').trim();
-      // YouTube (standard + short + shorts)
-      let m = s.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([\w-]+)/);
-      if (m) return { type: 'iframe', url: `https://www.youtube.com/embed/${m[1]}` };
-      // Vimeo
-      m = s.match(/vimeo\.com\/(?:video\/)?(\d+)/);
-      if (m) return { type: 'iframe', url: `https://player.vimeo.com/video/${m[1]}` };
-      // Instagram — /p/{shortcode}/, /reel/{shortcode}/, /tv/{shortcode}/,
-      // or /{username}/(p|reel|tv)/{shortcode}/ (Instagram share links from a
-      // profile include the username segment — matched here as an optional
-      // prefix so both forms embed correctly). Fixed 2026-07-25 after
-      // /username/reel/ URLs were falling through to a raw <video> and
-      // throwing "No video with supported format" in the lightbox.
-      // Instagram — preserve the ORIGINAL /p/, /reel/, or /tv/ path type
-      // and drop the optional /{username}/ prefix. Instagram's /embed/
-      // endpoint doesn't set X-Frame-Options, so a plain iframe works.
-      // Fixed 2026-07-25: an earlier revision rewrote /reel/ → /p/ which
-      // rendered a "post not available" placeholder for reels.
-      m = s.match(/instagram\.com\/(?:[\w.-]+\/)?(p|reel|tv)\/([\w-]+)/);
-      if (m) return { type: 'iframe', url: `https://www.instagram.com/${m[1]}/${m[2]}/embed/captioned/` };
-      // TikTok — /@user/video/{id} → oEmbed via tiktok's embed URL
-      m = s.match(/tiktok\.com\/(?:@[^/]+\/video\/|v\/)(\d+)/);
-      if (m) return { type: 'iframe', url: `https://www.tiktok.com/embed/v2/${m[1]}` };
-      // Facebook video (watch or /videos/{id}) — needs plugin URL wrapper
-      if (/facebook\.com\/.+\/(videos|watch)/.test(s) || /fb\.watch/.test(s)) {
-        return { type: 'iframe', url: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(s)}&show_text=0` };
-      }
-      // Direct media file (mp4, webm, mov, ogv)
-      return { type: 'video', url: s };
-    }
-    // ── Lightbox navigation state (2026-07-26) ───────────────────────
-    // _lbPics / _lbVids populated by loadMedia. When openModal fires
-    // for a picture/video it sets _lbList to the matching list and
-    // _lbIdx to the current position. Arrow buttons + arrow keys +
-    // swipe cycle through the list. Content re-renders in place;
-    // arrows and overlay persist.
-    let _lbList = [];
-    let _lbIdx = 0;
-    let _lbType = 'image';
-
-    function _renderLightboxContent() {
-      const content = document.getElementById('lightboxContent');
-      const src = _lbList[_lbIdx];
-      if (_lbType === 'image') {
-        content.innerHTML = `<img src="${escAttr(src)}" style="max-width:90vw;max-height:90vh;border-radius:12px;">`;
-      } else {
-        const emb = _buildVideoEmbed(src);
-        const _plat = (u => (/instagram\.com/.test(u)?'Instagram':/tiktok\.com/.test(u)?'TikTok':/vimeo\.com/.test(u)?'Vimeo':/facebook\.com|fb\.watch/.test(u)?'Facebook':/youtube\.com|youtu\.be/.test(u)?'YouTube':'the site'))(src);
-        const fallback = `<div style="margin-top:12px;text-align:center;"><a href="${escAttr(src)}" target="_blank" rel="noopener" style="color:#7dd3fc;text-decoration:none;font-size:0.85rem;border-bottom:1px dashed rgba(125,211,252,0.4);">Trouble loading? Open on ${_plat} ↗</a></div>`;
-        if (emb.type === 'iframe') {
-          const vert = /instagram\.com\/(?:[\w.-]+\/)?(?:reel|p|tv)|tiktok\.com/.test(src);
-          const w = vert ? 400 : 800;
-          const h = vert ? 700 : 450;
-          content.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;"><iframe width="${w}" height="${h}" src="${escAttr(emb.url)}" frameborder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen style="max-width:90vw;max-height:78vh;border-radius:12px;background:#000;"></iframe>${fallback}</div>`;
-        } else {
-          content.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;"><video controls src="${escAttr(emb.url)}" style="max-width:90vw;max-height:78vh;border-radius:12px;"></video>${fallback}</div>`;
-        }
-      }
-      // Show / hide nav chrome based on list length.
-      const showNav = _lbList.length > 1;
-      const prev = document.getElementById('lbPrevBtn');
-      const next = document.getElementById('lbNextBtn');
-      const cnt  = document.getElementById('lbCounter');
-      if (prev) prev.style.display = showNav ? 'flex' : 'none';
-      if (next) next.style.display = showNav ? 'flex' : 'none';
-      if (cnt) {
-        cnt.style.display = showNav ? 'block' : 'none';
-        cnt.textContent = showNav ? `${_lbIdx + 1} / ${_lbList.length}` : '';
-      }
-    }
-
-    function _lbPrev() {
-      if (_lbList.length < 2) return;
-      _lbIdx = (_lbIdx - 1 + _lbList.length) % _lbList.length;
-      _renderLightboxContent();
-    }
-    function _lbNext() {
-      if (_lbList.length < 2) return;
-      _lbIdx = (_lbIdx + 1) % _lbList.length;
-      _renderLightboxContent();
-    }
-
-    function openModal(src, type) {
-      // Instagram / TikTok / Facebook: skip the lightbox entirely and
-      // open in a new tab. All three platforms serve a "Content Unavailable"
-      // state (or block iframing outright) for logged-out visitors, so an
-      // embedded iframe renders as a black box for most viewers. YouTube /
-      // Vimeo / Soundcloud still embed cleanly and keep the lightbox
-      // behavior (with arrow navigation added 2026-07-26).
-      if (type === 'video' &&
-          /instagram\.com|tiktok\.com|facebook\.com|fb\.watch/.test(String(src || ''))) {
-        window.open(src, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      _lbType = type;
-      _lbList = type === 'image' ? _lbPics.slice() : _lbVids.slice();
-      _lbIdx = _lbList.indexOf(src);
-      if (_lbIdx < 0) {
-        // Item not in list (shouldn't happen after loadMedia populates
-        // both, but defensive) — fall back to a single-item view.
-        _lbList = [src];
-        _lbIdx = 0;
-      }
-      _renderLightboxContent();
-      document.getElementById('lightboxOverlay').style.display = 'flex';
-    }
-    function closeModal() {
-      document.getElementById('lightboxOverlay').style.display = 'none';
-      document.getElementById('lightboxContent').innerHTML = '';
-      // Also hide nav chrome so it doesn't briefly flash on the next open.
-      const prev = document.getElementById('lbPrevBtn');
-      const next = document.getElementById('lbNextBtn');
-      const cnt  = document.getElementById('lbCounter');
-      if (prev) prev.style.display = 'none';
-      if (next) next.style.display = 'none';
-      if (cnt)  cnt.style.display  = 'none';
-    }
-
-    // Backdrop click closes; arrow-button clicks are stopped from bubbling
-    // to backdrop by their own onclick handlers implicitly (button element).
-    const _lbo = document.getElementById('lightboxOverlay');
-    if (_lbo) _lbo.addEventListener('click', function(e) { if (e.target === this) closeModal(); });
-
-    // Keyboard: Escape closes, ← / → navigate when the lightbox is open.
-    document.addEventListener('keydown', function(e) {
-      var _o = document.getElementById('lightboxOverlay');
-      if (!_o || _o.style.display === 'none') return;
-      if (e.key === 'Escape')     { closeModal(); return; }
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); _lbPrev(); return; }
-      if (e.key === 'ArrowRight') { e.preventDefault(); _lbNext(); return; }
-    });
-
-    // Touch swipe on mobile — >50px horizontal, dominant over vertical.
-    // Attached to the overlay so it captures swipes on both the backdrop
-    // and the content area.
-    (function () {
-      const el = document.getElementById('lightboxOverlay');
-      if (!el) return;
-      let sx = 0, sy = 0, active = false;
-      el.addEventListener('touchstart', function (e) {
-        if (e.touches.length !== 1) { active = false; return; }
-        sx = e.touches[0].screenX; sy = e.touches[0].screenY; active = true;
-      }, { passive: true });
-      el.addEventListener('touchend', function (e) {
-        if (!active) return;
-        active = false;
-        if (e.changedTouches.length !== 1) return;
-        const dx = e.changedTouches[0].screenX - sx;
-        const dy = e.changedTouches[0].screenY - sy;
-        if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
-        if (dx > 0) _lbPrev(); else _lbNext();
-      }, { passive: true });
-    })();
-    function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-    function escAttr(s) { return String(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-  </script>
-<script src="/app/static/js/artist-reviews.js?v=2"></script>
-<script src="/app/static/js/artist-setlist-public.js?v=1"></script>
-<script src="/app/static/js/artist-venues-played.js?v=2"></script>
+<script src="/app/static/js/security.js?v=2"></script>
+<script src="/app/static/js/time-format.js"></script>
 <script src="/app/static/js/video-thumbnail.js?v=1"></script>
-<script src="/app/static/js/gf-modals.js?v=8"></script>
-<script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
-<script src="/app/static/js/gig-hover-card.js?v=23"></script>
-<script src="/app/static/js/gf-analytics.js?v=1"></script>
+<script src="/app/static/js/social-icons.js?v=1"></script>
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
-<script>if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});}</script>
-<script src="/app/static/js/vanity-url-editor.js?v=4"></script>
+<script src="/app/static/js/artist-reviews.js?v=2"></script>
+<script src="/app/static/js/artist-venues-played.js?v=2"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=19"></script>
+<script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>
+<script src="/app/static/js/maintenance-banner.js"></script>
+<script src="/app/static/js/sw-register.js"></script>
 </body>
 </html>

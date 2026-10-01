@@ -262,7 +262,8 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 tiktok_url,
                 website_url,
                 COALESCE(website_public, 0) as website_public,
-                social_order
+                social_order,
+                hero_media_id
             FROM artists
             WHERE id=:id
               AND deleted_at IS NULL
@@ -324,6 +325,35 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
     # Jul 1 2026: has_own_equipment normalized to int (SQLite stores
     # booleans as 0/1). None (field not sent) leaves DB value untouched
     # via COALESCE.
+    # 2026-10-01: hero image choice. The id must belong to THIS artist and
+    # be one of their own images -- otherwise a crafted request could point
+    # the hero at another artist's media row.
+    _hero_media_id = None
+    if "hero_media_id" in data:
+        _raw_hero = data.get("hero_media_id")
+        if _raw_hero in (None, "", 0, "0"):
+            # Explicit clear. COALESCE ignores NULL, so write it directly.
+            db.execute(
+                text("UPDATE artists SET hero_media_id = NULL WHERE id = :id"),
+                {"id": artist_id},
+            )
+        else:
+            try:
+                _cand = int(_raw_hero)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_media_id must be a number")
+            _owned = db.execute(
+                text(
+                    "SELECT id FROM artist_media "
+                    "WHERE id = :mid AND artist_id = :aid "
+                    "AND media_type IN ('picture', 'profile')"
+                ),
+                {"mid": _cand, "aid": artist_id},
+            ).first()
+            if not _owned:
+                raise HTTPException(400, "That image does not belong to this artist")
+            _hero_media_id = _cand
+
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     # 2026-09-14: same 0/1/None coercion for website_public. None →
@@ -341,6 +371,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 band_formats = COALESCE(:band_formats, band_formats),
                 styles = COALESCE(:styles, styles),
                 has_own_equipment = COALESCE(:has_own_equipment, has_own_equipment),
+                hero_media_id = COALESCE(:hero_media_id, hero_media_id),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -364,6 +395,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "band_formats": data.get("band_formats"),
             "styles": data.get("styles"),
             "has_own_equipment": _hoe,
+            "hero_media_id": _hero_media_id,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),

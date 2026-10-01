@@ -506,7 +506,12 @@ def setup_database():
         # Past" rather than a NULL row. Active-listing queries filter
         # `deleted_at IS NULL` so tombstones don't show up in discovery.
         "deleted_at TIMESTAMP DEFAULT NULL",
-    ])
+        # 2026-10-01: which of the artist's own pictures fills the profile
+    # hero. Previously the page just took the first picture, which for one
+    # band meant a dark backstage shot while their best photo sat further
+    # down the gallery. NULL = fall back to first picture, then profile pic.
+    "hero_media_id INTEGER",
+])
     
     # ==========================================
     # VENUES

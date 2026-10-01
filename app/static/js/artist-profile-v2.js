@@ -25,11 +25,14 @@
   // doesn't get a "What They Play" link that scrolls to an empty block.
   var SECTIONS = [
     { id: "__cal",       label: "Calendar", action: "v2OpenCal()" },
+    { id: "sec-listen",  label: "Listen" },
     { id: "sec-watch",   label: "Watch" },
     { id: "sec-photos",  label: "Photos" },
     { id: "sec-about",   label: "About" },
     { id: "sec-dates",   label: "Dates" },
     { id: "sec-setlist", label: "Setlist" },
+    { id: "sec-reviews", label: "Reviews" },
+    { id: "sec-venues",  label: "Venues" },
     { id: "sec-contact", label: "Contact" }
   ];
   var present = {};
@@ -57,7 +60,18 @@
     // the CSS gradient stands in rather than a flat block.
     var pics = media.filter(function (m) { return m.media_type === "picture" && m.file_path; });
     var profile = media.filter(function (m) { return m.media_type === "profile" && m.file_path; })[0];
-    var heroSrc = (pics[0] && pics[0].file_path) || (profile && profile.file_path) || "";
+    // The artist's own pick wins. Falling back to "first picture" is a
+    // guess, and it picked a dark backstage shot over a far better photo
+    // for the first band we looked at.
+    var chosen = null;
+    if (a.hero_media_id) {
+      chosen = media.filter(function (m) {
+        return Number(m.id) === Number(a.hero_media_id) && m.file_path;
+      })[0] || null;
+    }
+    var heroSrc = (chosen && chosen.file_path) ||
+                  (pics[0] && pics[0].file_path) ||
+                  (profile && profile.file_path) || "";
     if (heroSrc) {
       $("v2HeroBg").style.backgroundImage = 'url("' + heroSrc + '")';
     } else {
@@ -229,6 +243,66 @@
     }
   }
 
+
+  // ── audio ───────────────────────────────────────────────────────────
+  // Two shapes: uploaded files (media_type "audio", file_path) and linked
+  // tracks ("audio_link", video_url). Files get a native player; links to
+  // SoundCloud/Bandcamp can't be embedded blind, so they get a clear link.
+  function renderAudio(media) {
+    var files = media.filter(function (m) { return m.media_type === "audio" && m.file_path; });
+    var links = media.filter(function (m) { return m.media_type === "audio_link" && m.video_url; });
+    var total = files.length + links.length;
+    $("v2AudioCount").textContent = total ? total + " tracks" : "";
+    if (!total) return;            // section hides itself via renderNav
+    present["sec-listen"] = true;
+
+    var html = files.map(function (m) {
+      return '<div class="v2-track">' +
+        '<span class="v2-track-name">' + esc(m.title || "Untitled") + "</span>" +
+        '<audio controls preload="none" src="' + esc(m.file_path) + '"></audio>' +
+        "</div>";
+    }).join("");
+
+    html += links.map(function (m) {
+      var url = (window.gfSafeHref || function (u) { return u; })(m.video_url);
+      if (!url) return "";
+      var direct = /\.(mp3|wav|ogg|m4a|aac|flac)(\?|$)/i.test(url);
+      return '<div class="v2-track">' +
+        '<span class="v2-track-name">' + esc(m.title || "Untitled") + "</span>" +
+        (direct
+          ? '<audio controls preload="none" src="' + esc(url) + '"></audio>'
+          : '<a class="v2-track-link" href="' + esc(url) + '" target="_blank" rel="noopener">Open track &#8599;</a>') +
+        "</div>";
+    }).join("");
+
+    $("v2Audio").innerHTML = html;
+  }
+
+  // ── reviews + venues played ─────────────────────────────────────────
+  // Both have working modules already; mount them rather than reimplement.
+  // Each hides its own section when there's nothing to show, so a new
+  // artist doesn't get a "Reviews" link to an empty block.
+  async function renderReviewsSection() {
+    var summary = await getJSON("/api/artists/" + artistId + "/reviews/summary");
+    if (!summary || !Number(summary.review_count)) return;
+    present["sec-reviews"] = true;
+    if (typeof window.renderRatingSummary === "function") {
+      window.renderRatingSummary("v2RatingSummary", parseInt(artistId, 10));
+    }
+    if (typeof window.renderReviews === "function") {
+      window.renderReviews("v2ReviewsList", parseInt(artistId, 10));
+    }
+  }
+
+  async function renderVenuesSection() {
+    if (typeof window.renderVenuesPlayed !== "function") return;
+    await window.renderVenuesPlayed("v2VenuesPlayed", parseInt(artistId, 10));
+    // The module owns its own markup, so presence is judged by what it
+    // actually rendered rather than by assuming it found something.
+    var root = $("v2VenuesPlayed");
+    if (root && root.textContent.trim()) present["sec-venues"] = true;
+  }
+
   // ── photos ──────────────────────────────────────────────────────────
   function renderPhotos(media) {
     var pics = media.filter(function (m) { return m.media_type === "picture" && m.file_path; });
@@ -313,6 +387,7 @@
   // the 17th" is a spatial question, without letting an empty month own
   // the page the way the old layout did.
   var calGigs = [];
+  var calExternal = [];
   var calCursor = new Date();
   var CAL_MONTHS = ["January","February","March","April","May","June",
                     "July","August","September","October","November","December"];
@@ -341,12 +416,21 @@
     for (var d = 1; d <= days; d++) {
       var ds = y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
       var onDay = calGigs.filter(function (g) { return String(g.date) === ds; });
-      var cls = "v2-cal-cell" + (onDay.length ? " booked" : "") + (ds === todayStr ? " today" : "");
+      var extDay = calExternal.filter(function (g) { return String(g.date) === ds; });
+      var busy = onDay.length || extDay.length;
+      var cls = "v2-cal-cell" + (busy ? " booked" : "") + (ds === todayStr ? " today" : "");
+      // Only GigsFill bookings open a detail view; external gigs are
+      // self-reported and have no gig record behind them.
       var click = onDay.length ? ' onclick="v2OpenDay(\'' + ds + '\')"' : "";
       html += '<div class="' + cls + '"' + click + '><div class="v2-cal-num">' + d + "</div>";
       onDay.forEach(function (g) {
         var t = g.start_time && window.formatTime12Hour ? window.formatTime12Hour(g.start_time) : "";
         html += '<div class="v2-cal-gig" title="' + esc((g.venue_name || "") + " " + t) + '">' +
+                esc(t || "Booked") + "</div>";
+      });
+      extDay.forEach(function (g) {
+        var t = g.start_time && window.formatTime12Hour ? window.formatTime12Hour(g.start_time) : "";
+        html += '<div class="v2-cal-gig ext" title="' + esc((g.venue_name || "") + " (not booked through GigsFill)") + '">' +
                 esc(t || "Booked") + "</div>";
       });
       html += "</div>";
@@ -662,9 +746,12 @@
       getJSON("/api/artists/" + artistId),
       getJSON("/api/artists/" + artistId + "/media"),
       getJSON("/api/artists/" + artistId + "/gigs/public"),
-      getJSON("/api/artists/" + artistId + "/setlist")
+      getJSON("/api/artists/" + artistId + "/setlist"),
+      getJSON("/api/public/artists/" + artistId + "/external-gigs")
     ]);
-    var artist = results[0], media = results[1] || [], gigs = results[2] || [], setlist = results[3];
+    var artist = results[0], media = results[1] || [], gigs = results[2] || [],
+        setlist = results[3];
+    calExternal = results[4] || [];
 
     if (!artist) {
       document.querySelector("main").innerHTML =
@@ -673,6 +760,7 @@
     }
 
     renderHero(artist, media);
+    renderAudio(media);
     renderVideos(media);
     renderPhotos(media);
     renderAbout(artist);
@@ -682,6 +770,9 @@
     renderNav();
 
     calGigs = gigs;
+    await renderReviewsSection();
+    await renderVenuesSection();
+    renderNav();          // re-run: reviews/venues resolve after the first pass
     await renderAction(artist);
     // Mirror whatever the hero resolved to, so the page doesn't offer two
     // different answers to "what can I do about this artist".

@@ -1115,6 +1115,7 @@ async function loadArtist() {
                 rows="2"
                 data-id="${m.id}"
               >${escapeHtml(caption)}</textarea>
+              <button class="hero-btn" data-id="${m.id}">Use as cover</button>
               <button class="delete-btn" data-id="${m.id}">Delete</button>
             </div>
           </div>
@@ -1463,3 +1464,45 @@ async function loadArtist() {
 document.addEventListener("DOMContentLoaded", () => {
   loadArtist();
 });
+
+// ── Cover photo (2026-10-01) ────────────────────────────────────────────
+// Which picture fills the profile hero. Without this the page simply took
+// the first picture, which for one band meant a dark backstage shot while
+// their best photo sat further down the gallery. Stored as artist_media.id
+// on the artist row; the server checks the image actually belongs to them.
+(function () {
+  function markHero(id) {
+    document.querySelectorAll('#pictures .media-card').forEach(function (card) {
+      var on = String(card.dataset.id) === String(id);
+      card.classList.toggle('is-hero', on);
+      var btn = card.querySelector('.hero-btn');
+      if (btn) btn.textContent = on ? '\u2605 Cover photo' : 'Use as cover';
+    });
+  }
+  window.gfMarkHeroPicture = markHero;
+
+  document.addEventListener('click', async function (e) {
+    var btn = e.target.closest && e.target.closest('.hero-btn');
+    if (!btn) return;
+    e.preventDefault();
+    var mediaId = btn.dataset.id;
+    var aid = new URLSearchParams(window.location.search).get('artist_id');
+    if (!aid) return;
+    // Clicking the current cover clears it, so there's a way back to the
+    // default without hunting for a separate control.
+    var card = btn.closest('.media-card');
+    var clearing = card && card.classList.contains('is-hero');
+    try {
+      var r = await fetch('/api/artists/' + aid, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ hero_media_id: clearing ? 0 : Number(mediaId) })
+      });
+      if (!r.ok) throw new Error(((await r.json().catch(function(){return {};})).detail) || 'Failed');
+      markHero(clearing ? null : mediaId);
+    } catch (err) {
+      alert('Could not set the cover photo: ' + (err.message || 'please try again'));
+    }
+  });
+})();

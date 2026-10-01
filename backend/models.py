@@ -65,6 +65,9 @@ class Artist(Base):
     social_order = Column(Text)
 
     display_order = Column(Integer, default=0)
+    # 2026-10-01 — mirrors backend/db.py. Which artist_media picture fills
+    # the profile hero; NULL falls back to the first picture.
+    hero_media_id = Column(Integer)
     # Jul 1 2026: MC-type equipment gate (see db.py notes).
     has_own_equipment = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)

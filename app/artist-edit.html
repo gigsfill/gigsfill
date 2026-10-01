@@ -239,6 +239,18 @@
     /* ========================================
        MEDIA GRID - Pictures & Videos
        ======================================== */
+    .hero-btn {
+      background: rgba(6,182,212,0.15);
+      border: 1px solid rgba(6,182,212,0.45);
+      color: #67e8f9;
+      border-radius: 6px; padding: 5px 10px; font-size: 0.72rem;
+      cursor: pointer; font-weight: 600; margin-bottom: 4px;
+    }
+    .hero-btn:hover { background: rgba(6,182,212,0.28); }
+    .media-card.is-hero { outline: 2px solid var(--cyan); outline-offset: 2px; }
+    .media-card.is-hero .hero-btn {
+      background: var(--cyan); color: #06121a; border-color: var(--cyan);
+    }
     .media-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -593,7 +605,7 @@
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=24"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=25"></script>
   
 </head>
 
