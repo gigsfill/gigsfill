@@ -19,7 +19,12 @@
   };
 
   var params = new URLSearchParams(window.location.search);
-  var artistId = params.get("artist_id");
+  // window._VANITY is injected by the slug resolver for pretty URLs like
+  // gigsfill.com/fridayspast, which carry no query string. It takes
+  // precedence over ?artist_id=N.
+  var artistId = (window._VANITY && window._VANITY.type === "artist"
+                    ? window._VANITY.id : null)
+                 || params.get("artist_id");
 
   // Nav is built from what actually rendered, so a band with no setlist
   // doesn't get a "What They Play" link that scrolls to an empty block.

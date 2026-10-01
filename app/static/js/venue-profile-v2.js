@@ -26,7 +26,12 @@
   };
 
   var params = new URLSearchParams(window.location.search);
-  var venueId = params.get("venue_id");
+  // window._VANITY is injected by the slug resolver for pretty URLs like
+  // gigsfill.com/venuedemo, which carry no query string. It takes
+  // precedence over ?venue_id=N.
+  var venueId = (window._VANITY && window._VANITY.type === "venue"
+                   ? window._VANITY.id : null)
+                || params.get("venue_id");
 
   var SECTIONS = [
     { id: "__cal",       label: "Calendar", action: "v2OpenCal()" },

@@ -1518,7 +1518,7 @@ document.addEventListener("DOMContentLoaded", () => {
     var card = btn.closest('.media-card');
     var clearing = card && card.classList.contains('is-hero');
     try {
-      var r = await fetch('/api/artists/' + aid, {
+      var r = await fetch('/artists/' + aid, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -1570,7 +1570,7 @@ document.addEventListener("DOMContentLoaded", () => {
       var aid = artistId();
       if (!aid) return;
       try {
-        var r = await fetch("/api/artists/" + aid, {
+        var r = await fetch("/artists/" + aid, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           credentials: "include",

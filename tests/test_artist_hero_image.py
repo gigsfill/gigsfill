@@ -121,3 +121,38 @@ def test_framer_preview_matches_the_hero_aspect():
     html = (ROOT / "app" / "artist-edit.html").read_text()
     idx = html.index("#coverPreview {")
     assert "aspect-ratio" in html[idx:idx + 400]
+
+
+def test_cover_photo_saves_to_the_route_that_actually_accepts_put():
+    """The artist update route is PUT /artists/{id} — there is no /api
+    prefix on it, unlike venues which have both. Calling /api/artists/{id}
+    reaches a GET-only route and 405s, which is exactly what the cover
+    button did on first use. artist.edit.js already carries a comment about
+    this same trap from an earlier occurrence.
+    """
+    js = (ROOT / "app" / "static" / "js" / "artist.edit.js").read_text()
+    import re
+    # Every PUT in this file must target /artists/, never /api/artists/.
+    for m in re.finditer(r"fetch\(([^,]+),\s*\{([^}]*)", js, re.DOTALL):
+        target, opts = m.group(1), m.group(2)
+        if "PUT" not in opts:
+            continue
+        assert "/api/artists/" not in target, (
+            f"PUT to a GET-only route: {target.strip()}"
+        )
+
+
+def test_artist_put_route_has_no_api_prefix():
+    src = (ROOT / "backend" / "routes" / "artists.py").read_text()
+    assert '@router.put("/artists/{artist_id}")' in src
+    assert '@router.put("/api/artists/{artist_id}")' not in src
+
+
+def test_profile_pages_resolve_vanity_urls():
+    """gigsfill.com/venuedemo carries no query string; the slug resolver
+    injects window._VANITY instead. Reading only the query param made every
+    vanity link render "No venue specified"."""
+    for name, kind in (("artist-profile-v2.js", "artist"), ("venue-profile-v2.js", "venue")):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        assert "window._VANITY" in js, name
+        assert f'_VANITY.type === "{kind}"' in js, name
