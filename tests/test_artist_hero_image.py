@@ -230,9 +230,15 @@ def test_zoom_defaults_to_no_transform():
 def test_profiles_start_at_the_top_on_reload():
     """These are long single-scroll pages; a restored scroll position drops
     the visitor into the middle with no context."""
+    # scrollRestoration is set inline in <head>: the browser applies
+    # restoration before deferred scripts run, so setting it from the page
+    # bundle was too late.
+    for page in ("artist-profile.html", "venue-profile.html"):
+        html = (ROOT / "app" / page).read_text()
+        head = html.split("</head>")[0]
+        assert 'history.scrollRestoration = "manual"' in head, page
     for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
         js = (ROOT / "app" / "static" / "js" / name).read_text()
-        assert 'history.scrollRestoration = "manual"' in js, name
         assert "window.scrollTo(0, 0)" in js, name
 
 
@@ -273,3 +279,43 @@ def test_both_previews_match_their_hero_ratio():
         html = (ROOT / "app" / page).read_text()
         idx = html.index("#coverPreview {")
         assert "aspect-ratio: 64 / 21" in html[idx:idx + 900], page
+
+
+def test_nav_sync_ignores_sections_that_are_not_laid_out():
+    """A display:none element reports a rect of all zeros, so an unrendered
+    section always looked like "the section in view" — the Venues tab showed
+    as active at the very top of the page."""
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        idx = js.index("function sync()")
+        block = js[idx:idx + 700]
+        assert "offsetParent === null" in block, name
+
+
+def test_render_nav_reshows_sections_it_previously_hid():
+    """renderNav runs twice on the artist page because Reviews and Venues
+    resolve after the first pass. Hiding without ever un-hiding left a
+    section with display:none AND a nav link pointing at it."""
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        idx = js.index("function renderNav()")
+        block = js[idx:idx + 1400]
+        assert 'el.style.display = "";' in block, name
+
+
+def test_scroll_listener_is_not_stacked_per_render():
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        assert "removeEventListener(\"scroll\"" in js, name
+
+
+def test_edit_page_get_returns_the_cover_fields():
+    """The edit page marks the saved cover from its own GET. Those fields
+    were added to the public /api/artists/{id} select but missed on
+    /artists/{id}, so after a reload the edit page had no idea which picture
+    was the cover and the marker never appeared."""
+    src = (ROOT / "backend" / "routes" / "artists.py").read_text()
+    idx = src.index('@router.get("/artists/{artist_id}")')
+    block = src[idx:src.index("FROM artists a", idx)]
+    for col in ("hero_media_id", "hero_focal_x", "hero_focal_y", "hero_zoom"):
+        assert col in block, f"{col} missing from the edit GET"

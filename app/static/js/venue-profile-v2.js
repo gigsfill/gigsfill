@@ -25,16 +25,21 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   };
 
-  // Browsers restore the previous scroll position on reload, which on a
-  // long single-scroll profile drops you into the middle of the page with
-  // no context. Opt out and start at the top — unless the URL carries an
-  // explicit #section, which the visitor chose and should still win.
-  if ("scrollRestoration" in history) {
-    try { history.scrollRestoration = "manual"; } catch (e) {}
+  // Belt and braces with the inline guard in <head>: content loads async,
+  // so the page grows after first paint and the browser can shift the
+  // viewport again. On a reload we pin the top; a hash followed from a
+  // shared link is a fresh navigation and still scrolls to its section.
+  var _navEntry = (performance.getEntriesByType &&
+                   performance.getEntriesByType("navigation")[0]) || null;
+  var _isReload = _navEntry ? _navEntry.type === "reload"
+                            : (performance.navigation && performance.navigation.type === 1);
+
+  function v2PinTop() {
+    if (!_isReload && window.location.hash) return;   // honour a shared link
+    window.scrollTo(0, 0);
   }
-  if (!window.location.hash) {
-    window.addEventListener("load", function () { window.scrollTo(0, 0); });
-  }
+  v2PinTop();
+  window.addEventListener("load", v2PinTop);
 
   var params = new URLSearchParams(window.location.search);
   // window._VANITY is injected by the slug resolver for pretty URLs like
@@ -368,11 +373,18 @@
                 esc(s.label) + "</a>";
         return;
       }
+      var el = $(s.id);
       if (!present[s.id]) {
-        var el = $(s.id);
         if (el) el.style.display = "none";
         return;
       }
+      // Re-show explicitly. renderNav runs more than once on the artist
+      // page (Reviews and Venues resolve after the first pass), and that
+      // first pass has already hidden them. Without this the section keeps
+      // display:none while gaining a nav link — and a hidden element
+      // reports a rect of all zeros, so the scroll-sync below picked it as
+      // "in view" even at the very top of the page.
+      if (el) el.style.display = "";
       html += '<a href="#' + s.id + '">' + esc(s.label) + "</a>";
     });
     $("v2NavInner").innerHTML = html;
@@ -387,11 +399,18 @@
       links.forEach(function (l) {
         var sec = document.querySelector(l.getAttribute("href"));
         if (!sec) return;
+        // A display:none section has a rect of all zeros, which would
+        // otherwise always win this comparison.
+        if (sec.offsetParent === null) return;
         var top = sec.getBoundingClientRect().top - 80;
         if (top <= 0 && top > bestTop) { bestTop = top; best = l; }
       });
       links.forEach(function (l) { l.classList.toggle("on", l === best); });
     }
+    // renderNav can run more than once; each call was stacking another
+    // scroll listener on the page.
+    if (window.__v2NavSync) window.removeEventListener("scroll", window.__v2NavSync);
+    window.__v2NavSync = sync;
     window.addEventListener("scroll", sync, { passive: true });
     sync();
   }

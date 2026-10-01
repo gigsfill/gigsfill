@@ -909,6 +909,9 @@ async function loadVenueMedia(venueId) {
   items.forEach(m => {
     if (m.media_type === "profile") {
       qs("profilePic").src = m.file_path;
+      window.__gfLogoMediaId = m.id;
+      var _lb = document.getElementById("useLogoAsCover");
+      if (_lb) _lb.style.display = "inline-block";
     }
 
     if (m.media_type === "picture") {
@@ -1444,7 +1447,29 @@ document.addEventListener("DOMContentLoaded", init);
     }, 450);
   }
 
+
+  function showFramerFor(src) {
+    if (typeof showFramer === "function") {
+      showFramer(src, window.__gfFocalX, window.__gfFocalY);
+    } else if (window.gfShowCoverFramer) {
+      window.gfShowCoverFramer(src, window.__gfFocalX, window.__gfFocalY);
+    }
+  }
+
   function markHero(id) {
+    // The logo is a hero candidate too, so its button tracks the same
+    // state as the gallery cards — otherwise two controls could both look
+    // unselected while one of them is the active cover.
+    var logoBtn = el("useLogoAsCover");
+    if (logoBtn && window.__gfLogoMediaId) {
+      var logoOn = String(window.__gfLogoMediaId) === String(id);
+      logoBtn.textContent = logoOn ? "\u2605 Cover photo" : "Use as Cover";
+      logoBtn.classList.toggle("is-hero-btn", logoOn);
+      if (logoOn) {
+        var pic = el("profilePic");
+        if (pic) showFramerFor(pic.getAttribute("src"));
+      }
+    }
     if (!id) {
       var wrap = el("coverFramer");
       if (wrap) wrap.style.display = "none";
@@ -1546,4 +1571,15 @@ document.addEventListener("DOMContentLoaded", init);
     e.preventDefault();
     setZoom(zoom + (e.deltaY < 0 ? 0.08 : -0.08));
   }, { passive: false });
+
+  document.addEventListener("click", async function (e) {
+    if (!e.target || e.target.id !== "useLogoAsCover") return;
+    e.preventDefault();
+    var mid = window.__gfLogoMediaId;
+    if (!mid) return;
+    var clearing = e.target.classList.contains("is-hero-btn");
+    var ok = await put({ hero_media_id: clearing ? 0 : Number(mid) });
+    if (ok) markHero(clearing ? null : mid);
+    else alert("Could not set the cover photo. Please try again.");
+  });
 })();

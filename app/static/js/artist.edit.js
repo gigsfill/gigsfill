@@ -1097,6 +1097,11 @@ async function loadArtist() {
       // -----------------------------
       if (m.media_type === "profile" && m.file_path) {
         profilePicEl.src = m.file_path;
+        // The logo is a hero candidate, so remember its media id and reveal
+        // the control. Without the id the button has nothing to send.
+        window.__gfLogoMediaId = m.id;
+        var _lb = document.getElementById("useLogoAsCover");
+        if (_lb) _lb.style.display = "inline-block";
       }
   
       // -----------------------------
@@ -1486,7 +1491,47 @@ document.addEventListener("DOMContentLoaded", () => {
 // their best photo sat further down the gallery. Stored as artist_media.id
 // on the artist row; the server checks the image actually belongs to them.
 (function () {
+
+
+  // Shared PUT for the cover controls. venue.edit.js already had one; the
+  // artist side was doing it inline in each handler, which meant the new
+  // logo button had nothing to call.
+  async function put(body) {
+    var aid = artistId();
+    if (!aid) return false;
+    try {
+      var r = await fetch("/artists/" + aid, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body)
+      });
+      return r.ok;
+    } catch (e) { return false; }
+  }
+
+  function showFramerFor(src) {
+    if (typeof showFramer === "function") {
+      showFramer(src, window.__gfFocalX, window.__gfFocalY);
+    } else if (window.gfShowCoverFramer) {
+      window.gfShowCoverFramer(src, window.__gfFocalX, window.__gfFocalY);
+    }
+  }
+
   function markHero(id) {
+    // The logo is a hero candidate too, so its button tracks the same
+    // state as the gallery cards — otherwise two controls could both look
+    // unselected while one of them is the active cover.
+    var logoBtn = el("useLogoAsCover");
+    if (logoBtn && window.__gfLogoMediaId) {
+      var logoOn = String(window.__gfLogoMediaId) === String(id);
+      logoBtn.textContent = logoOn ? "\u2605 Cover photo" : "Use as Cover";
+      logoBtn.classList.toggle("is-hero-btn", logoOn);
+      if (logoOn) {
+        var pic = el("profilePic");
+        if (pic) showFramerFor(pic.getAttribute("src"));
+      }
+    }
     if (!id) {
       var wrap = document.getElementById('coverFramer');
       if (wrap) wrap.style.display = 'none';
@@ -1688,4 +1733,15 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     setZoom(zoom + (e.deltaY < 0 ? 0.08 : -0.08));
   }, { passive: false });
+
+  document.addEventListener("click", async function (e) {
+    if (!e.target || e.target.id !== "useLogoAsCover") return;
+    e.preventDefault();
+    var mid = window.__gfLogoMediaId;
+    if (!mid) return;
+    var clearing = e.target.classList.contains("is-hero-btn");
+    var ok = await put({ hero_media_id: clearing ? 0 : Number(mid) });
+    if (ok) markHero(clearing ? null : mid);
+    else alert("Could not set the cover photo. Please try again.");
+  });
 })();

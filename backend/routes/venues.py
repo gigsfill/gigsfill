@@ -515,8 +515,10 @@ def update_venue(venue_id: int, data: dict, request: Request,
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_media_id must be a number")
             _owned = db.execute(
+                # 'profile' included: a venue's logo is a legitimate hero
+                # choice, same as on the artist side.
                 text("SELECT id FROM venue_media WHERE id = :mid AND venue_id = :vid "
-                     "AND media_type = 'picture'"),
+                     "AND media_type IN ('picture', 'profile')"),
                 {"mid": _cand, "vid": venue_id},
             ).first()
             if not _owned:

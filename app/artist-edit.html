@@ -633,7 +633,7 @@
   <script src="/app/static/js/gf-modals.js?v=8"></script>
   <script src="/app/static/js/time-format.js"></script>
   <script src="/app/static/js/city-autocomplete.js"></script>
-  <script defer src="/app/static/js/artist.edit.js?v=30"></script>
+  <script defer src="/app/static/js/artist.edit.js?v=31"></script>
   
 </head>
 
@@ -672,6 +672,12 @@
           alt="Profile picture"
           onerror="this.onerror=null;this.src='/app/static/img/profile-placeholder.svg';"
         />
+      </div>
+      <!-- 2026-10-01: a logo or wordmark often makes a better hero than any
+           stage photo, so it gets the same cover control as the gallery.
+           Hidden until an image actually exists. -->
+      <div style="text-align:center;margin-top:10px;">
+        <button type="button" id="useLogoAsCover" class="hero-btn" style="display:none;">Use as Cover</button>
       </div>
       <input id="profilePicInput" type="file" accept="image/*" hidden />
     </div>

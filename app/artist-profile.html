@@ -1,6 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>
+/* Scroll restoration is disabled here, inline in <head>, because the
+   browser applies it before any deferred script runs — setting it from
+   the page bundle was too late. On a genuine reload we also clear any
+   #section left in the URL by the nav, so refresh returns to the top
+   instead of jumping back to wherever the visitor had scrolled. A hash
+   someone *followed* (a shared link) is a fresh navigation, not a reload,
+   so it still works. */
+try {
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  var _nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+  var _isReload = _nav ? _nav.type === "reload"
+                       : (performance.navigation && performance.navigation.type === 1);
+  if (_isReload && window.location.hash) {
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+} catch (e) {}
+</script>
+
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Artist – GigsFill</title>
@@ -739,7 +758,7 @@
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/artist-venues-played.js?v=2"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=23"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=25"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>

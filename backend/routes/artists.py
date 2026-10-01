@@ -180,7 +180,16 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.social_order,
                 a.latitude,
                 a.longitude,
-                COALESCE(a.has_own_equipment, 0) as has_own_equipment
+                COALESCE(a.has_own_equipment, 0) as has_own_equipment,
+                -- 2026-10-01: the edit page reads these to mark the saved
+                -- cover photo and open the framer at the stored position.
+                -- They were added to the PUBLIC /api/artists/{id} select but
+                -- missed here, so on reload the edit page had no idea which
+                -- picture was the cover and the marker never appeared.
+                a.hero_media_id,
+                a.hero_focal_x,
+                a.hero_focal_y,
+                a.hero_zoom
             FROM artists a
             WHERE a.id = :id
               AND (
