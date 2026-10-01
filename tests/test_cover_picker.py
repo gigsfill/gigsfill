@@ -112,8 +112,11 @@ def test_profile_hides_the_corner_plate_when_overlaying():
     """Otherwise the same mark renders twice in one band."""
     for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
         js = (ROOT / "app" / "static" / "js" / name).read_text()
-        idx = js.index("_overlayOn")
-        block = js[idx:idx + 900]
+        # Bound by the enclosing branch rather than a character count — a
+        # fixed window keeps breaking as lines are added inside it.
+        start = js.index("var _overlayOn")
+        end = js.index('ov.style.display = "none"', start)
+        block = js[start:end]
         assert 'plate.style.display = "none"' in block, name
 
 

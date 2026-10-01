@@ -127,6 +127,12 @@
           ov.src = _logo.file_path;
           ov.style.opacity = (a.hero_logo_opacity == null)
             ? 1 : Math.max(0.1, Math.min(1, Number(a.hero_logo_opacity)));
+          // Size was being ignored here, so the mark always rendered at the
+          // stylesheet's 46% no matter what the editor previewed.
+          var _ls = (a.hero_logo_scale == null)
+            ? 0.46 : Math.max(0.15, Math.min(1, Number(a.hero_logo_scale)));
+          ov.style.maxWidth = Math.round(_ls * 100) + "%";
+          ov.style.maxHeight = Math.round(_ls * 135) + "%";
           ov.style.display = "block";
           // The small corner plate would then show the same mark twice.
           var plate = $("v2Logo");

@@ -128,10 +128,11 @@
       '<div class="gf-cover-current">' +
         '<div class="gf-cover-thumb" style="background-image:url(\'' + esc(img.file_path) + '\');' +
           "background-position:" + state.x + "% " + state.y + "%;\"></div>" +
+        // Just which image is set. The zoom and band-height readout here
+        // restated settings the dialog already shows, in a place where
+        // nothing can be done about them.
         '<div class="gf-cover-meta">' +
           "<strong>" + esc(img.media_type === "profile" ? "Logo" : (img.title || "Photo")) + "</strong>" +
-          "<span>Zoom " + Math.round(state.zoom * 100) + "% · " +
-            (state.ratio <= 2.2 ? "Tall" : state.ratio >= 4 ? "Short" : "Standard") + " band</span>" +
         "</div>" +
         '<button type="button" class="gf-cover-clear" id="gfCoverClear">Remove</button>' +
       "</div>";
@@ -174,7 +175,13 @@
     // Overlay preview, mirroring the profile exactly.
     var row = $("gfCoverLogoRow"), ovImg = $("gfCoverPreviewLogo"), chk = $("gfCoverLogoOn");
     var avail = overlayAvailable();
-    if (row) row.style.display = avail ? "flex" : "none";
+    // Three sibling rows in the shared grid, so each is shown individually
+    // — a wrapper would have broken the column alignment with Zoom/Height.
+    if (row) row.style.display = avail ? "grid" : "none";
+    var sizeRow = $("gfCoverLogoSizeRow"), fadeRow = $("gfCoverLogoFadeRow");
+    var showSub = avail && state.logoOverlay;
+    if (sizeRow) sizeRow.style.display = showSub ? "grid" : "none";
+    if (fadeRow) fadeRow.style.display = showSub ? "grid" : "none";
     if (chk) chk.checked = !!state.logoOverlay;
     if (ovImg) {
       if (avail && state.logoOverlay) {
@@ -194,8 +201,7 @@
     var ls = $("gfCoverLogoSize"), lsv = $("gfCoverLogoSizeVal");
     if (ls) ls.value = Math.round(state.logoScale * 100);
     if (lsv) lsv.textContent = Math.round(state.logoScale * 100) + "%";
-    var lc = $("gfCoverLogoControls");
-    if (lc) lc.style.display = state.logoOverlay ? "grid" : "none";
+
 
     var z = $("gfCoverZoom"), zv = $("gfCoverZoomVal"), h = $("gfCoverHeight");
     if (z) z.value = Math.round(state.zoom * 100);
