@@ -91,3 +91,31 @@ def test_site_wide_gigs_are_narrowed_to_this_venue():
     it unfiltered would show other venues' bookings on this page."""
     js = PAGE_JS.read_text()
     assert "Number(g.venue_id) === Number(venueId)" in js
+
+
+def test_spec_rows_have_no_icons():
+    """Nine emoji down the left of a facts table was decoration competing
+    with the labels, not information."""
+    js = PAGE_JS.read_text()
+    idx = js.index("function renderSpecs")
+    block = js[idx:js.index("function formatArrival")]
+    assert "v2-spec-ico" not in block
+    # No emoji survived in the row definitions.
+    assert not any(ord(ch) > 0x2500 for ch in block), "emoji left in spec rows"
+
+
+def test_spec_body_text_is_one_treatment():
+    """Value and detail used to differ — white headline, muted detail — so a
+    row with both looked like a different kind of row from one with only a
+    detail. Stage and Arrival read unlike Load in / out for no reason the
+    content justified."""
+    html = (ROOT / "app" / "venue-profile-v2.html").read_text()
+    assert ".v2-spec-sub" not in html, "second body style still defined"
+    idx = html.index(".v2-spec-value {")
+    block = html[idx:idx + 220]
+    assert "var(--v2-dim)" in block, "body text should use the muted tone"
+
+    js = PAGE_JS.read_text()
+    idx = js.index('$("v2Specs").innerHTML')
+    render = js[idx:idx + 600]
+    assert render.count("v2-spec-value") == 2, "value and detail should share a class"

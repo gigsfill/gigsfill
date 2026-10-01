@@ -127,42 +127,44 @@
       var dims = (v.stage_width_ft && v.stage_depth_ft)
         ? v.stage_width_ft + " ft × " + v.stage_depth_ft + " ft"
         : "Stage available";
-      rows.push(["🎪", "Stage", dims, v.setup_location_description]);
+      rows.push(["Stage", dims, v.setup_location_description]);
     } else {
-      rows.push(["🎪", "Stage", '<span class="no">No stage</span>',
+      rows.push(["Stage", '<span class="no">No stage</span>',
                  v.setup_location_description]);
     }
 
-    rows.push(["🔊", "Sound",
+    rows.push(["Sound",
       v.has_sound_equipment ? "PA provided" : '<span class="no">Bring your own PA</span>',
       v.sound_equipment_description]);
 
     if (v.has_sound_engineer) {
-      rows.push(["🎚️", "Engineer", "Sound engineer on site", v.sound_engineer_details]);
+      rows.push(["Engineer", "Sound engineer on site", v.sound_engineer_details]);
     }
 
-    rows.push(["💡", "Lighting",
+    rows.push(["Lighting",
       v.has_lighting ? "Stage lighting" : '<span class="no">No stage lighting</span>',
       v.lighting_description]);
 
-    if (v.load_in_out_details) rows.push(["🚚", "Load in / out", "", v.load_in_out_details]);
+    if (v.load_in_out_details) rows.push(["Load in / out", "", v.load_in_out_details]);
 
     var arrival = formatArrival(v);
-    if (arrival) rows.push(["🕒", "Arrival", arrival, null]);
+    if (arrival) rows.push(["Arrival", arrival, null]);
 
     var pay = payLine(v);
-    if (pay) rows.push(["💵", "Typical pay", pay, null]);
+    if (pay) rows.push(["Typical pay", pay, null]);
 
-    if (v.bar_tab_details)  rows.push(["🍺", "Bar tab", "", v.bar_tab_details]);
-    if (v.food_tab_details) rows.push(["🍔", "Food", "", v.food_tab_details]);
+    if (v.bar_tab_details)  rows.push(["Bar tab", "", v.bar_tab_details]);
+    if (v.food_tab_details) rows.push(["Food", "", v.food_tab_details]);
 
+    // Label, then body text. Value and detail share one treatment — the
+    // mix of white values and muted details made rows that happened to
+    // have both look like a different kind of row from those that didn't.
     $("v2Specs").innerHTML = rows.map(function (r) {
-      return '<div class="v2-spec"><span class="v2-spec-ico">' + r[0] + "</span>" +
-        '<div class="v2-spec-body">' +
-          '<div class="v2-spec-label">' + esc(r[1]) + "</div>" +
-          (r[2] ? '<div class="v2-spec-value">' + r[2] + "</div>" : "") +
-          (r[3] ? '<div class="v2-spec-sub">' + esc(r[3]) + "</div>" : "") +
-        "</div></div>";
+      return '<div class="v2-spec">' +
+        '<div class="v2-spec-label">' + esc(r[0]) + "</div>" +
+        (r[1] ? '<div class="v2-spec-value">' + r[1] + "</div>" : "") +
+        (r[2] ? '<div class="v2-spec-value">' + esc(r[2]) + "</div>" : "") +
+        "</div>";
     }).join("");
     present["sec-specs"] = true;
   }
