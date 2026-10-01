@@ -373,7 +373,6 @@
     $("v2PhotoCount").textContent = pics.length ? pics.length + " photos" : "";
     if (!pics.length) { show("v2PhotosEmpty", true); return; }
     present["sec-photos"] = true;
-    if (pics.length <= 3) $("v2Photos").classList.add("few");
 
     $("v2Photos").innerHTML = pics.map(function (p) {
       return '<figure class="v2-photo" onclick="v2OpenLb(\'' + esc(p.file_path) + '\')">' +

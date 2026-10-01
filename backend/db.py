@@ -533,6 +533,10 @@ def setup_database():
     # photo can take a softer mark.
     "hero_logo_overlay INTEGER",
     "hero_logo_opacity REAL",
+    # 2026-10-01: overlay logo size, as a fraction of the hero width. A
+    # wide wordmark and a square badge need very different sizes to read
+    # well over the same photo.
+    "hero_logo_scale REAL",
 ])
     
     # ==========================================
@@ -641,6 +645,10 @@ def setup_database():
     # photo can take a softer mark.
     "hero_logo_overlay INTEGER",
     "hero_logo_opacity REAL",
+    # 2026-10-01: overlay logo size, as a fraction of the hero width. A
+    # wide wordmark and a square badge need very different sizes to read
+    # well over the same photo.
+    "hero_logo_scale REAL",
 ])
     
     # ==========================================

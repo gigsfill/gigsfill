@@ -192,7 +192,8 @@ def get_artist(artist_id: int, user=Depends(get_current_user), db=Depends(get_db
                 a.hero_zoom,
                 a.hero_ratio,
                 a.hero_logo_overlay,
-                a.hero_logo_opacity
+                a.hero_logo_opacity,
+                a.hero_logo_scale
             FROM artists a
             WHERE a.id = :id
               AND (
@@ -281,7 +282,8 @@ def get_artist_public(artist_id: int, db=Depends(get_db)):
                 hero_zoom,
                 hero_ratio,
                 hero_logo_overlay,
-                hero_logo_opacity
+                hero_logo_opacity,
+                hero_logo_scale
             FROM artists
             WHERE id=:id
               AND deleted_at IS NULL
@@ -429,6 +431,17 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             except (TypeError, ValueError):
                 raise HTTPException(400, "hero_logo_opacity must be a number")
 
+    # Overlay size as a fraction of hero width. Floor 0.15 keeps it
+    # recognisable; 1.0 lets a wordmark span the full band.
+    _logo_scale = None
+    if "hero_logo_scale" in data:
+        _raw_s = data.get("hero_logo_scale")
+        if _raw_s not in (None, ""):
+            try:
+                _logo_scale = max(0.15, min(1.0, float(_raw_s)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "hero_logo_scale must be a number")
+
     _hoe_in = data.get("has_own_equipment")
     _hoe = None if _hoe_in is None else (1 if bool(_hoe_in) else 0)
     # 2026-09-14: same 0/1/None coercion for website_public. None →
@@ -453,6 +466,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
                 hero_ratio = COALESCE(:hero_ratio, hero_ratio),
                 hero_logo_overlay = COALESCE(:hero_logo_overlay, hero_logo_overlay),
                 hero_logo_opacity = COALESCE(:hero_logo_opacity, hero_logo_opacity),
+                hero_logo_scale = COALESCE(:hero_logo_scale, hero_logo_scale),
                 booking_contact = COALESCE(:booking_contact, booking_contact),
                 spotify_url = COALESCE(:spotify_url, spotify_url),
                 instagram_url = COALESCE(:instagram_url, instagram_url),
@@ -483,6 +497,7 @@ def update_artist(artist_id: int, data: dict, user=Depends(get_current_user), db
             "hero_ratio": _ratio,
             "hero_logo_overlay": _logo_overlay,
             "hero_logo_opacity": _logo_opacity,
+            "hero_logo_scale": _logo_scale,
             "booking_contact": data.get("booking_contact"),
             "spotify_url": data.get("spotify_url"),
             "instagram_url": data.get("instagram_url"),

@@ -274,9 +274,16 @@ try {
      maxres, branded fallback for Instagram/TikTok which expose none). */
   .v2-media-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    /* Fixed 4-up so the edit page can show the same arrangement and an
+       artist can order their media knowing how it will land. auto-fill
+       gave videos 4 and photos 5, which matched neither each other nor
+       the editor. */
+    grid-template-columns: repeat(4, 1fr);
     gap: 16px;
   }
+  @media (max-width: 1000px) { .v2-media-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 760px)  { .v2-media-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 480px)  { .v2-media-grid { grid-template-columns: 1fr; } }
   .v2-card {
     background: var(--v2-raise-2);
     border: 1px solid var(--v2-line);
@@ -322,11 +329,11 @@ try {
   .v2-card-sub { font-size: 0.76rem; color: var(--v2-dim); }
 
   .v2-photo-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
   }
-  /* With only a couple of photos, auto-fill leaves small tiles stranded in a
-     wide row. Give them room instead. */
-  .v2-photo-grid.few { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  @media (max-width: 1000px) { .v2-photo-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 760px)  { .v2-photo-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 480px)  { .v2-photo-grid { grid-template-columns: 1fr; } }
   .v2-photo {
     aspect-ratio: 4/3; border-radius: 12px; overflow: hidden;
     border: 1px solid var(--v2-line); cursor: pointer; position: relative;
@@ -783,7 +790,7 @@ try {
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/artist-venues-played.js?v=2"></script>
-<script src="/app/static/js/artist-profile-v2.js?v=28"></script>
+<script src="/app/static/js/artist-profile-v2.js?v=29"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>

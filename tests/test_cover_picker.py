@@ -126,3 +126,65 @@ def test_overlay_sits_above_the_scrim_but_below_the_text():
         logo = html.index('id="v2HeroLogo"')
         inner = html.index('class="v2-hero-inner"')
         assert scrim < logo < inner, page
+
+
+def test_overlay_row_requires_a_logo_to_exist():
+    """With no logo uploaded there is nothing to overlay, so the control
+    must not appear at all."""
+    src = JS.read_text()
+    idx = src.index("function overlayAvailable()")
+    block = src[idx:src.index("}", idx) + 1]
+    assert "logo &&" in block
+
+
+def test_logo_size_is_clamped():
+    """Floor keeps the mark recognisable; 1.0 lets a wordmark span the band."""
+    for route in ("artists.py", "venues.py"):
+        src = (ROOT / "backend" / "routes" / route).read_text()
+        idx = src.index('if "hero_logo_scale" in data:')
+        assert "max(0.15, min(1.0" in src[idx:idx + 400], route
+
+
+def test_logo_height_tracks_width():
+    """Scaling only max-width lets a tall badge overflow the band."""
+    src = JS.read_text()
+    idx = src.index("ovImg.style.maxWidth")
+    assert "maxHeight" in src[idx:idx + 400]
+
+
+def test_saving_is_reported_including_failure():
+    """Auto-save with no feedback leaves the user hunting for a Save button,
+    and silence after a failure is worse than an error."""
+    src = JS.read_text()
+    idx = src.index("function setStatus(")
+    block = src[idx:idx + 900]
+    for kind in ("saving", "saved", "error"):
+        assert f'"{kind}"' in block or f"'{kind}'" in block, kind
+    assert "Could not save" in block
+    # Every write path reports.
+    for fn in ("saveFraming", "selectMedia", "clearMedia"):
+        i = src.index(fn)
+        assert "setStatus" in src[i:i + 900], fn
+
+
+def test_media_grids_match_between_profile_and_editor():
+    """The editor is meant to preview the arrangement. Videos were 4-up and
+    photos 5-up on the profile while the editor ran 6-8, so ordering media
+    there told you nothing about the result."""
+    for profile, editor in (("artist-profile.html", "artist-edit.html"),
+                            ("venue-profile.html", "venue-edit.html")):
+        pro = (ROOT / "app" / profile).read_text()
+        edi = (ROOT / "app" / editor).read_text()
+        for sel in (".v2-media-grid {", ".v2-photo-grid {"):
+            i = pro.index(sel)
+            assert "repeat(4, 1fr)" in pro[i:i + 300], f"{profile} {sel}"
+        i = edi.index(".media-grid {")
+        assert "repeat(4, 1fr)" in edi[i:i + 400], editor
+
+
+def test_few_photo_special_case_is_gone():
+    """It rendered two photos large, contradicting the fixed 4-up the editor
+    now mirrors."""
+    for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
+        js = (ROOT / "app" / "static" / "js" / name).read_text()
+        assert 'classList.add("few")' not in js, name

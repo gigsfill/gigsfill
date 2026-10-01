@@ -29,7 +29,7 @@
   var cfg = null;
   var media = [];          // candidate images, logo first
   var state = { mediaId: null, x: 50, y: 50, zoom: 1, ratio: 64 / 21,
-              logoOverlay: false, logoOpacity: 1 };
+              logoOverlay: false, logoOpacity: 1, logoScale: 0.46 };
   var saveTimer = null;
   var DEFAULT_RATIO = 64 / 21;
 
@@ -54,26 +54,45 @@
     } catch (e) { return false; }
   }
 
-  function flashSaved() {
+  function setStatus(kind) {
+    // Two places: the dialog footer while it's open, and the section
+    // summary behind it for when it isn't.
+    var el = $("gfCoverStatus");
+    if (el) {
+      el.className = "gf-save" + (kind ? " " + kind : "");
+      el.textContent = kind === "saving" ? "Saving\u2026"
+                     : kind === "saved"  ? "\u2713 Saved"
+                     : kind === "error"  ? "\u2717 Could not save \u2014 check your connection"
+                     : "Changes save automatically";
+      if (kind === "saved") {
+        clearTimeout(el._t);
+        el._t = setTimeout(function () { setStatus(null); }, 2200);
+      }
+    }
     var m = $("gfCoverSaved");
-    if (!m) return;
-    m.style.display = "inline";
-    clearTimeout(m._t);
-    m._t = setTimeout(function () { m.style.display = "none"; }, 1500);
+    if (m && kind === "saved") {
+      m.style.display = "inline";
+      clearTimeout(m._t);
+      m._t = setTimeout(function () { m.style.display = "none"; }, 1800);
+    }
   }
+  function flashSaved() { setStatus("saved"); }
 
   // Debounced: drag and slider input fire continuously.
   function saveFraming() {
     clearTimeout(saveTimer);
+    setStatus("saving");
     saveTimer = setTimeout(async function () {
-      if (await put({
+      var ok = await put({
         hero_focal_x: Math.round(state.x * 10) / 10,
         hero_focal_y: Math.round(state.y * 10) / 10,
         hero_zoom: Math.round(state.zoom * 100) / 100,
         hero_ratio: Math.round(state.ratio * 1000) / 1000,
         hero_logo_overlay: state.logoOverlay ? 1 : 0,
-        hero_logo_opacity: Math.round(state.logoOpacity * 100) / 100
-      })) flashSaved();
+        hero_logo_opacity: Math.round(state.logoOpacity * 100) / 100,
+        hero_logo_scale: Math.round(state.logoScale * 100) / 100
+      });
+      setStatus(ok ? "saved" : "error");
     }, 450);
   }
 
@@ -161,6 +180,9 @@
       if (avail && state.logoOverlay) {
         ovImg.src = logoImage().file_path;
         ovImg.style.opacity = state.logoOpacity;
+        ovImg.style.maxWidth = Math.round(state.logoScale * 100) + "%";
+        // Height tracks width so a tall badge can't overflow the band.
+        ovImg.style.maxHeight = Math.round(state.logoScale * 135) + "%";
         ovImg.style.display = "block";
       } else {
         ovImg.style.display = "none";
@@ -169,6 +191,11 @@
     var op = $("gfCoverLogoOpacity"), opv = $("gfCoverLogoOpacityVal");
     if (op) op.value = Math.round(state.logoOpacity * 100);
     if (opv) opv.textContent = Math.round(state.logoOpacity * 100) + "%";
+    var ls = $("gfCoverLogoSize"), lsv = $("gfCoverLogoSizeVal");
+    if (ls) ls.value = Math.round(state.logoScale * 100);
+    if (lsv) lsv.textContent = Math.round(state.logoScale * 100) + "%";
+    var lc = $("gfCoverLogoControls");
+    if (lc) lc.style.display = state.logoOverlay ? "grid" : "none";
 
     var z = $("gfCoverZoom"), zv = $("gfCoverZoomVal"), h = $("gfCoverHeight");
     if (z) z.value = Math.round(state.zoom * 100);
@@ -183,21 +210,24 @@
   function close() { $("gfCoverModal").classList.remove("open"); }
 
   async function selectMedia(id) {
+    setStatus("saving");
     state.mediaId = Number(id);
     // A fresh pick starts from a clean frame; inheriting the previous
     // image's crop lands the new one somewhere arbitrary.
     state.x = 50; state.y = 50; state.zoom = 1;
-    if (await put({
+    var ok = await put({
       hero_media_id: state.mediaId,
       hero_focal_x: 50, hero_focal_y: 50, hero_zoom: 1,
       hero_ratio: Math.round(state.ratio * 1000) / 1000
-    })) flashSaved();
+    });
+    setStatus(ok ? "saved" : "error");
     refresh();
   }
 
   async function clearMedia() {
+    setStatus("saving");
     state.mediaId = null;
-    if (await put({ hero_media_id: 0 })) flashSaved();
+    setStatus(await put({ hero_media_id: 0 }) ? "saved" : "error");
     refresh();
   }
 
@@ -248,7 +278,9 @@
       if (!t) return;
 
       if (t.closest && t.closest("#gfCoverOpen")) { e.preventDefault(); open(); return; }
-      if (t.closest && t.closest("#gfCoverClose")) { e.preventDefault(); close(); return; }
+      if (t.closest && (t.closest("#gfCoverClose") || t.closest("#gfCoverClose2"))) {
+        e.preventDefault(); close(); return;
+      }
       if (t.id === "gfCoverModal") { close(); return; }      // backdrop
       if (t.closest && t.closest("#gfCoverClear")) { e.preventDefault(); clearMedia(); return; }
 
@@ -260,9 +292,9 @@
         applyPreview(); saveFraming(); renderSummary();
         return;
       }
-      if (t.id === "gfCoverZoomIn")  { setZoom(state.zoom + 0.1); return; }
-      if (t.id === "gfCoverZoomOut") { setZoom(state.zoom - 0.1); return; }
-      if (t.id === "gfCoverReset") {
+      if (t.closest && t.closest("#gfCoverZoomIn"))  { setZoom(state.zoom + 0.1); return; }
+      if (t.closest && t.closest("#gfCoverZoomOut")) { setZoom(state.zoom - 0.1); return; }
+      if (t.closest && t.closest("#gfCoverReset")) {
         state.x = 50; state.y = 50; state.zoom = 1; state.ratio = DEFAULT_RATIO;
         applyPreview(); saveFraming(); renderSummary();
         return;
@@ -272,6 +304,11 @@
     document.addEventListener("input", function (e) {
       if (!e.target) return;
       if (e.target.id === "gfCoverZoom") setZoom(Number(e.target.value) / 100);
+      if (e.target.id === "gfCoverLogoSize") {
+        state.logoScale = Math.max(0.15, Math.min(1, Number(e.target.value) / 100));
+        applyPreview(); saveFraming();
+        return;
+      }
       if (e.target.id === "gfCoverLogoOpacity") {
         state.logoOpacity = Math.max(0.1, Math.min(1, Number(e.target.value) / 100));
         applyPreview(); saveFraming();
@@ -336,6 +373,8 @@
       state.logoOverlay = !!s.hero_logo_overlay;
       state.logoOpacity = (s.hero_logo_opacity == null)
         ? 1 : Math.max(0.1, Math.min(1, Number(s.hero_logo_opacity)));
+      state.logoScale = (s.hero_logo_scale == null)
+        ? 0.46 : Math.max(0.15, Math.min(1, Number(s.hero_logo_scale)));
       refresh();
     }
   };
