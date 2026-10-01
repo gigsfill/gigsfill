@@ -616,6 +616,11 @@
   <script defer src="/app/static/js/artist.edit.js?v=33"></script>
   
 <style>
+  /* The global --border is rgba(148,163,184,0.1), which all but disappears
+     against the dialog's #151b28. These rules carry meaning — they fence
+     the logo group and divide the header and footer — so they get their
+     own, brighter token rather than nudging --border site-wide. */
+  :root { --gf-rule: rgba(148, 163, 184, 0.32); }
   .gf-cover-none { color: var(--text-gray); font-size: 0.8rem; }
   .gf-cover-current { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .gf-cover-thumb {
@@ -653,7 +658,7 @@
   }
   .gf-cover-head {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 18px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+    padding: 14px 18px; border-bottom: 1px solid var(--gf-rule); flex: 0 0 auto;
   }
   .gf-cover-head h3 { margin: 0; font-size: 0.95rem; }
   .gf-cover-head button {
@@ -664,7 +669,7 @@
   .gf-cover-body { padding: 16px 18px; overflow-y: auto; flex: 1 1 auto; }
   .gf-cover-foot {
     display: flex; justify-content: space-between; gap: 10px;
-    padding: 12px 18px; border-top: 1px solid var(--border); flex: 0 0 auto;
+    padding: 12px 18px; border-top: 1px solid var(--gf-rule); flex: 0 0 auto;
   }
 
   /* Numbered steps so it reads as a sequence rather than a pile of
@@ -743,14 +748,17 @@
     grid-template-columns: 118px auto 1fr auto 46px;
     align-items: center; gap: 8px;
   }
-  .gf-row-lbl { font-size: 0.76rem; color: var(--text); font-weight: 600; }
+  /* Matches .form-row label on the page behind the dialog — these are the
+     same kind of thing as "Artist Name" or "City" and were reading as a
+     heavier, brighter second style for no reason. */
+  .gf-row-lbl { font-size: 0.8rem; font-weight: 500; color: var(--text-gray); }
   /* Rules on the first and last row of the logo group, so the toggle and
      the sliders it reveals read as one block. */
   .gf-row.gf-group-top {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--gf-rule);
     padding-top: 12px; margin-top: 6px;
   }
-  .gf-row.gf-group-end { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+  .gf-row.gf-group-end { border-bottom: 1px solid var(--gf-rule); padding-bottom: 12px; }
   .gf-row-end { font-size: 0.7rem; color: var(--text-gray); white-space: nowrap; }
   .gf-row-val {
     font-size: 0.73rem; color: var(--text-gray); text-align: right;
@@ -770,7 +778,7 @@
   /* Typed as well as dragged. A value you can read but not set is a tease
      when you want one axis back at 50 and the other left where it is. */
   .gf-pos { display: flex; align-items: center; gap: 6px; }
-  .gf-pos label { font-size: 0.73rem; color: var(--text-gray); font-weight: 600; }
+  .gf-pos label { font-size: 0.73rem; color: var(--text-gray); font-weight: 500; }
   .gf-pos input[type=number] {
     width: 58px; padding: 3px 6px; font-size: 0.75rem;
     background: rgba(255,255,255,0.06); border: 1px solid var(--border);
@@ -1211,7 +1219,7 @@
     </div>
   </div>
 </div>
-<script src="/app/static/js/cover-picker.js?v=12"></script>
+<script src="/app/static/js/cover-picker.js?v=13"></script>
 <script>
   (function () {
     var id = new URLSearchParams(window.location.search).get("artist_id");

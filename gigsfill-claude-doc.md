@@ -18,7 +18,13 @@ The list below tracks meaningful changes after the initial sync from the codebas
 
   - **Control rows reordered and relabelled.** Height moved to the top — it sets the shape of the band, and framing an image inside a box whose proportions you are about to change is backwards. `Zoom`/`Size`/`Fade` became **Image Zoom** / **Logo Size** / **Logo Fade**; with a logo overlay in the same list the bare words did not say which of the two images they acted on. The logo rows are fenced as a group with rules on the first and last row rather than a wrapper, which would have broken the shared grid that keeps every label aligned.
 
-  Cache-buster at `cover-picker.js?v=12`. 38 tests in `tests/test_cover_picker.py`.
+  - **Dialog chrome matched to the page behind it.** The row labels were `0.76rem / 600 / var(--text)` while the page's own `.form-row label` ("Artist Name", "City") is `0.8rem / 500 / var(--text-gray)` — the dialog was using a heavier, brighter second style for the same class of thing. Now identical, verified in-browser as `12.8px / 500 / rgb(148,163,184) / Inter`, and each label still fits the 118px column exactly.
+
+    The dividers were `var(--border)`, which is `rgba(148,163,184,0.1)` and all but invisible against the dialog's `#151b28`. These rules carry meaning — they fence the logo group and separate the header and footer — so they use a dialog-local `--gf-rule` at `0.32` alpha rather than nudging `--border` site-wide, where it would ripple through every card on the site.
+
+    No hover treatment and no `title` tooltip on the thumbnail: clicking it opens the dialog and the cursor already says so. Keyboard focus keeps its ring, since `:focus-visible` never fires for a mouse.
+
+  Cache-buster at `cover-picker.js?v=13`. 41 tests in `tests/test_cover_picker.py`.
 
 - **2026-10-01 (Artist profile redesigned and promoted; artist-chosen cover photo):** The artist profile was rebuilt and is now live at the existing URL. The old page is preserved as `app/artist-profile-legacy.html` for rollback; 34 files link to `artist-profile.html` so the URL was kept rather than redirected.
 

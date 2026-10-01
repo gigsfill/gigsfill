@@ -131,8 +131,7 @@
       '<div class="gf-cover-current">' +
         // The thumbnail and the name are the obvious things to click when
         // you want a different image, so they open the dialog too.
-        '<button type="button" class="gf-cover-pick" id="gfCoverPick" ' +
-          'title="Change the background image">' +
+        '<button type="button" class="gf-cover-pick" id="gfCoverPick">' +
           '<span class="gf-cover-thumb" style="background-image:url(\'' + esc(img.file_path) + '\');' +
             "background-position:" + state.x + "% " + state.y + "%;\"></span>" +
         // Just which image is set. The zoom and band-height readout here

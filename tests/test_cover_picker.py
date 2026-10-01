@@ -369,3 +369,40 @@ def test_out_of_range_entry_is_corrected_on_leaving_the_field():
     blk = src[src.index('addEventListener("focusout"'):][:500]
     assert "gfCoverLogoX" in blk and "gfCoverLogoY" in blk
     assert "Math.round(state.logoX)" in blk and "Math.round(state.logoY)" in blk
+
+
+def test_dialog_labels_match_the_page_behind_it():
+    """Height / Image Zoom / Logo Size are the same kind of thing as
+    "Artist Name" or "City"; a heavier, brighter second style read as a
+    different class of label."""
+    import re
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        form = re.search(r"\.form-row label \{(.*?)\}", html, re.S).group(1)
+        want = {k: v for k, v in re.findall(r"([\w-]+):\s*([^;]+);", form)}
+        row = re.search(r"\.gf-row-lbl \{(.*?)\}", html, re.S).group(1)
+        got = {k: v for k, v in re.findall(r"([\w-]+):\s*([^;]+);", row)}
+        for prop in ("font-size", "font-weight", "color"):
+            assert got[prop].strip() == want[prop].strip(), f"{page}: {prop}"
+
+
+def test_dialog_rules_are_visible_against_the_dialog():
+    """--border is rgba(148,163,184,0.1), which all but disappears on the
+    dialog's #151b28 — and these rules carry meaning, fencing the logo
+    group and dividing the header and footer."""
+    import re
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        alpha = float(re.search(r"--gf-rule: rgba\([\d, ]+,\s*([\d.]+)\)", html).group(1))
+        assert alpha > 0.1, f"{page}: rule no brighter than --border"
+        for sel in (r"\.gf-cover-head", r"\.gf-cover-foot",
+                    r"\.gf-row\.gf-group-top", r"\.gf-row\.gf-group-end"):
+            blk = re.search(sel + r" \{(.*?)\}", html, re.S).group(1)
+            assert "var(--gf-rule)" in blk, f"{page}: {sel}"
+
+
+def test_thumbnail_has_no_hover_tooltip():
+    """It just opens the dialog; a tooltip trailing the pointer is noise."""
+    src = JS.read_text()
+    blk = src[src.index('class="gf-cover-pick"'):][:200]
+    assert "title=" not in blk
