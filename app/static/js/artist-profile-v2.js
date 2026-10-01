@@ -437,6 +437,14 @@
   // look like four of their bookings.
   window.v2ShowAllBooked = function () {
     if (typeof window.openPublicGigsListModal !== "function") return;
+
+    // Hand off rather than stack. Leaving the calendar open underneath
+    // means the list's X reveals a modal the user has finished with and
+    // has to dismiss again — two closes for one exit. Closing here makes
+    // the list's own X the single way out, whether it was opened from the
+    // month grid or from a day's detail.
+    window.v2CloseCal();
+
     var rows = [];
     (calGigs || []).forEach(function (g) {
       var slots = Array.isArray(g.slots) ? g.slots : [];
