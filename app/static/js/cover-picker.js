@@ -230,10 +230,22 @@
     refresh();
   }
 
+  // Remove clears the whole background setup, not just the image. It
+  // previously left the overlay toggle, logo size, fade, zoom and band
+  // height behind, so choosing a new picture silently inherited the last
+  // one's settings — the logo would already be switched on at the old size.
   async function clearMedia() {
     setStatus("saving");
     state.mediaId = null;
-    setStatus(await put({ hero_media_id: 0 }) ? "saved" : "error");
+    state.x = 50; state.y = 50; state.zoom = 1; state.ratio = DEFAULT_RATIO;
+    state.logoOverlay = false; state.logoOpacity = 1; state.logoScale = 0.46;
+    var ok = await put({
+      hero_media_id: 0,
+      hero_focal_x: 50, hero_focal_y: 50, hero_zoom: 1,
+      hero_ratio: Math.round(DEFAULT_RATIO * 1000) / 1000,
+      hero_logo_overlay: 0, hero_logo_opacity: 1, hero_logo_scale: 0.46
+    });
+    setStatus(ok ? "saved" : "error");
     refresh();
   }
 
@@ -301,7 +313,11 @@
       if (t.closest && t.closest("#gfCoverZoomIn"))  { setZoom(state.zoom + 0.1); return; }
       if (t.closest && t.closest("#gfCoverZoomOut")) { setZoom(state.zoom - 0.1); return; }
       if (t.closest && t.closest("#gfCoverReset")) {
+        // Everything the dialog controls, including the overlay sliders —
+        // "Reset framing" that left the logo at 80% and half-faded would be
+        // a confusing half-measure.
         state.x = 50; state.y = 50; state.zoom = 1; state.ratio = DEFAULT_RATIO;
+        state.logoOpacity = 1; state.logoScale = 0.46;
         applyPreview(); saveFraming(); renderSummary();
         return;
       }

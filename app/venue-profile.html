@@ -133,7 +133,10 @@ try {
     background:
       linear-gradient(180deg, rgba(7,10,17,0.30) 0%, rgba(7,10,17,0.70) 48%, rgba(7,10,17,0.97) 100%),
       linear-gradient(90deg, rgba(7,10,17,0.80) 0%, rgba(7,10,17,0.30) 55%, transparent 100%),
-      radial-gradient(1200px 400px at 20% 100%, rgba(139,92,246,0.20), transparent 70%);
+      /* Percentages, not px: the cover-framing preview is a smaller box of
+         the same proportions and has to show the identical treatment, which
+         a fixed 1200x400 radial could never do. */
+      radial-gradient(94% 95% at 20% 100%, rgba(139,92,246,0.20), transparent 70%);
   }
   /* No photo yet — don't fall back to a flat block; a quiet gradient still
      reads as designed. */
@@ -812,7 +815,7 @@ try {
      renderVenueReviews; one module serves both profile types. -->
 <script src="/app/static/js/artist-reviews.js?v=2"></script>
 <script src="/app/static/js/public-gigs-list-modal.js?v=11"></script>
-<script src="/app/static/js/venue-profile-v2.js?v=12"></script>
+<script src="/app/static/js/venue-profile-v2.js?v=13"></script>
 <script src="/app/static/js/gf-analytics.js?v=1"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/gf-logo-link.js?v=1"></script>

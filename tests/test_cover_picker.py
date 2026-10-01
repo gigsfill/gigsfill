@@ -192,3 +192,48 @@ def test_few_photo_special_case_is_gone():
     for name in ("artist-profile-v2.js", "venue-profile-v2.js"):
         js = (ROOT / "app" / "static" / "js" / name).read_text()
         assert 'classList.add("few")' not in js, name
+
+
+def test_remove_clears_every_background_setting():
+    """Clearing only the image left the overlay toggle, logo size, fade,
+    zoom and band height behind, so the next image picked up the previous
+    one's settings — the logo already switched on at the old size."""
+    src = JS.read_text()
+    idx = src.index("async function clearMedia()")
+    block = src[idx:src.index("}", src.index("});", idx))]
+    for field in ("hero_media_id", "hero_focal_x", "hero_zoom", "hero_ratio",
+                  "hero_logo_overlay", "hero_logo_opacity", "hero_logo_scale"):
+        assert field in block, f"{field} not cleared by Remove"
+
+
+def test_preview_applies_the_same_scrim_as_the_hero():
+    """Without it the logo was previewed over a bright photo and rendered
+    over a darkened one, so one Fade value looked like two settings."""
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        assert 'id="gfCoverPreviewScrim"' in html, page
+        idx = html.index("#gfCoverPreviewScrim {")
+        block = html[idx:idx + 600]
+        assert "linear-gradient(180deg" in block and "radial-gradient" in block, page
+        # And the same saturation treatment as the hero background.
+        i2 = html.index("#gfCoverPreviewImg {")
+        assert "saturate(0.9)" in html[i2:i2 + 400], page
+
+
+def test_scrim_radial_scales_with_the_box():
+    """A fixed 1200x400 radial cannot look the same in a 640px preview."""
+    for page in ("artist-profile.html", "venue-profile.html", "artist-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        assert "radial-gradient(94% 95%" in html, page
+        assert "radial-gradient(1200px 400px" not in html, page
+
+
+def test_logo_sits_above_the_scrim_in_the_preview():
+    """Same order as the profile: above the scrim so it stays legible, below
+    nothing else in the box."""
+    for page in ("artist-edit.html", "venue-edit.html"):
+        html = (ROOT / "app" / page).read_text()
+        img = html.index('id="gfCoverPreviewImg"')
+        scrim = html.index('id="gfCoverPreviewScrim"')
+        logo = html.index('id="gfCoverPreviewLogo"')
+        assert img < scrim < logo, page
