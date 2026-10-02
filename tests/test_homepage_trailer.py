@@ -46,17 +46,34 @@ def test_player_and_poster_point_at_the_same_video():
     html = HOME.read_text()
     assert html.count(VIDEO_ID) >= 2
     assert f"i.ytimg.com/vi/{VIDEO_ID}/" in html
-    assert f"youtube-nocookie.com/embed/{VIDEO_ID}" in html
+    assert f"www.youtube.com/embed/{VIDEO_ID}" in html
 
 
-def test_nocookie_host_is_allowed_by_the_csp():
-    """youtube-nocookie.com is a distinct origin from youtube.com — without
-    it in frame-src the iframe silently stays blank."""
-    csp = MAIN.read_text()
-    assert "https://www.youtube-nocookie.com" in csp
-    frame = csp[csp.index('"frame-src'):]
-    frame = frame[:frame.index("media-src")]
-    assert "youtube-nocookie" in frame, "allowed somewhere, but not in frame-src"
+def test_embed_host_is_one_the_nginx_csp_allows():
+    """The policy that governs this page is the `set $CSP` line in the nginx
+    vhost, NOT the one in backend/main.py: nginx serves /app/ straight off
+    disk (`alias /opt/gigsfill/app/`), so FastAPI's middleware never runs
+    for a static page.
+
+    That is how youtube-nocookie.com shipped blank — it is a distinct origin
+    from youtube.com, absent from the nginx policy, and every local test hit
+    :8001 directly, which bypasses nginx. Pinning the host here keeps the
+    page on an origin that policy actually permits.
+    """
+    html = HOME.read_text()
+    assert "youtube-nocookie.com/embed" not in html
+    assert "https://www.youtube.com/embed/" in html
+
+    vhost = Path("/etc/nginx/sites-enabled/gigsfill")
+    if not vhost.exists():        # not the droplet; the assertion above stands
+        return
+    try:
+        policy = vhost.read_text()
+    except PermissionError:
+        return
+    frame = policy[policy.index("frame-src"):]
+    frame = frame[:frame.index(";")]
+    assert "https://www.youtube.com" in frame, "nginx CSP does not allow the embed host"
 
 
 def test_play_control_is_replaced_not_left_behind():

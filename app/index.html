@@ -615,9 +615,13 @@
     var box = document.getElementById('gfTrailer');
     if (!box) return;
     var f = document.createElement('iframe');
-    // youtube-nocookie defers YouTube's tracking cookies until playback,
-    // which is why it is in frame-src alongside youtube.com.
-    f.src = 'https://www.youtube-nocookie.com/embed/PqGZRwmbcZU?autoplay=1&rel=0';
+    // www.youtube.com, NOT youtube-nocookie.com. nginx serves /app/ straight
+    // off disk, so FastAPI's CSP middleware never runs for this page and the
+    // only policy that applies is the `set $CSP` line in the nginx vhost —
+    // which allows youtube.com but not the nocookie host. Embedding via
+    // nocookie produced a blank frame in production while passing every test
+    // against :8001, because that path bypasses nginx entirely.
+    f.src = 'https://www.youtube.com/embed/PqGZRwmbcZU?autoplay=1&rel=0';
     f.title = 'GigsFill trailer';
     f.allow = 'accelerometer; autoplay; encrypted-media; picture-in-picture';
     f.setAttribute('allowfullscreen', '');

@@ -14,7 +14,13 @@ The list below tracks meaningful changes after the initial sync from the codebas
 
   Details that matter: the poster falls back `maxresdefault` → `hqdefault` (maxres is not generated for every upload) with `this.onerror=null` first, or a failing fallback loops forever. The `<button>` is **replaced** by a plain `<div>` carrying the same `.gf-trailer` class, so the sizing rules survive but a screen reader no longer offers a play control for a playing video. `autoplay=1` is safe because it only ever runs from a real click.
 
-  **CSP:** the embed uses `www.youtube-nocookie.com`, which is a distinct origin from `youtube.com` and was **not** in `frame-src` — the iframe would have stayed silently blank. Added in `main.py`; this needs an **API restart**, unlike the static-file changes around it.
+  **CSP — and a trap worth knowing about.** The embed first used `www.youtube-nocookie.com` for the privacy win, and the host was added to the CSP in `main.py`. It shipped **blank in production**, while passing every local check.
+
+  Cause: **nginx serves `/app/` straight off disk** (`alias /opt/gigsfill/app/` in the vhost), so a static page never reaches FastAPI and its CSP middleware never runs. The only policy that applies to the homepage, every profile and the media lightbox is the `set $CSP` line in `/etc/nginx/sites-enabled/gigsfill`. Testing against `127.0.0.1:8001` bypasses nginx entirely, which is why the local run was green. **Verify CSP-dependent changes through `https://gigsfill.com`, not the uvicorn port.**
+
+  The embed now uses `https://www.youtube.com/embed/...`, which that nginx policy already allows, and the unused `youtube-nocookie` grant was reverted out of `main.py`. Confirmed through the public hostname: no CSP refusals, iframe loads.
+
+  **Separately: the two CSPs have drifted** and the nginx one is the stricter, authoritative one for static pages. It is missing every host added to the app in Jul 2026 — `instagram.com`, `www.instagram.com`, `tiktok.com`, `www.tiktok.com`, `player.vimeo.com`, `vimeo.com`, `www.facebook.com`, `web.facebook.com` — so **the media lightbox's Instagram / TikTok / Vimeo / Facebook embeds are blocked in production** and have been since that work landed. Not yet fixed; it needs the nginx vhost edited and reloaded.
 
   Verified live: poster loads (1280×720 natural), card sits above the demo button, click swaps in the nocookie iframe, no CSP refusals, no page errors. `tests/test_homepage_trailer.py`, 6 tests.
 
