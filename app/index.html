@@ -281,6 +281,49 @@
     .gf-feature-modal-footer .btn {
       font-size: 0.85rem;
     }
+
+    /* ── Product trailer ──────────────────────────────────────────────
+       A facade, not a live <iframe>. An embedded YouTube player pulls
+       ~1.5MB of script and sets cookies on every page load, and this page
+       is also the login screen — returning users would pay that on every
+       visit for a video they have already watched. The poster is one
+       image; YouTube is only loaded when someone presses play. */
+    .gf-trailer {
+      position: relative; display: block; width: 100%; padding: 0;
+      border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+      aspect-ratio: 16 / 9; background: #0b0f17; cursor: pointer;
+      /* The button is the whole poster, so it must not inherit the
+         centred text layout of the panel around it. */
+      line-height: 0;
+    }
+    .gf-trailer img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+      transition: opacity 0.2s;
+    }
+    .gf-trailer:hover img { opacity: 0.82; }
+    /* Drawn rather than an image file: one less request, and it stays
+       crisp at any size. */
+    .gf-trailer-play {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 58px; height: 42px; border-radius: 10px;
+      background: rgba(10,14,22,0.72); border: 1px solid rgba(255,255,255,0.22);
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .gf-trailer:hover .gf-trailer-play {
+      background: linear-gradient(135deg, var(--purple), var(--cyan));
+      border-color: transparent;
+    }
+    .gf-trailer-play::after {
+      content: ""; display: block; margin-left: 3px;
+      border-style: solid; border-width: 9px 0 9px 15px;
+      border-color: transparent transparent transparent #fff;
+    }
+    .gf-trailer:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+    .gf-trailer iframe { width: 100%; height: 100%; border: 0; display: block; }
+    @media (prefers-reduced-motion: reduce) {
+      .gf-trailer img, .gf-trailer-play { transition: none; }
+    }
   </style>
 </head>
 <script>
@@ -319,6 +362,26 @@
       <div style="text-align: center; margin-top: 12px;">
         <button class="btn link" onclick="showForgotPasswordModal()">Forgot Password?</button>
       </div>
+    </div>
+
+    <!-- Product trailer. Sits above the demo request on purpose: the
+         order reads sign in (returning users) → see what this is (new
+         visitors) → ask for a demo. Someone who has just watched it is
+         the person most likely to press the demo button. -->
+    <div class="auth-panel" style="max-width: 420px; margin: 0 auto 20px auto;">
+      <h3 style="text-align:center;margin:0 0 12px;font-size:1.1rem;font-weight:700;color:var(--text);">
+        See how GigsFill works
+      </h3>
+      <button type="button" class="gf-trailer" id="gfTrailer"
+              onclick="playTrailer()" aria-label="Play the GigsFill trailer">
+        <!-- maxresdefault is not generated for every upload; hqdefault
+             always exists, so fall back rather than showing a broken
+             poster. The handler clears itself so a failing fallback
+             cannot loop. -->
+        <img src="https://i.ytimg.com/vi/PqGZRwmbcZU/maxresdefault.jpg" alt=""
+             onerror="this.onerror=null;this.src='https://i.ytimg.com/vi/PqGZRwmbcZU/hqdefault.jpg';">
+        <span class="gf-trailer-play" aria-hidden="true"></span>
+      </button>
     </div>
 
     <!-- Request Live Demo — new prospects (venues + artists) submit
@@ -543,6 +606,31 @@
 </div>
 
 <script>
+  // Swap the poster for the real player. Called once — after this the
+  // button is gone, so there is nothing to guard against double-clicks.
+  // autoplay is safe here because it only ever runs from a real click;
+  // browsers block it otherwise, and the muted-autoplay workaround would
+  // start a trailer with no sound, which is worse than not playing.
+  function playTrailer() {
+    var box = document.getElementById('gfTrailer');
+    if (!box) return;
+    var f = document.createElement('iframe');
+    // youtube-nocookie defers YouTube's tracking cookies until playback,
+    // which is why it is in frame-src alongside youtube.com.
+    f.src = 'https://www.youtube-nocookie.com/embed/PqGZRwmbcZU?autoplay=1&rel=0';
+    f.title = 'GigsFill trailer';
+    f.allow = 'accelerometer; autoplay; encrypted-media; picture-in-picture';
+    f.setAttribute('allowfullscreen', '');
+    f.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+    // Replacing the <button> with a <div> keeps the sizing rules (which
+    // hang off .gf-trailer) while dropping the button semantics, so a
+    // screen reader no longer offers a play control for a playing video.
+    var wrap = document.createElement('div');
+    wrap.className = 'gf-trailer';
+    wrap.appendChild(f);
+    box.replaceWith(wrap);
+  }
+
   // 2026-08-12: cache pricing per session so we hit /api/pricing at most
   // once per page-load per user. Values come from platform_settings, which
   // admin can change — refetching per modal-open is unnecessary.

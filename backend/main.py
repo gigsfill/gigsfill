@@ -451,8 +451,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             # so the lightbox video-embed builder can iframe social posts
             # (reels, shorts, videos). Without these hosts in frame-src
             # the iframe silently fails to load and the modal shows blank.
+            # youtube-nocookie (2026-10-02): the homepage trailer embeds via
+            # the no-cookie host so YouTube's tracking cookies are deferred
+            # until someone actually plays it. It is a distinct origin from
+            # youtube.com, so without it here the iframe silently stays blank.
             "frame-src 'self' https://js.stripe.com "
             "https://www.youtube.com https://youtube.com "
+            "https://www.youtube-nocookie.com "
             "https://w.soundcloud.com https://bandcamp.com https://*.bandcamp.com "
             "https://www.instagram.com https://instagram.com "
             "https://www.tiktok.com https://tiktok.com "

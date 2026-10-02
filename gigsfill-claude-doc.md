@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-02 (Product trailer on the homepage):** The YouTube trailer is embedded in [index.html](app/index.html) as a card in the existing 420px stack, directly above "Request a Live Demo" — the order reads sign in (returning users) → see what this is (new visitors) → ask for a demo.
+
+  **Embedded as a facade, not a live `<iframe>`.** A YouTube embed pulls ~1.5MB of script and sets tracking cookies on every page load, and `index.html` is also the **login screen** — returning users would pay that cost on every visit for a video they have already watched. The card renders one poster image (`i.ytimg.com`, already covered by `img-src ... https:`); `playTrailer()` swaps in the real player on click. Measured in-browser: **0 iframes** before the click.
+
+  Details that matter: the poster falls back `maxresdefault` → `hqdefault` (maxres is not generated for every upload) with `this.onerror=null` first, or a failing fallback loops forever. The `<button>` is **replaced** by a plain `<div>` carrying the same `.gf-trailer` class, so the sizing rules survive but a screen reader no longer offers a play control for a playing video. `autoplay=1` is safe because it only ever runs from a real click.
+
+  **CSP:** the embed uses `www.youtube-nocookie.com`, which is a distinct origin from `youtube.com` and was **not** in `frame-src` — the iframe would have stayed silently blank. Added in `main.py`; this needs an **API restart**, unlike the static-file changes around it.
+
+  Verified live: poster loads (1280×720 natural), card sits above the demo button, click swaps in the nocookie iframe, no CSP refusals, no page errors. `tests/test_homepage_trailer.py`, 6 tests.
+
 - **2026-10-01 (The `-v2` prototype profile URLs were public and uncanonicalised):** The redesigned profiles were prototyped as `artist-profile-v2.html` / `venue-profile-v2.html` and promoted by **copying** them over the canonical filenames. The `-v2` files were left behind as byte-identical duplicates.
 
   **Why this hid:** the prototype URL kept serving a perfectly working page. It was not a 404 and nothing errored — it was the right page at the wrong address. The site-wide vanity rewriter in [vanity-url-editor.js](app/static/js/vanity-url-editor.js) matches `/app/(artist|venue)-profile\.html\?(artist_id|venue_id)=(\d+)`, which the `-v2` spelling does not satisfy, so it was never upgraded to the slug. Anyone who bookmarked or shared the prototype URL was handing out `gigsfill.com/app/artist-profile-v2.html?artist_id=1` instead of `gigsfill.com/fridayspast`. The venue side looked correct only because that URL had been reached through a vanity link.
