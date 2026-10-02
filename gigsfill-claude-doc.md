@@ -10,6 +10,8 @@ The list below tracks meaningful changes after the initial sync from the codebas
 
 - **2026-10-02 (Product trailer on the homepage):** The YouTube trailer is embedded in [index.html](app/index.html) as a card in the existing 420px stack, directly above "Request a Live Demo" — the order reads sign in (returning users) → see what this is (new visitors) → ask for a demo.
 
+  Headed **"GigsFill - Summary of Features"** in the same purple→cyan gradient as the "Search for live music" panel. The style string is lifted off that heading verbatim rather than re-typed, and a test asserts the two are byte-identical so they cannot drift.
+
   **Embedded as a facade, not a live `<iframe>`.** A YouTube embed pulls ~1.5MB of script and sets tracking cookies on every page load, and `index.html` is also the **login screen** — returning users would pay that cost on every visit for a video they have already watched. The card renders one poster image (`i.ytimg.com`, already covered by `img-src ... https:`); `playTrailer()` swaps in the real player on click. Measured in-browser: **0 iframes** before the click.
 
   Details that matter: the poster falls back `maxresdefault` → `hqdefault` (maxres is not generated for every upload) with `this.onerror=null` first, or a failing fallback loops forever. The `<button>` is **replaced** by a plain `<div>` carrying the same `.gf-trailer` class, so the sizing rules survive but a screen reader no longer offers a play control for a playing video. `autoplay=1` is safe because it only ever runs from a real click.

@@ -84,3 +84,13 @@ def test_play_control_is_replaced_not_left_behind():
     fn = fn[:fn.index("\n  }") + 4]
     assert "replaceWith" in fn
     assert "createElement('div')" in fn, "button semantics kept after play"
+
+
+def test_heading_matches_the_other_panel_headings():
+    """The gradient treatment is copied verbatim from the "Search for live
+    music" panel rather than re-typed, so the two cannot drift apart."""
+    html = HOME.read_text()
+    ref = re.search(r'<h3 style="([^"]*)">Search for live music in your town\.</h3>', html)
+    mine = re.search(r'<h3 style="([^"]*)">GigsFill - Summary of Features</h3>', html)
+    assert ref and mine, "heading markup changed shape"
+    assert mine.group(1) == ref.group(1), "trailer heading has drifted from the reference"
