@@ -94,3 +94,26 @@ def test_heading_matches_the_other_panel_headings():
     mine = re.search(r'<h3 style="([^"]*)">GigsFill - Summary of Features</h3>', html)
     assert ref and mine, "heading markup changed shape"
     assert mine.group(1) == ref.group(1), "trailer heading has drifted from the reference"
+
+
+def test_panel_headings_scale_to_stay_on_one_line():
+    """At a fixed 1.45rem the longer heading needed 391px in a card that
+    gives it 370px, so it wrapped on desktop and wrapped harder on a phone
+    (286px at 360px wide). No single fixed size serves both: 1.25rem clears
+    desktop comfortably, a 360px phone needs about 1rem. clamp() spans the
+    range."""
+    html = HOME.read_text()
+    for text in ("Search for live music in your town.", "GigsFill - Summary of Features"):
+        h = re.search(r'<h3 style="([^"]*)">' + re.escape(text) + r'</h3>', html)
+        assert h, f"heading markup changed: {text}"
+        assert "clamp(" in h.group(1), f"{text} is back on a fixed size"
+        assert "1.45rem" not in h.group(1)
+
+
+def test_the_stage_card_heading_was_left_alone():
+    """It is a different element in a different container, and shrinking it
+    was not asked for."""
+    html = HOME.read_text()
+    rule = html[html.index(".feature-card.gf-stage h3 {"):]
+    rule = rule[:rule.index("}")]
+    assert "1.45rem" in rule
