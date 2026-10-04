@@ -106,6 +106,8 @@
       ".gfbc-detail { margin-top:12px; padding:11px 13px; border:1px solid var(--border); border-radius:8px;",
       "  background:rgba(255,255,255,0.02); font-size:0.82rem; }",
       ".gfbc-detail h4 { margin:0 0 7px; font-size:0.82rem; color:var(--text); font-weight:700; }",
+      ".gfbc-unavail { font-size:0.68rem; font-weight:700; letter-spacing:0.08em;",
+      "  text-transform:uppercase; color:var(--text-muted); margin:2px 0 6px; }",
       ".gfbc-who { display:flex; flex-wrap:wrap; gap:6px; }",
       ".gfbc-who span { padding:2px 9px; border-radius:999px; font-size:0.72rem;",
       "  background:rgba(245,158,11,0.14); color:#fbbf24; border:1px solid rgba(245,158,11,0.3); }",
@@ -448,19 +450,20 @@
     } else if (!off.length) {
       who = '<div class="gfbc-free">Everyone is available.</div>';
     } else {
-      who = '<div class="gfbc-who">' + off.map(function (m) {
-        // No "(you)" marker: the day cell already fills in when it is your own
-        // day, and your name in a list of your own band is not ambiguous.
+      // Current member first. In a list of their own band, the one name
+      // someone scans for is their own, and alphabetical order buries it.
+      var ordered = off.slice().sort(function (a, b) {
+        return (b.is_self ? 1 : 0) - (a.is_self ? 1 : 0);
+      });
+      who = '<div class="gfbc-unavail">Unavailable:</div>' +
+            '<div class="gfbc-who">' + ordered.map(function (m) {
         return "<span>" + esc(m.name) + "</span>";
       }).join("") + "</div>" +
       '<p style="margin:8px 0 0;color:var(--text-gray);font-size:0.76rem;">' +
-      "Bookings on this date still go through — you'll see a warning naming " +
+      "Bookings on this date still go through \u2014 you'll see a warning naming " +
       "whoever is away, and can book anyway if the line-up still works." + "</p>";
     }
 
-    // 2026-10-05: the "block the whole band" control is gone with the rest of
-    // artist-level availability. Nothing on this calendar sets band state any
-    // more — you click your own days, everyone else's are a read-only view.
     var act = "";
 
     box.style.display = "block";

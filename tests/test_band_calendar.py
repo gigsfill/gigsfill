@@ -415,3 +415,19 @@ def test_both_pages_tell_touch_users_about_the_gesture():
     for page in ("artist-book-gigs.html", "user-profile.html"):
         html = (ROOT / "app" / page).read_text()
         assert "press and hold" in html, page
+
+
+def test_the_day_panel_labels_who_is_unavailable():
+    js = JS.read_text()
+    assert 'class="gfbc-unavail">Unavailable:' in js
+    # Not on the empty state — "Unavailable:" over nothing reads as a bug.
+    free = js[js.index("Everyone is available."):]
+    assert "gfbc-unavail" not in free[:200]
+
+
+def test_the_current_member_is_listed_first():
+    """In a list of their own band the one name someone scans for is their
+    own, and the server's order does not put it first."""
+    js = JS.read_text()
+    fn = js[js.index("var ordered = off.slice().sort"):][:260]
+    assert "b.is_self" in fn and "a.is_self" in fn
