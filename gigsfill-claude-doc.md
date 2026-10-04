@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-06 ("All dates" snapshot on both calendars):** A button in the calendar header opens a sheet listing every marked day in order, consecutive days collapsed onto one line.
+
+  A month grid answers "is the 14th free". It is poor at "when are we out over the next year", which is the question when someone is planning — hence the list.
+
+  **Runs merge only when the same people are out on both days.** Merging on adjacency alone would print `Nov 14 – Nov 16` across three days that each had a different member away, which is false. The run key is the sorted set of user ids, so Nov 14 (Jonathan) and Nov 15 (Scott) stay on separate lines while Nov 20–21 (both) merge. Verified in a browser across six shapes including a run crossing a month boundary (Jan 30 – Feb 1).
+
+  It **asks for its own 12-month range** rather than listing whatever months the grid happens to have loaded, and the sheet is appended to `<body>`, not to the calendar root — `render()` rewrites `root.innerHTML` on every toggle and would otherwise tear the sheet out from under the reader. Closes on ×, backdrop click, or Escape.
+
 - **2026-10-05c (Stop explaining why a member is away):** The cross-band detection stays; the commentary goes. A member is available or not, and that is the whole signal.
 
   The calendar used to draw a derived conflict as a distinct squared dot reading "booked with Fifty Proof at The Mint", with its own legend row and chip style. All removed — one look for "cannot play". `describe_for_email` prints names only.

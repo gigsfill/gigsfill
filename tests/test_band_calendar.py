@@ -268,3 +268,43 @@ def test_edited_page_scripts_carry_a_cache_buster():
             name = src.split("?")[0]
             if name in ("band-calendar.js", "artist-book-gigs-init.js"):
                 assert "?v=" in src, f"{page}: {name} has no cache-buster"
+
+
+# ── "All dates" snapshot ────────────────────────────────────────────────────
+
+def test_consecutive_days_merge_only_when_the_same_people_are_out():
+    """A month grid answers "is the 14th free"; it is poor at "when are we out
+    over the next year". The list collapses runs — but merging on date alone
+    would print "Nov 14 - Nov 16" across three days that each had a different
+    member away, which is simply false."""
+    js = JS.read_text()
+    fn = js[js.index("function mergeRuns"):]
+    fn = fn[:fn.index("\n  Cal.prototype.openList")]
+    assert "keyOf" in fn, "runs are merged without comparing who is out"
+    assert "last.key === k" in fn
+    assert "addDays(last.end, 1) === d" in fn, "merges non-adjacent days"
+
+
+def test_the_snapshot_asks_for_its_own_range():
+    """The grid holds three months; a snapshot is useless if it only lists
+    whatever the user happened to page to."""
+    js = JS.read_text()
+    fn = js[js.index("Cal.prototype.openList"):][:1800]
+    assert "addDays(from, 365)" in fn
+
+
+def test_the_sheet_is_not_parented_to_the_redrawn_grid():
+    """render() rewrites root.innerHTML on every toggle, which would tear the
+    sheet out from under whoever is reading it."""
+    js = JS.read_text()
+    fn = js[js.index("Cal.prototype.openList"):][:1800]
+    assert "document.body.appendChild(host)" in fn
+    assert "this.root.appendChild(host)" not in js
+
+
+def test_both_calendars_offer_the_list():
+    js = JS.read_text()
+    assert 'data-list="1"' in js and ">All dates<" in js
+    # Available in both modes: the button lives in the shared header.
+    hdr = js[js.index("var legend"):js.index("this.root.innerHTML")]
+    assert "data-list" not in hdr, "button should not be mode-gated"

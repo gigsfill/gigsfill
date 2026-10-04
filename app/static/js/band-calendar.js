@@ -110,6 +110,32 @@
       ".gfbc-act button.gfbc-danger:hover { border-color:var(--gfbc-block); color:var(--gfbc-block); }",
       ".gfbc-status { font-size:0.74rem; color:var(--text-gray); min-height:16px; margin-top:8px; }",
       ".gfbc-status.ok { color:#34d399; } .gfbc-status.err { color:#ef4444; }",
+      ".gfbc-listbtn { background:rgba(255,255,255,0.06); border:1px solid var(--border);",
+      "  color:var(--text); border-radius:6px; cursor:pointer; font-size:0.78rem; padding:4px 10px; }",
+      ".gfbc-listbtn:hover { border-color:var(--cyan); color:var(--cyan); }",
+      ".gfbc-modal { position:fixed; inset:0; z-index:9100; display:none; padding:20px;",
+      "  background:rgba(3,5,10,0.88); align-items:center; justify-content:center; }",
+      ".gfbc-modal.open { display:flex; }",
+      ".gfbc-sheet { background:#151b28; border:1px solid var(--border); border-radius:12px;",
+      "  width:min(560px,100%); max-height:85vh; display:flex; flex-direction:column;",
+      "  box-shadow:0 30px 80px rgba(0,0,0,0.6); }",
+      ".gfbc-sheet-head { display:flex; align-items:center; justify-content:space-between;",
+      "  padding:13px 17px; border-bottom:1px solid rgba(148,163,184,0.32); }",
+      ".gfbc-sheet-head h4 { margin:0; font-size:0.92rem; color:var(--text); font-weight:700; }",
+      ".gfbc-sheet-head button { background:none; border:none; color:var(--text-gray);",
+      "  font-size:1.4rem; line-height:1; cursor:pointer; padding:0 4px; }",
+      ".gfbc-sheet-head button:hover { color:var(--text); }",
+      ".gfbc-sheet-body { padding:6px 17px 16px; overflow-y:auto; }",
+      /* One row per run of consecutive days. Dates left, who is out right, so
+         the eye runs down a single column of dates. */
+      ".gfbc-li { display:flex; gap:12px; align-items:baseline; padding:8px 0;",
+      "  border-bottom:1px solid rgba(148,163,184,0.14); font-size:0.84rem; }",
+      ".gfbc-li:last-child { border-bottom:none; }",
+      ".gfbc-li-d { color:var(--text); font-weight:600; white-space:nowrap; min-width:172px; }",
+      ".gfbc-li-n { color:var(--text-gray); font-size:0.79rem; }",
+      ".gfbc-li-c { margin-left:auto; color:var(--text-muted); font-size:0.72rem; white-space:nowrap; }",
+      ".gfbc-empty { color:var(--text-gray); font-size:0.84rem; padding:14px 0; }",
+      "@media (max-width:520px) { .gfbc-li { flex-wrap:wrap; } .gfbc-li-d { min-width:0; } }",
       "@media (max-width:520px) { .gfbc-cell { height:50px; } .gfbc-dot { width:13px; height:13px; } }"
     ].join("\n");
     document.head.appendChild(css);
@@ -236,6 +262,7 @@
         '<div class="gfbc-head">' +
           '<span class="gfbc-title">' + MONTHS[this.m] + " " + this.y + "</span>" +
           '<span class="gfbc-nav">' +
+            '<button type="button" class="gfbc-listbtn" data-list="1">All dates</button>' +
             '<button type="button" data-nav="-1" aria-label="Previous month">‹</button>' +
             '<button type="button" class="gfbc-today" data-nav="0">Today</button>' +
             '<button type="button" data-nav="1" aria-label="Next month">›</button>' +
@@ -247,6 +274,9 @@
         '<div class="gfbc-status">' + (this.err ? esc(this.err) : "") + "</div>" +
         '<div class="gfbc-detail" style="display:none;"></div>' +
       "</div>";
+
+    var listBtn = this.root.querySelector("[data-list]");
+    if (listBtn) listBtn.addEventListener("click", function () { self.openList(); });
 
     this.root.querySelectorAll("[data-nav]").forEach(function (b) {
       b.addEventListener("click", function () {
@@ -365,6 +395,112 @@
   };
 
   var mounted = {};   // element id -> Cal, so two callers cannot double-mount
+
+  // ── "All dates" snapshot ──────────────────────────────────────────────
+  // A month grid answers "is the 14th free". It is poor at "when are we out
+  // over the next year", which is the question when someone is planning. This
+  // lists every marked day in order, collapsing consecutive days into one row.
+
+  function addDays(isoStr, n) {
+    var p = isoStr.split("-");
+    var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+    d.setDate(d.getDate() + n);
+    return iso(d);
+  }
+
+  function prettyDay(isoStr) {
+    return new Date(isoStr + "T12:00:00").toLocaleDateString(undefined, {
+      weekday: "short", month: "short", day: "numeric", year: "numeric"
+    });
+  }
+
+  // Two consecutive days only belong on one line when the SAME people are out
+  // on both. Merging on date alone would print "Oct 10 - Oct 12" over three
+  // days that each had a different member away, which is just wrong.
+  function mergeRuns(days, keyOf) {
+    var dates = Object.keys(days).filter(function (d) { return (days[d] || []).length; }).sort();
+    var runs = [];
+    dates.forEach(function (d) {
+      var k = keyOf(days[d]);
+      var last = runs[runs.length - 1];
+      if (last && last.key === k && addDays(last.end, 1) === d) {
+        last.end = d;
+        last.count += 1;
+        return;
+      }
+      runs.push({ start: d, end: d, key: k, count: 1, entries: days[d] });
+    });
+    return runs;
+  }
+
+  Cal.prototype.openList = async function () {
+    var self = this;
+    // On <body>, not inside root: render() rewrites root.innerHTML on every
+    // toggle, which would tear the sheet out from under whoever is reading it.
+    if (!this._sheetId) {
+      this._sheetId = "gfbcSheet_" + (this.root.id || Math.random().toString(36).slice(2));
+    }
+    var host = document.getElementById(this._sheetId);
+    if (!host) {
+      host = document.createElement("div");
+      host.className = "gfbc-modal";
+      host.id = this._sheetId;
+      document.body.appendChild(host);
+      host.addEventListener("click", function (e) {
+        if (e.target === host || (e.target.closest && e.target.closest("[data-close]"))) {
+          host.classList.remove("open");
+        }
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") host.classList.remove("open");
+      });
+    }
+    host.innerHTML = '<div class="gfbc-sheet"><div class="gfbc-sheet-head">' +
+      "<h4>All dates</h4><button type=\"button\" data-close=\"1\" aria-label=\"Close\">\u00D7</button>" +
+      '</div><div class="gfbc-sheet-body"><p class="gfbc-empty">Loading\u2026</p></div></div>';
+    host.classList.add("open");
+
+    // The grid holds three months; a snapshot wants the year ahead, so this
+    // asks for its own range rather than listing whatever happens to be loaded.
+    var from = iso(new Date());
+    var to = addDays(from, 365);
+    var days = {};
+    try {
+      var url = this.o.mode === "band"
+        ? "/api/artists/" + this.o.artistId + "/calendar?start=" + from + "&end=" + to
+        : "/api/me/days-off?start=" + from + "&end=" + to;
+      var res = await fetch(url, { credentials: "include" });
+      if (res.ok) days = (await res.json()).days || {};
+    } catch (e) { /* falls through to the empty state */ }
+
+    var isBand = this.o.mode === "band";
+    var runs = mergeRuns(days, function (list) {
+      return isBand
+        ? list.map(function (m) { return m.user_id; }).sort().join(",")
+        : "me";
+    });
+
+    var body = host.querySelector(".gfbc-sheet-body");
+    if (!runs.length) {
+      body.innerHTML = '<p class="gfbc-empty">Nothing marked in the next 12 months.</p>';
+      return;
+    }
+    body.innerHTML = runs.map(function (r) {
+      var when = r.start === r.end
+        ? prettyDay(r.start)
+        : prettyDay(r.start) + " \u2013 " + prettyDay(r.end);
+      var who = isBand
+        ? r.entries.map(function (m) {
+            return esc(m.name) + (m.is_self ? " (you)" : "");
+          }).join(", ")
+        : "";
+      return '<div class="gfbc-li">' +
+               '<span class="gfbc-li-d">' + esc(when) + "</span>" +
+               (who ? '<span class="gfbc-li-n">' + who + "</span>" : "") +
+               (r.count > 1 ? '<span class="gfbc-li-c">' + r.count + " days</span>" : "") +
+             "</div>";
+    }).join("");
+  };
 
   window.gfBandCalendar = {
     mount: function (opts) {
