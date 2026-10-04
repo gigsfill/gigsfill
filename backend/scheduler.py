@@ -818,10 +818,31 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                       SELECT artist_id FROM venue_artist_bans WHERE venue_id = ?
                   )
                   AND (? IS NULL OR a.id != ?)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM artist_availability aa
-                      WHERE aa.artist_id = a.id
-                        AND date(?) BETWEEN date(aa.blackout_start) AND date(aa.blackout_end)
+                  -- 2026-10-05: see services/member_availability.py — skip only when
+                  -- no member of the band is free that night.
+                  AND NOT (
+    EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _any_m
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _free_m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM member_days_off d
+            WHERE d.user_id = _free_m.user_id
+              AND (d.artist_id = 0 OR d.artist_id = a.id)
+              AND date(d.day) = date(?)
+        )
+    )
                   )
                   AND (
                       -- Case A: at least one OPEN slot matches by type.
@@ -987,10 +1008,31 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                           SELECT artist_id FROM venue_artist_bans WHERE venue_id = ?
                       )
                       AND (? IS NULL OR a.id != ?)
-                      AND NOT EXISTS (
-                          SELECT 1 FROM artist_availability aa
-                          WHERE aa.artist_id = a.id
-                            AND date(?) BETWEEN date(aa.blackout_start) AND date(aa.blackout_end)
+                      -- 2026-10-05: see services/member_availability.py — skip only when
+                      -- no member of the band is free that night.
+                      AND NOT (
+    EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _any_m
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _free_m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM member_days_off d
+            WHERE d.user_id = _free_m.user_id
+              AND (d.artist_id = 0 OR d.artist_id = a.id)
+              AND date(d.day) = date(?)
+        )
+    )
                       )
                 """, (vlat - _lat_d, vlat + _lat_d,
                       vlon - _lon_d, vlon + _lon_d,
@@ -1245,10 +1287,31 @@ def process_radius_blast(cursor, smtp_config):
                       SELECT artist_id FROM venue_artist_bans WHERE venue_id = ?
                   )
                   AND (? IS NULL OR a.id != ?)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM artist_availability aa
-                      WHERE aa.artist_id = a.id
-                        AND date(?) BETWEEN date(aa.blackout_start) AND date(aa.blackout_end)
+                  -- 2026-10-05: see services/member_availability.py — skip only when
+                  -- no member of the band is free that night.
+                  AND NOT (
+    EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _any_m
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _free_m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM member_days_off d
+            WHERE d.user_id = _free_m.user_id
+              AND (d.artist_id = 0 OR d.artist_id = a.id)
+              AND date(d.day) = date(?)
+        )
+    )
                   )
             """, (vlat - _lat_d2, vlat + _lat_d2,
                   vlon - _lon_d2, vlon + _lon_d2, venue_id,

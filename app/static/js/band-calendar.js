@@ -89,7 +89,6 @@
       /* Your own day reads as a filled state, not a dot among others: it is the
          one you can change by clicking. */
       ".gfbc-cell.gfbc-mine { background:rgba(245,158,11,0.16); border-color:rgba(245,158,11,0.55); }",
-      ".gfbc-cell.gfbc-blocked { background:rgba(239,68,68,0.16); border-color:rgba(239,68,68,0.6); }",
       ".gfbc-dots { display:flex; flex-wrap:wrap; gap:2px; margin-top:auto; }",
       ".gfbc-dot { width:15px; height:15px; border-radius:50%; font-size:0.52rem; font-weight:700;",
       "  display:flex; align-items:center; justify-content:center; color:#0b0f17; letter-spacing:-0.02em; }",
@@ -97,7 +96,6 @@
          ring it so it never reads as something you clicked. */
       ".gfbc-dot.gfbc-gig { border-radius:4px; box-shadow:0 0 0 1.5px rgba(255,255,255,0.45) inset; }",
       ".gfbc-more { font-size:0.56rem; color:var(--text-gray); align-self:center; }",
-      ".gfbc-lock { position:absolute; top:3px; right:4px; font-size:0.6rem; color:var(--gfbc-block); }",
       ".gfbc-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:0.72rem; color:var(--text-gray); }",
       ".gfbc-legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px;",
       "  vertical-align:-1px; }",
@@ -128,7 +126,7 @@
     var now = new Date();
     this.y = now.getFullYear();
     this.m = now.getMonth();
-    this.data = { days: {}, band_blocked: [], members: [], can_block_band: false };
+    this.data = { days: {}, members: [] };
     this.selected = null;
     this.busy = false;
   }
@@ -157,12 +155,10 @@
       var j = await res.json();
       this.data = {
         days: j.days || {},
-        band_blocked: j.band_blocked || [],
-        members: j.members || [],
-        can_block_band: !!j.can_block_band
+        members: j.members || []
       };
     } catch (e) {
-      this.data = { days: {}, band_blocked: [], members: [], can_block_band: false };
+      this.data = { days: {}, members: [] };
       this.err = "Could not load the calendar.";
     }
     this.render();
@@ -205,12 +201,10 @@
     for (var d = 1; d <= dim; d++) {
       var day = iso(new Date(this.y, this.m, d));
       var off = this.offOn(day);
-      var blocked = this.data.band_blocked.indexOf(day) !== -1;
       var cls = "gfbc-cell";
       if (day === todayIso) cls += " gfbc-today-cell";
       if (day < todayIso) cls += " gfbc-past";
       if (this.iAmOff(day)) cls += " gfbc-mine";
-      if (blocked) cls += " gfbc-blocked";
 
       var dots = "";
       if (this.o.mode === "band") {
@@ -232,7 +226,6 @@
       }
 
       cells += '<button type="button" class="' + cls + '" data-day="' + day + '">' +
-                 (blocked ? '<span class="gfbc-lock" title="Whole band blocked">■</span>' : "") +
                  '<span class="gfbc-num">' + d + "</span>" +
                  '<span class="gfbc-dots">' + dots + "</span>" +
                "</button>";
@@ -241,8 +234,7 @@
     var legend = this.o.mode === "band"
       ? '<span><i style="background:rgba(245,158,11,0.6)"></i>You are off</span>' +
         '<span><i style="background:hsl(200,70%,62%)"></i>A member is off — booking still allowed</span>' +
-        '<span><i style="background:hsl(140,70%,62%);border-radius:2px;box-shadow:0 0 0 1.5px rgba(255,255,255,0.45) inset"></i>Booked with another band — automatic</span>' +
-        '<span><i style="background:rgba(239,68,68,0.7)"></i>Whole band blocked — not bookable</span>'
+        '<span><i style="background:hsl(140,70%,62%);border-radius:2px;box-shadow:0 0 0 1.5px rgba(255,255,255,0.45) inset"></i>Booked with another band — automatic</span>'
       : '<span><i style="background:rgba(245,158,11,0.6)"></i>You are off</span>';
 
     this.root.innerHTML =
@@ -347,7 +339,6 @@
     var box = this.root.querySelector(".gfbc-detail");
     if (!box) return;
     var off = this.offOn(day);
-    var blocked = this.data.band_blocked.indexOf(day) !== -1;
     var pretty = new Date(day + "T12:00:00").toLocaleDateString(undefined, {
       weekday: "long", month: "long", day: "numeric", year: "numeric"
     });
@@ -374,54 +365,14 @@
       "whoever is away, and can book anyway if the line-up still works." + "</p>";
     }
 
+    // 2026-10-05: the "block the whole band" control is gone with the rest of
+    // artist-level availability. Nothing on this calendar sets band state any
+    // more — you click your own days, everyone else's are a read-only view.
     var act = "";
-    if (this.o.mode === "band" && this.data.can_block_band) {
-      act = '<div class="gfbc-act"><button type="button" class="' +
-            (blocked ? "" : "gfbc-danger ") + 'gfbc-blockbtn" data-day="' + day + '">' +
-            (blocked ? "Unblock the whole band" : "Block the whole band this day") +
-            "</button></div>" +
-            '<p style="margin:7px 0 0;color:var(--text-gray);font-size:0.72rem;">' +
-            "Blocking the band is a hard stop for a hiatus or a tour: the date " +
-            "stops being bookable and the band drops out of gig blasts and the " +
-            "open-gig digest. One member being away never does this." + "</p>";
-    }
 
     box.style.display = "block";
-    box.innerHTML = "<h4>" + esc(pretty) + (blocked ? " — band blocked" : "") + "</h4>" + who + act;
+    box.innerHTML = "<h4>" + esc(pretty) + "</h4>" + who + act;
 
-    var self = this;
-    var btn = box.querySelector(".gfbc-blockbtn");
-    if (btn) btn.addEventListener("click", function () { self.toggleBand(day); });
-  };
-
-  Cal.prototype.toggleBand = async function (day) {
-    if (this.busy) return;
-    this.busy = true;
-    this.status("Saving…");
-    try {
-      var res = await fetch("/api/artists/" + this.o.artistId + "/band-days-off/toggle", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ day: day })
-      });
-      var j = null;
-      try { j = await res.json(); } catch (_) {}
-      if (!res.ok) {
-        this.status((j && j.detail) || "Could not change that.", "err");
-        this.busy = false;
-        return;
-      }
-      var at = this.data.band_blocked.indexOf(day);
-      if (j.blocked && at === -1) this.data.band_blocked.push(day);
-      if (!j.blocked && at !== -1) this.data.band_blocked.splice(at, 1);
-      this.selected = day;
-      this.status(j.blocked ? "Band blocked" : "Band unblocked", "ok");
-    } catch (e) {
-      this.status("Could not change that.", "err");
-    }
-    this.busy = false;
-    this.render();
   };
 
   window.gfBandCalendar = {

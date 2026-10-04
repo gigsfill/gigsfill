@@ -44,10 +44,16 @@ def test_a_member_day_off_never_hard_blocks_the_artist():
     assert "artist_availability" not in _func(src, "toggle_my_day_off")
 
 
-def test_only_an_artist_admin_can_block_the_whole_band():
-    """It silences gig blasts and the open-gig digest for everyone."""
+def test_nothing_can_block_a_whole_band_any_more():
+    """2026-10-05: artist-level availability is gone. A band is unavailable
+    only in the sense that its members are, and the one derived consequence
+    (suppressing an email nobody could accept) lives in member_availability."""
     src = ROUTES.read_text()
-    assert "check_artist_access" in _func(src, "toggle_band_wide_day")
+    assert "toggle_band_wide_day" not in src
+    assert "artist_availability" not in src
+    for f in ("backend/routes/gigs.py", "backend/scheduler.py",
+              "backend/services/gig_hold.py", "backend/services/open_gig_digest.py"):
+        assert "artist_availability" not in (ROOT / f).read_text(), f
 
 
 def test_member_toggle_requires_membership():
@@ -152,8 +158,11 @@ def test_commitment_statuses_match_the_booking_conflict_check():
     gigs = (ROOT / "backend" / "routes" / "gigs.py").read_text()
     wanted = {"booked", "pending_contract", "awaiting_venue_contract",
               "pending_venue_approval"}
-    got = set(re.findall(r"'(\w+)'", src[src.index("_COMMITTED ="):][:300]))
+    mod = (ROOT / "backend" / "services" / "member_availability.py").read_text()
+    got = set(re.findall(r"'(\w+)'", mod[mod.index("COMMITTED_SLOT_STATUSES"):][:300]))
     assert wanted <= got, got
+    # And availability.py uses that constant rather than its own copy.
+    assert "COMMITTED_SLOT_STATUSES" in src
     assert "'booked','pending_contract','awaiting_venue_contract','pending_venue_approval'" in gigs
 
 
@@ -188,3 +197,27 @@ def test_untoggling_your_day_does_not_erase_a_derived_gig():
     fn = js[js.index("Cal.prototype.applyLocal"):]
     fn = fn[:fn.index("Cal.prototype.meId")]
     assert 'm.scope === "gig"' in fn and "if (gig) list.push(gig)" in fn
+
+
+def test_only_an_email_nobody_could_accept_is_suppressed():
+    """The one derived consequence of member availability: when NO member is
+    free, the blast and digest skip the date. It cannot hurt a stripped-down
+    line-up, because if a duo could play then someone is free and the offer
+    still goes out."""
+    mod = (ROOT / "backend" / "services" / "member_availability.py").read_text()
+    assert "def everyone_off" in mod
+    # Expressed as "no member is free", not "every member has a row": the
+    # latter is vacuously true for a band with no members.
+    assert "NOT EXISTS" in mod and "_free_m" in mod
+    assert "_any_m" in mod, "no guard against the zero-member case"
+    for f in ("backend/routes/gigs.py", "backend/scheduler.py"):
+        src = (ROOT / f).read_text()
+        assert "member_days_off" in src, f
+
+
+def test_the_digest_names_who_is_away():
+    """Dropping the artist-level block means the band hears about the gig; the
+    email has to say who cannot make it or the band cannot judge the line-up."""
+    src = (ROOT / "backend" / "services" / "open_gig_digest.py").read_text()
+    assert "members_off_by_date" in src
+    assert "Away:" in src

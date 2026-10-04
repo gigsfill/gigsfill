@@ -525,21 +525,46 @@ def _fetch_artist_open_gigs_live(cursor, artist_id: int, window_days: int = 28,
             (artist_id,)
         ).fetchall()
     }
+    # (2026-10-05) Artist-level blackouts are gone. A date is skipped only when
+    # NO member of the band is free — an offer no possible line-up could accept
+    # is noise, but a four-piece missing its drummer is still a trio and should
+    # hear about the gig. Computed per member rather than per band, straight
+    # from member_days_off; see services/member_availability.py for the same
+    # rule expressed in SQL for the blast queries.
     blackout_dates: set[str] = set()
-    for br in cursor.execute(
-        "SELECT blackout_start, blackout_end FROM artist_availability WHERE artist_id = ?",
-        (artist_id,)
-    ).fetchall():
-        try:
-            from datetime import date as _d, timedelta as _td
-            s = _d.fromisoformat(str(br[0])[:10])
-            e = _d.fromisoformat(str(br[1])[:10])
-            d = s
-            while d <= e:
-                blackout_dates.add(d.isoformat())
-                d += _td(days=1)
-        except Exception:
-            pass
+    _member_ids = [
+        r[0] for r in cursor.execute(
+            "SELECT user_id FROM artists WHERE id = ? AND user_id IS NOT NULL "
+            "UNION SELECT user_id FROM entity_users "
+            "WHERE entity_type = 'artist' AND entity_id = ?",
+            (artist_id, artist_id)
+        ).fetchall()
+    ]
+    if _member_ids:
+        _q = ",".join("?" for _ in _member_ids)
+        _rows = cursor.execute(
+            f"SELECT day, COUNT(DISTINCT user_id) FROM member_days_off "
+            f"WHERE user_id IN ({_q}) AND (artist_id = 0 OR artist_id = ?) "
+            f"GROUP BY day",
+            (*_member_ids, artist_id)
+        ).fetchall()
+        for _day, _n in _rows:
+            if int(_n) >= len(_member_ids):
+                blackout_dates.add(str(_day)[:10])
+
+    # Who is away on the dates we DO send. The whole point of dropping the
+    # artist-level block: the band still hears about the gig, and the email
+    # says who cannot make it so they can judge the line-up themselves.
+    members_off_by_date: dict[str, list] = {}
+    if _member_ids:
+        _q2 = ",".join("?" for _ in _member_ids)
+        for _day, _nm in cursor.execute(
+            f"SELECT d.day, COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) "
+            f"FROM member_days_off d JOIN users u ON u.id = d.user_id "
+            f"WHERE d.user_id IN ({_q2}) AND (d.artist_id = 0 OR d.artist_id = ?)",
+            (*_member_ids, artist_id)
+        ).fetchall():
+            members_off_by_date.setdefault(str(_day)[:10], []).append(_nm)
 
     # Already-booked gigs (artist has any slot on this gig in a non-open state with their id)
     already_booked_gig_ids = {
@@ -747,6 +772,7 @@ def _fetch_artist_open_gigs_live(cursor, artist_id: int, window_days: int = 28,
             "distance_mi": dist_mi,
             "urgent_36h": urgent,
             "artist_id": artist_id,
+            "members_off": members_off_by_date.get(str(gdate)[:10], []),
             # Per-slot terms — used by the renderer to draw multi-slot
             # gigs with each slot's time + pay on its own line.
             "slots": out_slots,
@@ -1283,6 +1309,11 @@ def _render_digest_email(*, artist_name: str, rows: list[dict],
                 right_parts.append(
                     f"<span style='color:#6b7280;'>"
                     f"{_n} open slot{'s' if _n != 1 else ''}</span>"
+                )
+            _away = g.get("members_off") or []
+            if _away:
+                right_parts.append(
+                    f"<span style='color:#b45309;'>Away: {_esc(', '.join(_away))}</span>"
                 )
             if g["notification_key"] == "open_gig_36h":
                 right_parts.append(

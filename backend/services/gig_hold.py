@@ -527,18 +527,10 @@ def respond_to_hold_offer(db, token: str, action: str, slot_id: Optional[int] = 
                     db.commit()
                     return {"ok": False, "message":
                         "This venue requires an up-to-date W-9 on file before booking."}
-            # Artist blackout
-            _bo = db.execute(
-                text("""SELECT reason FROM artist_availability
-                        WHERE artist_id = :aid
-                          AND date(:d) BETWEEN date(blackout_start) AND date(blackout_end)
-                        LIMIT 1"""),
-                {"aid": row["artist_id"], "d": str(gate_gig_date)[:10] if gate_gig_date else ""}
-            ).first()
-            if _bo:
-                db.commit()
-                return {"ok": False, "message":
-                    f"You have a blackout on this date: {_bo[0] or 'unavailable'}"}
+            # (2026-10-05) Artist blackout gate removed. Accepting a hold is a
+            # band member's own click, and the member-availability warning
+            # already names who is away; refusing outright denied a trio a gig
+            # its drummer could not make.
             # Per-gig dedupe — one slot per artist per gig. Book_slot
             # (routes/gigs.py:4803) enforces this; hold-accept was
             # silently letting a second slot land.
@@ -2372,16 +2364,9 @@ def _book_one_series_pick(db, gig_id: int, slot_id: int, artist_id: int,
             ).first()
             if not _w9r or _w9r[0] < _cy:
                 return False, "This venue requires an up-to-date W-9 on file before booking.", None
-        # Artist blackout
-        _bo = db.execute(
-            text("""SELECT reason FROM artist_availability
-                    WHERE artist_id = :aid
-                      AND date(:d) BETWEEN date(blackout_start) AND date(blackout_end)
-                    LIMIT 1"""),
-            {"aid": artist_id, "d": str(gig["date"])[:10]}
-        ).first()
-        if _bo:
-            return False, f"You have a blackout on this date: {_bo[0] or 'unavailable'}", None
+        # (2026-10-05) Artist blackout gate removed; see the note in the accept
+        # path above. An offer is still skipped when NO member is free — that
+        # one is handled where offers are selected, not here.
         # Cross-venue time overlap
         from backend.routes.gigs import _enforce_no_artist_time_overlap as _overlap
         _overlap(db, artist_id, gig_id, gig["venue_id"], str(gig["date"])[:10],

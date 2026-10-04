@@ -8,6 +8,20 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-05 (Artist-level availability removed entirely):** The hard block is gone — table, endpoints, UI and all 12 enforcement sites. Member availability is now the only input, and everything else is derived from it.
+
+  **Why it was the wrong shape.** An artist-level blackout refused bookings *and* pulled the band out of preferred-artist blasts, the open-gig digest and hold offers. For a band that is the wrong unit: a four-piece whose drummer is away is still a trio, and a trio without its bass player is still a duo. Suppressing the offer took the decision away from the people best placed to make it.
+
+  Three findings settled it. Every booking-path block (`book_gig`, `book_slot`, `book_with_contract`, hold acceptance) is **artist-initiated** — the person clicking is a band member who already sees the member-availability warning. **Nothing commits a band without a member acting**: venue holds are offers the artist still accepts. And the venue-facing "greyed out in search" was already dead code; nothing called `/api/artists/{id}/available`.
+
+  **The one survivor, derived.** `services/member_availability.everyone_off()` suppresses a blast or digest only when **no** member is free. It cannot hurt a stripped-down line-up: if a duo could play, someone is free and the offer still goes out. Expressed as *"no member is free"* rather than *"every member has a row"* — the latter is vacuously true for a band with no members, so there is an explicit `EXISTS` guard for that case. The SQL fragment (`sql_no_member_free`) and the Python helper live in one module so the blast queries and the digest cannot drift.
+
+  **Emails now name who is away** instead of silently not arriving: the digest adds an `Away: …` line per gig date, including anyone booked with another band.
+
+  **A live bug this nearly shipped.** Removing the retired endpoints by decorator boundary also deleted the `_COMMITTED` status constant, which `_other_band_commitments` still used inside an f-string. The module imported cleanly and only raised `NameError` when called — so the band calendar would have 500'd while every import check passed. A test caught it; the constant now lives in `services/member_availability.py` as `COMMITTED_SLOT_STATUSES`, shared rather than copied. (This is the second time in two days that decorator-bounded deletion has swallowed a helper — see 2026-10-04.)
+
+  The `artist_availability` table is left in `setup_database` but is empty and unreferenced; nothing reads or writes it.
+
 - **2026-10-04b (Cross-band conflicts show automatically):** A member in two bands who is booked with one now shows as unavailable on the other's calendar, and in its booking warning, without anyone clicking anything.
 
   **Derived, never stored.** Writing these as `member_days_off` rows at booking time would mean deleting them again on cancel, decline, date change and roster change — and `gigs.py` has three cancellation endpoints that this doc already flags as the place a fix lands on one path and misses the others. A stale "unavailable" is worse than none, so `_other_band_commitments()` computes it on read and is always correct. It self-heals: cancel the gig and the marking disappears on the next load.

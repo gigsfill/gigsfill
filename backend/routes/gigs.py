@@ -2011,9 +2011,10 @@ def booking_precheck(gig_id: int, artist_id: int, slot_id: int = None,
     # ALSO surface member-level (user_availability) blackouts that fall on
     # this gig date. These are SOFT warnings — the booking artist confirms
     # through them (band might perform without the unavailable member).
-    # Band-level (artist_availability) is enforced separately as a hard
-    # block inside book_gig/book_slot/book_with_contract — we don't duplicate
-    # that here. Per user direction: band-block wins, member warning ignored.
+    # (2026-10-05) There is no band-level hard block any more. This warning is
+    # the whole mechanism: it names who is away — including anyone booked with
+    # another band that night — and the band decides whether the line-up still
+    # works.
     try:
         from backend.routes.availability import _member_blackouts_for_gig
         result["member_blackouts"] = _member_blackouts_for_gig(
@@ -2377,18 +2378,12 @@ def _run_prebooking_checks(db, gig_id: int, artist_id: int, venue_id: int,
     if active_offer and active_offer["artist_id"] != artist_id:
         raise HTTPException(403, "WAITLIST_LOCKED: This gig has an active waitlist offer to another artist.")
 
-    # 6. Blackout check (FIX May 2026 audit #5: book_slot enforces it inline,
-    #    book_gig and contracts.book_with_contract both go through this helper —
-    #    centralizing here closes the gap so all three paths reject blackouts.)
-    if gig_date:
-        _bo = db.execute(_t("""SELECT reason FROM artist_availability
-                               WHERE artist_id=:aid
-                                 AND date(:d) BETWEEN date(blackout_start) AND date(blackout_end)
-                               LIMIT 1"""),
-                         {"aid": artist_id, "d": str(gig_date)[:10]}).mappings().first()
-        if _bo:
-            _r = _bo.get("reason") or "marked as unavailable"
-            raise HTTPException(403, f"You have a blackout on this date: {_r}")
+    # 6. (2026-10-05) The artist-level blackout block that used to sit here is
+    #    gone, along with the table behind it. It refused the booking outright,
+    #    which is the wrong call for a band: a four-piece whose drummer is away
+    #    is still a trio. Whoever is booking is a band member and already sees
+    #    the member-availability warning naming who is out, so the decision
+    #    belongs to them. See services/member_availability.py.
 
     # 7. Stripe Connect onboarding gate (Audit fix May 2026).
     #    Frontend `artist-stripe-payment.js:checkArtistPaymentMethod` already
@@ -2728,19 +2723,11 @@ def book_gig(
     # covering the gig date. book_slot already enforces this (~line 3091); the
     # single-slot path was missing it, so an artist with a blackout could still
     # book single-slot gigs through this endpoint.
-    if gig.get("date"):
-        _blackout = db.execute(
-            text("""
-                SELECT id, reason FROM artist_availability
-                WHERE artist_id = :aid
-                  AND date(:d) BETWEEN date(blackout_start) AND date(blackout_end)
-                LIMIT 1
-            """),
-            {"aid": artist_id, "d": str(gig["date"])[:10]}
-        ).mappings().first()
-        if _blackout:
-            _reason = _blackout.get("reason") or "marked as unavailable"
-            raise HTTPException(403, f"You have a blackout on this date: {_reason}")
+    # (2026-10-05) Artist-level blackout check removed. It refused the booking
+    # outright; a band missing one member is still a smaller band, and the
+    # member-availability warning already names who is out so the person
+    # booking — always a band member — can decide. See
+    # services/member_availability.py.
 
     # Audit fix (May 2026): Stripe Connect onboarding gate. Frontend already
     # blocks the Book button, but a direct API call would otherwise produce
@@ -5302,23 +5289,9 @@ def book_slot(
     if existing_slot:
         raise HTTPException(403, "You already have a slot booked or pending on this gig. Each artist can only hold one slot per event.")
 
-    # Check artist blackout dates
-    gig_date_str = db.execute(
-        text("SELECT date FROM gigs WHERE id = :gid"), {"gid": gig_id}
-    ).scalar()
-    if gig_date_str:
-        blackout = db.execute(
-            text("""
-                SELECT id, reason FROM artist_availability
-                WHERE artist_id = :aid
-                  AND date(:d) BETWEEN date(blackout_start) AND date(blackout_end)
-                LIMIT 1
-            """),
-            {"aid": artist_id, "d": str(gig_date_str)[:10]}
-        ).mappings().first()
-        if blackout:
-            reason = blackout.get("reason", "") or "marked as unavailable"
-            raise HTTPException(403, f"You have a blackout on this date: {reason}")
+    # (2026-10-05) Artist-level blackout check removed here too — see the note
+    # in _run_prebooking_checks. The member-availability warning covers it
+    # without refusing a line-up that could still play.
 
     # ── Frequency check (FIX 2026-05-22 audit): venue's policy on how many
     # days between performances by the same artist. Was previously enforced
@@ -7229,10 +7202,32 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
               -- bindparams and injects an extra binding, causing runtime error.
               SELECT artist_id FROM gig_cancelled_artists WHERE gig_id = :gid
           )
-          AND NOT EXISTS (
-              SELECT 1 FROM artist_availability aa
-              WHERE aa.artist_id = a.id
-                AND date(:gdate) BETWEEN date(aa.blackout_start) AND date(aa.blackout_end)
+          -- 2026-10-05: artist-level blackouts are gone. Skip the band only when
+          -- NO member is free: a four-piece missing its drummer is still a
+          -- trio, and suppressing the offer took that decision away from them.
+          AND NOT (
+    EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _any_m
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _free_m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM member_days_off d
+            WHERE d.user_id = _free_m.user_id
+              AND (d.artist_id = 0 OR d.artist_id = a.id)
+              AND date(d.day) = date(:gdate)
+        )
+    )
           )
     """), {"vid": venue_id, "gig": gig_id, "gid": gig_id,
            "excl_aid": exclude_artist_id, "gdate": str(gig_date)[:10]}).mappings().all()
@@ -7546,10 +7541,32 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
               -- on this gig, not just the most recent — see gig_cancelled_artists in db.py.
               SELECT artist_id FROM gig_cancelled_artists WHERE gig_id = :gid
           )
-          AND NOT EXISTS (
-              SELECT 1 FROM artist_availability aa
-              WHERE aa.artist_id = a.id
-                AND date(:gdate) BETWEEN date(aa.blackout_start) AND date(aa.blackout_end)
+          -- 2026-10-05: artist-level blackouts are gone. Skip the band only when
+          -- NO member is free: a four-piece missing its drummer is still a
+          -- trio, and suppressing the offer took that decision away from them.
+          AND NOT (
+    EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _any_m
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT user_id FROM artists WHERE id = a.id AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = a.id
+        ) _free_m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM member_days_off d
+            WHERE d.user_id = _free_m.user_id
+              AND (d.artist_id = 0 OR d.artist_id = a.id)
+              AND date(d.day) = date(:gdate)
+        )
+    )
           )
     """), {
         "lat_min": lat_min, "lat_max": lat_max,
