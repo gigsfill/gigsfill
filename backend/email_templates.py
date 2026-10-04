@@ -1164,7 +1164,7 @@ TEMPLATES = {
 <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #1d4ed8;">Is your availability up to date?</h1>
 <p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{member_name}} &mdash; {{horizon_sentence}}</p>
 <p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Your bandmates in <strong>{{band_names}}</strong> see these days on the band calendar, so marking them keeps everyone from booking a date you can&rsquo;t play.</p>
-{{marked_block}}
+{{marked_days_html}}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 8px 0 20px 0;">
 <tbody>
 <tr>

@@ -266,13 +266,13 @@ def send_availability_reminders(cursor, smtp_config, site_url="https://gigsfill.
                 f'<li style="margin:0 0 4px 0;">{r}</li>' for r in ranges)
             more = ("" if total_runs <= len(ranges)
                     else f'<li style="margin:0;color:#9ca3af;">and {total_runs - len(ranges)} more</li>')
-            marked_block = (
+            marked_days_html = (
                 '<p style="margin:0 0 8px 0;font-size:14px;color:#4b5563;">'
                 "Days you've already marked:</p>"
                 '<ul style="margin:0 0 20px 0;padding-left:20px;font-size:14px;'
                 'line-height:1.6;color:#4b5563;">' + items + more + "</ul>")
         else:
-            marked_block = ""
+            marked_days_html = ""
 
         token = make_ack_token(m["user_id"])
         variables = {
@@ -281,7 +281,7 @@ def send_availability_reminders(cursor, smtp_config, site_url="https://gigsfill.
             "member_name": m["name"],
             "band_names": ", ".join(bands),
             "horizon_sentence": _horizon_sentence(m),
-            "marked_block": marked_block,
+            "marked_days_html": marked_days_html,
             "calendar_url": f"{site_url}/app/user-profile.html?tab=availability",
             "all_clear_url": f"{site_url}/api/availability/all-clear?token={token}",
             "prefs_url": f"{site_url}/app/user-profile.html?tab=notifications",

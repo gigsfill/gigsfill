@@ -268,6 +268,12 @@ _SCHED_HTML_SAFE_KEYS = frozenset({
     "open_slots_html", "artist_list_html", "gig_summary_html",
     "venue_logo_html", "artist_logo_html",
     "slots_html",
+    # 2026-10-07: the availability reminder's date list. Without this the
+    # <ul> arrived HTML-escaped and the email showed raw tags where the dates
+    # should be. Built entirely from our own formatted dates — no user input
+    # reaches it — which is the bar for being on this list.
+    "marked_days_html",
+    "all_clear_url", "prefs_url",
     "venue_address_link",
     "personal_note", "recipient_greeting",
     "far_notice_artist", "far_notice_venue",

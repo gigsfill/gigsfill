@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-07c (Reminder email showed raw HTML where the dates should be):** The first real send arrived with `<ul><li>` tags printed as text.
+
+  `scheduler.render_template` HTML-escapes **every** value except keys in `_SCHED_HTML_SAFE_KEYS`, and the date list was passed as markup under `marked_block`, which was not on it. Renamed to **`marked_days_html`** and added — the existing convention is an `_html` suffix on anything carrying markup (`slots_html`, `artist_list_html`, …), so the name itself declares that escaping is being skipped on purpose. `all_clear_url` and `prefs_url` joined `calendar_url` on the list at the same time.
+
+  It qualifies for the list because the block is built entirely from our own formatted dates; no user input reaches it.
+
+  Two tests now cover the class rather than the instance: one asserts every `*_html` / `*_url` variable this email supplies is allow-listed, the other that the template's `{{placeholders}}` are a subset of what the sender supplies — a half-finished rename would otherwise ship `{{marked_block}}` as literal text in a sent email.
+
 - **2026-10-07b (Weekly availability reminder email):** A branded nudge to band members, Mondays 10:00 Pacific. [services/availability_reminder.py](backend/services/availability_reminder.py), template `member_availability_reminder`, new table `availability_reminders(user_id, last_sent_at, last_ack_at, send_count)`.
 
   **It triggers on the coverage horizon, not on last activity.** The two differ in ways that matter: last-activity would nag a member who sat down last month and marked a whole year ahead — their availability is in excellent shape, the metric just cannot see it. The horizon asks the question that counts, *do we know whether this member is free over the window venues are booking into*, and a member with nothing marked answers it the same way as one whose marks run out next week: we do not know. Default `HORIZON_DAYS = 60`.

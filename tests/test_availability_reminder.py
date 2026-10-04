@@ -90,3 +90,39 @@ def test_the_job_is_idempotent_per_tick():
     fn = sched[sched.index("def _send_availability_reminders"):][:700]
     assert "weekday() != 0" in fn and "hour != 10" in fn
     assert "MIN_GAP_DAYS" in SVC.read_text()
+
+
+def test_html_bearing_variables_are_allow_listed():
+    """render_template HTML-escapes every value unless the key is in
+    _SCHED_HTML_SAFE_KEYS. The date list was passed as markup under a key
+    that was not, so the first real email showed raw <ul><li> tags where the
+    dates should have been.
+
+    The convention is an _html suffix on anything carrying markup, so the
+    name itself says the escaping is being skipped deliberately."""
+    sched = (ROOT / "backend" / "scheduler.py").read_text()
+    safe = sched[sched.index("_SCHED_HTML_SAFE_KEYS = frozenset({"):]
+    safe = safe[:safe.index("})")]
+    svc = SVC.read_text()
+
+    block = svc[svc.index("variables = {"):svc.index("subject = render_template")]
+    for key in re.findall(r'"(\w+)":', block):
+        if key.endswith("_html") or key.endswith("_url"):
+            assert f'"{key}"' in safe, f"{key} carries markup but is escaped"
+
+    # And nothing passes markup under a name that hides it.
+    assert "marked_block" not in svc, "pre-rename name is back"
+    assert '"marked_days_html"' in svc
+
+
+def test_the_template_and_the_sender_agree_on_variable_names():
+    """A renamed variable that is only half-renamed leaves {{placeholder}}
+    text sitting in a sent email."""
+    tpl_src = (ROOT / "backend" / "email_templates.py").read_text()
+    body = tpl_src[tpl_src.index('"member_availability_reminder"'):]
+    body = body[:body.index("\n    },")]
+    used = set(re.findall(r"{{(\w+)}}", body))
+    svc = SVC.read_text()
+    block = svc[svc.index("variables = {"):svc.index("subject = render_template")]
+    supplied = set(re.findall(r'"(\w+)":', block))
+    assert used <= supplied, f"template wants {sorted(used - supplied)}"
