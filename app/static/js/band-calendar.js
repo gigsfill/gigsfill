@@ -31,6 +31,8 @@
 
   var MONTHS = ["January", "February", "March", "April", "May", "June",
                 "July", "August", "September", "October", "November", "December"];
+  // Long enough not to fire while scrolling, short enough not to feel stuck.
+  var LONG_PRESS_MS = 450;
   var DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   function esc(s) {
@@ -81,6 +83,12 @@
       "  border-radius:7px; background:rgba(255,255,255,0.02); cursor:pointer; padding:3px 4px;",
       "  display:flex; flex-direction:column; align-items:flex-start; gap:2px; }",
       ".gfbc-cell:hover { border-color:var(--cyan); }",
+      /* touch-action stops the 300ms double-tap-zoom delay; the callout and
+         user-select rules stop iOS offering to copy text mid-press. */
+      ".gfbc-cell { touch-action:manipulation; -webkit-touch-callout:none;",
+      "  -webkit-user-select:none; user-select:none; }",
+      ".gfbc-cell.gfbc-pressing { border-color:var(--cyan); transform:scale(0.96); }",
+      "@media (prefers-reduced-motion: reduce) { .gfbc-cell.gfbc-pressing { transform:none; } }",
       ".gfbc-cell[disabled] { cursor:default; opacity:0.35; }",
       ".gfbc-cell.gfbc-pad { visibility:hidden; }",
       ".gfbc-cell.gfbc-past { opacity:0.4; }",
@@ -307,9 +315,49 @@
     // Reading a day is occasional, so it moves to hover and keyboard focus,
     // neither of which changes anything.
     this.root.querySelectorAll(".gfbc-cell[data-day]").forEach(function (c) {
-      c.addEventListener("click", function () { self.onDay(c.dataset.day); });
+      c.addEventListener("click", function () {
+        // A long press fires a synthetic click on release. Swallow it, or
+        // inspecting a day on a phone would also toggle it — the exact problem
+        // the long press exists to solve.
+        //
+        // Guarded by elapsed time rather than a boolean: if that click never
+        // arrives (the finger lifts off the grid, or the page scrolls away),
+        // a sticky flag would silently eat the next genuine tap.
+        if (Date.now() - (self._lpAt || 0) < 700) return;
+        self.onDay(c.dataset.day);
+      });
       c.addEventListener("mouseenter", function () { self.peek(c.dataset.day); });
       c.addEventListener("focus", function () { self.peek(c.dataset.day); });
+
+      // ── Long press = inspect, on touch ──────────────────────────────────
+      // Phones and tablets have no hover, so without this the only way to
+      // read a day is to tap it, which marks you off, then tap again to undo.
+      function cancelPress() {
+        clearTimeout(c._lpTimer);
+        c.classList.remove("gfbc-pressing");
+      }
+      c.addEventListener("touchstart", function () {
+        cancelPress();
+        c.classList.add("gfbc-pressing");
+        c._lpTimer = setTimeout(function () {
+          c.classList.remove("gfbc-pressing");
+          self._lpAt = Date.now();
+          self.peek(c.dataset.day);
+          // A press with no feedback feels broken; the panel can be below the
+          // fold on a phone. Vibration is unsupported on iOS and throws in
+          // some embedded browsers, hence the guard.
+          if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) {} }
+        }, LONG_PRESS_MS);
+      }, { passive: true });
+      // A finger that moves is a scroll, not a press.
+      c.addEventListener("touchmove", cancelPress, { passive: true });
+      c.addEventListener("touchend", cancelPress);
+      c.addEventListener("touchcancel", cancelPress);
+      // iOS pops a selection callout on a long press otherwise, which lands
+      // on top of the panel being revealed.
+      c.addEventListener("contextmenu", function (e) {
+        if (self._lpAt && Date.now() - self._lpAt < 1200) e.preventDefault();
+      });
     });
 
     if (this.selected) this.showDetail(this.selected);

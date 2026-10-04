@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-07 (Press and hold to inspect a day on touch):** Closes the gap left by the hover fix. On a phone or tablet, holding a day for 450ms reveals who is away without marking you off; a normal tap still toggles.
+
+  Four details, each verified on an emulated iPhone (`has_touch`, `is_mobile`, `hover: none`):
+  - **The synthetic click is swallowed.** Touch fires a click on release, which would toggle the very day the press just revealed. Guarded by elapsed time (`Date.now() - _lpAt < 700`) rather than a boolean — if that click never arrives because the finger lifts off the grid or the page scrolls away, a sticky flag would silently eat the next genuine tap. Confirmed a tap ~900ms after a long press still toggles.
+  - **A finger that moves is a scroll**, so `touchmove` cancels the timer. Confirmed a scroll gesture over a day leaves the panel untouched.
+  - **iOS callout suppressed** via `-webkit-touch-callout:none`, `user-select:none` and a `contextmenu` guard, or the copy/selection menu lands on top of the panel. `touch-action:manipulation` also drops the 300ms double-tap-zoom delay.
+  - **Feedback**: the cell scales slightly while held (respecting `prefers-reduced-motion`) and vibrates 12ms where supported — iOS has no Vibration API and some embedded browsers throw, hence the guard. Without a cue the press feels broken, since the panel can sit below the fold on a phone.
+
+  Measured on touch: long press reveals with the marked-day set unchanged; a 150ms tap toggles on; tapping again toggles off.
+
 - **2026-10-06e (Inspecting a day no longer marks you off):** The day panel appeared only after a click, and the click toggled your own availability. So the only way to read who was away was to mark yourself away and click again to undo it — and the help text said "Click a day to see who's away", instructing people to do exactly that.
 
   One gesture cannot do both jobs unambiguously, so they split by frequency. **Click keeps the toggle**, because marking days is the bulk action the calendar exists for. **Hover and keyboard focus now inspect**, and neither writes anything: `peek()` deliberately does not set `this.selected`, or a hovered day would survive the next re-render as though it had been chosen, and it no-ops while a save is in flight.

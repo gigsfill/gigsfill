@@ -373,3 +373,40 @@ def test_the_help_text_no_longer_tells_people_to_click_to_inspect():
     panel = panel[:panel.index("</div>", panel.index("bandCalendar"))]
     assert "Click a day to see who" not in panel, "still advertises the destructive path"
     assert "Hover a day" in panel
+
+
+def test_long_press_inspects_on_touch():
+    """Phones and tablets have no hover. Without this the only way to read a
+    day is to tap it — which marks you off — then tap again to undo."""
+    js = JS.read_text()
+    assert "LONG_PRESS_MS" in js
+    assert 'addEventListener("touchstart"' in js
+    # A finger that moves is a scroll, not a press.
+    for ev in ("touchmove", "touchend", "touchcancel"):
+        assert f'addEventListener("{ev}"' in js, ev
+
+
+def test_the_synthetic_click_after_a_long_press_is_swallowed():
+    """Touch fires a click on release, which would toggle the day the press
+    just revealed — the exact problem the gesture exists to solve."""
+    js = JS.read_text()
+    blk = js[js.index('c.addEventListener("click"'):][:700]
+    assert "self._lpAt" in blk
+    # Time-based, not a boolean: if the click never arrives (finger lifts off
+    # the grid, page scrolls away) a sticky flag eats the next genuine tap.
+    assert "Date.now() -" in blk
+
+
+def test_touch_press_does_not_trigger_the_ios_callout():
+    """iOS offers a copy/selection callout on long press, landing on top of
+    the panel being revealed."""
+    js = JS.read_text()
+    assert "-webkit-touch-callout:none" in js
+    assert "touch-action:manipulation" in js
+    assert 'addEventListener("contextmenu"' in js
+
+
+def test_both_pages_tell_touch_users_about_the_gesture():
+    for page in ("artist-book-gigs.html", "user-profile.html"):
+        html = (ROOT / "app" / page).read_text()
+        assert "press and hold" in html, page
