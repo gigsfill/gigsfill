@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-05c (Stop explaining why a member is away):** The cross-band detection stays; the commentary goes. A member is available or not, and that is the whole signal.
+
+  The calendar used to draw a derived conflict as a distinct squared dot reading "booked with Fifty Proof at The Mint", with its own legend row and chip style. All removed — one look for "cannot play". `describe_for_email` prints names only.
+
+  It is also a disclosure the app had no business making: band A does not need to be told its singer plays with band B, let alone at which venue. So the fields are no longer **fetched** — `_other_band_commitments` stopped selecting `a2.name` and dropped the `venues` join entirely, which is the surest way not to leak them.
+
+  The internal marker was `scope: "gig"`, which still named the cause to anyone who opened the network tab. Replaced by `locked: true` — all the UI ever needed was "this entry cannot be cleared by un-clicking", not why. A test asserts the payload never carries the cause.
+
 - **2026-10-05b (Availability tab rendered empty — stale cache-buster):** The band calendar did not appear. `artist-book-gigs-init.js` was rewritten in `aa7a8cb` to mount it, but its `?v=15` was never bumped, and nginx serves `/app/` with `Cache-Control: public, max-age=86400`. Returning browsers kept the old copy for a day.
 
   **Why it failed silently.** The old init guards with `if (typeof renderAvailabilityPanel === 'function')`, so nothing threw. It revealed `#availabilitySection` and then simply never called `gfBandCalendar.mount()` — an empty panel, no console error, nothing to grep for.

@@ -44,15 +44,14 @@ def _other_band_commitments(db, artist_id: int, start: str, end: str):
     "unavailable" is worse than none, so this is computed on read and is
     always right.
 
-    Returns {day: [{user_id, name, artist_id, artist_name, venue_name}]}.
+    Returns {day: [{user_id, name}]}. Deliberately nothing about WHICH band or
+    venue: unavailable is unavailable, and band A has no business being told
+    its singer is playing with band B.
     """
     rows = db.execute(text(f"""
         SELECT date(g.date) AS day,
                eu.user_id AS user_id,
-               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) AS name,
-               a2.id AS other_artist_id,
-               a2.name AS other_artist_name,
-               v.venue_name AS venue_name
+               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) AS name
         FROM (
             SELECT user_id FROM artists WHERE id = :aid AND user_id IS NOT NULL
             UNION
@@ -70,7 +69,6 @@ def _other_band_commitments(db, artist_id: int, start: str, end: str):
         ) a2 ON a2.member_id = eu.user_id AND a2.id <> :aid
         JOIN gig_slots gs ON gs.artist_id = a2.id AND gs.status IN {_COMMITTED}
         JOIN gigs g ON g.id = gs.gig_id
-        LEFT JOIN venues v ON v.id = g.venue_id
         WHERE date(g.date) BETWEEN date(:s) AND date(:e)
     """), {"aid": artist_id, "s": start, "e": end}).mappings().all()
 
@@ -82,13 +80,7 @@ def _other_band_commitments(db, artist_id: int, start: str, end: str):
         # one unavailable person for this band; keep the first.
         if any(x["user_id"] == r["user_id"] for x in bucket):
             continue
-        bucket.append({
-            "user_id": r["user_id"],
-            "name": r["name"],
-            "artist_id": r["other_artist_id"],
-            "artist_name": r["other_artist_name"],
-            "venue_name": r["venue_name"],
-        })
+        bucket.append({"user_id": r["user_id"], "name": r["name"]})
     return out
 
 
@@ -139,8 +131,6 @@ def _member_blackouts_for_gig(db, artist_id: int, gig_date: str,
             "user_id": r["user_id"],
             "name": r["name"],
             "scope": "all" if not r["artist_id"] else "band",
-            "with_artist": None,
-            "venue": None,
             "blackout_start": gd,
             "blackout_end": gd,
             "reason": "",
@@ -153,16 +143,13 @@ def _member_blackouts_for_gig(db, artist_id: int, gig_date: str,
     for p in _other_band_commitments(db, artist_id, gd, gd).get(gd, []):
         prior = next((x for x in out if x["user_id"] == p["user_id"]), None)
         if prior:
-            prior["scope"] = "gig"
-            prior["with_artist"] = p["artist_name"]
-            prior["venue"] = p["venue_name"]
+            prior["locked"] = True
             continue
         out.append({
             "user_id": p["user_id"],
             "name": p["name"],
-            "scope": "gig",
-            "with_artist": p["artist_name"],
-            "venue": p["venue_name"],
+            "scope": "band",
+            "locked": True,
             "blackout_start": gd,
             "blackout_end": gd,
             "reason": "",
@@ -265,18 +252,16 @@ def get_band_calendar(artist_id: int, start: str = None, end: str = None,
         for p in people:
             prior = next((x for x in entry if x["user_id"] == p["user_id"]), None)
             if prior:
-                # They clicked the day off AND have a gig. The gig is the more
-                # specific fact, so say that instead of the bare "off".
-                prior["scope"] = "gig"
-                prior["with_artist"] = p["artist_name"]
-                prior["venue"] = p["venue_name"]
+                # `locked`, not a "gig" scope: the UI only needs to know this
+                # entry cannot be cleared by un-clicking. Naming the cause in
+                # the payload would tell band B exactly what we decided not to
+                # show it, to anyone who opens the network tab.
+                prior["locked"] = True
                 continue
             entry.append({
                 "user_id": p["user_id"],
                 "name": p["name"],
-                "scope": "gig",
-                "with_artist": p["artist_name"],
-                "venue": p["venue_name"],
+                "locked": True,
                 "is_self": p["user_id"] == user.id,
             })
 

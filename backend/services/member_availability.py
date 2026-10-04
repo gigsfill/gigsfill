@@ -114,10 +114,7 @@ def describe_for_email(db, artist_id: int, day: str) -> str:
     off = members_off(db, artist_id, day)
     if not off:
         return ""
-    parts = []
-    for m in off:
-        if m.get("scope") == "gig" and m.get("with_artist"):
-            parts.append(f"{m['name']} (playing with {m['with_artist']})")
-        else:
-            parts.append(m["name"])
-    return ", ".join(parts)
+    # Names only. Why someone cannot play is their business — including when
+    # the reason is a gig with another band — and it changes nothing about the
+    # decision in front of the reader: that member is out.
+    return ", ".join(m["name"] for m in off)

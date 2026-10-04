@@ -179,15 +179,29 @@ def test_a_cross_band_gig_still_only_warns():
     assert "artist_availability" not in _func(src, "_other_band_commitments")
 
 
-def test_the_warning_says_which_band_and_venue():
-    """"Scott is away" is not actionable; "Scott is booked with Fifty Proof
-    at Venue Demo" is."""
+def test_the_reason_someone_is_away_is_never_shown():
+    """2026-10-05: unavailable is unavailable. Whether a member has a day off
+    or a gig with another band changes nothing for the band reading it, and
+    band A has no business being told its singer plays with band B."""
     src = ROUTES.read_text()
     fn = _func(src, "_member_blackouts_for_gig")
-    assert "with_artist" in fn and "venue" in fn
-    assert "_other_band_commitments" in fn
+    assert "_other_band_commitments" in fn, "cross-band conflicts no longer counted"
+    for leak in ("with_artist", "venue_name", "other_artist_name"):
+        assert leak not in fn, f"{leak} is still surfaced"
+    # Not even fetched, which is the surest way not to leak it.
+    q = _func(src, "_other_band_commitments")
+    assert "a2.name" not in q and "venue_name" not in q
     js = JS.read_text()
-    assert "booked with " in js
+    for leak in ("booked with", "with_artist", "gfbc-gig", "gigchip"):
+        assert leak not in js, f"calendar still shows {leak}"
+    mod = (ROOT / "backend" / "services" / "member_availability.py").read_text()
+    assert "playing with" not in mod
+    # Not even as a scope value in the payload: that would tell band B the
+    # cause to anyone who opens the network tab.
+    cal = _func(src, "get_band_calendar")
+    code = "\n".join(l for l in cal.splitlines() if not l.strip().startswith("#"))
+    assert '"gig"' not in code, "cause is still named in the payload"
+    assert '"locked": True' in code
 
 
 def test_untoggling_your_day_does_not_erase_a_derived_gig():
@@ -196,7 +210,7 @@ def test_untoggling_your_day_does_not_erase_a_derived_gig():
     js = JS.read_text()
     fn = js[js.index("Cal.prototype.applyLocal"):]
     fn = fn[:fn.index("Cal.prototype.meId")]
-    assert 'm.scope === "gig"' in fn and "if (gig) list.push(gig)" in fn
+    assert "m.locked" in fn and "if (gig) list.push(gig)" in fn
 
 
 def test_only_an_email_nobody_could_accept_is_suppressed():
