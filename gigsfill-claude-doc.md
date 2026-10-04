@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-09 (Per-band scope on the personal calendar; red for "can't play"):** Three changes to the member's own calendar.
+
+  **A day can now be scoped to chosen bands.** A member in several bands saw only "all bands" or an opaque **"1 band"**, with no way to change it — the only route to a per-band day was to open that band's calendar and click there. The day panel now lists the member's bands as checkboxes, **all ticked by default**, and the cell names the band rather than counting it. New `POST /api/me/days-off/scope`, which rewrites the day rather than diffing: a diff would have to reason about the global row shadowing per-band rows, which is exactly where the earlier scope bug came from. Every band ticked is stored as the single "all bands" row, so it stays correct if they later join another band.
+
+  **The first attempt was a dead end worth recording.** An "All bands" radio sat above the per-band boxes and disabled them when selected — but a lone radio cannot be unticked, so there was no way to narrow the day at all. Replaced with plain checkboxes, where "all ticked" carries the same meaning without a second control to get stuck in.
+
+  **A marked day is red, not amber.** It means "cannot play"; amber read as a caution, and on the personal calendar nothing else on the cell carries the meaning.
+
+  **The instruction moved against the grid.** "Click the days you **can't** play" is now a banner immediately above the day cells rather than a line in the prose above the card — people start clicking before they read.
+
 - **2026-10-08f (Un-marking a day did not save):** Reported: a member marked a run of days unavailable, then could not reverse it on the band calendar.
 
   **Cause: scope.** A day marked from someone's **profile** is stored once with `artist_id = 0` and shows on every band's calendar. `_toggle_day` only ever created or deleted a **band-scoped** row, so the global row was never touched — the day never cleared, and the first click made it *more* unavailable by stacking a band row on top. From the member's side it simply did not save. Reproduced exactly against the reporter's own account.

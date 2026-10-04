@@ -72,6 +72,12 @@
       ".gfbc-nav button, .gfbc-today { background:rgba(255,255,255,0.06); border:1px solid var(--border);",
       "  color:var(--text); border-radius:6px; cursor:pointer; font-size:0.78rem; padding:4px 10px; }",
       ".gfbc-nav button:hover, .gfbc-today:hover { border-color:var(--cyan); color:var(--cyan); }",
+      /* The one instruction that matters, against the grid rather than in
+         the prose above the card — people start clicking before they read. */
+      ".gfbc-banner { margin:0 0 8px; padding:7px 12px; border-radius:7px;",
+      "  background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4);",
+      "  color:#fbbf24; font-size:0.82rem; font-weight:600; text-align:center; }",
+      ".gfbc-banner b { color:#fff; text-decoration:underline; }",
       ".gfbc-dow { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:4px; }",
       ".gfbc-dow span { text-align:center; font-size:0.68rem; color:var(--text-gray); font-weight:600;",
       "  text-transform:uppercase; letter-spacing:0.04em; }",
@@ -96,7 +102,10 @@
       ".gfbc-cell.gfbc-today-cell .gfbc-num { color:var(--cyan); font-weight:800; }",
       /* Your own day reads as a filled state, not a dot among others: it is the
          one you can change by clicking. */
-      ".gfbc-cell.gfbc-mine { background:rgba(245,158,11,0.16); border-color:rgba(245,158,11,0.55); }",
+      /* Red: the day means "cannot play". Amber read as a caution, which is
+         not what it is, and on the personal calendar there is nothing else on
+         the cell to carry the meaning. */
+      ".gfbc-cell.gfbc-mine { background:rgba(239,68,68,0.18); border-color:rgba(239,68,68,0.6); }",
       ".gfbc-dots { display:flex; flex-wrap:wrap; gap:2px; margin-top:auto; }",
       /* One small square per member, carrying their initials in their own
          colour, so a day's line-up reads at a glance. */
@@ -106,6 +115,12 @@
       ".gfbc-detail { margin-top:12px; padding:11px 13px; border:1px solid var(--border); border-radius:8px;",
       "  background:rgba(255,255,255,0.02); font-size:0.82rem; }",
       ".gfbc-detail h4 { margin:0 0 7px; font-size:0.82rem; color:var(--text); font-weight:700; }",
+      ".gfbc-scope { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px; }",
+      ".gfbc-scope label { display:inline-flex; align-items:center; gap:6px;",
+      "  font-size:0.78rem; color:var(--text-gray); cursor:pointer; }",
+      ".gfbc-scope input { accent-color:var(--cyan); }",
+      ".gfbc-scope input:disabled + span, .gfbc-scope label:has(input:disabled)",
+      "  { opacity:0.45; cursor:default; }",
       ".gfbc-unavail { font-size:0.68rem; font-weight:700; letter-spacing:0.08em;",
       "  text-transform:uppercase; color:var(--text-muted); margin:2px 0 6px; }",
       ".gfbc-who { display:flex; flex-wrap:wrap; gap:6px; }",
@@ -193,7 +208,9 @@
       var j = await res.json();
       this.data = {
         days: j.days || {},
-        members: j.members || []
+        members: j.members || [],
+        // Personal calendar only: which bands this day could apply to.
+        bands: j.bands || []
       };
     } catch (e) {
       this.data = { days: {}, members: [] };
@@ -258,9 +275,19 @@
           dots += '<span class="gfbc-more">+' + (off.length - shown.length) + "</span>";
         }
       } else if (off.length) {
-        // Personal view: show where the day applies, not who.
+        // Personal view: say where the day applies. "1 band" told the member
+        // nothing — which band was only discoverable by opening that band's
+        // own calendar.
         var anyGlobal = off.some(function (x) { return x.scope === "all"; });
-        dots = '<span class="gfbc-more">' + (anyGlobal ? "all bands" : "1 band") + "</span>";
+        var label;
+        if (anyGlobal) {
+          label = "all bands";
+        } else if (off.length === 1) {
+          label = off[0].artist_name || "1 band";
+        } else {
+          label = off.length + " bands";
+        }
+        dots = '<span class="gfbc-more">' + esc(label) + "</span>";
       }
 
       cells += '<button type="button" class="' + cls + '" data-day="' + day + '">' +
@@ -286,6 +313,7 @@
             '<button type="button" data-nav="1" aria-label="Next month">›</button>' +
           "</span>" +
         "</div>" +
+        '<div class="gfbc-banner">Click the days you <b>can\u2019t</b> play</div>' +
         '<div class="gfbc-dow">' + DOW.map(function (x) { return "<span>" + x + "</span>"; }).join("") + "</div>" +
         '<div class="gfbc-grid">' + cells + "</div>" +
         '<div class="gfbc-status">' + (this.err ? esc(this.err) : "") + "</div>" +
@@ -428,6 +456,25 @@
 
   // Read-only. Deliberately does NOT set this.selected: a hovered day must not
   // survive a re-render as though the user had chosen it.
+  Cal.prototype.saveScope = async function (day, bands) {
+    this.status("Saving\u2026");
+    try {
+      var r = await fetch("/api/me/days-off/scope", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ day: day, bands: bands })
+      });
+      if (!r.ok) { this.status("Could not save that.", "err"); return; }
+      this.status("Saved", "ok");
+      this.selected = day;
+      this._loadedKey = "";          // scope changed; the grid must refetch
+      await this.load();
+    } catch (e) {
+      this.status("Could not save that.", "err");
+    }
+  };
+
   Cal.prototype.peek = function (day) {
     if (this.busy) return;          // mid-save, the panel is about to redraw
     this.showDetail(day);
@@ -442,11 +489,37 @@
     });
 
     var who;
-    if (this.o.mode !== "band") {
-      who = off.length
-        ? '<div class="gfbc-who"><span>You are off' +
-          (off.some(function (x) { return x.scope === "all"; }) ? " — all bands" : "") + "</span></div>"
-        : '<div class="gfbc-free">You are available.</div>';
+        if (this.o.mode !== "band") {
+      if (!off.length) {
+        who = '<div class="gfbc-free">You are available.</div>';
+      } else {
+        // A member in several bands used to see only "all bands" or an opaque
+        // "1 band", with no way to change it here — the only route to a
+        // per-band day was to open that band's own calendar and click there.
+        var bands = this.data.bands || [];
+        var isAll = off.some(function (x) { return x.scope === "all"; });
+        var picked = {};
+        off.forEach(function (x) { if (x.artist_id) picked[x.artist_id] = true; });
+        // Just the bands, all ticked by default. An "All bands" radio was
+        // tried first and was a dead end: with it selected the per-band boxes
+        // were disabled, and a lone radio cannot be unticked, so there was no
+        // way to narrow the day. Every band ticked IS "all bands" — the server
+        // stores it that way, so it stays right if they join another later.
+        var opts = bands.length > 1
+          ? '<div class="gfbc-scope">' +
+              bands.map(function (b) {
+                return '<label><input type="checkbox" class="gfbc-band" value="' + b.id + '"' +
+                       ((isAll || picked[b.id]) ? " checked" : "") + "> " + esc(b.name) + "</label>";
+              }).join("") +
+            "</div>"
+          : "";
+        who = '<div class="gfbc-unavail">Can&rsquo;t play &mdash; which bands?</div>' +
+              (opts || '<div class="gfbc-free" style="color:var(--text-gray)">' +
+                       "Applies to every band you play in.</div>") +
+              (opts ? '<p style="margin:8px 0 0;color:var(--text-gray);font-size:0.74rem;">' +
+                      "All ticked means every band. Untick them all to clear the day." +
+                      "</p>" : "");
+      }
     } else if (!off.length) {
       who = '<div class="gfbc-free">Everyone is available.</div>';
     } else {
@@ -468,6 +541,16 @@
 
     box.style.display = "block";
     box.innerHTML = "<h4>" + esc(pretty) + "</h4>" + who + act;
+
+    var self2 = this;
+    box.querySelectorAll(".gfbc-band").forEach(function (el) {
+      el.addEventListener("change", function () {
+        var picks = Array.prototype.slice
+          .call(box.querySelectorAll(".gfbc-band:checked"))
+          .map(function (c) { return Number(c.value); });
+        self2.saveScope(day, picks);
+      });
+    });
 
   };
 

@@ -403,7 +403,19 @@ def get_my_days_off(start: str = None, end: str = None,
             "artist_name": r["artist_name"] if r["artist_id"] else None,
             "scope": "all" if not r["artist_id"] else "band",
         })
-    return {"days": days}
+    # The bands this person plays in, so the calendar can offer "which of
+    # these?" rather than only "all" or an opaque "1 band".
+    bands = db.execute(text("""
+        SELECT a.id, a.name FROM artists a
+        WHERE a.user_id = :u AND a.deleted_at IS NULL
+        UNION
+        SELECT a.id, a.name FROM artists a
+        JOIN entity_users e ON e.entity_id = a.id AND e.entity_type = 'artist'
+        WHERE e.user_id = :u AND a.deleted_at IS NULL
+        ORDER BY 2
+    """), {"u": user.id}).mappings().all()
+    return {"days": days,
+            "bands": [{"id": b["id"], "name": b["name"]} for b in bands]}
 
 
 
@@ -461,3 +473,71 @@ def availability_all_clear(token: str = "", db=Depends(get_db)):
             border-radius:6px;text-decoration:none;font-size:15px;font-weight:600;">
     Open my calendar</a>
 </div></body></html>""")
+
+
+@router.post("/api/me/days-off/scope")
+def set_day_scope(payload: dict, user=Depends(get_current_user), db=Depends(get_db)):
+    """Choose which bands a day off applies to.
+
+    A member in several bands was shown "all bands" or an opaque "1 band" with
+    no way to change it from their own calendar — the only route to a
+    per-band day was to go to that band's calendar and click there.
+
+    `bands` is either the string "all" or a list of artist ids. An empty list
+    clears the day entirely, which is the same as un-marking it, so the
+    calendar does not need a separate delete for this path.
+
+    Rewrites the day rather than diffing: a day has at most one row per band,
+    the set is tiny, and a diff would have to reason about the "all" row
+    shadowing per-band rows, which is exactly where the earlier scope bug came
+    from.
+    """
+    day = (payload or {}).get("day")
+    if not day:
+        raise HTTPException(400, "day required")
+    d = _parse_date(day).isoformat()
+    bands = (payload or {}).get("bands")
+
+    mine = {b[0] for b in db.execute(text("""
+        SELECT a.id FROM artists a WHERE a.user_id = :u AND a.deleted_at IS NULL
+        UNION
+        SELECT a.id FROM artists a
+        JOIN entity_users e ON e.entity_id = a.id AND e.entity_type = 'artist'
+        WHERE e.user_id = :u AND a.deleted_at IS NULL
+    """), {"u": user.id}).fetchall()}
+
+    db.execute(text("""
+        DELETE FROM member_days_off WHERE user_id = :u AND date(day) = date(:d)
+    """), {"u": user.id, "d": d})
+
+    if bands == "all":
+        db.execute(text("""
+            INSERT INTO member_days_off (user_id, artist_id, day) VALUES (:u, 0, :d)
+        """), {"u": user.id, "d": d})
+        scope = "all"
+    else:
+        ids = [int(b) for b in (bands or []) if str(b).strip().isdigit()]
+        # Silently ignoring an id they are not in would hide a real mistake;
+        # refusing is clearer than storing a row that shows up nowhere.
+        bad = [i for i in ids if i not in mine]
+        if bad:
+            raise HTTPException(403, "You are not a member of that artist")
+        for i in ids:
+            db.execute(text("""
+                INSERT OR IGNORE INTO member_days_off (user_id, artist_id, day)
+                VALUES (:u, :a, :d)
+            """), {"u": user.id, "a": i, "d": d})
+        # Every band selected is the same thing as "all", and storing it that
+        # way keeps it correct when they later join another band.
+        if ids and set(ids) == mine:
+            db.execute(text("""
+                DELETE FROM member_days_off WHERE user_id = :u AND date(day) = date(:d)
+            """), {"u": user.id, "d": d})
+            db.execute(text("""
+                INSERT INTO member_days_off (user_id, artist_id, day) VALUES (:u, 0, :d)
+            """), {"u": user.id, "d": d})
+            scope = "all"
+        else:
+            scope = "band" if ids else "none"
+    db.commit()
+    return {"ok": True, "day": d, "scope": scope}

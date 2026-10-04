@@ -515,3 +515,57 @@ def test_the_profile_calendar_toggle_stays_simple():
     # there and the conversion branch must not run.
     assert "_row(0) if artist_id != 0 else None" in fn, \
         "the conversion is not gated to band calendars"
+
+
+# ── Choosing which bands a day applies to ───────────────────────────────────
+
+def test_a_day_can_be_scoped_to_chosen_bands():
+    """A member in several bands saw only "all bands" or an opaque "1 band"
+    with no way to change it — the only route to a per-band day was to open
+    that band's calendar and click there."""
+    src = ROUTES.read_text()
+    assert '@router.post("/api/me/days-off/scope")' in src
+    js = JS.read_text()
+    assert "gfbc-band" in js and "saveScope" in js
+
+
+def test_the_cell_names_the_band_instead_of_counting_it():
+    js = JS.read_text()
+    assert '"1 band"' in js and "artist_name" in js
+    fn = js[js.index("Personal view: say where the day applies"):][:600]
+    assert "off[0].artist_name" in fn
+
+
+def test_the_scope_control_cannot_trap_the_user():
+    """An "All bands" radio was tried first: with it selected the per-band
+    boxes were disabled, and a lone radio cannot be unticked, so there was no
+    way to narrow the day."""
+    js = JS.read_text()
+    assert 'name="gfbcScope"' not in js, "the dead-end radio is back"
+    assert "disabled" not in js[js.index("var opts = bands.length > 1"):][:700]
+
+
+def test_every_band_ticked_is_stored_as_all_bands():
+    """So it stays right when they later join another band."""
+    src = ROUTES.read_text()
+    fn = _func(src, "set_day_scope")
+    assert "set(ids) == mine" in fn
+
+
+def test_scoping_rejects_a_band_you_are_not_in():
+    src = ROUTES.read_text()
+    fn = _func(src, "set_day_scope")
+    assert "403" in fn and "not a member" in fn
+
+
+def test_a_day_you_cannot_play_reads_red():
+    js = JS.read_text()
+    rule = js[js.index(".gfbc-cell.gfbc-mine {"):][:160]
+    assert "239,68,68" in rule, "still amber"
+
+
+def test_the_instruction_sits_against_the_grid():
+    """People start clicking before they read the prose above the card."""
+    js = JS.read_text()
+    assert "gfbc-banner" in js
+    assert "can\\u2019t</b> play" in js or "can’t</b> play" in js
