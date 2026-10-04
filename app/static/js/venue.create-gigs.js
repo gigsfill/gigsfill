@@ -4591,6 +4591,10 @@ async function renderCalendar() {
     const notesRow = document.getElementById('gigNotes')?.closest('.modal-row');
     if (notesRow) notesRow.style.display = '';
     if (document.getElementById('gigNotes')) document.getElementById('gigNotes').value = gig.notes || '';
+    // Fill the per-gig spec panel from this gig's overrides; it opens
+    // itself when any are set, or the venue would have to guess there
+    // is anything behind the collapsed button.
+    if (window.gfGigSpec) window.gfGigSpec.load(gig);
 
     // Clear and pre-populate slot builder from booked slots
     const slotList = document.getElementById('slotList');
@@ -5594,6 +5598,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         title: titleInput.value,
         pay: slots[0].pay,
         notes: notesInput.value,
+        // Per-gig room spec. Always sends every key, null for the ones
+        // left on the venue default — sending only the filled ones would
+        // make clearing an override impossible.
+        ...(window.gfGigSpec ? window.gfGigSpec.payload() : {}),
         artist_type: artistType,
         band_formats: bandFormats,
         styles: gigStyles,
@@ -5737,6 +5745,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
       title: titleInput.value,
       pay: pay,
       notes: notesInput.value,
+        // Per-gig room spec. Always sends every key, null for the ones
+        // left on the venue default — sending only the filled ones would
+        // make clearing an override impossible.
+        ...(window.gfGigSpec ? window.gfGigSpec.payload() : {}),
       artist_type: artistType,
       band_formats: bandFormats,
         styles: gigStyles,
@@ -5887,6 +5899,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         body: JSON.stringify({
           title: titleInput.value,
           notes: notesInput.value,
+        // Per-gig room spec. Always sends every key, null for the ones
+        // left on the venue default — sending only the filled ones would
+        // make clearing an override impossible.
+        ...(window.gfGigSpec ? window.gfGigSpec.payload() : {}),
           slots: slots
         })
       });
@@ -5899,6 +5915,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
           end_time: endTime,
           pay: pay,
           notes: notesInput.value,
+        // Per-gig room spec. Always sends every key, null for the ones
+        // left on the venue default — sending only the filled ones would
+        // make clearing an override impossible.
+        ...(window.gfGigSpec ? window.gfGigSpec.payload() : {}),
           artist_type: artistType,
           band_formats: bandFormats,
           styles: gigStyles,
@@ -6067,6 +6087,10 @@ async function _showBookedGigModal(gig, isPastGig, modalTitle, gigArtistInfo, de
         end_time: endTime,
         pay: pay,
         notes: notesInput.value,
+        // Per-gig room spec. Always sends every key, null for the ones
+        // left on the venue default — sending only the filled ones would
+        // make clearing an override impossible.
+        ...(window.gfGigSpec ? window.gfGigSpec.payload() : {}),
         artist_type: artistType,
         band_formats: bandFormats,
         styles: gigStyles,

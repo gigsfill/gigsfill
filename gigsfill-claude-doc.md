@@ -8,6 +8,22 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-08 (Per-gig overrides of the venue room spec):** A venue can now set stage, PA, sound engineer, lighting, load-in, arrival window and bar/food tabs **per gig**, instead of every gig inheriting the venue's standing answer through a live JOIN.
+
+  **The bug this fixes is not cosmetic.** `artist.book-gigs.js` filters gig search on `g.has_sound_equipment`, joined straight off the venue row. A venue defaulting to "no PA" that was bringing one for a big night had that gig **filtered out of search** for every artist requiring sound equipment — losing applicants on the gig it cared most about, with nothing on screen explaining it. The reverse was worse: a venue defaulting to "PA provided" that was not providing one had artists apply believing there was one.
+
+  **Schema:** 16 nullable `ovr_*` columns on `gigs`; NULL means inherit, so nothing needed backfilling. **Prefixed, not same-named** — several queries already do `SELECT g.*, v.has_stage, …` and a same-named column on both sides collides in the row dict, with the last one silently winning.
+
+  **One resolution path**, [services/gig_spec.py](backend/services/gig_spec.py). `select_sql()` emits `COALESCE(g.ovr_x, v.x) AS x`, so consumers keep the same keys. Wired into both gig-list queries (the search filter), the gig modal, the cancellation blast and contract generation. `preview_auto_contract` deliberately is **not** — it previews the venue's standard contract and has no gig. A test walks the source for any `v.has_*` read not inside a `COALESCE`.
+
+  **`resolve()` treats only None as absent.** An override of `0` or `""` is a real answer — "no stage tonight", "no bar tab" — and `or` would fall back to the venue default for exactly the values a venue is most likely to be overriding.
+
+  **The form is tri-state**, a select rather than a checkbox: "Use my venue default (No)" / "Yes — for this gig" / "No — for this gig". A checkbox has two states and this needs three. It posts **every** key with null for untouched ones, or an override could be set and never undone. Collapsed behind a "Differs from your usual setup?" button with a changed-count badge, auto-opening when a gig already overrides something.
+
+  Recurring series: each occurrence is created through `create_gig` with a shared `recurring_group_id`, so a series picks the override up per occurrence; `update_recurring_series` applies to every **future** occurrence, past ones excluded by the existing `date >= :from_date` filter so a signed contract is never rewritten after the fact.
+
+  Known limitation: for text fields blank means "inherit", so "no bar tab tonight" is typed rather than cleared — which also reads better to the artist than a blank.
+
 - **2026-10-07c (Reminder email showed raw HTML where the dates should be):** The first real send arrived with `<ul><li>` tags printed as text.
 
   `scheduler.render_template` HTML-escapes **every** value except keys in `_SCHED_HTML_SAFE_KEYS`, and the date list was passed as markup under `marked_block`, which was not on it. Renamed to **`marked_days_html`** and added — the existing convention is an `_html` suffix on anything carrying markup (`slots_html`, `artist_list_html`, …), so the name itself declares that escaping is being skipped on purpose. `all_clear_url` and `prefs_url` joined `calendar_url` on the list at the same time.

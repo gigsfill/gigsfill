@@ -1200,7 +1200,14 @@ def create_gig(venue_id: int, data: dict, user=Depends(get_current_user), db=Dep
                 "is_multi_slot": 1
             }
         ).scalar()
-        
+
+        # Per-gig spec overrides (2026-10-07). Written separately rather than
+        # folded into the INSERT: creation already has several statement
+        # shapes, and sixteen more columns on each is how one path quietly
+        # misses them. No-op when the payload carries no override keys.
+        from backend.services.gig_spec import save_overrides as _save_spec
+        _save_spec(db, gig_id, data)
+
         # Always create slots (every gig uses slots)
         if slots:
             for i, slot in enumerate(slots):
@@ -1402,6 +1409,26 @@ def list_gigs(request: Request, user=Depends(get_current_user), db=Depends(get_d
                     g.contract_hold_artist_id,
                     g.hold_status,
                     g.hold_offer_window_hours,
+                    -- Raw overrides alongside the resolved values: the venue's
+                    -- edit panel needs to know which fields this gig actually
+                    -- overrides, which the resolved value cannot tell it (an
+                    -- override that matches the default looks identical).
+                    g.ovr_has_stage,
+                    g.ovr_stage_width_ft,
+                    g.ovr_stage_depth_ft,
+                    g.ovr_setup_location_description,
+                    g.ovr_has_sound_equipment,
+                    g.ovr_sound_equipment_description,
+                    g.ovr_has_sound_engineer,
+                    g.ovr_sound_engineer_details,
+                    g.ovr_has_lighting,
+                    g.ovr_lighting_description,
+                    g.ovr_load_in_out_details,
+                    g.ovr_arrival_time_type,
+                    g.ovr_arrival_no_earlier_than_hour,
+                    g.ovr_arrival_no_earlier_than_period,
+                    g.ovr_bar_tab_details,
+                    g.ovr_food_tab_details,
                     (SELECT gc.artist_id FROM gig_contracts gc WHERE gc.gig_id = g.id ORDER BY gc.id DESC LIMIT 1) as contract_artist_id,
                     (SELECT gc.status FROM gig_contracts gc WHERE gc.gig_id = g.id ORDER BY gc.id DESC LIMIT 1) as contract_status,
                     CASE WHEN g.radius_blast_token IS NOT NULL AND g.status = 'open' THEN 1 ELSE 0 END as is_blast_open,
@@ -1430,9 +1457,25 @@ def list_gigs(request: Request, user=Depends(get_current_user), db=Depends(get_d
                     v.state,
                     v.latitude as venue_lat,
                     v.longitude as venue_lon,
-                    v.has_stage,
-                    v.has_sound_equipment,
-                    v.has_lighting,
+                    -- Resolved per gig: an override wins over the venue
+                    -- default. Artist search filters on these, so reading
+                    -- v.* directly drops overridden gigs from results.
+                    COALESCE(g.ovr_has_stage, v.has_stage) AS has_stage,
+                    COALESCE(g.ovr_stage_width_ft, v.stage_width_ft) AS stage_width_ft,
+                    COALESCE(g.ovr_stage_depth_ft, v.stage_depth_ft) AS stage_depth_ft,
+                    COALESCE(g.ovr_setup_location_description, v.setup_location_description) AS setup_location_description,
+                    COALESCE(g.ovr_has_sound_equipment, v.has_sound_equipment) AS has_sound_equipment,
+                    COALESCE(g.ovr_sound_equipment_description, v.sound_equipment_description) AS sound_equipment_description,
+                    COALESCE(g.ovr_has_sound_engineer, v.has_sound_engineer) AS has_sound_engineer,
+                    COALESCE(g.ovr_sound_engineer_details, v.sound_engineer_details) AS sound_engineer_details,
+                    COALESCE(g.ovr_has_lighting, v.has_lighting) AS has_lighting,
+                    COALESCE(g.ovr_lighting_description, v.lighting_description) AS lighting_description,
+                    COALESCE(g.ovr_load_in_out_details, v.load_in_out_details) AS load_in_out_details,
+                    COALESCE(g.ovr_arrival_time_type, v.arrival_time_type) AS arrival_time_type,
+                    COALESCE(g.ovr_arrival_no_earlier_than_hour, v.arrival_no_earlier_than_hour) AS arrival_no_earlier_than_hour,
+                    COALESCE(g.ovr_arrival_no_earlier_than_period, v.arrival_no_earlier_than_period) AS arrival_no_earlier_than_period,
+                    COALESCE(g.ovr_bar_tab_details, v.bar_tab_details) AS bar_tab_details,
+                    COALESCE(g.ovr_food_tab_details, v.food_tab_details) AS food_tab_details,
                     COALESCE(a.name,
                         (SELECT a2.name FROM artists a2
                          JOIN gig_contracts gc2 ON gc2.artist_id = a2.id
@@ -1586,9 +1629,25 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
                     v.state,
                     v.latitude as venue_lat,
                     v.longitude as venue_lon,
-                    v.has_stage,
-                    v.has_sound_equipment,
-                    v.has_lighting,
+                    -- Resolved per gig: an override wins over the venue
+                    -- default. Artist search filters on these, so reading
+                    -- v.* directly drops overridden gigs from results.
+                    COALESCE(g.ovr_has_stage, v.has_stage) AS has_stage,
+                    COALESCE(g.ovr_stage_width_ft, v.stage_width_ft) AS stage_width_ft,
+                    COALESCE(g.ovr_stage_depth_ft, v.stage_depth_ft) AS stage_depth_ft,
+                    COALESCE(g.ovr_setup_location_description, v.setup_location_description) AS setup_location_description,
+                    COALESCE(g.ovr_has_sound_equipment, v.has_sound_equipment) AS has_sound_equipment,
+                    COALESCE(g.ovr_sound_equipment_description, v.sound_equipment_description) AS sound_equipment_description,
+                    COALESCE(g.ovr_has_sound_engineer, v.has_sound_engineer) AS has_sound_engineer,
+                    COALESCE(g.ovr_sound_engineer_details, v.sound_engineer_details) AS sound_engineer_details,
+                    COALESCE(g.ovr_has_lighting, v.has_lighting) AS has_lighting,
+                    COALESCE(g.ovr_lighting_description, v.lighting_description) AS lighting_description,
+                    COALESCE(g.ovr_load_in_out_details, v.load_in_out_details) AS load_in_out_details,
+                    COALESCE(g.ovr_arrival_time_type, v.arrival_time_type) AS arrival_time_type,
+                    COALESCE(g.ovr_arrival_no_earlier_than_hour, v.arrival_no_earlier_than_hour) AS arrival_no_earlier_than_hour,
+                    COALESCE(g.ovr_arrival_no_earlier_than_period, v.arrival_no_earlier_than_period) AS arrival_no_earlier_than_period,
+                    COALESCE(g.ovr_bar_tab_details, v.bar_tab_details) AS bar_tab_details,
+                    COALESCE(g.ovr_food_tab_details, v.food_tab_details) AS food_tab_details,
                     COALESCE(a.name,
                         (SELECT a2.name FROM artists a2
                          JOIN gig_contracts gc2 ON gc2.artist_id = a2.id
@@ -1693,6 +1752,26 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                     -- column the frontend can't tell held gigs apart.
                     g.hold_status,
                     g.hold_offer_window_hours,
+                    -- Raw overrides alongside the resolved values: the venue's
+                    -- edit panel needs to know which fields this gig actually
+                    -- overrides, which the resolved value cannot tell it (an
+                    -- override that matches the default looks identical).
+                    g.ovr_has_stage,
+                    g.ovr_stage_width_ft,
+                    g.ovr_stage_depth_ft,
+                    g.ovr_setup_location_description,
+                    g.ovr_has_sound_equipment,
+                    g.ovr_sound_equipment_description,
+                    g.ovr_has_sound_engineer,
+                    g.ovr_sound_engineer_details,
+                    g.ovr_has_lighting,
+                    g.ovr_lighting_description,
+                    g.ovr_load_in_out_details,
+                    g.ovr_arrival_time_type,
+                    g.ovr_arrival_no_earlier_than_hour,
+                    g.ovr_arrival_no_earlier_than_period,
+                    g.ovr_bar_tab_details,
+                    g.ovr_food_tab_details,
                     CASE WHEN g.radius_blast_token IS NOT NULL AND g.status = 'open' THEN 1 ELSE 0 END as is_blast_open,
                     COALESCE(g.frequency_exempt, 0) as frequency_exempt,
                     -- has_active_waitlist drives the old 'WAITLIST IN PROGRESS'
@@ -3908,6 +3987,12 @@ def update_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=Depen
                 {"gid": gig_id, "st": times[0], "et": times[1], "pay": (times[2] if times[2] is not None else 0)}
             )
 
+    # Spec overrides for this gig. Sent only when the venue actually changed
+    # one, and an explicit null returns the field to the venue default — a
+    # venue has to be able to undo an override, not just set one.
+    from backend.services.gig_spec import save_overrides as _save_spec
+    _save_spec(db, gig_id, data)
+
     db.commit()
     return {"ok": True}
 
@@ -4136,6 +4221,12 @@ def booked_edit_gig(gig_id: int, data: dict, user=Depends(get_current_user), db=
     except Exception as _rce:
         logger.warning(f"[booked_edit_gig] fee recompute failed for gig {gig_id}: {_rce}")
 
+    # A venue can decide to bring the PA after a gig is booked; the artist
+    # still needs to see it. Same resolution path, so search, the gig
+    # modal and the contract all agree.
+    from backend.services.gig_spec import save_overrides as _save_spec
+    _save_spec(db, gig_id, data)
+
     db.commit()
 
     # Notify all booked artists that the gig has been edited
@@ -4313,6 +4404,14 @@ def update_recurring_series(venue_id: int, recurring_group_id: str, data: dict, 
     ).mappings().all()
     
     existing_dates = {g['date']: {'id': g['id'], 'status': g['status']} for g in existing_gigs}
+
+    # Spec overrides apply to every future occurrence in the series, which is
+    # what "we're bringing the PA for this residency" means. Past gigs are
+    # already excluded by the `date >= :from_date` filter above — rewriting
+    # the spec on a gig that has happened would change what it said after the
+    # fact, including on a signed contract.
+    from backend.services.gig_spec import save_overrides as _save_spec
+    _save_spec(db, [g['id'] for g in existing_gigs], data)
     
     # 2. Calculate target dates ONLY if recurring schedule settings were provided
     # If days_of_week is empty/null, skip add/delete — just update field values
@@ -7063,14 +7162,31 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
     logger.info(f"[BLAST] Template loaded: subject={tpl['subject'][:60]}")
 
     # Fetch venue detail vars for template
+    # Resolved for THIS gig, not the venue's standing answer — the blast is
+    # how artists decide whether to apply, so advertising a PA the venue is
+    # not bringing (or hiding one it is) lands on the night.
     _vd = db.execute(text("""
-        SELECT venue_size, address_line_1, address_line_2, city, state, postal_code,
-               has_stage, stage_width_ft, stage_depth_ft, setup_location_description,
-               has_sound_equipment, sound_equipment_description, has_sound_engineer, sound_engineer_details,
-               has_lighting, lighting_description, arrival_time_type, arrival_no_earlier_than_hour,
-               arrival_no_earlier_than_period, bar_tab_details, food_tab_details
-        FROM venues WHERE id = :vid
-    """), {"vid": venue_id}).mappings().first() or {}
+        SELECT v.venue_size, v.address_line_1, v.address_line_2, v.city, v.state, v.postal_code,
+               COALESCE(g.ovr_has_stage, v.has_stage) AS has_stage,
+               COALESCE(g.ovr_stage_width_ft, v.stage_width_ft) AS stage_width_ft,
+               COALESCE(g.ovr_stage_depth_ft, v.stage_depth_ft) AS stage_depth_ft,
+               COALESCE(g.ovr_setup_location_description, v.setup_location_description) AS setup_location_description,
+               COALESCE(g.ovr_has_sound_equipment, v.has_sound_equipment) AS has_sound_equipment,
+               COALESCE(g.ovr_sound_equipment_description, v.sound_equipment_description) AS sound_equipment_description,
+               COALESCE(g.ovr_has_sound_engineer, v.has_sound_engineer) AS has_sound_engineer,
+               COALESCE(g.ovr_sound_engineer_details, v.sound_engineer_details) AS sound_engineer_details,
+               COALESCE(g.ovr_has_lighting, v.has_lighting) AS has_lighting,
+               COALESCE(g.ovr_lighting_description, v.lighting_description) AS lighting_description,
+               COALESCE(g.ovr_load_in_out_details, v.load_in_out_details) AS load_in_out_details,
+               COALESCE(g.ovr_arrival_time_type, v.arrival_time_type) AS arrival_time_type,
+               COALESCE(g.ovr_arrival_no_earlier_than_hour, v.arrival_no_earlier_than_hour) AS arrival_no_earlier_than_hour,
+               COALESCE(g.ovr_arrival_no_earlier_than_period, v.arrival_no_earlier_than_period) AS arrival_no_earlier_than_period,
+               COALESCE(g.ovr_bar_tab_details, v.bar_tab_details) AS bar_tab_details,
+               COALESCE(g.ovr_food_tab_details, v.food_tab_details) AS food_tab_details
+        FROM venues v
+        JOIN gigs g ON g.id = :gig_for_spec
+        WHERE v.id = :vid
+    """), {"vid": venue_id, "gig_for_spec": gig_id}).mappings().first() or {}
 
     # Fetch venue detail vars using shared helper
     from backend.services.email_dispatch import _fetch_venue_detail_vars, format_email_date

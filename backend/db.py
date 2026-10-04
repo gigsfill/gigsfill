@@ -693,6 +693,38 @@ def setup_database():
             FOREIGN KEY (artist_id) REFERENCES artists(id)
         )
     """)
+    # ── Per-gig overrides of the venue's room spec (2026-10-07) ───────────
+    # NULL means "inherit the venue default", which is the overwhelmingly
+    # common case, so existing rows need no backfill.
+    #
+    # Prefixed `ovr_` rather than reusing the venue column names. Several
+    # queries already do `SELECT g.*, v.has_stage, v.has_sound_equipment ...`;
+    # same-named columns on both sides would silently collide in the row dict
+    # and whichever came last would win — a bug that would look like the
+    # override randomly working or not.
+    #
+    # Reads must go through services/gig_spec.py, never read the venue column
+    # directly, or an overridden gig keeps advertising the venue default. That
+    # matters most in artist search, which filters on these fields.
+    _add_columns(cursor, "gigs", [
+        "ovr_has_stage INTEGER",
+        "ovr_stage_width_ft REAL",
+        "ovr_stage_depth_ft REAL",
+        "ovr_setup_location_description TEXT",
+        "ovr_has_sound_equipment INTEGER",
+        "ovr_sound_equipment_description TEXT",
+        "ovr_has_sound_engineer INTEGER",
+        "ovr_sound_engineer_details TEXT",
+        "ovr_has_lighting INTEGER",
+        "ovr_lighting_description TEXT",
+        "ovr_load_in_out_details TEXT",
+        "ovr_arrival_time_type TEXT",
+        "ovr_arrival_no_earlier_than_hour TEXT",
+        "ovr_arrival_no_earlier_than_period TEXT",
+        "ovr_bar_tab_details TEXT",
+        "ovr_food_tab_details TEXT",
+    ])
+
     _add_columns(cursor, "gigs", [
         "title VARCHAR",
         "pay INTEGER",

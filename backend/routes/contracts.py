@@ -248,6 +248,15 @@ def generate_auto_contract(db, gig_id: int, venue_id: int, artist_id: int, slot_
         """),
         {"vid": venue_id}
     ).mappings().first()
+    # Overlay this gig's spec overrides (2026-10-07). The terms below say
+    # either "Sound equipment provided" or "Performer shall provide their own
+    # sound equipment"; using the venue's standing answer would put the wrong
+    # obligation into a document someone signs. preview_auto_contract is
+    # deliberately NOT overlaid — it previews the venue's standard contract and
+    # has no gig.
+    if venue is not None:
+        from backend.services.gig_spec import apply_to_venue
+        venue = apply_to_venue(db, gig_id, venue)
     
     # Get artist data
     artist = db.execute(
