@@ -49,6 +49,37 @@ ARTIST_EMAIL_DEBOUNCE_DAYS = 7
 AUTO_SUSPEND_THRESHOLD_DAYS = 30
 
 
+def _artist_recipients(conn, artist_id):
+    """Every user on the artist with an email address.
+
+    2026-10-09: these used to go to the owner alone. A band member cannot fix
+    the owner's Stripe account, but they can see that payouts are blocked and
+    chase whoever can — and each has their own email_preferences row to
+    silence it if they would rather not know.
+    """
+    rows = conn.execute(
+        """SELECT u.id, u.email FROM users u
+           WHERE u.email IS NOT NULL AND TRIM(u.email) != '' AND u.id IN (
+               SELECT user_id FROM artists WHERE id = ? AND user_id IS NOT NULL
+               UNION
+               SELECT user_id FROM entity_users
+               WHERE entity_type = 'artist' AND entity_id = ?
+           )""",
+        (artist_id, artist_id)
+    ).fetchall()
+    out = []
+    for uid, email in rows:
+        pref = conn.execute(
+            "SELECT enabled FROM email_preferences WHERE user_id = ? "
+            "AND notification_type = 'connect_account_issue'",
+            (uid,)
+        ).fetchone()
+        if pref and pref[0] == 0:
+            continue
+        out.append(email)
+    return out
+
+
 def _get_or_create_onboarding_url_for_artist(conn, artist_id: int) -> Optional[str]:
     """Return https://gigsfill.com/api/stripe/onboarding/<token> for
     this artist, minting + storing the token if missing. Used by
@@ -327,7 +358,8 @@ Complete account setup</a></p>
 <p>This link opens Stripe's secure form. We don't see or store any of the
 information you submit there — it goes directly to Stripe.</p>
 <p>— The GigsFill team</p>"""
-        if send_email(smtp, artist_email, subj, body):
+        _recips = _artist_recipients(conn, artist_id) or ([artist_email] if artist_email else [])
+        if any(send_email(smtp, _to, subj, body) for _to in _recips):
             conn.execute(
                 "UPDATE connect_account_health SET artist_emailed_at = CURRENT_TIMESTAMP "
                 "WHERE artist_id = ?",
@@ -462,7 +494,8 @@ Complete account setup now</a></p>
 reinstated. No action needed from us. If you're stuck, reply to this
 email and we'll help.</p>
 <p>— The GigsFill team</p>"""
-                send_email(smtp, artist_email, subj, body)
+                for _to in (_artist_recipients(conn, artist_id) or [artist_email]):
+                    send_email(smtp, _to, subj, body)
             except Exception as ee:
                 logger.warning(f"[AUTO_SUSPEND] final-warning email failed for artist={artist_id}: {ee}")
 

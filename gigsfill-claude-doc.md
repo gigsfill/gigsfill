@@ -8,6 +8,20 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-09c (All artist users now get all artist emails):** Audited who actually receives each artist-addressed email. Booking, cancellation, gig-edited, hold offers and payouts already resolved **all** users via `get_all_entity_users`. Three paths did not, and went to the owner alone:
+
+  - `scheduler.process_gig_confirmation` — the gig-confirmation reminder
+  - `scheduler.process_open_gig_notifications` — the open-gig blast to preferred artists
+  - `services/connect_health.py` — Stripe Connect account warnings
+
+  All three now resolve owner + `entity_users`. The deciding argument is that **each user has their own `email_preferences` row**: the right default is that everyone sees everything and silences it individually, rather than the platform deciding for them. A member cannot fix the owner's Stripe account, but they can see payouts are blocked and chase whoever can.
+
+  **The preference check moved inside the per-recipient loop.** Left where it was, it read the owner's row and applied that answer to everyone — one member opting out would have silenced the rest. The blast skips an artist only when **nobody** on it wants the email, which also preserves the `BLAST_OFF_DEFAULTS` opt-in behaviour per user. Blank and null emails are filtered, and the health warning falls back to the owner if the membership lookup returns nothing.
+
+  Volume note: artist 1 has four users, so these emails now go to four addresses instead of one.
+
+  **A near-miss while auditing.** I first tried dry-running `send_booking_emails` with the mailer stubbed; the stub did not intercept, because the function imports its sender locally, so it attempted **real SMTP to real member addresses**. Nothing went out only because that shell has no mail credentials and the connection timed out. Live dispatch is not a safe way to inspect recipients — the rest of the audit was static.
+
 - **2026-10-09b (Booking-calendar marks: red for everyone, and hover text):** The per-member hues on the artist booking calendar became a single red, matching "cannot play" everywhere else — on that calendar the question is "can we take this gig", not "which member". The band calendar keeps its per-member colours, where telling members apart is the point.
 
   **The red did not apply at first.** `artist-book-gigs.html` carries a blanket `.calendar > * * { background: transparent !important }`, and its own comment a few hundred lines above warns that this "nukes the gradient background → invisible text". The chips had been fine only because the previous version set an inline `style.background`, which outranked it; dropping that for a stylesheet rule left them transparent with white text. Matched the `!important`.

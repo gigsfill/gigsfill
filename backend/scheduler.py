@@ -468,27 +468,28 @@ def process_gig_confirmation(cursor, smtp_config):
         for gig in gigs:
             gig_id, date, start_time, end_time, pay, gig_notes, artist_id, venue_name = gig
 
-            # Get artist info
-            cursor.execute("""
-                SELECT a.name, u.email, u.id as user_id
-                FROM artists a
-                JOIN users u ON u.id = a.user_id
-                WHERE a.id = ?
-            """, (artist_id,))
-            artist = cursor.fetchone()
-            if not artist:
+            # Every user on the artist, not just the owner (2026-10-09). Any
+            # member may be the one actually playing, and each has their own
+            # email_preferences row, so the right default is that everyone sees
+            # it and silences it individually.
+            cursor.execute("SELECT a.name FROM artists a WHERE a.id = ?", (artist_id,))
+            _a = cursor.fetchone()
+            if not _a:
                 continue
+            artist_name = _a[0]
 
-            artist_name, artist_email, user_id = artist
-
-            # Check if artist has email notifications enabled
             cursor.execute("""
-                SELECT enabled FROM email_preferences
-                WHERE user_id = ? AND notification_type = 'venue_gig_confirmation_reminder'
-            """, (user_id,))
-            pref = cursor.fetchone()
-            if pref and pref[0] == 0:
-                continue  # Artist disabled this notification
+                SELECT u.id, u.email FROM users u
+                WHERE u.email IS NOT NULL AND TRIM(u.email) != '' AND u.id IN (
+                    SELECT user_id FROM artists WHERE id = ? AND user_id IS NOT NULL
+                    UNION
+                    SELECT user_id FROM entity_users
+                    WHERE entity_type = 'artist' AND entity_id = ?
+                )
+            """, (artist_id, artist_id))
+            _recipients = cursor.fetchall()
+            if not _recipients:
+                continue
 
             venue_vars = _build_venue_detail_vars(cursor, venue_id, gig_notes=gig_notes)
             # BUG FIX (Jul 2026 audit): format pay to two decimals matching
@@ -515,7 +516,20 @@ def process_gig_confirmation(cursor, smtp_config):
             subject = render_template(template['subject'], variables)
             body = render_template(template['body'], variables)
 
-            if send_email(smtp_config, artist_email, subject, body):
+            # Per recipient, so one member opting out does not silence the
+            # rest — the preference is read from each user's own row.
+            _sent_any = False
+            for _uid, _uemail in _recipients:
+                cursor.execute("""
+                    SELECT enabled FROM email_preferences
+                    WHERE user_id = ? AND notification_type = 'venue_gig_confirmation_reminder'
+                """, (_uid,))
+                _p = cursor.fetchone()
+                if _p and _p[0] == 0:
+                    continue
+                if send_email(smtp_config, _uemail, subject, body):
+                    _sent_any = True
+            if _sent_any:
                 # 2026-08-08 audit fix (finding #13): key on per-artist
                 # notification_key so the SELECT above correctly excludes
                 # only THIS artist's already-sent reminder for THIS gig.
@@ -931,19 +945,37 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
             notified_user_ids = {p[3] for p in preferred}
 
             for a_id, artist_name, artist_email, user_id in preferred:
+                # 2026-10-09: every user on the artist, not just the owner.
+                # Any of them may be the one who books, and each has their own
+                # email_preferences row — so the decision is made per user and
+                # the artist is skipped only when nobody wants it.
                 cursor.execute("""
-                    SELECT enabled FROM email_preferences
-                    WHERE user_id = ? AND notification_type = ?
-                """, (user_id, template_key))
-                pref = cursor.fetchone()
-                if pref is not None:
-                    if pref[0] == 0:
+                    SELECT u.id, u.email FROM users u
+                    WHERE u.email IS NOT NULL AND TRIM(u.email) != '' AND u.id IN (
+                        SELECT user_id FROM artists WHERE id = ? AND user_id IS NOT NULL
+                        UNION
+                        SELECT user_id FROM entity_users
+                        WHERE entity_type = 'artist' AND entity_id = ?
+                    )
+                """, (a_id, a_id))
+                _recips = []
+                for _uid, _uemail in cursor.fetchall():
+                    cursor.execute("""
+                        SELECT enabled FROM email_preferences
+                        WHERE user_id = ? AND notification_type = ?
+                    """, (_uid, template_key))
+                    pref = cursor.fetchone()
+                    if pref is not None:
+                        if pref[0] == 0:
+                            continue
+                    elif template_key in BLAST_OFF_DEFAULTS:
+                        # Default OFF — must explicitly opt in. Currently only
+                        # _4w and _2w (long-lead-time blasts) are in this set;
+                        # _1w, _36h and cancellation blasts default ON. See
+                        # backend/email_service.py for the canonical list.
                         continue
-                elif template_key in BLAST_OFF_DEFAULTS:
-                    # Default OFF — artist must explicitly opt in. Currently only
-                    # _4w and _2w (long-lead-time blasts) are in this set; _1w,
-                    # _36h, and cancellation blasts default ON. See
-                    # backend/email_service.py for the canonical list.
+                    _recips.append((_uid, _uemail))
+                if not _recips:
                     continue
                 # Look up pay override for this preferred artist
                 ov_row = cursor.execute(
@@ -986,7 +1018,11 @@ def process_open_gig_notifications(cursor, smtp_config, notification_key):
                 else:
                     subject = render_template(template['subject'], variables)
                     body    = render_template(template['body'], variables)
-                    if send_email(smtp_config, artist_email, subject, body):
+                    _ok = False
+                    for _uid, _uemail in _recips:
+                        if send_email(smtp_config, _uemail, subject, body):
+                            _ok = True
+                    if _ok:
                         sent_count += 1
                         notified_user_ids.add(user_id)
 
