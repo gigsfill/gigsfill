@@ -359,8 +359,14 @@ def record_ach_pending_verification(venue_id: int, data: dict,
     if not setup_intent_id:
         raise HTTPException(400, "setup_intent_id required")
 
-    if not check_venue_access(db, user, venue_id):
-        raise HTTPException(403, "Not your venue")
+    # check_venue_access is (db, venue_id, user_id) and RAISES 403 — it does
+    # not return a bool. These three ACH endpoints had it as
+    # `if not check_venue_access(db, user, venue_id)`: wrong argument order,
+    # wrong usage, and the name was never imported into this module at all, so
+    # every one of them raised NameError on the first line. ACH venue setup
+    # could never have worked.
+    from backend.utils import check_venue_access
+    check_venue_access(db, venue_id, user.id)
 
     stripe_mod, _keys = init_stripe(db)
     try:
@@ -384,17 +390,24 @@ def record_ach_pending_verification(venue_id: int, data: dict,
     if isinstance(pm, dict):
         last4 = ((pm.get("us_bank_account") or {}).get("last4") or "")
 
+    # Which of the two flows Stripe picked. The form has to ask for the right
+    # thing — two dollar amounts, or a 6-character descriptor code — and
+    # guessing wrong means the venue cannot complete setup.
+    md_type = (next_action.get("verify_with_microdeposits") or {}).get(
+        "microdeposit_type") or ""
+
     db.execute(
         text("""
             UPDATE entity_payment_settings
             SET ach_pending_setup_intent_id = :sid,
                 ach_pending_verification_url = :url,
                 ach_pending_bank_last4 = :last4,
+                ach_pending_microdeposit_type = :mdt,
                 updated_at = :now
             WHERE entity_type = 'venue' AND entity_id = :vid
         """),
         {"sid": setup_intent_id, "url": hosted_url, "last4": last4,
-         "vid": venue_id, "now": utcnow_naive()},
+         "mdt": md_type, "vid": venue_id, "now": utcnow_naive()},
     )
     db.commit()
     logger.info(f"Venue {venue_id}: ACH awaiting microdeposit verification ({setup_intent_id})")
@@ -407,11 +420,17 @@ def record_ach_pending_verification(venue_id: int, data: dict,
 def get_ach_pending_verification(venue_id: int,
                                  user=Depends(get_current_user), db=Depends(get_db)):
     """Whether this venue has a bank account still awaiting microdeposits."""
-    if not check_venue_access(db, user, venue_id):
-        raise HTTPException(403, "Not your venue")
+    # check_venue_access is (db, venue_id, user_id) and RAISES 403 — it does
+    # not return a bool. These three ACH endpoints had it as
+    # `if not check_venue_access(db, user, venue_id)`: wrong argument order,
+    # wrong usage, and the name was never imported into this module at all, so
+    # every one of them raised NameError on the first line. ACH venue setup
+    # could never have worked.
+    from backend.utils import check_venue_access
+    check_venue_access(db, venue_id, user.id)
     row = db.execute(
         text("""SELECT ach_pending_setup_intent_id, ach_pending_verification_url,
-                       ach_pending_bank_last4
+                       ach_pending_bank_last4, ach_pending_microdeposit_type
                 FROM entity_payment_settings
                 WHERE entity_type = 'venue' AND entity_id = :vid"""),
         {"vid": venue_id},
@@ -422,7 +441,110 @@ def get_ach_pending_verification(venue_id: int,
         "pending": True,
         "verification_url": row.get("ach_pending_verification_url") or "",
         "bank_last4": row.get("ach_pending_bank_last4") or "",
+        # "amounts" | "descriptor_code" | "" when an older row predates this.
+        "microdeposit_type": row.get("ach_pending_microdeposit_type") or "",
     }
+
+
+@router.post("/api/stripe/venue/{venue_id}/ach-verify")
+def verify_ach_microdeposits(venue_id: int, data: dict,
+                             user=Depends(get_current_user), db=Depends(get_db)):
+    """Submit the microdeposit verification and finish bank setup.
+
+    This was the missing step. A venue could start ACH setup and get parked in
+    `requires_action`, but nothing in the app could complete it — the only way
+    through was Stripe's hosted page, which we stored a link to and never
+    showed. A venue that picked bank payment simply could not pay.
+
+    Accepts either variant:
+      amounts         — two deposit values in CENTS, e.g. [32, 45]
+      descriptor_code — the 6-character code on a single $0.01 deposit
+
+    On success the SetupIntent moves to `succeeded` and the existing
+    `setup_intent.succeeded` webhook promotes the bank account to the venue's
+    payment method, so there is deliberately no duplicate of that logic here.
+    """
+    # check_venue_access is (db, venue_id, user_id) and RAISES 403 — it does
+    # not return a bool. These three ACH endpoints had it as
+    # `if not check_venue_access(db, user, venue_id)`: wrong argument order,
+    # wrong usage, and the name was never imported into this module at all, so
+    # every one of them raised NameError on the first line. ACH venue setup
+    # could never have worked.
+    from backend.utils import check_venue_access
+    check_venue_access(db, venue_id, user.id)
+
+    row = db.execute(
+        text("""SELECT ach_pending_setup_intent_id, ach_pending_microdeposit_type
+                FROM entity_payment_settings
+                WHERE entity_type = 'venue' AND entity_id = :vid"""),
+        {"vid": venue_id},
+    ).mappings().first()
+    sid = row and row.get("ach_pending_setup_intent_id")
+    if not sid:
+        raise HTTPException(400, "No bank account is awaiting verification.")
+
+    amounts = data.get("amounts")
+    code = (data.get("descriptor_code") or "").strip()
+
+    kwargs = {}
+    if amounts is not None:
+        if not isinstance(amounts, list) or len(amounts) != 2:
+            raise HTTPException(400, "Enter both deposit amounts.")
+        try:
+            # Cents. A venue typing "0.32" means 32 cents; accept both rather
+            # than failing on a reasonable reading of the form.
+            vals = []
+            for a in amounts:
+                n = float(a)
+                vals.append(int(round(n * 100)) if n < 1 else int(round(n)))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Amounts must be numbers.")
+        if any(v <= 0 or v > 99 for v in vals):
+            raise HTTPException(400, "Each amount should be between 1 and 99 cents.")
+        kwargs["amounts"] = vals
+    elif code:
+        kwargs["descriptor_code"] = code
+    else:
+        raise HTTPException(400, "Enter the deposit amounts or the descriptor code.")
+
+    # The module has no top-level `import stripe`; init_stripe() is how every
+    # other endpoint here gets a client with the API key already set, and it
+    # raises a clear 500 when Stripe is not configured rather than failing
+    # obscurely inside the call below.
+    stripe, _keys = init_stripe(db)
+    try:
+        si = stripe.SetupIntent.verify_microdeposits(sid, **kwargs)
+    except stripe.error.CardError as e:
+        raise HTTPException(400, str(getattr(e, "user_message", None) or e)[:200])
+    except stripe.error.InvalidRequestError as e:
+        # Stripe returns this for a wrong code or wrong amounts, and the
+        # message is the only thing that tells the venue how many tries remain.
+        raise HTTPException(400, str(getattr(e, "user_message", None) or e)[:200])
+    except Exception as e:
+        logger.exception("ACH verify failed for venue %s", venue_id)
+        raise HTTPException(400, f"Could not verify that: {str(e)[:160]}")
+
+    status = (si.get("status") if isinstance(si, dict) else getattr(si, "status", "")) or ""
+    if status != "succeeded":
+        # Still pending is not an error the venue caused; say what it is.
+        return {"ok": False, "status": status,
+                "message": "Stripe is still processing that. Try again shortly."}
+
+    # Clear the parked state. The webhook attaches the payment method; if it
+    # has not arrived yet the venue's card panel simply refreshes a moment
+    # later, which is better than writing the same row from two places.
+    db.execute(
+        text("""UPDATE entity_payment_settings
+                SET ach_pending_setup_intent_id = NULL,
+                    ach_pending_verification_url = NULL,
+                    ach_pending_microdeposit_type = NULL,
+                    updated_at = :now
+                WHERE entity_type = 'venue' AND entity_id = :vid"""),
+        {"vid": venue_id, "now": utcnow_naive()},
+    )
+    db.commit()
+    logger.info("Venue %s: ACH microdeposits verified (%s)", venue_id, sid)
+    return {"ok": True, "status": "succeeded"}
 
 
 @router.get("/api/stripe/venue/{venue_id}/payment-method")

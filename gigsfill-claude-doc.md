@@ -8,6 +8,20 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-08d (ACH bank setup could never be completed — three bugs):** A venue choosing bank payment got parked in Stripe's `requires_action` state with no way out. Fixing it surfaced that the feature had never worked at all.
+
+  1. **No verification step existed.** Stripe parks the SetupIntent until the venue confirms microdeposits; the app stored the hosted-page URL and never showed it, and had no endpoint of its own. New `POST /api/stripe/venue/{id}/ach-verify` handles **both** Stripe variants — `amounts` (two deposit values) and `descriptor_code` (a 6-character code on one $0.01 deposit) — which required storing `ach_pending_microdeposit_type`, since asking for the wrong one leaves the venue stuck. Amounts accept `0.32` or `32`; anything outside 1–99 cents is refused before reaching Stripe.
+
+  2. **`check_venue_access` was called wrongly in all three ACH endpoints.** It is `(db, venue_id, user_id)` and **raises**; they had `if not check_venue_access(db, user, venue_id)` — wrong order, treating a raising helper as a bool — and the name **was never imported into the module**. Every one raised `NameError` on its first line. So `record_ach_pending_verification` and `get_ach_pending_verification` were broken too, not just missing a successor.
+
+  3. **No `stripe` in scope.** The module has no top-level `import stripe`; endpoints use `init_stripe(db)`, which also sets the API key and raises a clear 500 when Stripe is unconfigured.
+
+  Deliberately does **not** attach the payment method — the existing `setup_intent.succeeded` webhook already promotes the bank account, and writing that row from two places invites drift.
+
+  UI: [ach-verify-panel.js](app/static/js/ach-verify-panel.js) renders at the top of the venue Payments tab, asks for the right variant, surfaces Stripe's own error text (the only thing that says how many attempts remain), and keeps the hosted Stripe page as a fallback for when the deposits never arrive. It hides itself when nothing is pending.
+
+  Verified against live Stripe: every validation branch returns the right 400, and a valid submission reaches Stripe and returns its genuine "No such setupintent" for a fabricated id. `tests/test_ach_verification.py`, 11 tests, two of which pin the scope bugs so a new endpoint here cannot repeat them.
+
 - **2026-10-08c (CSP parity restored; city autocomplete moved server-side):** Three of the standing items cleared.
 
   **nginx CSP synced to the app's.** The live policy allowed **0** of the 6 social hosts `main.py` allows, so Instagram, TikTok, Vimeo and Facebook embeds in the media lightbox had been blocked on every profile since July — artists upload a reel and visitors see nothing, with no error anywhere. The vhost's `set $CSP` is now copied verbatim from the app's own response header; backed up to `/root/nginx-gigsfill.bak.*`, `nginx -t` before `systemctl reload nginx`. Verified live: all 13 frame-src hosts present, site serving, no CSP refusals on a full profile load. `tests/test_csp_parity.py` now fails if a host exists in `main.py` but not the vhost — the drift was invisible precisely because tests hit `:8001`, which bypasses nginx.

@@ -1622,6 +1622,12 @@ def setup_database():
     """)
     
     _add_columns(cursor, "entity_payment_settings", [
+        # 2026-10-08: which microdeposit flow Stripe chose. Two variants exist
+        # — `amounts` (the venue types the two deposit values) and
+        # `descriptor_code` (a 6-character code on a single $0.01 deposit) —
+        # and the form has to ask for the right one. Without this stored, the
+        # venue was parked in a pending state with no way to finish.
+        "ach_pending_microdeposit_type TEXT",
         "stripe_customer_id VARCHAR",
         "stripe_payment_method_id VARCHAR",
         "stripe_connect_account_id VARCHAR",

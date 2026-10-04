@@ -2980,6 +2980,11 @@
 <!-- TAB: PAYMENTS -->
 <div class="tab-content" id="payments-tab">
 <section class="panel">
+  <!-- Bank setup still needing microdeposit verification (2026-10-08).
+       Rendered first because a venue parked here cannot pay at all until it
+       is cleared, and the panel hides itself when nothing is pending. -->
+  <div id="achVerifyPanel"></div>
+
   <!-- Stripe Card Notice -->
   <div style="margin-bottom: 16px; padding: 14px 18px; border-radius: 8px; background: rgba(99, 91, 255, 0.1); border: 1px solid rgba(99, 91, 255, 0.3); font-size: 0.8rem; line-height: 1.6; color: var(--text-gray); text-align: left;">
     <strong style="color: #635bff;">💳 How Payments Work:</strong> The artist is paid automatically the day after the gig is completed. The payment includes the Gig Pay plus a GigsFill service fee of <span id="venueFeePercent">…</span>%.
@@ -3991,6 +3996,7 @@
      around the legacy showAlert delegate confirmed it was already unreferenced. -->
 
 <script src="https://js.stripe.com/v3/" async></script>
+<script src="/app/static/js/ach-verify-panel.js?v=1" defer></script>
 <script src="/app/static/js/venue-stripe-payment.js?v=29" defer></script>
 <script src="/app/static/js/venue-payment-guard.js?v=2" defer></script>
 <script src="/app/static/js/onboarding-checklist.js?v=10" defer></script>
@@ -4097,6 +4103,17 @@
       .then(function (r) { return r.ok ? r.json() : {}; })
       .catch(function () { return {}; })
       .then(function (v) { window.gfGigSpec.mount({ venue: v || {} }); });
+  })();
+</script>
+<script>
+  // Mount the ACH verification prompt. It no-ops unless this venue has a bank
+  // setup parked in Stripe's requires_action state.
+  (function () {
+    var vid = new URLSearchParams(window.location.search).get("venue_id");
+    if (!vid) return;
+    function go() { if (window.gfAchVerify) window.gfAchVerify.mount("achVerifyPanel", vid); }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", go);
+    else go();
   })();
 </script>
 </body>
