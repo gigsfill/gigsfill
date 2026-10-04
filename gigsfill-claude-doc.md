@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-05b (Availability tab rendered empty — stale cache-buster):** The band calendar did not appear. `artist-book-gigs-init.js` was rewritten in `aa7a8cb` to mount it, but its `?v=15` was never bumped, and nginx serves `/app/` with `Cache-Control: public, max-age=86400`. Returning browsers kept the old copy for a day.
+
+  **Why it failed silently.** The old init guards with `if (typeof renderAvailabilityPanel === 'function')`, so nothing threw. It revealed `#availabilitySection` and then simply never called `gfBandCalendar.mount()` — an empty panel, no console error, nothing to grep for.
+
+  Bumped to `?v=16`, and removed the coupling that made it possible: **the calendar now self-mounts from markup**. `<div id="bandCalendar" data-gfbc-mode="band">` is enough; `band-calendar.js` picks it up on `DOMContentLoaded`, reads the artist id from `data-artist-id` or the query string, and un-hides the section itself. The init file still mounts it too and a `mounted` map makes whichever runs first win, so there is no double-mount. Verified in a browser with the init replaced by a stub that reveals the panel but never mounts: 31 cells, exactly 1 grid, in both cases.
+
+  **Standing hazard worth remembering:** `/app/` is cached for 24h including the HTML itself, so a markup change needs a hard refresh and cannot be cache-busted. Any JS edit must bump its `?v=`; a test now asserts the two files involved here carry one.
+
 - **2026-10-05 (Artist-level availability removed entirely):** The hard block is gone — table, endpoints, UI and all 12 enforcement sites. Member availability is now the only input, and everything else is derived from it.
 
   **Why it was the wrong shape.** An artist-level blackout refused bookings *and* pulled the band out of preferred-artist blasts, the open-gig digest and hold offers. For a band that is the wrong unit: a four-piece whose drummer is away is still a trio, and a trio without its bass player is still a duo. Suppressing the offer took the decision away from the people best placed to make it.

@@ -1878,7 +1878,9 @@
       &mdash; you get a warning naming who&rsquo;s out and can book anyway if the
       line-up still works.
     </p>
-    <div id="bandCalendar"></div>
+    <!-- data-* drives self-mounting; see band-calendar.js. The init file
+         also mounts it, and whichever runs first wins. -->
+    <div id="bandCalendar" data-gfbc-mode="band"></div>
   </div>
 
 </section>
@@ -2691,9 +2693,9 @@
 <script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/artist-booked-gigs-modal.js?v=3"></script>
-<script src="/app/static/js/band-calendar.js?v=4"></script>
+<script src="/app/static/js/band-calendar.js?v=5"></script>
 <script src="/app/static/js/artist-external-gigs.js?v=22"></script>
-<script src="/app/static/js/artist-book-gigs-init.js?v=15"></script>
+<script src="/app/static/js/artist-book-gigs-init.js?v=16"></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
 <script src="/app/static/js/maintenance-banner.js"></script>
 <script src="/app/static/js/gig-hover-card.js?v=23"></script>

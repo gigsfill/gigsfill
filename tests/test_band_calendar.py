@@ -221,3 +221,36 @@ def test_the_digest_names_who_is_away():
     src = (ROOT / "backend" / "services" / "open_gig_digest.py").read_text()
     assert "members_off_by_date" in src
     assert "Away:" in src
+
+
+def test_the_calendar_mounts_itself_from_markup():
+    """It used to appear only if a separate page-init file called mount().
+    When that file was rewritten without a new cache-buster, browsers kept the
+    old copy — which still revealed the panel but never mounted anything, so
+    the tab rendered empty with no error at all. The element that needs a
+    calendar now says so itself."""
+    js = JS.read_text()
+    assert "data-gfbc-mode" in js and "function autoMount" in js
+    assert "DOMContentLoaded" in js
+    for page, mode in (("artist-book-gigs.html", "band"), ("user-profile.html", "me")):
+        html = (ROOT / "app" / page).read_text()
+        assert f'data-gfbc-mode="{mode}"' in html, page
+
+
+def test_two_callers_cannot_double_mount():
+    """Markup and the init file both mount it; whichever runs first wins."""
+    js = JS.read_text()
+    fn = js[js.index("window.gfBandCalendar = {"):][:600]
+    assert "mounted[key]" in fn
+
+
+def test_edited_page_scripts_carry_a_cache_buster():
+    """nginx serves /app/ with max-age=86400, so an edited file with an
+    unchanged ?v= is invisible to every returning browser for a day."""
+    import re
+    for page in ("artist-book-gigs.html", "user-profile.html"):
+        html = (ROOT / "app" / page).read_text()
+        for src in re.findall(r'<script src="/app/static/js/([^"]+)"', html):
+            name = src.split("?")[0]
+            if name in ("band-calendar.js", "artist-book-gigs-init.js"):
+                assert "?v=" in src, f"{page}: {name} has no cache-buster"

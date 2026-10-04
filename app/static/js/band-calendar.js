@@ -375,13 +375,44 @@
 
   };
 
+  var mounted = {};   // element id -> Cal, so two callers cannot double-mount
+
   window.gfBandCalendar = {
     mount: function (opts) {
       if (!opts || !opts.el) return null;
+      var key = typeof opts.el === "string" ? opts.el : (opts.el.id || "");
+      if (key && mounted[key]) return mounted[key];
       var c = new Cal(opts);
       if (!c.root) return null;
+      if (key) mounted[key] = c;
       c.load();
       return c;
     }
   };
+
+  // Self-mount from markup. The calendar used to appear only if a separate
+  // page-init file called mount(), and when that file was rewritten without a
+  // new cache-buster, browsers kept the old copy: it still revealed the panel
+  // but never mounted anything, so the tab rendered empty with no error. This
+  // removes the dependency — the element that needs a calendar says so itself.
+  function autoMount() {
+    document.querySelectorAll("[data-gfbc-mode]").forEach(function (el) {
+      var mode = el.getAttribute("data-gfbc-mode");
+      var opts = { el: el.id || el, mode: mode };
+      if (mode === "band") {
+        var aid = el.getAttribute("data-artist-id") ||
+                  new URLSearchParams(window.location.search).get("artist_id");
+        if (!aid) return;                       // nothing to show a calendar for
+        opts.artistId = parseInt(aid, 10);
+        var section = document.getElementById("availabilitySection");
+        if (section && section.style.display === "none") section.style.display = "";
+      }
+      window.gfBandCalendar.mount(opts);
+    });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", autoMount);
+  } else {
+    autoMount();
+  }
 })();
