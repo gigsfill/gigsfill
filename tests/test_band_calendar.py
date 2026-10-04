@@ -314,9 +314,14 @@ def test_the_sheet_is_not_parented_to_the_redrawn_grid():
 def test_both_calendars_offer_the_list():
     js = JS.read_text()
     assert 'data-list="1"' in js and ">All dates<" in js
-    # Available in both modes: the button lives in the shared header.
-    hdr = js[js.index("var legend"):js.index("this.root.innerHTML")]
-    assert "data-list" not in hdr, "button should not be mode-gated"
+    # Available in both modes: it is emitted in the shared header markup, not
+    # inside a `this.o.mode === "band"` branch.
+    # Bound to the innerHTML construction — the CSS block above it also
+    # mentions these class names, so searching the whole file slices backwards.
+    tpl = js[js.index("this.root.innerHTML ="):]
+    tpl = tpl[:tpl.index('"</div>";') if '"</div>";' in tpl[:4000] else 4000]
+    assert "data-list" in tpl, "button is not in the shared header markup"
+    assert 'mode === "band"' not in tpl, "button is mode-gated"
 
 
 def test_the_list_uses_columns_not_a_flex_row():

@@ -103,9 +103,6 @@
       ".gfbc-dot { width:16px; height:16px; border-radius:4px; font-size:0.52rem; font-weight:700;",
       "  display:flex; align-items:center; justify-content:center; color:#0b0f17; letter-spacing:-0.02em; }",
       ".gfbc-more { font-size:0.56rem; color:var(--text-gray); align-self:center; }",
-      ".gfbc-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:0.72rem; color:var(--text-gray); }",
-      ".gfbc-legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px;",
-      "  vertical-align:-1px; }",
       ".gfbc-detail { margin-top:12px; padding:11px 13px; border:1px solid var(--border); border-radius:8px;",
       "  background:rgba(255,255,255,0.02); font-size:0.82rem; }",
       ".gfbc-detail h4 { margin:0 0 7px; font-size:0.82rem; color:var(--text); font-weight:700; }",
@@ -270,10 +267,11 @@
                "</button>";
     }
 
-    var legend = this.o.mode === "band"
-      ? '<span><i style="background:rgba(245,158,11,0.6)"></i>You are off</span>' +
-        '<span><i style="background:hsl(200,70%,62%)"></i>A member is off — booking still allowed</span>'
-      : '<span><i style="background:rgba(245,158,11,0.6)"></i>You are off</span>';
+    // Legend removed 2026-10-08. Its "a member is off" swatch was a fixed
+    // blue, but member squares are coloured per person via hueFor(), so no
+    // square was ever reliably that colour — it taught a code that did not
+    // exist. Its only real content, "booking still allowed", is already said
+    // in the paragraph above the calendar and again in the day panel.
 
     this.root.innerHTML =
       '<div class="gfbc">' +
@@ -288,7 +286,6 @@
         "</div>" +
         '<div class="gfbc-dow">' + DOW.map(function (x) { return "<span>" + x + "</span>"; }).join("") + "</div>" +
         '<div class="gfbc-grid">' + cells + "</div>" +
-        '<div class="gfbc-legend">' + legend + "</div>" +
         '<div class="gfbc-status">' + (this.err ? esc(this.err) : "") + "</div>" +
         '<div class="gfbc-detail" style="display:none;"></div>' +
       "</div>";
