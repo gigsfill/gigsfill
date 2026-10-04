@@ -6,7 +6,11 @@ domain) after a venue in Hermosa Beach could not finish signup: the hand-built
 validates.
 """
 
+from pathlib import Path
+
 from backend import us_cities
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_the_public_surface_is_intact():
@@ -80,3 +84,30 @@ def test_no_duplicate_city_state_pairs():
         k = (c["city"].lower(), c["state"])
         assert k not in seen, k
         seen.add(k)
+
+
+def test_the_autocomplete_does_not_download_the_whole_table():
+    """At 4,792 cities shipping the list was fine. At 32,306 it is 2.0MB raw /
+    428KB gzipped, paid by every visitor on every page with a city field — to
+    answer a handful of keystrokes. /api/cities/search already existed."""
+    js = (ROOT / "app" / "static" / "js" / "city-autocomplete.js").read_text()
+    code = "\n".join(l for l in js.splitlines() if not l.strip().startswith("//"))
+    assert "/api/cities/all" not in code
+    assert "/api/cities/search" in code
+
+
+def test_keystrokes_are_debounced_and_ordered():
+    """Without a debounce a fast typist fires one request per keystroke; without
+    a sequence guard an older reply can land last and show stale matches."""
+    js = (ROOT / "app" / "static" / "js" / "city-autocomplete.js").read_text()
+    fn = js[js.index("function searchRemote"):][:1400]
+    assert "clearTimeout(_timer)" in fn and "setTimeout(" in fn
+    assert "mine !== _seq" in fn, "no guard against out-of-order replies"
+    assert "_cache[key]" in fn, "backspacing re-queries the server"
+
+
+def test_a_reply_for_a_stale_query_is_dropped():
+    """The field can change or be picked while a reply is in flight."""
+    js = (ROOT / "app" / "static" / "js" / "city-autocomplete.js").read_text()
+    call = js[js.index("searchRemote(v, 8,"):][:400]
+    assert "self.value.trim() !== v" in call

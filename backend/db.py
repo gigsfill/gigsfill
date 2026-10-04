@@ -2648,19 +2648,11 @@ def setup_database():
     except Exception:
         pass
 
-    c4.execute("""
-        CREATE TABLE IF NOT EXISTS artist_availability (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            artist_id INTEGER NOT NULL,
-            blackout_start DATE NOT NULL,
-            blackout_end DATE NOT NULL,
-            reason TEXT DEFAULT '',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (artist_id) REFERENCES artists(id)
-        )
-    """)
-    c4.execute("CREATE INDEX IF NOT EXISTS idx_availability_artist ON artist_availability(artist_id)")
-    c4.execute("CREATE INDEX IF NOT EXISTS idx_availability_dates ON artist_availability(blackout_start, blackout_end)")
+    # artist_availability: retired 2026-10-05 when artist-level blackouts were
+    # removed. The table is kept (empty, unreferenced) rather than dropped —
+    # DROP TABLE is irreversible, the additive _add_columns pattern here has no
+    # story for removals, and an empty table costs nothing. Nothing reads or
+    # writes it; services/member_availability.py replaced it entirely.
 
     # Per-user member-level availability (May 21 2026). Sibling to
     # artist_availability — that's band-wide ("the band can't perform"),

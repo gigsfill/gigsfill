@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-08c (CSP parity restored; city autocomplete moved server-side):** Three of the standing items cleared.
+
+  **nginx CSP synced to the app's.** The live policy allowed **0** of the 6 social hosts `main.py` allows, so Instagram, TikTok, Vimeo and Facebook embeds in the media lightbox had been blocked on every profile since July — artists upload a reel and visitors see nothing, with no error anywhere. The vhost's `set $CSP` is now copied verbatim from the app's own response header; backed up to `/root/nginx-gigsfill.bak.*`, `nginx -t` before `systemctl reload nginx`. Verified live: all 13 frame-src hosts present, site serving, no CSP refusals on a full profile load. `tests/test_csp_parity.py` now fails if a host exists in `main.py` but not the vhost — the drift was invisible precisely because tests hit `:8001`, which bypasses nginx.
+
+  **City autocomplete queries the server.** It fetched `/api/cities/all` on every page load and filtered in the browser — fine at 4,792 cities, **2.0MB raw / 428KB gzipped** after the Census rebuild to 32,306, paid by every visitor on every page with a city field to answer a few keystrokes. It now calls the existing `/api/cities/search`, debounced 160ms with a sequence guard (an older reply landing last would show stale matches) and a per-query cache so backspacing is free. Measured: **0** calls to `/api/cities/all` on load, and five keystrokes produced **one** request. `artist.book-gigs.js` and `public-gigs.js` still fetch the full list for client-side radius filtering — they need the coordinates.
+
+  **`artist_availability` left in place, annotated.** Empty and unreferenced since 2026-10-05. Not dropped: `DROP TABLE` is irreversible, the additive `_add_columns` pattern has no story for removals, and an empty table costs nothing. The comment says so, so the next reader does not have to work it out.
+
 - **2026-10-08b (No modal closes on a backdrop click):** A venue opened Venue Gig Details, clicked outside it by mistake, and the modal vanished. The pattern was everywhere — **34 sites across 25 files** — and in a modal holding typed input or something being read mid-way, one stray click threw it away with no warning and no undo.
 
   Every one now ignores the backdrop. The listeners are **kept rather than deleted**: a backdrop click still has to be swallowed, or it falls through to whatever sits underneath, which is how a single misclick ended up dismissing two things at once.

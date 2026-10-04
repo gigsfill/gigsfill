@@ -12,46 +12,44 @@
   let _blockedInput = null;
   let _cityInvalid = false;
 
-  function loadCities() {
-    if (_cities) return Promise.resolve(_cities);
-    if (_loading) return _loading;
-    _loading = fetch("/api/cities/all")
-      .then(function(r) { return r.ok ? r.json() : []; })
-      .then(function(d) { _cities = d; return d; })
-      .catch(function() { _cities = []; return []; });
-    return _loading;
+  // 2026-10-08: queries the server instead of downloading the table.
+  //
+  // This used to fetch /api/cities/all on every page load and filter in the
+  // browser. That was fine at 4,792 cities; after the list was rebuilt from
+  // the Census it is 32,306, and the payload reached 2.0MB raw / 428KB
+  // gzipped — paid by every visitor on every page with a city field, which is
+  // most of them, to answer a handful of keystrokes.
+  //
+  // /api/cities/search already existed and does the same startsWith-then-
+  // contains ranking server-side against an index.
+  var _cache = {};          // query -> rows, so backspacing costs nothing
+  var _seq = 0;             // guards against an older reply landing last
+  var _timer = null;
+
+  function searchRemote(query, limit, cb) {
+    var q = String(query || "").toLowerCase().trim();
+    if (q.length < 2) { cb([]); return; }
+    var key = q + "|" + (limit || 8);
+    if (_cache[key]) { cb(_cache[key]); return; }
+
+    clearTimeout(_timer);
+    // Debounced: without it a fast typist fires one request per keystroke and
+    // the replies race each other.
+    _timer = setTimeout(function () {
+      var mine = ++_seq;
+      fetch("/api/cities/search?q=" + encodeURIComponent(q) + "&limit=" + (limit || 8),
+            { credentials: "include" })
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (rows) {
+          if (mine !== _seq) return;     // a newer query has since been sent
+          rows = Array.isArray(rows) ? rows : [];
+          _cache[key] = rows;
+          cb(rows);
+        })
+        .catch(function () { if (mine === _seq) cb([]); });
+    }, 160);
   }
 
-  loadCities();
-
-  function search(query, limit) {
-    limit = limit || 8;
-    if (!_cities || query.length < 1) return [];
-    var q = query.toLowerCase().trim();
-    var starts = [], contains = [];
-    for (var i = 0; i < _cities.length; i++) {
-      var n = _cities[i].city.toLowerCase();
-      if (n.startsWith(q)) starts.push(_cities[i]);
-      else if (n.includes(q)) contains.push(_cities[i]);
-      if (starts.length + contains.length >= limit * 3) break;
-    }
-    return starts.concat(contains).slice(0, limit);
-  }
-
-  window.validateCityName = async function(cityName, stateCode) {
-    var cities = await loadCities();
-    if (!cities || !cityName) return null;
-    var cn = cityName.trim().toLowerCase();
-    var sc = stateCode ? stateCode.trim().toUpperCase() : null;
-    for (var i = 0; i < cities.length; i++) {
-      if (cities[i].city.toLowerCase() === cn) {
-        if (!sc || cities[i].state === sc) return cities[i];
-      }
-    }
-    return null;
-  };
-
-  // ─── PAGE BLOCKING OVERLAY ───
   function showBlockOverlay(input) {
     if (_blockOverlay) return;
     _blockedInput = input;
@@ -376,12 +374,18 @@
       if (this._lastPickTime && (Date.now() - this._lastPickTime) < 300) return;
       var v = this.value.trim();
       if (v.length < 2) { dd.style.display = "none"; matches = []; idx = -1; return; }
-      matches = search(v);
-      idx = -1;
-      if (!matches.length) { dd.style.display = "none"; return; }
-      positionDD();
-      render();
-      dd.style.display = "block";
+      var self = this;
+      searchRemote(v, 8, function (rows) {
+        // The field may have changed or been picked while the reply was in
+        // flight; dropping a stale list beats showing one.
+        if (self.value.trim() !== v) return;
+        matches = rows;
+        idx = -1;
+        if (!matches.length) { dd.style.display = "none"; return; }
+        positionDD();
+        render();
+        dd.style.display = "block";
+      });
     });
 
     // Use capture phase to intercept before Chrome autofill can steal events
