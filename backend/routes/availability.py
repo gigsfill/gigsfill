@@ -92,158 +92,6 @@ def check_available(artist_id: int, check_date: str, db=Depends(get_db)):
 
 
 # ── ADD BLACKOUT RANGE ─────────────────────────────────────────────────────────
-@router.post("/api/artists/{artist_id}/availability")
-def add_blackout(artist_id: int, data: dict,
-                 user=Depends(get_current_user), db=Depends(get_db)):
-    """Add a blackout date range. Artist/team only.
-
-    Conflict detection (May 2026):
-      - BOOKED gigs in the range → 409 with conflict_type='booked' (always blocking;
-        artist must cancel the booking first).
-      - WAITLISTED gigs in the range → 409 with conflict_type='waitlist' UNLESS
-        `force=true` is set in the body. With force, the artist is removed from
-        those waitlists and the blackout is created.
-
-    The frontend sees the 409 with a structured payload and shows a confirmation
-    modal asking the user to keep waitlist (cancel blackout) or remove from
-    waitlist (proceed with blackout via force=true).
-    """
-    check_artist_access(db, artist_id, user.id)
-
-    start = _parse_date(data.get("blackout_start"))
-    end = _parse_date(data.get("blackout_end"))
-    reason = str(data.get("reason", "")).strip()[:200]
-    force = bool(data.get("force", False))
-
-    if end < start:
-        raise HTTPException(400, "End date must be on or after start date")
-    if (end - start).days > 365:
-        raise HTTPException(400, "Blackout range cannot exceed 1 year")
-
-    # ─── Check 1: Booked gigs (always blocking — never overridable) ───
-    # Jul 2026 refactor: dropped the `g.artist_id = :aid` OR-leg. Every
-    # gig has a `gig_slots` row now (backfill in db.setup_database), and
-    # `gigs.artist_id` was a duplicate of `gig_slots.artist_id` for
-    # single-slot gigs. Slot-only path handles both shapes.
-    booked_conflicts = db.execute(
-        text("""
-            SELECT DISTINCT g.id, g.date, g.title FROM gigs g
-            JOIN gig_slots gs ON gs.gig_id = g.id
-            WHERE g.status = 'booked'
-              AND date(g.date) BETWEEN date(:start) AND date(:end)
-              AND gs.artist_id = :aid
-              AND gs.status = 'booked'
-            ORDER BY g.date
-            LIMIT 5
-        """),
-        {"aid": artist_id, "start": str(start), "end": str(end)}
-    ).mappings().all()
-
-    if booked_conflicts:
-        conflict_list = ", ".join(f"{c['date']} ({c['title']})" for c in booked_conflicts)
-        raise HTTPException(
-            409,
-            f"You have existing bookings in this date range: {conflict_list}. "
-            f"Cancel those gigs before blocking this period."
-        )
-
-    # ─── Check 2: Waitlisted gigs (overridable with force=true) ───
-    waitlist_conflicts = db.execute(
-        text("""
-            SELECT DISTINCT g.id, g.date, g.title, v.venue_name
-            FROM gig_waitlist w
-            JOIN gigs g ON g.id = w.gig_id
-            LEFT JOIN venues v ON v.id = g.venue_id
-            WHERE w.artist_id = :aid
-              AND (w.offer_declined = 0 OR w.offer_declined IS NULL)
-              AND date(g.date) BETWEEN date(:start) AND date(:end)
-              AND g.status NOT IN ('cancelled', 'deleted')
-            ORDER BY g.date
-        """),
-        {"aid": artist_id, "start": str(start), "end": str(end)}
-    ).mappings().all()
-    # Also include active offers (artist is in waitlist_offered but maybe no longer
-    # in gig_waitlist if the schema separates them)
-    offered_conflicts = db.execute(
-        text("""
-            SELECT DISTINCT g.id, g.date, g.title, v.venue_name
-            FROM waitlist_offered wo
-            JOIN gigs g ON g.id = wo.gig_id
-            LEFT JOIN venues v ON v.id = g.venue_id
-            WHERE wo.artist_id = :aid
-              AND wo.offer_expires_at > datetime('now')
-              AND date(g.date) BETWEEN date(:start) AND date(:end)
-              AND g.status NOT IN ('cancelled', 'deleted')
-            ORDER BY g.date
-        """),
-        {"aid": artist_id, "start": str(start), "end": str(end)}
-    ).mappings().all()
-    # Merge by gig_id
-    all_waitlist_gig_ids = {c["id"] for c in waitlist_conflicts} | {c["id"] for c in offered_conflicts}
-    merged_conflicts = list({c["id"]: dict(c) for c in (list(waitlist_conflicts) + list(offered_conflicts))}.values())
-
-    if all_waitlist_gig_ids and not force:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "waitlist_conflict",
-                "conflict_type": "waitlist",
-                "message": "You are on the waitlist for gigs in this date range.",
-                "conflicts": [
-                    {
-                        "gig_id": c["id"],
-                        "date": str(c["date"]),
-                        "title": c.get("title") or "",
-                        "venue_name": c.get("venue_name") or "",
-                    }
-                    for c in merged_conflicts
-                ]
-            }
-        )
-
-    # If force=true and there are waitlist conflicts, remove the artist from those waitlists
-    if all_waitlist_gig_ids and force:
-        for gid in all_waitlist_gig_ids:
-            db.execute(
-                text("DELETE FROM gig_waitlist WHERE gig_id = :gid AND artist_id = :aid"),
-                {"gid": gid, "aid": artist_id}
-            )
-            # Also remove any active offer (if artist was the current offer holder)
-            db.execute(
-                text("DELETE FROM waitlist_offered WHERE gig_id = :gid AND artist_id = :aid"),
-                {"gid": gid, "aid": artist_id}
-            )
-        # If we removed an offer holder, advance the waitlist so the gig isn't stuck
-        try:
-            from backend.routes.waitlist import advance_waitlist_offer
-            for gid in all_waitlist_gig_ids:
-                # Only advance if the gig is still in a state that uses the waitlist
-                gig_status = db.execute(text("SELECT status FROM gigs WHERE id = :gid"), {"gid": gid}).scalar()
-                if gig_status in ('open', 'cancelled_blast'):
-                    advance_waitlist_offer(db, gid)
-        except Exception as _adv_err:
-            logger.warning(f"advance_waitlist_offer after blackout failed: {_adv_err}")
-
-    result = db.execute(
-        text("""
-            INSERT INTO artist_availability (artist_id, blackout_start, blackout_end, reason)
-            VALUES (:aid, :start, :end, :reason)
-        """),
-        {"aid": artist_id, "start": str(start), "end": str(end), "reason": reason}
-    )
-    db.commit()
-
-    return {
-        "ok": True,
-        "id": result.lastrowid,
-        "blackout_start": str(start),
-        "blackout_end": str(end),
-        "reason": reason,
-        "removed_from_waitlists": list(all_waitlist_gig_ids) if force else []
-    }
-
-
-# ── DELETE BLACKOUT ────────────────────────────────────────────────────────────
 @router.delete("/api/artists/{artist_id}/availability/{blackout_id}")
 def delete_blackout(artist_id: int, blackout_id: int,
                     user=Depends(get_current_user), db=Depends(get_db)):
@@ -267,311 +115,295 @@ def delete_blackout(artist_id: int, blackout_id: int,
 
 
 # ── UPDATE BLACKOUT ────────────────────────────────────────────────────────────
-@router.put("/api/artists/{artist_id}/availability/{blackout_id}")
-def update_blackout(artist_id: int, blackout_id: int, data: dict,
-                    user=Depends(get_current_user), db=Depends(get_db)):
-    """Update a blackout date range."""
-    check_artist_access(db, artist_id, user.id)
-
-    existing = db.execute(
-        text("SELECT id FROM artist_availability WHERE id = :id AND artist_id = :aid"),
-        {"id": blackout_id, "aid": artist_id}
-    ).fetchone()
-    if not existing:
-        raise HTTPException(404, "Blackout not found")
-
-    start = _parse_date(data.get("blackout_start"))
-    end = _parse_date(data.get("blackout_end"))
-    reason = str(data.get("reason", "")).strip()[:200]
-
-    if end < start:
-        raise HTTPException(400, "End date must be on or after start date")
-
-    db.execute(
-        text("""
-            UPDATE artist_availability
-            SET blackout_start = :start, blackout_end = :end, reason = :reason
-            WHERE id = :id AND artist_id = :aid
-        """),
-        {"start": str(start), "end": str(end), "reason": reason,
-         "id": blackout_id, "aid": artist_id}
-    )
-    db.commit()
-    return {"ok": True}
-
-
-# ── PUBLIC: BULK CHECK DATES (for venue calendar rendering) ──────────────────
-@router.post("/api/artists/{artist_id}/availability/check-bulk")
-def check_bulk(artist_id: int, data: dict, db=Depends(get_db)):
-    """
-    Check availability for multiple dates at once.
-    Body: { "dates": ["2026-03-15", "2026-03-22", ...] }
-    Returns: { "unavailable": ["2026-03-15", ...] }
-    """
-    dates = data.get("dates", [])
-    if not dates or len(dates) > 366:
-        raise HTTPException(400, "Provide between 1 and 366 dates")
-
-    blackouts = db.execute(
-        text("""
-            SELECT blackout_start, blackout_end
-            FROM artist_availability
-            WHERE artist_id = :aid
-        """),
-        {"aid": artist_id}
-    ).fetchall()
-
-    unavailable = []
-    for d_str in dates:
-        try:
-            d = _parse_date(d_str)
-        except Exception:
-            continue
-        for b_start, b_end in blackouts:
-            try:
-                bs = datetime.strptime(str(b_start), "%Y-%m-%d").date()
-                be = datetime.strptime(str(b_end), "%Y-%m-%d").date()
-                if bs <= d <= be:
-                    unavailable.append(str(d))
-                    break
-            except Exception:
-                continue
-
-    return {"unavailable": unavailable}
-
-
-# ─── PER-MEMBER (USER) AVAILABILITY ─────────────────────────────────────────
-# Sibling to per-artist availability above. Lives in `user_availability` —
-# scoped by user_id with an optional artist_id ("applies to this band only").
-# Band-level blackouts (artist_availability) hard-block bookings; member-level
-# blackouts surface as a soft warning at booking time that the band can confirm
-# through ("the band is performing as a duo without Jim that night").
-
-
-def _user_artist_ids(db, user_id: int):
-    """Return list of artist ids this user has access to (owner OR entity_users)."""
-    rows = db.execute(text("""
-        SELECT a.id FROM artists a WHERE a.user_id = :uid
-        UNION
-        SELECT eu.entity_id FROM entity_users eu
-        WHERE eu.entity_type = 'artist' AND eu.user_id = :uid
-    """), {"uid": user_id}).fetchall()
-    return [r[0] for r in rows]
-
-
-@router.get("/api/me/availability")
-def me_get_availability(user=Depends(get_current_user), db=Depends(get_db)):
-    """Return this user's member-level blackouts, plus a read-only list of
-    band-level blackouts for each artist they belong to (so they can see all
-    their unavailable dates in one place)."""
-    user_rows = db.execute(text("""
-        SELECT ua.id, ua.artist_id, ua.blackout_start, ua.blackout_end, ua.reason,
-               ua.created_at, a.name as artist_name
-        FROM user_availability ua
-        LEFT JOIN artists a ON a.id = ua.artist_id
-        WHERE ua.user_id = :uid
-          AND date(ua.blackout_end) >= date('now', '-1 day')
-        ORDER BY ua.blackout_start ASC
-    """), {"uid": user.id}).mappings().all()
-
-    # The artists this user is on (owner or entity_users)
-    artist_ids = _user_artist_ids(db, user.id)
-    my_artists = []
-    band_rows = []
-    if artist_ids:
-        ph = ",".join(f":a{i}" for i in range(len(artist_ids)))
-        params = {f"a{i}": aid for i, aid in enumerate(artist_ids)}
-        my_artists = [dict(r) for r in db.execute(text(
-            f"SELECT id, name FROM artists WHERE id IN ({ph}) ORDER BY name"
-        ), params).mappings().all()]
-        band_rows = [dict(r) for r in db.execute(text(f"""
-            SELECT ab.id, ab.artist_id, ab.blackout_start, ab.blackout_end, ab.reason,
-                   ab.created_at, a.name as artist_name
-            FROM artist_availability ab
-            JOIN artists a ON a.id = ab.artist_id
-            WHERE ab.artist_id IN ({ph})
-              AND date(ab.blackout_end) >= date('now', '-1 day')
-            ORDER BY ab.blackout_start ASC
-        """), params).mappings().all()]
-
-    return {
-        "user_blackouts": [dict(r) for r in user_rows],
-        "band_blackouts": band_rows,  # read-only — edited via artist-edit
-        "my_artists": my_artists,
-    }
-
-
-@router.post("/api/me/availability")
-def me_add_blackout(data: dict, user=Depends(get_current_user), db=Depends(get_db)):
-    """Add a member-level blackout for this user. If artist_ids is omitted
-    or empty, the blackout applies to ALL artists this user is a member of
-    (stored as artist_id=NULL). If artist_ids is a list, one row per id is
-    inserted, each scoped to that artist."""
-    blackout_start = (data.get("blackout_start") or "").strip()
-    blackout_end   = (data.get("blackout_end")   or "").strip()
-    reason         = (data.get("reason") or "").strip()[:300]
-    artist_ids     = data.get("artist_ids")  # None, [], or list of ints
-
-    if not blackout_start:
-        raise HTTPException(400, "blackout_start required")
-    if not blackout_end:
-        blackout_end = blackout_start
-
-    # Validate dates parse
-    try:
-        bs = _parse_date(blackout_start)
-        be = _parse_date(blackout_end)
-        if be < bs:
-            raise HTTPException(400, "blackout_end must be on or after blackout_start")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(400, "Invalid date format")
-
-    # Verify the user owns/manages each artist in artist_ids (no cross-account writes)
-    my_artist_ids = set(_user_artist_ids(db, user.id))
-    if artist_ids:
-        for aid in artist_ids:
-            if int(aid) not in my_artist_ids:
-                raise HTTPException(403, f"You're not a member of artist {aid}")
-        # Insert one row per artist. 2026-07-25: RETURNING id inline
-        # (was: separate last_insert_rowid() call — per-connection so it
-        # returned the wrong id when the pool swapped connections between
-        # INSERT and follow-up SELECT).
-        new_ids = []
-        for aid in artist_ids:
-            nid = db.execute(text("""
-                INSERT INTO user_availability (user_id, artist_id, blackout_start, blackout_end, reason)
-                VALUES (:uid, :aid, :bs, :be, :r) RETURNING id
-            """), {"uid": user.id, "aid": int(aid),
-                   "bs": blackout_start, "be": blackout_end, "r": reason}).scalar()
-            new_ids.append(nid)
-        db.commit()
-        return {"ok": True, "ids": new_ids, "count": len(new_ids)}
-    else:
-        # NULL artist_id → applies to all my artists. Same RETURNING id fix.
-        nid = db.execute(text("""
-            INSERT INTO user_availability (user_id, artist_id, blackout_start, blackout_end, reason)
-            VALUES (:uid, NULL, :bs, :be, :r) RETURNING id
-        """), {"uid": user.id, "bs": blackout_start, "be": blackout_end, "r": reason}).scalar()
-        db.commit()
-        return {"ok": True, "ids": [nid], "count": 1}
-
-
-@router.delete("/api/me/availability/{blackout_id}")
-def me_delete_blackout(blackout_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    row = db.execute(text(
-        "SELECT id FROM user_availability WHERE id = :bid AND user_id = :uid"
-    ), {"bid": blackout_id, "uid": user.id}).first()
-    if not row:
-        raise HTTPException(404, "Blackout not found or not yours")
-    db.execute(text("DELETE FROM user_availability WHERE id = :bid"), {"bid": blackout_id})
-    db.commit()
-    return {"ok": True}
-
-
-@router.put("/api/me/availability/{blackout_id}")
-def me_update_blackout(blackout_id: int, data: dict,
-                       user=Depends(get_current_user), db=Depends(get_db)):
-    row = db.execute(text(
-        "SELECT id FROM user_availability WHERE id = :bid AND user_id = :uid"
-    ), {"bid": blackout_id, "uid": user.id}).first()
-    if not row:
-        raise HTTPException(404, "Blackout not found or not yours")
-    bs = (data.get("blackout_start") or "").strip()
-    be = (data.get("blackout_end") or "").strip() or bs
-    reason = (data.get("reason") or "").strip()[:300]
-    try:
-        d1 = _parse_date(bs); d2 = _parse_date(be)
-        if d2 < d1:
-            raise HTTPException(400, "blackout_end must be on or after blackout_start")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(400, "Invalid date format")
-    db.execute(text("""
-        UPDATE user_availability SET blackout_start = :bs, blackout_end = :be, reason = :r
-        WHERE id = :bid
-    """), {"bs": bs, "be": be, "r": reason, "bid": blackout_id})
-    db.commit()
-    return {"ok": True}
-
-
-@router.get("/api/artists/{artist_id}/member-availability")
-def artist_member_availability(artist_id: int,
-                                user=Depends(get_current_user), db=Depends(get_db)):
-    """Return aggregated member-level blackouts for an artist's roster.
-    Used by artist-edit's 'Member Availability' section. Caller must have
-    access to the artist (check_artist_access enforces this).
-
-    Returns list grouped by user:
-      [{user_id, name, blackouts: [{id, blackout_start, blackout_end, reason}, ...]}, ...]
-    """
-    check_artist_access(db, artist_id, user.id)
-
-    # All users who are members of this artist (owner + entity_users)
-    members = db.execute(text("""
-        SELECT u.id as user_id,
-               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) as name
-        FROM users u
-        WHERE u.id = (SELECT user_id FROM artists WHERE id = :aid)
-        UNION
-        SELECT u.id as user_id,
-               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) as name
-        FROM users u
-        JOIN entity_users eu ON eu.user_id = u.id
-        WHERE eu.entity_type = 'artist' AND eu.entity_id = :aid
-    """), {"aid": artist_id}).mappings().all()
-
-    result = []
-    for m in members:
-        # For each member, pull their blackouts that apply to THIS artist
-        # (either artist_id IS NULL = "all my bands", or artist_id matches)
-        rows = db.execute(text("""
-            SELECT id, blackout_start, blackout_end, reason, artist_id, created_at
-            FROM user_availability
-            WHERE user_id = :uid
-              AND (artist_id IS NULL OR artist_id = :aid)
-              AND date(blackout_end) >= date('now', '-1 day')
-            ORDER BY blackout_start ASC
-        """), {"uid": m["user_id"], "aid": artist_id}).mappings().all()
-        if rows:
-            result.append({
-                "user_id": m["user_id"],
-                "name": m["name"],
-                "blackouts": [dict(r) for r in rows],
-            })
-    return {"members": result}
-
-
 def _member_blackouts_for_gig(db, artist_id: int, gig_date: str,
                               current_user_id: int = None):
-    """Return member-level blackouts that conflict with a given gig date,
-    for booking-precheck. Returns list of {id, user_id, name, blackout_start,
-    blackout_end, reason, is_self}. `is_self` is True when the row belongs
-    to current_user_id — the booking-precheck modal uses this to switch from
-    the generic "one or more members have blocked this date" copy to a
-    personal "you have these dates blocked" variant with a deep link to the
-    user's My Availability tab. Empty list when no conflicts."""
+    """Members who have marked themselves off on a gig date.
+
+    Drives the booking warning: "Scott is away that night — book anyway?".
+    SOFT by design. A four-piece that also plays as a duo has to stay bookable
+    when the drummer is out, so this never blocks; it only names who is away
+    and lets the band decide.
+
+    Returns {user_id, name, scope, is_self, blackout_start, blackout_end,
+    reason}. The two blackout_* keys are the gig date repeated and reason is
+    always "": both are kept so the existing booking-precheck modal keeps
+    working without a rewrite.
+
+    NOTE gigs.py imports this inside a try/except that falls back to an empty
+    list, so if this function goes missing the warning silently stops
+    appearing rather than erroring. tests/test_band_calendar.py pins it.
+    """
     if not gig_date:
         return []
+    gd = str(gig_date)[:10]
     rows = db.execute(text("""
-        SELECT ua.id, ua.user_id, ua.blackout_start, ua.blackout_end, ua.reason,
-               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) as name
-        FROM user_availability ua
-        JOIN users u ON u.id = ua.user_id
-        WHERE (ua.artist_id IS NULL OR ua.artist_id = :aid)
-          AND ua.user_id IN (
-            SELECT user_id FROM artists WHERE id = :aid
+        SELECT d.user_id, d.artist_id,
+               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) AS name
+        FROM member_days_off d
+        JOIN users u ON u.id = d.user_id
+        WHERE (d.artist_id = 0 OR d.artist_id = :aid)
+          AND d.user_id IN (
+            SELECT user_id FROM artists WHERE id = :aid AND user_id IS NOT NULL
             UNION
             SELECT user_id FROM entity_users
             WHERE entity_type = 'artist' AND entity_id = :aid
           )
-          AND date(:gd) BETWEEN date(ua.blackout_start) AND date(ua.blackout_end)
-    """), {"aid": artist_id, "gd": str(gig_date)[:10]}).mappings().all()
-    out = []
+          AND date(d.day) = date(:gd)
+    """), {"aid": artist_id, "gd": gd}).mappings().all()
+
+    out, seen = [], set()
     for r in rows:
-        d = dict(r)
-        d["is_self"] = (current_user_id is not None and d.get("user_id") == current_user_id)
-        out.append(d)
+        # Someone can hold both a global row and a band row for the same day.
+        # That is one unavailable person, not two.
+        if r["user_id"] in seen:
+            continue
+        seen.add(r["user_id"])
+        out.append({
+            "user_id": r["user_id"],
+            "name": r["name"],
+            "scope": "all" if not r["artist_id"] else "band",
+            "blackout_start": gd,
+            "blackout_end": gd,
+            "reason": "",
+            "is_self": (current_user_id is not None and r["user_id"] == current_user_id),
+        })
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BAND CALENDAR (2026-10-04)
+# ══════════════════════════════════════════════════════════════════════════════
+# Replaces the date-range + reason forms above. Members click days on a
+# calendar; a click is one row in `member_days_off`, toggled on and off. No
+# reason is collected — in practice it was either blank or "Out of Town",
+# and it was never shown to anyone making a booking decision.
+#
+# Scope follows where you clicked, which is also what it means:
+#   • your own profile  → artist_id 0, every band you play in ("I'm away")
+#   • a band's calendar → that band only ("I'm booked with the other band")
+#
+# Band-wide blackouts stay in `artist_availability` and keep their hard-block
+# semantics — they remove the artist from preferred-artist blasts, the open-gig
+# digest and venue holds, which a member being out never should. They are now
+# set from the same calendar rather than a separate section.
+
+def _member_ids_for_artist(db, artist_id: int):
+    """Owner plus every entity_user. Both legs matter: the owning user is on
+    artists.user_id and does not necessarily have an entity_users row."""
+    rows = db.execute(text("""
+        SELECT user_id FROM artists WHERE id = :aid AND user_id IS NOT NULL
+        UNION
+        SELECT user_id FROM entity_users
+        WHERE entity_type = 'artist' AND entity_id = :aid
+    """), {"aid": artist_id}).fetchall()
+    return [r[0] for r in rows]
+
+
+def _is_artist_admin(db, artist_id: int, user) -> bool:
+    """Only an admin may mark the whole band out, because that hard-blocks
+    bookings and silences blasts for everyone."""
+    try:
+        check_artist_access(db, artist_id, user.id)
+    except HTTPException:
+        return False
+    return True
+
+
+@router.get("/api/artists/{artist_id}/calendar")
+def get_band_calendar(artist_id: int, start: str = None, end: str = None,
+                      user=Depends(get_current_user), db=Depends(get_db)):
+    """Everything the band calendar needs for a date window, in one call:
+    who is off on which day, and which days the whole band is blocked.
+
+    Shaped as a day → members map rather than a flat list so the grid can
+    render straight from it; the month view asks "who is out on the 14th",
+    never "when is Jim out".
+    """
+    check_artist_access(db, artist_id, user.id)
+    if not start or not end:
+        today = date.today()
+        start = start or today.replace(day=1).isoformat()
+        end = end or (today + timedelta(days=120)).isoformat()
+    s, e = _parse_date(start), _parse_date(end)
+    if e < s:
+        raise HTTPException(400, "end must not be before start")
+    if (e - s).days > 400:
+        raise HTTPException(400, "Range too wide — ask for a year or less")
+
+    members = _member_ids_for_artist(db, artist_id)
+    if not members:
+        return {"days": {}, "band_blocked": [], "members": []}
+
+    # Expanded inline rather than via a helper so the member list and the
+    # day rows are guaranteed to come from the same set of ids.
+    ph = ",".join(f":m{i}" for i in range(len(members)))
+    binds = {f"m{i}": m for i, m in enumerate(members)}
+    binds.update({"aid": artist_id, "s": s.isoformat(), "e": e.isoformat()})
+
+    rows = db.execute(text(f"""
+        SELECT d.day, d.user_id, d.artist_id,
+               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) AS name
+        FROM member_days_off d
+        JOIN users u ON u.id = d.user_id
+        WHERE d.user_id IN ({ph})
+          AND (d.artist_id = 0 OR d.artist_id = :aid)
+          AND date(d.day) BETWEEN date(:s) AND date(:e)
+    """), binds).mappings().all()
+
+    days = {}
+    for r in rows:
+        key = str(r["day"])[:10]
+        entry = days.setdefault(key, [])
+        # A member can hold both a global row and a band row for the same
+        # day; the calendar should show them once.
+        if any(x["user_id"] == r["user_id"] for x in entry):
+            continue
+        entry.append({
+            "user_id": r["user_id"],
+            "name": r["name"],
+            "scope": "all" if not r["artist_id"] else "band",
+            "is_self": r["user_id"] == user.id,
+        })
+
+    band_rows = db.execute(text("""
+        SELECT id, blackout_start, blackout_end, reason FROM artist_availability
+        WHERE artist_id = :aid
+          AND date(blackout_end) >= date(:s) AND date(blackout_start) <= date(:e)
+    """), {"aid": artist_id, "s": s.isoformat(), "e": e.isoformat()}).mappings().all()
+    band_blocked = []
+    for b in band_rows:
+        try:
+            d0 = max(_parse_date(str(b["blackout_start"])[:10]), s)
+            d1 = min(_parse_date(str(b["blackout_end"])[:10]), e)
+        except HTTPException:
+            continue
+        while d0 <= d1:
+            band_blocked.append(d0.isoformat())
+            d0 += timedelta(days=1)
+
+    roster = db.execute(text(f"""
+        SELECT u.id,
+               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) AS name
+        FROM users u WHERE u.id IN ({ph})
+    """), binds).mappings().all()
+
+    return {
+        "days": days,
+        "band_blocked": sorted(set(band_blocked)),
+        "members": [{"user_id": r["id"], "name": r["name"],
+                     "is_self": r["id"] == user.id} for r in roster],
+        "can_block_band": _is_artist_admin(db, artist_id, user),
+    }
+
+
+def _toggle_day(db, user_id: int, artist_id: int, day: str):
+    """Insert the day, or delete it if it is already there. Returns the new
+    state so the caller does not have to re-read."""
+    d = _parse_date(day)
+    existing = db.execute(text("""
+        SELECT id FROM member_days_off
+        WHERE user_id = :u AND artist_id = :a AND date(day) = date(:d)
+    """), {"u": user_id, "a": artist_id, "d": d.isoformat()}).first()
+    if existing:
+        db.execute(text("DELETE FROM member_days_off WHERE id = :i"), {"i": existing[0]})
+        db.commit()
+        return False
+    db.execute(text("""
+        INSERT INTO member_days_off (user_id, artist_id, day) VALUES (:u, :a, :d)
+    """), {"u": user_id, "a": artist_id, "d": d.isoformat()})
+    db.commit()
+    return True
+
+
+@router.post("/api/artists/{artist_id}/days-off/toggle")
+def toggle_band_day_off(artist_id: int, payload: dict,
+                        user=Depends(get_current_user), db=Depends(get_db)):
+    """Mark yourself off for this band only. Any member of the band may do
+    this for themselves — it is a soft signal, not a block."""
+    if user.id not in _member_ids_for_artist(db, artist_id):
+        raise HTTPException(403, "You are not a member of this artist")
+    on = _toggle_day(db, user.id, artist_id, payload.get("day"))
+    return {"day": str(payload.get("day"))[:10], "off": on, "scope": "band"}
+
+
+@router.post("/api/me/days-off/toggle")
+def toggle_my_day_off(payload: dict,
+                      user=Depends(get_current_user), db=Depends(get_db)):
+    """Mark yourself off across every band you play in."""
+    on = _toggle_day(db, user.id, 0, payload.get("day"))
+    return {"day": str(payload.get("day"))[:10], "off": on, "scope": "all"}
+
+
+@router.get("/api/me/days-off")
+def get_my_days_off(start: str = None, end: str = None,
+                    user=Depends(get_current_user), db=Depends(get_db)):
+    """The personal calendar: the user's own days, both global and per-band,
+    so they can see where each one applies."""
+    if not start or not end:
+        today = date.today()
+        start = start or today.replace(day=1).isoformat()
+        end = end or (today + timedelta(days=365)).isoformat()
+    s, e = _parse_date(start), _parse_date(end)
+    if e < s:
+        raise HTTPException(400, "end must not be before start")
+
+    rows = db.execute(text("""
+        SELECT d.day, d.artist_id, a.name AS artist_name
+        FROM member_days_off d
+        LEFT JOIN artists a ON a.id = d.artist_id
+        WHERE d.user_id = :u AND date(d.day) BETWEEN date(:s) AND date(:e)
+    """), {"u": user.id, "s": s.isoformat(), "e": e.isoformat()}).mappings().all()
+
+    days = {}
+    for r in rows:
+        key = str(r["day"])[:10]
+        days.setdefault(key, []).append({
+            "artist_id": r["artist_id"],
+            "artist_name": r["artist_name"] if r["artist_id"] else None,
+            "scope": "all" if not r["artist_id"] else "band",
+        })
+    return {"days": days}
+
+
+@router.post("/api/artists/{artist_id}/band-days-off/toggle")
+def toggle_band_wide_day(artist_id: int, payload: dict,
+                         user=Depends(get_current_user), db=Depends(get_db)):
+    """Mark the WHOLE band unavailable for a day — a hard block.
+
+    Stored in artist_availability as a single-day row so every existing
+    consumer (booking, preferred-artist blast, open-gig digest, venue holds)
+    keeps working untouched. Toggling off deletes only rows that cover
+    exactly this day; a multi-day range created by the old form is left
+    alone rather than silently torn in half.
+    """
+    check_artist_access(db, artist_id, user.id)
+    _ensure_artist_availability_table(db)
+    d = _parse_date(payload.get("day"))
+
+    same_day = db.execute(text("""
+        SELECT id FROM artist_availability
+        WHERE artist_id = :a AND date(blackout_start) = date(:d)
+                            AND date(blackout_end) = date(:d)
+    """), {"a": artist_id, "d": d.isoformat()}).first()
+
+    if same_day:
+        db.execute(text("DELETE FROM artist_availability WHERE id = :i"), {"i": same_day[0]})
+        db.commit()
+        return {"day": d.isoformat(), "blocked": False}
+
+    spanning = db.execute(text("""
+        SELECT id FROM artist_availability
+        WHERE artist_id = :a
+          AND date(:d) BETWEEN date(blackout_start) AND date(blackout_end)
+    """), {"a": artist_id, "d": d.isoformat()}).first()
+    if spanning:
+        raise HTTPException(
+            409,
+            "That day is inside a longer band blackout. Remove the range first.")
+
+    db.execute(text("""
+        INSERT INTO artist_availability (artist_id, blackout_start, blackout_end, reason)
+        VALUES (:a, :d, :d, '')
+    """), {"a": artist_id, "d": d.isoformat()})
+    db.commit()
+    return {"day": d.isoformat(), "blocked": True}

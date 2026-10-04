@@ -2644,6 +2644,72 @@ def setup_database():
     c4.execute("CREATE INDEX IF NOT EXISTS idx_user_availability_artist ON user_availability(artist_id)")
     c4.execute("CREATE INDEX IF NOT EXISTS idx_user_availability_dates ON user_availability(blackout_start, blackout_end)")
 
+    # ── Member days off (2026-10-04) ───────────────────────────────────────
+    # Replaces the date-range + reason forms that fed user_availability.
+    # Members now click days on a band calendar, so the natural unit is one
+    # row per day and a click is a single INSERT or DELETE — no range
+    # splitting, no partial-overlap edits, no reason to type.
+    #
+    #   artist_id = 0 → every band this user plays in. Set from their own
+    #                   profile: "I am out of town that weekend" is a fact
+    #                   about the person.
+    #   artist_id = N → that band only. Set from the band's own calendar,
+    #                   which is how someone booked with one band marks
+    #                   themselves unavailable to another.
+    #
+    # 0 rather than NULL for "all bands" so the UNIQUE index actually bites:
+    # both SQLite and Postgres treat NULLs as distinct, so a nullable column
+    # here would happily store the same day twice and the toggle would
+    # desync from what the calendar shows.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS member_days_off (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL DEFAULT 0,
+            day DATE NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    c4.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_member_days_off_unique "
+               "ON member_days_off(user_id, artist_id, day)")
+    # The band calendar reads every member's days for a month, so the lookup
+    # is by day first.
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_member_days_off_day ON member_days_off(day)")
+    c4.execute("CREATE INDEX IF NOT EXISTS idx_member_days_off_artist ON member_days_off(artist_id, day)")
+
+    # One-time: expand the old ranges into day rows. Idempotent — the UNIQUE
+    # index makes a re-run a no-op, and it only fires while the old table
+    # still has rows, so it costs nothing on every subsequent boot.
+    try:
+        _old = c4.execute("SELECT user_id, artist_id, blackout_start, blackout_end "
+                          "FROM user_availability").fetchall()
+        if _old:
+            from datetime import date as _date, timedelta as _td
+            for _r in _old:
+                _uid, _aid, _s, _e = _r[0], _r[1], str(_r[2])[:10], str(_r[3])[:10]
+                try:
+                    _d = _date.fromisoformat(_s)
+                    _last = _date.fromisoformat(_e)
+                except ValueError:
+                    continue
+                # A corrupt range (end before start, or an absurd span) must
+                # not spin here.
+                if _last < _d or (_last - _d).days > 366:
+                    continue
+                while _d <= _last:
+                    try:
+                        c4.execute(
+                            "INSERT OR IGNORE INTO member_days_off (user_id, artist_id, day) "
+                            "VALUES (?, ?, ?)",
+                            (_uid, _aid if _aid else 0, _d.isoformat()))
+                    except Exception:
+                        pass
+                    _d += _td(days=1)
+    except Exception:
+        pass
+
+
     # ── Setlist (2026-09-05) ───────────────────────────────────────────────
     # Per-artist song list shown as a public tab on artist-profile.html and
     # editable from artist-edit.html. One row per song. `display_order` drives

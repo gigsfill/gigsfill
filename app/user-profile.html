@@ -841,101 +841,30 @@
   </div><!-- end affiliates-tab -->
 
   <!-- ── MY AVAILABILITY TAB ────────────────────────────────────────────── -->
+  <!-- 2026-10-04: the range form and its list are replaced by a calendar.
+       Marking a weekend off was three fields and a reason nobody read; it is
+       now one click per day. Days set here apply to EVERY band you play in,
+       because "I'm away that weekend" is a fact about you. To be out for one
+       band only — say you're booked with another that night — use that band's
+       own calendar instead. -->
   <div class="tab-content" id="availability-tab">
     <div class="content-card">
       <h2 class="section-header gradient-title" style="margin: 0 0 12px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">My Availability</h2>
       <p style="color:var(--text-gray);font-size:0.9rem;margin-bottom:8px;line-height:1.55;">
-        Dates when <strong style="color:var(--text);">you personally</strong> can't perform
-        (out of town, sick, family commitment, day job conflict, etc.).
+        Click any day you can&rsquo;t perform &mdash; no reason needed, click again to undo.
+        These apply to <strong style="color:var(--text);">every band you play in</strong>.
       </p>
-      <p style="color:var(--text-gray);font-size:0.85rem;margin-bottom:8px;line-height:1.55;">
-        ⚠️ <strong style="color:#f59e0b;">Soft warning</strong> — bookings on these dates
-        <em>still go through</em>, but the artist gets an alert like "Jim is unavailable that night —
-        play as a duo?" so the band can decide. Your blackouts also show in read-only form on the
-        <a href="/app/user-profile.html?tab=my-artists" style="color:var(--cyan);">My Artists tab</a>
-        (pick an artist → Member Availability) so bandmates can see when you're out.
+      <p style="color:var(--text-gray);font-size:0.85rem;margin-bottom:18px;line-height:1.55;">
+        &#9888;&#65039; <strong style="color:#f59e0b;">Soft warning</strong> &mdash; bookings on these dates
+        <em>still go through</em>. Your band sees a warning naming who&rsquo;s away and decides
+        whether the line-up still works. Your bandmates see these days on the band calendar.
+        <br>
+        Need to be out for <em>one</em> band only &mdash; booked with another that night?
+        Mark it on that band&rsquo;s own calendar:
+        <a href="/app/user-profile.html?tab=my-artists" style="color:var(--cyan);">My Artists</a>
+        &rarr; pick the artist &rarr; Availability.
       </p>
-      <p style="color:var(--text-gray);font-size:0.82rem;margin-bottom:18px;line-height:1.55;font-style:italic;">
-        Need to block ALL bookings for the whole band on a date (e.g. band on hiatus, drummer's wedding)?
-        Add it from <a href="/app/user-profile.html?tab=my-artists" style="color:var(--cyan);font-style:normal;">My Artists</a>
-        (pick the artist → Availability) instead — that's the hard block.
-      </p>
-
-      <!-- Add Blackout Form -->
-      <!-- 2026-08-26: restyled to match the compact inline edit look
-           (dates + reason in a flex row, scope selector below, save
-           button on its own row). Same fields, less vertical space
-           and matching visual rhythm with the row-edit panels. -->
-      <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:24px;">
-        <h3 style="font-size:0.9rem;margin:0 0 10px;color:var(--text);">Add a Blackout Date</h3>
-        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px;">
-          <div>
-            <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Start</label>
-            <input type="text" readonly class="gf-date-input" id="uaStartDate" placeholder="mm/dd/yyyy"
-              style="background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">
-          </div>
-          <div>
-            <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">End</label>
-            <input type="text" readonly class="gf-date-input" id="uaEndDate" placeholder="mm/dd/yyyy"
-              style="background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">
-          </div>
-          <div style="flex:1;min-width:200px;">
-            <label style="font-size:0.72rem;color:var(--text-gray);display:block;margin-bottom:3px;">Reason <span style="color:var(--text-muted);font-weight:400;">(optional, visible to bandmates)</span></label>
-            <select id="uaReasonPreset" onchange="uaReasonChanged()"
-              style="width:100%;box-sizing:border-box;background:#151b28;border:1px solid #333;color:var(--text-white);border-radius:6px;padding:6px 10px;font-size:0.82rem;">
-              <option value="">— No reason —</option>
-              <option value="Out of Town">Out of Town</option>
-              <option value="Family Commitment">Family Commitment</option>
-              <option value="Sick">Sick</option>
-              <option value="Work Conflict">Work Conflict</option>
-              <option value="Other Gig">Other Gig</option>
-              <option value="Vacation">Vacation</option>
-              <option value="Other">Other (type your own)</option>
-            </select>
-            <input type="text" id="uaReasonOther" maxlength="300" placeholder="What's the reason?"
-              style="display:none;width:100%;box-sizing:border-box;padding:6px 10px;margin-top:6px;background:#151b28;border:1px solid #333;border-radius:6px;color:var(--text-white);font-size:0.82rem;">
-          </div>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-bottom:10px;">
-          <span style="font-size:0.72rem;color:var(--text-gray);font-weight:600;">Applies to:</span>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;color:var(--text);">
-            <input type="checkbox" id="uaScopeAll" checked onchange="uaSetScope('all')">
-            All My Artists
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;color:var(--text);">
-            <input type="checkbox" id="uaScopeSpecific" onchange="uaSetScope('specific')">
-            Specific Artists Only
-          </label>
-        </div>
-        <div id="uaArtistChecks" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:6px;">
-          <div style="color:var(--text-gray);font-size:0.78rem;">Loading your artists…</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <button onclick="uaAddBlackout()"
-            style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);color:#10b981;border-radius:6px;padding:6px 14px;font-size:0.82rem;cursor:pointer;font-weight:600;">
-            Add Blackout Date
-          </button>
-          <span id="uaAddStatus" style="font-size:0.78rem;"></span>
-        </div>
-      </div>
-
-      <!-- My Blackouts -->
-      <div style="margin-bottom:24px;">
-        <h3 style="font-size:0.9rem;margin:0 0 10px;color:var(--text);">My Blackout Dates</h3>
-        <div id="uaUserBlackouts" style="font-size:0.85rem;color:var(--text-gray);">Loading…</div>
-      </div>
-
-      <!-- Artist-level Blackouts (read-only) -->
-      <div>
-        <h3 style="font-size:0.9rem;margin:0 0 4px;color:var(--text);">Artist-Level Blackout Dates <span style="font-size:0.72rem;color:var(--text-gray);font-weight:400;">(read-only here — edit on each Artist's page)</span></h3>
-        <p style="color:var(--text-gray);font-size:0.78rem;margin:0 0 10px;line-height:1.5;">
-          🚫 <strong style="color:#ef4444;">Hard-block</strong> dates set at the artist level — the
-          whole band is unavailable and venues can't book on these days. Shown here just so you can
-          see all your unavailable dates in one place; change them from
-          <a href="/app/user-profile.html?tab=my-artists" style="color:var(--cyan);">My Artists</a> (pick the artist → Availability).
-        </p>
-        <div id="uaBandBlackouts" style="font-size:0.85rem;color:var(--text-gray);">Loading…</div>
-      </div>
+      <div id="myCalendar"></div>
     </div>
   </div><!-- end availability-tab -->
 
@@ -1251,7 +1180,16 @@
   <script src="/app/static/js/gf-date-picker.js?v=1"></script>
   <script src="/app/static/js/user-profile.js?v=21"></script>
   <script src="/app/static/js/user-affiliate.js?v=8"></script>
-  <script src="/app/static/js/user-availability.js?v=10"></script>
+  <script src="/app/static/js/band-calendar.js?v=2"></script>
+  <script>
+    // Days marked here are global (artist_id 0 server-side), which is
+    // what "every band you play in" means.
+    document.addEventListener("DOMContentLoaded", function () {
+      if (window.gfBandCalendar) {
+        window.gfBandCalendar.mount({ el: "myCalendar", mode: "me" });
+      }
+    });
+  </script>
   
 
   <!-- Delete Account Modal -->

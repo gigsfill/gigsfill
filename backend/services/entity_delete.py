@@ -549,6 +549,9 @@ def delete_artist(db, artist_id: int, user_id: int) -> None:
         "DELETE FROM artist_email_digest_queue WHERE artist_id = :aid",
         # blackouts: owner-private availability windows.
         "DELETE FROM artist_availability WHERE artist_id = :aid",
+        # band-scoped member days off; the global rows (artist_id 0) belong
+        # to the person, not this band, so they stay.
+        "DELETE FROM member_days_off WHERE artist_id = :aid",
         # bans: purge this artist's row on every venue's ban list.
         "DELETE FROM venue_artist_bans WHERE artist_id = :aid",
         # artist-owned flyers.

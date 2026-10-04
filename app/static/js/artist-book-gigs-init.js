@@ -1053,28 +1053,21 @@ window.showRecentMessages = function() {
   }
 })();
 
-// ── AVAILABILITY TAB (2026-08-01) ───────────────────────────────────────────
-// Moved from artist-edit.html so the artist's team can manage blackout
-// dates alongside gig booking. When the page loads with ?artist_id=X we
-// reveal both sections and render into their containers — same targets
-// artist-availability.js + artist-member-availability.js already look for,
-// so no changes needed in those modules. Sections stay display:none until
-// we know we have an artist_id (matches the artist-edit behavior).
+// ── AVAILABILITY TAB ────────────────────────────────────────────────────────
+// 2026-10-04: one band calendar replaces the two panels that used to live
+// here (artist-wide ranges + a read-only member summary). band-calendar.js
+// owns the whole tab now; it only needs the artist id and the container.
 (function initAvailabilityTab() {
   const params = new URLSearchParams(window.location.search);
   const artistId = params.get('artist_id');
   if (!artistId) return;
-  const aid = parseInt(artistId);
   const section = document.getElementById('availabilitySection');
   if (section) section.style.display = '';
-  const memberSection = document.getElementById('memberAvailabilitySection');
-  if (memberSection) memberSection.style.display = '';
-  // Render the editable artist-wide blackout panel.
-  if (typeof renderAvailabilityPanel === 'function') {
-    renderAvailabilityPanel('availabilityContainer', aid);
+  if (window.gfBandCalendar) {
+    window.gfBandCalendar.mount({
+      el: 'bandCalendar', mode: 'band', artistId: parseInt(artistId)
+    });
   }
-  // artist-member-availability.js auto-loads on DOMContentLoaded so we
-  // don't need to invoke it here — it finds #memberAvailabilityContainer.
 })();
 
 

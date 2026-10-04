@@ -685,6 +685,7 @@ def delete_account(request: Request, data: dict = Body(default={}), user=Depends
         for _stmt in (
             "DELETE FROM user_settings WHERE user_id = :uid",
             "DELETE FROM user_availability WHERE user_id = :uid",
+            "DELETE FROM member_days_off WHERE user_id = :uid",
             "DELETE FROM artist_email_digest_queue WHERE user_id = :uid",
             # BUG FIX 2026-08-07: another sweep for FK-blocking references
             # the previous cascades missed. Symptom: users with no

@@ -8,6 +8,18 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-04 (Band calendar replaces member + artist availability forms):** Three range-entry UIs became one grid. Members used to type a start date, an end date and a reason — one weekend at a time, on a different page from where the band could see them. Now everyone clicks days on the same calendar and the band reads availability at a glance.
+
+  **New table `member_days_off(user_id, artist_id, day)`** with `UNIQUE(user_id, artist_id, day)`, so a click is one INSERT or DELETE. `artist_id = 0` means every band the user plays in (set from their own profile — "I'm away that weekend" is a fact about the person); a real id means that band only (set from the band's calendar, which is how someone booked with one band marks themselves unavailable to another). **0 rather than NULL** because both SQLite and Postgres treat NULLs as distinct in a UNIQUE index, so a nullable column would store the same day twice and the toggle would desync from the grid. A one-time, idempotent migration expands the old ranges into day rows.
+
+  **The soft/hard split survives, and it matters.** A member's day off must never make the artist unavailable: a four-piece that also gigs as a duo has to stay bookable when the drummer is away. So member days only warn — the booking flow names who is out and offers "book anyway". Band-wide blackouts stay in `artist_availability` with their hard-block semantics untouched across all 12 query sites in 5 files (they also pull the artist out of preferred-artist blasts, the open-gig digest and venue holds — things a member being out should never do). They are now set from the same calendar, in the day panel, admin-only.
+
+  **Removed:** `artist-availability.js`, `artist-member-availability.js`, `user-availability.js` (61 KB), the separate "Artist Availability" and "Member Availability" cards, and 8 endpoints — including every writer to `user_availability`, which nothing reads any more. Left in place: `GET`/`DELETE` for artist availability, as an escape hatch.
+
+  **A near-miss worth recording.** Deleting those endpoints by decorator boundary also swallowed `_member_blackouts_for_gig`, which sits between two of them. `gigs.py` imports it inside a `try/except` that falls back to an empty list — so the booking warning would have silently stopped appearing rather than erroring. Caught by a test, restored, and the function now carries a comment saying why its absence is invisible.
+
+  New UI: [band-calendar.js](app/static/js/band-calendar.js), mounted twice — `mode: "band"` on the artist's Availability tab, `mode: "me"` on the user profile. Dates are built from `getFullYear()/getMonth()/getDate()`, never `toISOString()`, which is UTC and would put anyone west of Greenwich on the wrong day through the evening. `tests/test_band_calendar.py`, 10 tests. Old availability rows were cleared at the owner's request.
+
 - **2026-10-02 (Product trailer on the homepage):** The YouTube trailer is embedded in [index.html](app/index.html) as a card in the existing 420px stack, directly above "Request a Live Demo" — the order reads sign in (returning users) → see what this is (new visitors) → ask for a demo.
 
   Headed **"GigsFill - Summary of Features"** in the same purple→cyan gradient as the "Search for live music" panel. The style string is lifted off that heading verbatim rather than re-typed, and a test asserts the two are byte-identical so they cannot drift.

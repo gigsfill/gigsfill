@@ -1853,45 +1853,32 @@
 </section>
 </div>
 
-<!-- TAB: AVAILABILITY (2026-08-01)
-     Moved from artist-edit.html so the artist team can manage blackout
-     dates and see member conflicts from one place, alongside gig booking.
-     Same #availabilitySection + #memberAvailabilityContainer targets
-     the JS modules already look for. -->
+<!-- TAB: AVAILABILITY
+     2026-10-04: replaced two cards and three range-entry forms with one
+     calendar. Members used to type date ranges with a reason, one weekend at
+     a time, in a different place from where the band could see them. Now
+     everyone clicks days on the same grid and the band reads availability at
+     a glance.
+
+     The old split lives on underneath where it matters: a member's day is a
+     soft warning (a four-piece that also plays as a duo must stay bookable
+     when the drummer is away), while blocking the whole band is a hard stop
+     and is set deliberately from the day panel. -->
 <div class="tab-content" id="availability-tab">
 <section class="panel">
 
-  <!-- Artist-wide availability (hard block) -->
   <div class="content-card" id="availabilitySection" style="display:none;">
-    <h2 class="section-header gradient-title" style="margin: 0 0 8px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Artist Availability</h2>
-    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 6px;">
-      Dates this <strong style="color:var(--text);">whole artist</strong> is unavailable — e.g. band on hiatus,
-      touring elsewhere, drummer's wedding, holiday break.
+    <h2 class="section-header gradient-title" style="margin: 0 0 8px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Band Calendar</h2>
+    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 14px;line-height:1.55;">
+      Click any day you can&rsquo;t play &mdash; no reason needed, click again to undo.
+      Everyone in the band marks their own days here, so you can see at a glance
+      when the whole band is free. Click a day to see who&rsquo;s away.
+      <br>
+      Bookings on a day someone is away <strong style="color:var(--text);">still go through</strong>
+      &mdash; you get a warning naming who&rsquo;s out and can book anyway if the
+      line-up still works.
     </p>
-    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 14px;">
-      🚫 <strong style="color:#ef4444;">Hard block</strong> — no warning, no override; the dates
-      are simply not offered as bookable. For a single member being unavailable
-      (rest of the band still plays), use
-      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Availability</a>
-      on that member's profile instead.
-    </p>
-    <div id="availabilityContainer"></div>
-  </div>
-
-  <!-- Member availability (read-only summary) -->
-  <div class="content-card" id="memberAvailabilitySection" style="display:none;margin-top:16px;">
-    <h2 class="section-header gradient-title" style="margin: 0 0 8px 0; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; text-align: left;">Member Availability</h2>
-    <p style="color:var(--text-gray);font-size:0.85rem;margin:0 0 14px;">
-      Read-only view of the personal blackout dates each band member has
-      added on their own profile. These are <strong style="color:#f59e0b;">soft warnings</strong> —
-      bookings on these dates still go through, but the artist gets an
-      alert like "Jim is unavailable that night — play as a duo?" so the
-      band can decide. Members edit their own dates from
-      <a href="/app/user-profile.html#availability" style="color:var(--cyan);">My Profile → My Availability</a>.
-    </p>
-    <div id="memberAvailabilityContainer">
-      <p style="color:var(--text-gray);">Loading…</p>
-    </div>
+    <div id="bandCalendar"></div>
   </div>
 
 </section>
@@ -2704,8 +2691,7 @@
 <script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/vanity-url-editor.js?v=4"></script>
 <script src="/app/static/js/artist-booked-gigs-modal.js?v=3"></script>
-<script src="/app/static/js/artist-availability.js?v=6"></script>
-<script src="/app/static/js/artist-member-availability.js?v=4"></script>
+<script src="/app/static/js/band-calendar.js?v=2"></script>
 <script src="/app/static/js/artist-external-gigs.js?v=22"></script>
 <script src="/app/static/js/artist-book-gigs-init.js?v=15"></script>
 <script src="/app/static/js/onboarding-checklist.js?v=9" defer></script>
