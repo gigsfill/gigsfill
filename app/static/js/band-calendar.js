@@ -452,7 +452,9 @@
       who = '<div class="gfbc-free">Everyone is available.</div>';
     } else {
       who = '<div class="gfbc-who">' + off.map(function (m) {
-        return "<span>" + esc(m.name) + (m.is_self ? " (you)" : "") + "</span>";
+        // No "(you)" marker: the day cell already fills in when it is your own
+        // day, and your name in a list of your own band is not ambiguous.
+        return "<span>" + esc(m.name) + "</span>";
       }).join("") + "</div>" +
       '<p style="margin:8px 0 0;color:var(--text-gray);font-size:0.76rem;">' +
       "Bookings on this date still go through — you'll see a warning naming " +
@@ -576,7 +578,7 @@
         : prettyDay(r.start) + " \u2013 " + prettyDay(r.end);
       var who = isBand
         ? r.entries.map(function (m) {
-            return esc(m.name) + (m.is_self ? " (you)" : "");
+            return esc(m.name);
           }).join(", ")
         : "";
       // All three cells always, even when empty: a skipped cell would slide the
