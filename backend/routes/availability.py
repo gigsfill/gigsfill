@@ -296,6 +296,13 @@ def _toggle_day(db, user_id: int, artist_id: int, day: str):
     db.execute(text("""
         INSERT INTO member_days_off (user_id, artist_id, day) VALUES (:u, :a, :d)
     """), {"u": user_id, "a": artist_id, "d": d.isoformat()})
+    # They engaged, so the unanswered-reminder counter starts over; otherwise a
+    # member who ignored five emails then finally updated would be silenced
+    # after one more lapse.
+    db.execute(text("""
+        INSERT INTO availability_reminders (user_id, send_count) VALUES (:u, 0)
+        ON CONFLICT(user_id) DO UPDATE SET send_count = 0
+    """), {"u": user_id})
     db.commit()
     return True
 
@@ -350,3 +357,58 @@ def get_my_days_off(start: str = None, end: str = None,
     return {"days": days}
 
 
+
+
+@router.get("/api/availability/all-clear", include_in_schema=False)
+def availability_all_clear(token: str = "", db=Depends(get_db)):
+    """One-click "I'm free, stop reminding me" from the weekly email.
+
+    Deliberately unauthenticated: it is reached from an email client, often on
+    a phone that is not logged in, and forcing a login would make the quick
+    answer the slow one. Safety comes from the token — signed, its own salt,
+    60-day expiry — so it cannot be forged or guessed, and the worst a leaked
+    link can do is silence one person's reminder for a month.
+    """
+    from fastapi.responses import HTMLResponse
+    from backend.services.availability_reminder import read_ack_token, record_ack
+    from backend.db import get_db_connection
+
+    # Three outcomes, three headings. A failed save is not an invalid link, and
+    # telling someone their good link is bad sends them hunting for a problem
+    # that is ours.
+    uid = read_ack_token(token)
+    if not uid:
+        heading = "Link not valid"
+        body = ("This link has expired or was altered. Open your availability "
+                "calendar to update it directly.")
+    else:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            record_ack(cur, uid)
+            conn.commit()
+            heading = "All clear"
+            body = ("Thanks — we'll leave you alone for a month. Your band "
+                    "will see you as available until you mark days off.")
+        except Exception:
+            logger.exception("all-clear ack failed for uid=%s", uid)
+            heading = "Couldn't save that"
+            body = ("Your link was fine, but we couldn't record it. Open your "
+                    "availability calendar and mark your days there instead.")
+
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Availability — GigsFill</title></head>
+<body style="margin:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<div style="max-width:520px;margin:48px auto;background:#fff;border-radius:8px;
+     box-shadow:0 1px 3px rgba(0,0,0,0.08);padding:32px 40px;">
+  <img src="/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40"
+       style="display:block;border:0;margin-bottom:24px;">
+  <h1 style="margin:0 0 12px;font-size:20px;color:{'#1d4ed8' if heading == 'All clear' else '#b45309'};">
+    {heading}</h1>
+  <p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#4b5563;">{body}</p>
+  <a href="/app/user-profile.html?tab=availability"
+     style="display:inline-block;padding:12px 24px;background:#1d4ed8;color:#fff;
+            border-radius:6px;text-decoration:none;font-size:15px;font-weight:600;">
+    Open my calendar</a>
+</div></body></html>""")

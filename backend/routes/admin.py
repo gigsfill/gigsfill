@@ -3948,6 +3948,7 @@ def admin_delete_user(target_user_id: int, request: Request,
             "DELETE FROM user_settings            WHERE user_id = :uid",
             "DELETE FROM user_availability        WHERE user_id = :uid",
             "DELETE FROM member_days_off          WHERE user_id = :uid",
+            "DELETE FROM availability_reminders WHERE user_id = :uid",
             "DELETE FROM artist_email_digest_queue WHERE user_id = :uid",
         ):
             try:

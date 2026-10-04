@@ -1768,6 +1768,26 @@ def run_scheduled_emails():
         # local timezone on the calendar day of their demo. Idempotent
         # via demo_requests.reminder_sent_at, so calling every scheduler
         # tick is safe.
+        # Weekly "is your availability up to date?" nudge to band members.
+        # Monday 10:00 Pacific. Triggered by each member's coverage horizon,
+        # not by how long since they last clicked — see
+        # services/availability_reminder.py for why those differ. Idempotent:
+        # last_sent_at rate-limits to one per member per week regardless of how
+        # often this runs.
+        def _send_availability_reminders():
+            from datetime import datetime as _dt
+            try:
+                from zoneinfo import ZoneInfo
+                local = _dt.now(ZoneInfo("America/Los_Angeles"))
+            except Exception as e:
+                logger.warning(f"[SCHED] availability_reminder tz load failed: {e}")
+                return
+            if local.weekday() != 0 or local.hour != 10:
+                return
+            from backend.services.availability_reminder import send_availability_reminders
+            send_availability_reminders(cursor, smtp_config)
+        _run(_send_availability_reminders, "send_availability_reminders")
+
         def _send_demo_reminders():
             from backend.routes.demo_requests import send_pending_demo_reminders
             send_pending_demo_reminders(cursor)

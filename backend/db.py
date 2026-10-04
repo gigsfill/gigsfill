@@ -2678,6 +2678,29 @@ def setup_database():
     c4.execute("CREATE INDEX IF NOT EXISTS idx_member_days_off_day ON member_days_off(day)")
     c4.execute("CREATE INDEX IF NOT EXISTS idx_member_days_off_artist ON member_days_off(artist_id, day)")
 
+    # ── Availability reminder state (2026-10-07) ──────────────────────────
+    # One row per member who has been reminded. Two timestamps, because a
+    # reminder has two valid outcomes and only one of them is "they marked
+    # some days":
+    #
+    #   last_sent_at — rate limit. Never remind the same person twice in a
+    #                  week however many bands they are in.
+    #   last_ack_at  — they clicked "I'm all clear" in the email. A member who
+    #                  is genuinely free for months has nothing to mark, and
+    #                  without this the reminder would chase them forever on
+    #                  exactly the evidence that they are available. Suppresses
+    #                  for ACK_QUIET_DAYS.
+    c4.execute("""
+        CREATE TABLE IF NOT EXISTS availability_reminders (
+            user_id INTEGER PRIMARY KEY,
+            last_sent_at DATETIME,
+            last_ack_at DATETIME,
+            send_count INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
+
     # One-time: expand the old ranges into day rows. Idempotent — the UNIQUE
     # index makes a re-run a no-op, and it only fires while the old table
     # still has rows, so it costs nothing on every subsequent boot.

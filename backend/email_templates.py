@@ -1139,6 +1139,51 @@ TEMPLATES = {
 </html>'''
     },
 
+    # 2026-10-07. Triggered by the coverage horizon, not by how long it has
+    # been since someone last clicked — a member who marked a whole year ahead
+    # last month needs no nudge, and the horizon is what tells us apart from a
+    # member whose marks run out next week.
+    #
+    # The "all clear" button is load-bearing, not decoration: a member who is
+    # genuinely free for months has nothing to mark, and without a way to say
+    # so this email would chase them forever on exactly the evidence that they
+    # are available.
+    "member_availability_reminder": {
+        "subject": "{{subject_line}}",
+        "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+<tbody>
+<tr>
+<td style="padding: 40px 20px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+<tbody>
+<tr>
+<td style="padding: 32px 40px 24px 40px; border-bottom: 1px solid #eee;"><img src="https://gigsfill.com/app/static/img/gigsfill-logo_light.png" alt="GigsFill" width="160" height="40" style="height: 40px; width: 160px; max-width: 160px; display: block; border: 0; outline: none;"></td>
+</tr>
+<tr>
+<td style="padding: 32px 40px;">
+<h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #1d4ed8;">Is your availability up to date?</h1>
+<p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Hi {{member_name}} &mdash; {{horizon_sentence}}</p>
+<p style="margin: 0 0 20px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Your bandmates in <strong>{{band_names}}</strong> see these days on the band calendar, so marking them keeps everyone from booking a date you can&rsquo;t play.</p>
+{{marked_block}}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 8px 0 20px 0;">
+<tbody>
+<tr>
+<td style="border-radius: 6px; background-color: #1d4ed8;"><a href="{{calendar_url}}" style="display: inline-block; padding: 12px 24px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none;">Update my availability</a></td>
+</tr>
+</tbody>
+</table>
+<p style="margin: 0 0 6px 0; font-size: 14px; line-height: 1.6; color: #4b5563;">Nothing to add &mdash; free for everything right now?</p>
+<p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6;"><a href="{{all_clear_url}}" style="color: #1d4ed8;">I&rsquo;m all clear &mdash; don&rsquo;t remind me for a month</a></p>
+<p style="margin: 0; font-size: 13px; line-height: 1.6; color: #9ca3af;">You&rsquo;re getting this because you play in a band on GigsFill. <a href="{{prefs_url}}" style="color: #9ca3af;">Email settings</a></p>
+</td>
+</tr>
+</tbody>
+</table>
+</td>
+</tr>
+</tbody>
+</table>''',
+    },
     "venue_gig_confirmation_reminder": {
         "subject": 'Gig reminder: {{venue_name}} on {{date}}',
         "body": '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">

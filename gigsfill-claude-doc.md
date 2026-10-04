@@ -8,6 +8,18 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-07b (Weekly availability reminder email):** A branded nudge to band members, Mondays 10:00 Pacific. [services/availability_reminder.py](backend/services/availability_reminder.py), template `member_availability_reminder`, new table `availability_reminders(user_id, last_sent_at, last_ack_at, send_count)`.
+
+  **It triggers on the coverage horizon, not on last activity.** The two differ in ways that matter: last-activity would nag a member who sat down last month and marked a whole year ahead — their availability is in excellent shape, the metric just cannot see it. The horizon asks the question that counts, *do we know whether this member is free over the window venues are booking into*, and a member with nothing marked answers it the same way as one whose marks run out next week: we do not know. Default `HORIZON_DAYS = 60`.
+
+  **The always-available problem, and why the "I'm all clear" button is load-bearing.** A member genuinely free for months has nothing to mark, so their horizon never moves and the reminder would chase them forever on exactly the evidence that they are available. The email carries a one-click link that stamps `last_ack_at` and buys 30 days of silence. Belt and braces: `MAX_UNANSWERED = 6` stops after six ignored emails, and marking any day resets that counter, so a member who ignores five then engages is not silenced on the next lapse.
+
+  **The ack link is unauthenticated by design** — it is opened from an email client, often on a phone that is not logged in, and requiring a login would make the quick answer the slow one. Safety is in the token: signed, **its own salt** (so it can never be replayed against email-verify or password-reset), 60-day expiry. Verified that an email-verify token is rejected here and vice versa.
+
+  **Checked that the two systemd units share a signing key**, since the scheduler mints these tokens and the API verifies them — a mismatch would mean every link in the wild silently failing. Same fingerprint on both.
+
+  Two bugs found while testing: `get_template` falls back to a `notification_type` column this schema does not have, so a missing template **raises** instead of returning `None` and the `if not tpl` guard never ran (now wrapped); and the ack page showed "Link not valid" when the *save* failed, telling someone with a perfectly good link to go hunting for a problem that was ours (now three distinct outcomes).
+
 - **2026-10-07 (Press and hold to inspect a day on touch):** Closes the gap left by the hover fix. On a phone or tablet, holding a day for 450ms reveals who is away without marking you off; a normal tap still toggles.
 
   Four details, each verified on an emulated iPhone (`has_touch`, `is_mobile`, `hover: none`):
