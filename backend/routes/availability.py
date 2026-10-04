@@ -115,6 +115,70 @@ def delete_blackout(artist_id: int, blackout_id: int,
 
 
 # ── UPDATE BLACKOUT ────────────────────────────────────────────────────────────
+# Statuses that mean a slot is a real commitment, not a browse. Same set
+# _check_artist_time_conflict uses in gigs.py — kept identical on purpose, so
+# "committed" means one thing across the app.
+_COMMITTED = "('booked','pending_contract','awaiting_venue_contract','pending_venue_approval')"
+
+
+def _other_band_commitments(db, artist_id: int, start: str, end: str):
+    """Days a member of this band is already playing with a DIFFERENT band.
+
+    Derived, never stored. Writing these as rows at booking time would mean
+    deleting them again on every cancel, decline, date change and roster
+    change — and the three cancellation endpoints in gigs.py are already the
+    place this codebase most often fixes one path and misses another. A stale
+    "unavailable" is worse than none, so this is computed on read and is
+    always right.
+
+    Returns {day: [{user_id, name, artist_id, artist_name, venue_name}]}.
+    """
+    rows = db.execute(text(f"""
+        SELECT date(g.date) AS day,
+               eu.user_id AS user_id,
+               COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) AS name,
+               a2.id AS other_artist_id,
+               a2.name AS other_artist_name,
+               v.venue_name AS venue_name
+        FROM (
+            SELECT user_id FROM artists WHERE id = :aid AND user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM entity_users
+            WHERE entity_type = 'artist' AND entity_id = :aid
+        ) eu
+        JOIN users u ON u.id = eu.user_id
+        JOIN (
+            SELECT id, name, user_id AS member_id FROM artists
+            WHERE user_id IS NOT NULL AND deleted_at IS NULL
+            UNION
+            SELECT a.id, a.name, e.user_id FROM artists a
+            JOIN entity_users e ON e.entity_type = 'artist' AND e.entity_id = a.id
+            WHERE a.deleted_at IS NULL
+        ) a2 ON a2.member_id = eu.user_id AND a2.id <> :aid
+        JOIN gig_slots gs ON gs.artist_id = a2.id AND gs.status IN {_COMMITTED}
+        JOIN gigs g ON g.id = gs.gig_id
+        LEFT JOIN venues v ON v.id = g.venue_id
+        WHERE date(g.date) BETWEEN date(:s) AND date(:e)
+    """), {"aid": artist_id, "s": start, "e": end}).mappings().all()
+
+    out = {}
+    for r in rows:
+        day = str(r["day"])[:10]
+        bucket = out.setdefault(day, [])
+        # One member double-booked with two other bands on one night is still
+        # one unavailable person for this band; keep the first.
+        if any(x["user_id"] == r["user_id"] for x in bucket):
+            continue
+        bucket.append({
+            "user_id": r["user_id"],
+            "name": r["name"],
+            "artist_id": r["other_artist_id"],
+            "artist_name": r["other_artist_name"],
+            "venue_name": r["venue_name"],
+        })
+    return out
+
+
 def _member_blackouts_for_gig(db, artist_id: int, gig_date: str,
                               current_user_id: int = None):
     """Members who have marked themselves off on a gig date.
@@ -162,10 +226,34 @@ def _member_blackouts_for_gig(db, artist_id: int, gig_date: str,
             "user_id": r["user_id"],
             "name": r["name"],
             "scope": "all" if not r["artist_id"] else "band",
+            "with_artist": None,
+            "venue": None,
             "blackout_start": gd,
             "blackout_end": gd,
             "reason": "",
             "is_self": (current_user_id is not None and r["user_id"] == current_user_id),
+        })
+
+    # A member already playing with another band that night is unavailable
+    # whether or not they remembered to click the day — which is the point:
+    # nobody has to maintain it.
+    for p in _other_band_commitments(db, artist_id, gd, gd).get(gd, []):
+        prior = next((x for x in out if x["user_id"] == p["user_id"]), None)
+        if prior:
+            prior["scope"] = "gig"
+            prior["with_artist"] = p["artist_name"]
+            prior["venue"] = p["venue_name"]
+            continue
+        out.append({
+            "user_id": p["user_id"],
+            "name": p["name"],
+            "scope": "gig",
+            "with_artist": p["artist_name"],
+            "venue": p["venue_name"],
+            "blackout_start": gd,
+            "blackout_end": gd,
+            "reason": "",
+            "is_self": (current_user_id is not None and p["user_id"] == current_user_id),
         })
     return out
 
@@ -264,6 +352,28 @@ def get_band_calendar(artist_id: int, start: str = None, end: str = None,
             "scope": "all" if not r["artist_id"] else "band",
             "is_self": r["user_id"] == user.id,
         })
+
+    # Members already playing with another band that night. Derived, so it is
+    # merged in after the clicked days rather than stored alongside them.
+    for day, people in _other_band_commitments(db, artist_id, s.isoformat(), e.isoformat()).items():
+        entry = days.setdefault(day, [])
+        for p in people:
+            prior = next((x for x in entry if x["user_id"] == p["user_id"]), None)
+            if prior:
+                # They clicked the day off AND have a gig. The gig is the more
+                # specific fact, so say that instead of the bare "off".
+                prior["scope"] = "gig"
+                prior["with_artist"] = p["artist_name"]
+                prior["venue"] = p["venue_name"]
+                continue
+            entry.append({
+                "user_id": p["user_id"],
+                "name": p["name"],
+                "scope": "gig",
+                "with_artist": p["artist_name"],
+                "venue": p["venue_name"],
+                "is_self": p["user_id"] == user.id,
+            })
 
     band_rows = db.execute(text("""
         SELECT id, blackout_start, blackout_end, reason FROM artist_availability

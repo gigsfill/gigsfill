@@ -93,6 +93,9 @@
       ".gfbc-dots { display:flex; flex-wrap:wrap; gap:2px; margin-top:auto; }",
       ".gfbc-dot { width:15px; height:15px; border-radius:50%; font-size:0.52rem; font-weight:700;",
       "  display:flex; align-items:center; justify-content:center; color:#0b0f17; letter-spacing:-0.02em; }",
+      /* A gig with another band is a fact, not a choice: square it off and
+         ring it so it never reads as something you clicked. */
+      ".gfbc-dot.gfbc-gig { border-radius:4px; box-shadow:0 0 0 1.5px rgba(255,255,255,0.45) inset; }",
       ".gfbc-more { font-size:0.56rem; color:var(--text-gray); align-self:center; }",
       ".gfbc-lock { position:absolute; top:3px; right:4px; font-size:0.6rem; color:var(--gfbc-block); }",
       ".gfbc-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:0.72rem; color:var(--text-gray); }",
@@ -104,6 +107,8 @@
       ".gfbc-who { display:flex; flex-wrap:wrap; gap:6px; }",
       ".gfbc-who span { padding:2px 9px; border-radius:999px; font-size:0.72rem;",
       "  background:rgba(245,158,11,0.14); color:#fbbf24; border:1px solid rgba(245,158,11,0.3); }",
+      ".gfbc-who span.gfbc-gigchip { background:rgba(52,211,153,0.13); color:#6ee7b7;",
+      "  border-color:rgba(52,211,153,0.33); }",
       ".gfbc-free { color:#34d399; font-size:0.78rem; }",
       ".gfbc-act { margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; }",
       ".gfbc-act button { border-radius:6px; cursor:pointer; font-size:0.76rem; padding:6px 13px;",
@@ -211,8 +216,11 @@
       if (this.o.mode === "band") {
         var shown = off.slice(0, 3);
         dots = shown.map(function (m) {
-          return '<span class="gfbc-dot" style="background:hsl(' + hueFor(m.user_id) +
-                 ',70%,62%)" title="' + esc(m.name) + '">' + esc(initials(m.name)) + "</span>";
+          var isGig = m.scope === "gig";
+          var tip = m.name + (isGig ? " — booked with " + (m.with_artist || "another band") : "");
+          return '<span class="gfbc-dot' + (isGig ? " gfbc-gig" : "") +
+                 '" style="background:hsl(' + hueFor(m.user_id) +
+                 ',70%,62%)" title="' + esc(tip) + '">' + esc(initials(m.name)) + "</span>";
         }).join("");
         if (off.length > shown.length) {
           dots += '<span class="gfbc-more">+' + (off.length - shown.length) + "</span>";
@@ -233,6 +241,7 @@
     var legend = this.o.mode === "band"
       ? '<span><i style="background:rgba(245,158,11,0.6)"></i>You are off</span>' +
         '<span><i style="background:hsl(200,70%,62%)"></i>A member is off — booking still allowed</span>' +
+        '<span><i style="background:hsl(140,70%,62%);border-radius:2px;box-shadow:0 0 0 1.5px rgba(255,255,255,0.45) inset"></i>Booked with another band — automatic</span>' +
         '<span><i style="background:rgba(239,68,68,0.7)"></i>Whole band blocked — not bookable</span>'
       : '<span><i style="background:rgba(245,158,11,0.6)"></i>You are off</span>';
 
@@ -306,12 +315,18 @@
   Cal.prototype.applyLocal = function (day, isOff) {
     var list = this.data.days[day] || [];
     if (this.o.mode === "band") {
+      // A gig with another band is derived from a booking, not from a click,
+      // so un-clicking must not wipe it off the grid — only the server
+      // cancelling that gig can. Without this guard, clearing your own day
+      // would appear to clear a booking you are still committed to.
+      var gig = list.filter(function (m) { return m.is_self && m.scope === "gig"; })[0];
       if (isOff) {
         if (!list.some(function (m) { return m.is_self; })) {
           list.push({ user_id: this.meId(), name: this.meName(), scope: "band", is_self: true });
         }
       } else {
         list = list.filter(function (m) { return !m.is_self; });
+        if (gig) list.push(gig);
       }
     } else {
       list = isOff ? [{ artist_id: 0, artist_name: null, scope: "all" }] : [];
@@ -347,7 +362,12 @@
       who = '<div class="gfbc-free">Everyone is available.</div>';
     } else {
       who = '<div class="gfbc-who">' + off.map(function (m) {
-        return "<span>" + esc(m.name) + (m.is_self ? " (you)" : "") + "</span>";
+        var label = esc(m.name) + (m.is_self ? " (you)" : "");
+        if (m.scope === "gig") {
+          label += " — booked with " + esc(m.with_artist || "another band");
+          if (m.venue) label += " at " + esc(m.venue);
+        }
+        return '<span' + (m.scope === "gig" ? ' class="gfbc-gigchip"' : "") + ">" + label + "</span>";
       }).join("") + "</div>" +
       '<p style="margin:8px 0 0;color:var(--text-gray);font-size:0.76rem;">' +
       "Bookings on this date still go through — you'll see a warning naming " +

@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-04b (Cross-band conflicts show automatically):** A member in two bands who is booked with one now shows as unavailable on the other's calendar, and in its booking warning, without anyone clicking anything.
+
+  **Derived, never stored.** Writing these as `member_days_off` rows at booking time would mean deleting them again on cancel, decline, date change and roster change — and `gigs.py` has three cancellation endpoints that this doc already flags as the place a fix lands on one path and misses the others. A stale "unavailable" is worse than none, so `_other_band_commitments()` computes it on read and is always correct. It self-heals: cancel the gig and the marking disappears on the next load.
+
+  The "committed" status set (`booked`, `pending_contract`, `awaiting_venue_contract`, `pending_venue_approval`) is deliberately identical to the one `_check_artist_time_conflict` uses in `gigs.py`, so the calendar and the booking guard cannot disagree about whether a slot counts. Deleted artists are excluded on both legs of the membership union, or a tombstoned band would produce phantom conflicts.
+
+  **Still soft.** It names the clash — "John Carta — booked with Fifty Proof at Venue Demo" — and the band books anyway if the line-up works. Nothing here touches `artist_availability`.
+
+  UI: derived days render as a squared, ringed dot rather than the round one, so a fact never reads as something a member clicked. One subtlety worth keeping: `applyLocal()` preserves a derived gig when you un-click your own day on the same date — without that guard, clearing your day would appear to clear a booking you are still committed to. Verified in a browser by toggling twice on a gig date and asserting the dot survives.
+
 - **2026-10-04 (Band calendar replaces member + artist availability forms):** Three range-entry UIs became one grid. Members used to type a start date, an end date and a reason — one weekend at a time, on a different page from where the band could see them. Now everyone clicks days on the same calendar and the band reads availability at a glance.
 
   **New table `member_days_off(user_id, artist_id, day)`** with `UNIQUE(user_id, artist_id, day)`, so a click is one INSERT or DELETE. `artist_id = 0` means every band the user plays in (set from their own profile — "I'm away that weekend" is a fact about the person); a real id means that band only (set from the band's calendar, which is how someone booked with one band marks themselves unavailable to another). **0 rather than NULL** because both SQLite and Postgres treat NULLs as distinct in a UNIQUE index, so a nullable column would store the same day twice and the toggle would desync from the grid. A one-time, idempotent migration expands the old ranges into day rows.

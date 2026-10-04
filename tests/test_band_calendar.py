@@ -126,3 +126,65 @@ def test_dates_are_local_not_utc():
                      if not l.strip().startswith(("*", "/*", "//")))
     assert "toISOString" not in body
     assert "getFullYear()" in body
+
+
+# ── Cross-band: booked with one band shows as unavailable to the others ──────
+
+def test_cross_band_conflicts_are_derived_not_stored():
+    """Writing these at booking time would mean deleting them again on every
+    cancel, decline, date change and roster change. gigs.py has three
+    cancellation endpoints that the project's own notes call easy to fix one
+    of and miss the others; a stale "unavailable" is worse than none."""
+    src = ROUTES.read_text()
+    fn = _func(src, "_other_band_commitments")
+    assert "SELECT" in fn and "INSERT" not in fn and "DELETE" not in fn, \
+        "cross-band conflicts are being written somewhere"
+    # And nothing in the booking path writes them either.
+    gigs = (ROOT / "backend" / "routes" / "gigs.py").read_text()
+    assert "INSERT INTO member_days_off" not in gigs
+
+
+def test_commitment_statuses_match_the_booking_conflict_check():
+    """"Committed" has to mean the same thing here as it does in
+    _check_artist_time_conflict, or the calendar and the booking guard
+    disagree about whether a slot counts."""
+    src = ROUTES.read_text()
+    gigs = (ROOT / "backend" / "routes" / "gigs.py").read_text()
+    wanted = {"booked", "pending_contract", "awaiting_venue_contract",
+              "pending_venue_approval"}
+    got = set(re.findall(r"'(\w+)'", src[src.index("_COMMITTED ="):][:300]))
+    assert wanted <= got, got
+    assert "'booked','pending_contract','awaiting_venue_contract','pending_venue_approval'" in gigs
+
+
+def test_deleted_bands_do_not_create_phantom_conflicts():
+    src = ROUTES.read_text()
+    fn = _func(src, "_other_band_commitments")
+    assert fn.count("deleted_at IS NULL") >= 2
+
+
+def test_a_cross_band_gig_still_only_warns():
+    """Same rule as a clicked day: it names the clash and lets the band book
+    anyway. Nothing here may touch the hard-block table."""
+    src = ROUTES.read_text()
+    assert "artist_availability" not in _func(src, "_other_band_commitments")
+
+
+def test_the_warning_says_which_band_and_venue():
+    """"Scott is away" is not actionable; "Scott is booked with Fifty Proof
+    at Venue Demo" is."""
+    src = ROUTES.read_text()
+    fn = _func(src, "_member_blackouts_for_gig")
+    assert "with_artist" in fn and "venue" in fn
+    assert "_other_band_commitments" in fn
+    js = JS.read_text()
+    assert "booked with " in js
+
+
+def test_untoggling_your_day_does_not_erase_a_derived_gig():
+    """Otherwise clearing your own day would appear to clear a booking you
+    are still committed to."""
+    js = JS.read_text()
+    fn = js[js.index("Cal.prototype.applyLocal"):]
+    fn = fn[:fn.index("Cal.prototype.meId")]
+    assert 'm.scope === "gig"' in fn and "if (gig) list.push(gig)" in fn
