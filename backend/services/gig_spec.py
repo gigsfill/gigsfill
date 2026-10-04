@@ -50,15 +50,24 @@ NUM_FIELDS = frozenset({"stage_width_ft", "stage_depth_ft"})
 OVR_PREFIX = "ovr_"
 
 
+ENABLED_COL = OVR_PREFIX + "enabled"
+
+
 def select_sql(gig_alias: str = "g", venue_alias: str = "v") -> str:
     """The SELECT fragment that resolves every field, aliased to the plain
     venue column name so existing consumers keep working unchanged.
 
-    Callers that previously listed `v.has_sound_equipment` swap that line for
-    this fragment and get the resolved value under the same key.
+    All-or-nothing on `ovr_enabled`, not a per-field COALESCE. When a venue
+    ticks "this gig is different" the form prefills from the venue and the gig
+    then carries a complete copy, so a field left exactly as the venue had it
+    is still that gig's own answer. A COALESCE would quietly re-point such a
+    field at the venue the next time the venue profile changed, and only that
+    field — the gig would be half snapshot, half live.
     """
+    flag = f"COALESCE({gig_alias}.{ENABLED_COL}, 0)"
     return ",\n".join(
-        f"COALESCE({gig_alias}.{OVR_PREFIX}{f}, {venue_alias}.{f}) AS {f}"
+        f"CASE WHEN {flag} = 1 THEN {gig_alias}.{OVR_PREFIX}{f} "
+        f"ELSE {venue_alias}.{f} END AS {f}"
         for f in FIELDS
     )
 
@@ -72,47 +81,59 @@ def resolve(gig_row, venue_row) -> dict:
     """
     gig_row = gig_row or {}
     venue_row = venue_row or {}
-    out = {}
-    for f in FIELDS:
-        v = gig_row.get(OVR_PREFIX + f)
-        out[f] = venue_row.get(f) if v is None else v
-    return out
+    on = str(gig_row.get(ENABLED_COL) or 0) in ("1", "True", "true")
+    if not on:
+        return {f: venue_row.get(f) for f in FIELDS}
+    return {f: gig_row.get(OVR_PREFIX + f) for f in FIELDS}
 
 
 def overridden_fields(gig_row) -> list:
     """Which fields this gig overrides. Drives the "differs from your usual
     setup" badge so a venue can see at a glance that a gig is not standard."""
     gig_row = gig_row or {}
-    return [f for f in FIELDS if gig_row.get(OVR_PREFIX + f) is not None]
+    if str(gig_row.get(ENABLED_COL) or 0) not in ("1", "True", "true"):
+        return []
+    return list(FIELDS)
 
 
 def clean_payload(data: dict) -> dict:
-    """Pull override values out of an API payload, normalised.
+    """Pull the override block out of an API payload.
 
-    Accepts either `ovr_has_stage` or a nested `spec_overrides` object. An
-    explicit null clears the override and returns the gig to the venue
-    default — that has to stay expressible, or a venue could set an override
-    and never undo it.
+    The form is all-or-nothing, matching what a venue sees:
+
+      ovr_enabled 0/absent → clears every field and the gig inherits again.
+                             Clearing matters: a venue that ticks the box and
+                             then unticks it must actually go back to the
+                             venue defaults, not keep a stale copy that no
+                             longer shows anywhere in the form.
+      ovr_enabled 1        → stores every field. The form prefills from the
+                             venue, so even untouched fields are a deliberate
+                             statement of what this gig provides.
     """
     src = data.get("spec_overrides") if isinstance(data.get("spec_overrides"), dict) else data
-    out = {}
+    if ENABLED_COL not in src and "spec_override_enabled" not in src:
+        return {}                       # absent entirely: leave the gig as-is
+
+    raw_flag = src.get(ENABLED_COL, src.get("spec_override_enabled"))
+    on = str(raw_flag).strip().lower() in ("1", "true", "yes", "on")
+    if not on:
+        out = {ENABLED_COL: 0}
+        out.update({OVR_PREFIX + f: None for f in FIELDS})
+        return out
+
+    out = {ENABLED_COL: 1}
     for f in FIELDS:
-        key = OVR_PREFIX + f
-        raw = src.get(key, src.get(f) if "spec_overrides" in data else None)
-        if key not in src and not ("spec_overrides" in data and f in src):
-            continue                      # absent entirely: leave as-is
-        if raw is None or (isinstance(raw, str) and raw.strip() == "" and f not in BOOL_FIELDS):
-            out[key] = None               # explicit clear
-            continue
+        raw = src.get(OVR_PREFIX + f, src.get(f))
         if f in BOOL_FIELDS:
-            out[key] = 1 if str(raw).strip().lower() in ("1", "true", "yes", "on") else 0
+            out[OVR_PREFIX + f] = 1 if str(raw).strip().lower() in ("1", "true", "yes", "on") else 0
         elif f in NUM_FIELDS:
             try:
-                out[key] = float(raw)
+                out[OVR_PREFIX + f] = None if raw in (None, "") else float(raw)
             except (TypeError, ValueError):
-                out[key] = None
+                out[OVR_PREFIX + f] = None
         else:
-            out[key] = str(raw).strip()[:2000] or None
+            txt = "" if raw is None else str(raw).strip()[:2000]
+            out[OVR_PREFIX + f] = txt or None
     return out
 
 
@@ -168,3 +189,94 @@ def save_overrides(db, gig_ids, data: dict) -> int:
         params["gid"] = gid
         db.execute(_text(f"UPDATE gigs SET {assigns} WHERE id = :gid"), params)
     return len(cols)
+
+
+def gigs_with_own_setup(db, venue_id: int, from_date=None):
+    """Future gigs at this venue that carry their own spec copy.
+
+    A venue that edits its room settings needs to know which gigs will NOT
+    pick the changes up — that is the cost of the snapshot model, and leaving
+    a venue to discover it when an artist turns up expecting the old setup is
+    not acceptable.
+
+    Each row carries the fields that now differ from the venue's current
+    answers, so the venue can see whether the drift actually matters: a gig
+    pinned only because of its PA, on a venue that just edited its bar tab,
+    needs no action.
+
+    Past gigs are excluded. Rewriting what a finished gig advertised would
+    change the record after the fact, including on a signed contract.
+    """
+    from sqlalchemy import text as _text
+    from datetime import date as _date
+    frm = str(from_date or _date.today())[:10]
+    cols = ", ".join("g." + OVR_PREFIX + f for f in FIELDS)
+    rows = db.execute(_text(f"""
+        SELECT g.id, g.date, g.start_time, g.title, g.status, {cols}
+        FROM gigs g
+        WHERE g.venue_id = :vid
+          AND COALESCE(g.{ENABLED_COL}, 0) = 1
+          AND date(g.date) >= date(:frm)
+          AND (g.status IS NULL OR g.status != 'cancelled')
+        ORDER BY g.date, g.start_time
+    """), {"vid": venue_id, "frm": frm}).mappings().all()
+    if not rows:
+        return []
+
+    venue = db.execute(_text("SELECT * FROM venues WHERE id = :v"),
+                       {"v": venue_id}).mappings().first() or {}
+
+    def _same(a, b):
+        # 0 vs "0" vs False all mean the same thing across SQLite and PG, and
+        # an empty string and NULL are both "nothing said".
+        if a is None and b is None:
+            return True
+        if a in (None, "") and b in (None, ""):
+            return True
+        try:
+            return float(a) == float(b)
+        except (TypeError, ValueError):
+            return str(a).strip() == str(b).strip()
+
+    out = []
+    for r in rows:
+        differs = [f for f in FIELDS if not _same(r[OVR_PREFIX + f], venue.get(f))]
+        out.append({
+            "gig_id": r["id"], "date": str(r["date"])[:10],
+            "start_time": r["start_time"], "title": r["title"],
+            "status": r["status"], "differs": differs,
+        })
+    return out
+
+
+def copy_venue_defaults_to(db, venue_id: int, gig_ids) -> int:
+    """Overwrite these gigs' stored copies with the venue's current answers.
+
+    Keeps the flag ON. The gig stays pinned — it was marked different for a
+    reason and the venue may want it to stay that way — it is simply re-based
+    on today's venue settings. A venue that wants the gig to follow the venue
+    from now on unticks the box on the gig instead, which clears the copy.
+
+    Scoped to gigs belonging to this venue, so a crafted id list cannot reach
+    another venue's gigs.
+    """
+    from sqlalchemy import text as _text
+    ids = [int(i) for i in (gig_ids or []) if str(i).strip()]
+    if not ids:
+        return 0
+    venue = db.execute(_text("SELECT * FROM venues WHERE id = :v"),
+                       {"v": venue_id}).mappings().first()
+    if not venue:
+        return 0
+    assigns = ", ".join(f"{OVR_PREFIX}{f} = :{f}" for f in FIELDS)
+    params = {f: venue.get(f) for f in FIELDS}
+    n = 0
+    for gid in ids:
+        p = dict(params)
+        p["gid"] = gid
+        p["vid"] = venue_id
+        res = db.execute(_text(
+            f"UPDATE gigs SET {assigns} WHERE id = :gid AND venue_id = :vid "
+            f"AND COALESCE({ENABLED_COL}, 0) = 1"), p)
+        n += (res.rowcount or 0)
+    return n

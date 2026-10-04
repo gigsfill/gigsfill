@@ -3755,25 +3755,25 @@
       <div class="modal-row" style="align-items:flex-start;">
         <label>This Gig&rsquo;s Setup</label>
         <div class="modal-control" style="flex:1;">
-          <button type="button" id="gigSpecToggle"
-                  style="background:rgba(255,255,255,0.06);border:1px solid var(--border);
-                         color:var(--text);border-radius:6px;padding:7px 13px;font-size:0.8rem;
-                         cursor:pointer;">
-            Differs from your usual setup? <span id="gigSpecCount"></span>
-          </button>
+          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;
+                        font-size:0.82rem;color:var(--text);">
+            <input type="checkbox" id="gigSpecOn" style="accent-color:var(--cyan);">
+            This gig differs from my usual venue setup
+            <span id="gigSpecCount"></span>
+          </label>
           <div id="gigSpecPanel" style="display:none;margin-top:12px;border:1px solid var(--border);
                border-radius:8px;padding:14px;background:rgba(255,255,255,0.02);">
             <p style="margin:0 0 12px;font-size:0.78rem;color:var(--text-gray);line-height:1.55;">
-              Leave anything blank to use your venue&rsquo;s usual answer. Change only what&rsquo;s
+              Pre-filled with your venue&rsquo;s current settings. Change whatever is
               different for this gig &mdash; artists see these details, and they filter
-              searches on them.
+              searches on them. Untick the box above to go back to your venue defaults.
             </p>
             <div id="gigSpecFields"></div>
             <button type="button" id="gigSpecReset"
                     style="margin-top:12px;background:none;border:1px solid var(--border);
                            color:var(--text-gray);border-radius:6px;padding:5px 11px;
                            font-size:0.74rem;cursor:pointer;">
-              Use my venue defaults for everything
+              Re-copy my venue settings
             </button>
           </div>
         </div>
@@ -3996,8 +3996,8 @@
 <script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/hold-mgmt.js?v=13"></script>
-<script src="/app/static/js/gig-spec-overrides.js?v=1"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=267"></script>
+<script src="/app/static/js/gig-spec-overrides.js?v=2"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=268"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/venue.contracts.js?v=4" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=27" defer></script>

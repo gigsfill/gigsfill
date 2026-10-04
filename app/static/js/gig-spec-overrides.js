@@ -1,26 +1,26 @@
 /**
  * Per-gig room spec overrides.
  * ============================
- * 2026-10-07. Every gig used to inherit the venue's standing spec through a
- * live JOIN. A venue whose default is "no PA" had no way to say it was
- * bringing one for a particular night — and because artists filter gig search
- * on these fields, that gig was quietly filtered OUT of results for everyone
- * who requires sound equipment. The venue lost applicants on the gig it cared
- * most about, with nothing on screen to explain it.
+ * 2026-10-07, reworked 2026-10-08. Every gig used to inherit the venue's
+ * standing spec through a live JOIN. A venue whose default is "no PA" had no
+ * way to say it was bringing one for a particular night — and because artists
+ * filter gig search on these fields, that gig was quietly filtered OUT of
+ * results for everyone who requires sound equipment.
  *
- * Each control is tri-state, not a plain input:
- *   "Use my venue default"  → sends null, the gig inherits
- *   Yes / No, or typed text → sends the value, this gig only
+ * One checkbox, then the same form the venue edit page shows, prefilled with
+ * the venue's current answers. Tick it and edit whatever differs; everything
+ * else stays as the venue has it, and the gig keeps its own complete copy.
  *
- * That third state is the whole point. A plain checkbox cannot distinguish
- * "no PA for this gig" from "I haven't said", and a plain text box cannot
- * distinguish "no bar tab tonight" from "unchanged" — which are exactly the
- * overrides a venue is most likely to want.
+ * The earlier design made each control tri-state ("use my venue default" /
+ * Yes / No) so only genuinely changed fields were pinned. It was replaced
+ * because it asked venues to learn a control they see nowhere else, to solve
+ * a problem they do not have. The cost is that an overridden gig is a
+ * snapshot: later edits to the venue profile do not reach it. For a gig whose
+ * details artists have already seen, that is arguably the safer behaviour.
  *
- * window.gfGigSpec.mount({ venue })  — venue row, for the default labels
+ * window.gfGigSpec.mount({ venue })  — venue row, used to prefill
  * window.gfGigSpec.load(gig)         — fill from a gig being edited
- * window.gfGigSpec.payload()         — { ovr_*: value|null } for the save
- * window.gfGigSpec.reset()           — back to inheriting everything
+ * window.gfGigSpec.payload()         — { ovr_enabled, ovr_* } for the save
  */
 (function () {
   "use strict";
@@ -85,18 +85,12 @@
         var id = "ovr_" + key;
         var ctrl;
         if (kind === "bool") {
-          // A select, not a checkbox: a checkbox has two states and this
-          // needs three. "Use my venue default" has to be distinguishable
-          // from an explicit No.
-          ctrl = '<select id="' + id + '" data-k="' + key + '" data-t="bool">' +
-                   '<option value="">Use my venue default (' + esc(defaultLabel(key, kind)) + ")</option>" +
-                   '<option value="1">Yes &mdash; for this gig</option>' +
-                   '<option value="0">No &mdash; for this gig</option>' +
-                 "</select>";
+          ctrl = '<label class="gf-spec-yn"><input type="checkbox" id="' + id +
+                 '" data-k="' + key + '" data-t="bool"> Yes</label>';
         } else {
           ctrl = '<input type="' + (kind === "num" ? "number" : "text") + '" id="' + id +
-                 '" data-k="' + key + '" data-t="' + kind + '" placeholder="' +
-                 esc(defaultLabel(key, kind)) + '"' + (kind === "num" ? ' step="0.5" min="0"' : "") + ">";
+                 '" data-k="' + key + '" data-t="' + kind + '"' +
+                 (kind === "num" ? ' step="0.5" min="0"' : "") + ">";
         }
         return '<div class="gf-spec-row">' +
                  '<label for="' + id + '">' + esc(label) + "</label>" +
@@ -106,9 +100,18 @@
       return '<div class="gf-spec-group"><h4>' + esc(grp[0]) + "</h4>" + rows + "</div>";
     }).join("");
     injectStyles();
-    host.addEventListener("input", updateCount);
-    host.addEventListener("change", updateCount);
-    updateCount();
+    prefill();
+  }
+
+  // Copy the venue's current answers in. Called on mount and whenever the box
+  // is ticked from empty, so the venue starts from what they already have
+  // rather than a blank form they would have to retype.
+  function prefill() {
+    els().forEach(function (el) {
+      var v = venueRow[el.dataset.k];
+      if (el.dataset.t === "bool") el.checked = truthy(v);
+      else el.value = (v === null || v === undefined) ? "" : String(v);
+    });
   }
 
   function injectStyles() {
@@ -140,75 +143,83 @@
       document.querySelectorAll("#gigSpecFields [data-k]"));
   }
 
-  function updateCount() {
-    var n = 0;
-    els().forEach(function (el) {
-      var set = String(el.value).trim() !== "";
-      el.classList.toggle("on", set);
-      if (set) n++;
-    });
-    var badge = document.getElementById("gigSpecCount");
-    if (badge) badge.textContent = n ? "— " + n + " changed" : "";
-    // Open the panel on load when a gig already overrides something, or the
-    // venue would have to guess that there is anything behind the button.
-    if (n && !_userToggled) show(true);
+  function enabled() {
+    var c = document.getElementById("gigSpecOn");
+    return !!(c && c.checked);
   }
 
-  var _userToggled = false;
-  function show(on) {
+  function syncPanel() {
+    var on = enabled();
     var p = document.getElementById("gigSpecPanel");
     if (p) p.style.display = on ? "block" : "none";
+    var badge = document.getElementById("gigSpecCount");
+    if (badge) badge.textContent = on ? "" : "";
   }
 
   window.gfGigSpec = {
     mount: function (opts) {
       venueRow = (opts && opts.venue) || {};
       render();
-      var t = document.getElementById("gigSpecToggle");
-      if (t && !t._wired) {
-        t._wired = true;
-        t.addEventListener("click", function () {
-          _userToggled = true;
-          var p = document.getElementById("gigSpecPanel");
-          show(!p || p.style.display === "none");
+      var chk = document.getElementById("gigSpecOn");
+      if (chk && !chk._wired) {
+        chk._wired = true;
+        chk.addEventListener("change", function () {
+          // Ticking from empty copies the venue's current answers in. Ticking
+          // back on a gig that already has its own copy must NOT re-copy, or
+          // a venue toggling the box twice would silently lose their edits.
+          if (chk.checked && !_hasOwnCopy) prefill();
+          syncPanel();
         });
       }
-      var r = document.getElementById("gigSpecReset");
-      if (r && !r._wired) {
-        r._wired = true;
-        r.addEventListener("click", function () { window.gfGigSpec.reset(); });
+      var rst = document.getElementById("gigSpecReset");
+      if (rst && !rst._wired) {
+        rst._wired = true;
+        rst.addEventListener("click", function () { window.gfGigSpec.reset(); });
       }
+      syncPanel();
     },
 
     load: function (gig) {
-      _userToggled = false;
-      els().forEach(function (el) {
-        var v = gig ? gig["ovr_" + el.dataset.k] : null;
-        el.value = (v === null || v === undefined) ? "" : String(v);
-      });
-      updateCount();
+      var on = String((gig && gig.ovr_enabled) || 0) === "1";
+      _hasOwnCopy = on;
+      var chk = document.getElementById("gigSpecOn");
+      if (chk) chk.checked = on;
+      if (on) {
+        els().forEach(function (el) {
+          var v = gig["ovr_" + el.dataset.k];
+          if (el.dataset.t === "bool") el.checked = truthy(v);
+          else el.value = (v === null || v === undefined) ? "" : String(v);
+        });
+      } else {
+        prefill();
+      }
+      syncPanel();
     },
 
+    // "Re-copy my venue settings" — discard this gig's edits and start again
+    // from the venue's current answers, without unticking the box.
     reset: function () {
-      els().forEach(function (el) { el.value = ""; });
-      updateCount();
+      _hasOwnCopy = false;
+      prefill();
+      syncPanel();
     },
 
-    // Always sends every key, with null for the ones left on the default.
-    // Sending only the filled ones would make clearing an override
-    // impossible — the server would never hear that it should go back to
-    // inheriting.
+    // Always sends the flag. Unticking has to reach the server as an explicit
+    // 0 so the stored copy is cleared — otherwise a gig would keep showing a
+    // spec the venue had already turned off.
     payload: function () {
-      var out = {};
+      var out = { ovr_enabled: enabled() ? 1 : 0 };
+      if (!out.ovr_enabled) return out;
       els().forEach(function (el) {
-        var raw = String(el.value).trim();
-        out["ovr_" + el.dataset.k] = raw === "" ? null
-          : (el.dataset.t === "bool" ? Number(raw)
-             : el.dataset.t === "num" ? Number(raw) : raw);
+        out["ovr_" + el.dataset.k] = el.dataset.t === "bool"
+          ? (el.checked ? 1 : 0)
+          : String(el.value).trim();
       });
       return out;
     },
 
     fields: function () { return FIELDS.map(function (f) { return f[0]; }); }
   };
+
+  var _hasOwnCopy = false;
 })();

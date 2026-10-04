@@ -1413,6 +1413,7 @@ def list_gigs(request: Request, user=Depends(get_current_user), db=Depends(get_d
                     -- edit panel needs to know which fields this gig actually
                     -- overrides, which the resolved value cannot tell it (an
                     -- override that matches the default looks identical).
+                    COALESCE(g.ovr_enabled, 0) AS ovr_enabled,
                     g.ovr_has_stage,
                     g.ovr_stage_width_ft,
                     g.ovr_stage_depth_ft,
@@ -1460,22 +1461,22 @@ def list_gigs(request: Request, user=Depends(get_current_user), db=Depends(get_d
                     -- Resolved per gig: an override wins over the venue
                     -- default. Artist search filters on these, so reading
                     -- v.* directly drops overridden gigs from results.
-                    COALESCE(g.ovr_has_stage, v.has_stage) AS has_stage,
-                    COALESCE(g.ovr_stage_width_ft, v.stage_width_ft) AS stage_width_ft,
-                    COALESCE(g.ovr_stage_depth_ft, v.stage_depth_ft) AS stage_depth_ft,
-                    COALESCE(g.ovr_setup_location_description, v.setup_location_description) AS setup_location_description,
-                    COALESCE(g.ovr_has_sound_equipment, v.has_sound_equipment) AS has_sound_equipment,
-                    COALESCE(g.ovr_sound_equipment_description, v.sound_equipment_description) AS sound_equipment_description,
-                    COALESCE(g.ovr_has_sound_engineer, v.has_sound_engineer) AS has_sound_engineer,
-                    COALESCE(g.ovr_sound_engineer_details, v.sound_engineer_details) AS sound_engineer_details,
-                    COALESCE(g.ovr_has_lighting, v.has_lighting) AS has_lighting,
-                    COALESCE(g.ovr_lighting_description, v.lighting_description) AS lighting_description,
-                    COALESCE(g.ovr_load_in_out_details, v.load_in_out_details) AS load_in_out_details,
-                    COALESCE(g.ovr_arrival_time_type, v.arrival_time_type) AS arrival_time_type,
-                    COALESCE(g.ovr_arrival_no_earlier_than_hour, v.arrival_no_earlier_than_hour) AS arrival_no_earlier_than_hour,
-                    COALESCE(g.ovr_arrival_no_earlier_than_period, v.arrival_no_earlier_than_period) AS arrival_no_earlier_than_period,
-                    COALESCE(g.ovr_bar_tab_details, v.bar_tab_details) AS bar_tab_details,
-                    COALESCE(g.ovr_food_tab_details, v.food_tab_details) AS food_tab_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_stage ELSE v.has_stage END AS has_stage,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_stage_width_ft ELSE v.stage_width_ft END AS stage_width_ft,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_stage_depth_ft ELSE v.stage_depth_ft END AS stage_depth_ft,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_setup_location_description ELSE v.setup_location_description END AS setup_location_description,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_sound_equipment ELSE v.has_sound_equipment END AS has_sound_equipment,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_sound_equipment_description ELSE v.sound_equipment_description END AS sound_equipment_description,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_sound_engineer ELSE v.has_sound_engineer END AS has_sound_engineer,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_sound_engineer_details ELSE v.sound_engineer_details END AS sound_engineer_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_lighting ELSE v.has_lighting END AS has_lighting,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_lighting_description ELSE v.lighting_description END AS lighting_description,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_load_in_out_details ELSE v.load_in_out_details END AS load_in_out_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_time_type ELSE v.arrival_time_type END AS arrival_time_type,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_no_earlier_than_hour ELSE v.arrival_no_earlier_than_hour END AS arrival_no_earlier_than_hour,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_no_earlier_than_period ELSE v.arrival_no_earlier_than_period END AS arrival_no_earlier_than_period,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_bar_tab_details ELSE v.bar_tab_details END AS bar_tab_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_food_tab_details ELSE v.food_tab_details END AS food_tab_details,
                     COALESCE(a.name,
                         (SELECT a2.name FROM artists a2
                          JOIN gig_contracts gc2 ON gc2.artist_id = a2.id
@@ -1632,22 +1633,22 @@ def list_public_gigs(request: Request, db=Depends(get_db)):
                     -- Resolved per gig: an override wins over the venue
                     -- default. Artist search filters on these, so reading
                     -- v.* directly drops overridden gigs from results.
-                    COALESCE(g.ovr_has_stage, v.has_stage) AS has_stage,
-                    COALESCE(g.ovr_stage_width_ft, v.stage_width_ft) AS stage_width_ft,
-                    COALESCE(g.ovr_stage_depth_ft, v.stage_depth_ft) AS stage_depth_ft,
-                    COALESCE(g.ovr_setup_location_description, v.setup_location_description) AS setup_location_description,
-                    COALESCE(g.ovr_has_sound_equipment, v.has_sound_equipment) AS has_sound_equipment,
-                    COALESCE(g.ovr_sound_equipment_description, v.sound_equipment_description) AS sound_equipment_description,
-                    COALESCE(g.ovr_has_sound_engineer, v.has_sound_engineer) AS has_sound_engineer,
-                    COALESCE(g.ovr_sound_engineer_details, v.sound_engineer_details) AS sound_engineer_details,
-                    COALESCE(g.ovr_has_lighting, v.has_lighting) AS has_lighting,
-                    COALESCE(g.ovr_lighting_description, v.lighting_description) AS lighting_description,
-                    COALESCE(g.ovr_load_in_out_details, v.load_in_out_details) AS load_in_out_details,
-                    COALESCE(g.ovr_arrival_time_type, v.arrival_time_type) AS arrival_time_type,
-                    COALESCE(g.ovr_arrival_no_earlier_than_hour, v.arrival_no_earlier_than_hour) AS arrival_no_earlier_than_hour,
-                    COALESCE(g.ovr_arrival_no_earlier_than_period, v.arrival_no_earlier_than_period) AS arrival_no_earlier_than_period,
-                    COALESCE(g.ovr_bar_tab_details, v.bar_tab_details) AS bar_tab_details,
-                    COALESCE(g.ovr_food_tab_details, v.food_tab_details) AS food_tab_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_stage ELSE v.has_stage END AS has_stage,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_stage_width_ft ELSE v.stage_width_ft END AS stage_width_ft,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_stage_depth_ft ELSE v.stage_depth_ft END AS stage_depth_ft,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_setup_location_description ELSE v.setup_location_description END AS setup_location_description,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_sound_equipment ELSE v.has_sound_equipment END AS has_sound_equipment,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_sound_equipment_description ELSE v.sound_equipment_description END AS sound_equipment_description,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_sound_engineer ELSE v.has_sound_engineer END AS has_sound_engineer,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_sound_engineer_details ELSE v.sound_engineer_details END AS sound_engineer_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_lighting ELSE v.has_lighting END AS has_lighting,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_lighting_description ELSE v.lighting_description END AS lighting_description,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_load_in_out_details ELSE v.load_in_out_details END AS load_in_out_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_time_type ELSE v.arrival_time_type END AS arrival_time_type,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_no_earlier_than_hour ELSE v.arrival_no_earlier_than_hour END AS arrival_no_earlier_than_hour,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_no_earlier_than_period ELSE v.arrival_no_earlier_than_period END AS arrival_no_earlier_than_period,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_bar_tab_details ELSE v.bar_tab_details END AS bar_tab_details,
+                    CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_food_tab_details ELSE v.food_tab_details END AS food_tab_details,
                     COALESCE(a.name,
                         (SELECT a2.name FROM artists a2
                          JOIN gig_contracts gc2 ON gc2.artist_id = a2.id
@@ -1756,6 +1757,7 @@ def list_venue_gigs(venue_id: int, user=Depends(get_current_user), db=Depends(ge
                     -- edit panel needs to know which fields this gig actually
                     -- overrides, which the resolved value cannot tell it (an
                     -- override that matches the default looks identical).
+                    COALESCE(g.ovr_enabled, 0) AS ovr_enabled,
                     g.ovr_has_stage,
                     g.ovr_stage_width_ft,
                     g.ovr_stage_depth_ft,
@@ -7167,22 +7169,22 @@ def fire_cancelled_gig_blast(db, gig_id: int, venue_id: int, skip_waitlist_check
     # not bringing (or hiding one it is) lands on the night.
     _vd = db.execute(text("""
         SELECT v.venue_size, v.address_line_1, v.address_line_2, v.city, v.state, v.postal_code,
-               COALESCE(g.ovr_has_stage, v.has_stage) AS has_stage,
-               COALESCE(g.ovr_stage_width_ft, v.stage_width_ft) AS stage_width_ft,
-               COALESCE(g.ovr_stage_depth_ft, v.stage_depth_ft) AS stage_depth_ft,
-               COALESCE(g.ovr_setup_location_description, v.setup_location_description) AS setup_location_description,
-               COALESCE(g.ovr_has_sound_equipment, v.has_sound_equipment) AS has_sound_equipment,
-               COALESCE(g.ovr_sound_equipment_description, v.sound_equipment_description) AS sound_equipment_description,
-               COALESCE(g.ovr_has_sound_engineer, v.has_sound_engineer) AS has_sound_engineer,
-               COALESCE(g.ovr_sound_engineer_details, v.sound_engineer_details) AS sound_engineer_details,
-               COALESCE(g.ovr_has_lighting, v.has_lighting) AS has_lighting,
-               COALESCE(g.ovr_lighting_description, v.lighting_description) AS lighting_description,
-               COALESCE(g.ovr_load_in_out_details, v.load_in_out_details) AS load_in_out_details,
-               COALESCE(g.ovr_arrival_time_type, v.arrival_time_type) AS arrival_time_type,
-               COALESCE(g.ovr_arrival_no_earlier_than_hour, v.arrival_no_earlier_than_hour) AS arrival_no_earlier_than_hour,
-               COALESCE(g.ovr_arrival_no_earlier_than_period, v.arrival_no_earlier_than_period) AS arrival_no_earlier_than_period,
-               COALESCE(g.ovr_bar_tab_details, v.bar_tab_details) AS bar_tab_details,
-               COALESCE(g.ovr_food_tab_details, v.food_tab_details) AS food_tab_details
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_stage ELSE v.has_stage END AS has_stage,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_stage_width_ft ELSE v.stage_width_ft END AS stage_width_ft,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_stage_depth_ft ELSE v.stage_depth_ft END AS stage_depth_ft,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_setup_location_description ELSE v.setup_location_description END AS setup_location_description,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_sound_equipment ELSE v.has_sound_equipment END AS has_sound_equipment,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_sound_equipment_description ELSE v.sound_equipment_description END AS sound_equipment_description,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_sound_engineer ELSE v.has_sound_engineer END AS has_sound_engineer,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_sound_engineer_details ELSE v.sound_engineer_details END AS sound_engineer_details,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_has_lighting ELSE v.has_lighting END AS has_lighting,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_lighting_description ELSE v.lighting_description END AS lighting_description,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_load_in_out_details ELSE v.load_in_out_details END AS load_in_out_details,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_time_type ELSE v.arrival_time_type END AS arrival_time_type,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_no_earlier_than_hour ELSE v.arrival_no_earlier_than_hour END AS arrival_no_earlier_than_hour,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_arrival_no_earlier_than_period ELSE v.arrival_no_earlier_than_period END AS arrival_no_earlier_than_period,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_bar_tab_details ELSE v.bar_tab_details END AS bar_tab_details,
+               CASE WHEN COALESCE(g.ovr_enabled, 0) = 1 THEN g.ovr_food_tab_details ELSE v.food_tab_details END AS food_tab_details
         FROM venues v
         JOIN gigs g ON g.id = :gig_for_spec
         WHERE v.id = :vid
@@ -10774,3 +10776,44 @@ def resolve_exhausted_series_hold(
             "gigs_deleted": full_gig_deletes,
             "gigs_partial": partial_slot_deletes,
             "message": f"Removed {total_slots_deleted} empty slot(s) — {summary}."}
+
+
+# ── Gigs that carry their own room-spec copy (2026-10-08) ───────────────────
+# A venue editing its room settings needs to know which upcoming gigs will not
+# pick the changes up. The snapshot is deliberate, but silent drift is not:
+# leaving a venue to find out when an artist turns up expecting the old setup
+# is the failure this prevents.
+
+@router.get("/api/venues/{venue_id}/gigs-with-own-setup")
+def list_gigs_with_own_setup(venue_id: int,
+                             user=Depends(get_current_user), db=Depends(get_db)):
+    from backend.utils import check_venue_access
+    from backend.services.gig_spec import gigs_with_own_setup
+    check_venue_access(db, venue_id, user.id)
+    gigs = gigs_with_own_setup(db, venue_id)
+    # `stale` is the subset the venue probably cares about: a gig pinned only
+    # for its PA, at a venue that just edited its bar tab, needs no action.
+    return {"gigs": gigs, "count": len(gigs),
+            "stale": [g for g in gigs if g["differs"]]}
+
+
+@router.post("/api/venues/{venue_id}/gigs-with-own-setup/sync")
+def sync_venue_defaults_to_gigs(venue_id: int, payload: dict,
+                                user=Depends(get_current_user), db=Depends(get_db)):
+    """Re-base the named gigs on the venue's current settings.
+
+    Keeps each gig pinned — it was marked different for a reason — and simply
+    copies today's venue answers over its stored copy. A venue that wants a
+    gig to follow the venue from now on unticks the box on that gig instead.
+    """
+    from backend.utils import check_venue_access
+    from backend.services.gig_spec import copy_venue_defaults_to
+    check_venue_access(db, venue_id, user.id)
+    ids = payload.get("gig_ids") or []
+    if not isinstance(ids, list):
+        raise HTTPException(400, "gig_ids must be a list")
+    if len(ids) > 500:
+        raise HTTPException(400, "Too many gigs in one request")
+    n = copy_venue_defaults_to(db, venue_id, ids)
+    db.commit()
+    return {"ok": True, "updated": n}

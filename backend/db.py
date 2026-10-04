@@ -707,6 +707,16 @@ def setup_database():
     # directly, or an overridden gig keeps advertising the venue default. That
     # matters most in artist search, which filters on these fields.
     _add_columns(cursor, "gigs", [
+        # 2026-10-08: switched from per-field COALESCE to an all-or-nothing
+        # flag. When set, the gig carries its own complete copy of the spec,
+        # prefilled from the venue at the moment the venue ticked the box, and
+        # the venue columns are ignored entirely. Simpler to reason about and
+        # identical to the venue edit form, which is what venues already know.
+        #
+        # The trade is that the gig becomes a snapshot: later edits to the
+        # venue profile do not reach it. For a gig that has already been
+        # advertised with these details that is arguably the safer behaviour.
+        "ovr_enabled INTEGER DEFAULT 0",
         "ovr_has_stage INTEGER",
         "ovr_stage_width_ft REAL",
         "ovr_stage_depth_ft REAL",
