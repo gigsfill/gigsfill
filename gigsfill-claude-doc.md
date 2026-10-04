@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-08e (Unavailable members shown on the artist booking calendar):** The band calendar knew who could not play on which days; the calendar an artist actually books from knew nothing about it. You could be looking straight at an open Saturday with half the band away and not find out until after applying.
+
+  Each day cell now carries a small square per absent member in the **bottom-left**, with their initials in the same `hueFor(user_id)` colour the band calendar uses — a member should be the same mark in both places. Two squares then a `+N`, because three already crowd a cell that may also be carrying gig bubbles. The tooltip names everyone and gets the verb right for one versus several.
+
+  **Injected, not built into `renderCalendar()`.** [artist.book-gigs.js](app/static/js/artist.book-gigs.js) is ~127KB and already exposes `.calendar-day[data-date]` as a decoration hook for the external-gig bubbles; [artist-availability-marks.js](app/static/js/artist-availability-marks.js) follows that pattern, including the MutationObserver + rAF and the `_injecting` guard — without the guard the observer sees its own marks and loops forever. Marks are cleared calendar-wide before each pass, since clearing only the dates in the fresh set strands one on a day whose last absence was just undone.
+
+  Data comes from the existing `/api/artists/{id}/calendar` over the window the grid is actually showing (read off the rendered cells, which spill into neighbouring months), cached by window so paging back and forth does not refetch. A non-member gets a non-OK response and simply sees no marks.
+
 - **2026-10-08d (ACH bank setup could never be completed — three bugs):** A venue choosing bank payment got parked in Stripe's `requires_action` state with no way out. Fixing it surfaced that the feature had never worked at all.
 
   1. **No verification step existed.** Stripe parks the SetupIntent until the venue confirms microdeposits; the app stored the hosted-page URL and never showed it, and had no endpoint of its own. New `POST /api/stripe/venue/{id}/ach-verify` handles **both** Stripe variants — `amounts` (two deposit values) and `descriptor_code` (a 6-character code on one $0.01 deposit) — which required storing `ach_pending_microdeposit_type`, since asking for the wrong one leaves the venue stuck. Amounts accept `0.32` or `32`; anything outside 1–99 cents is refused before reaching Stripe.

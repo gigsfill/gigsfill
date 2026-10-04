@@ -431,3 +431,49 @@ def test_the_current_member_is_listed_first():
     js = JS.read_text()
     fn = js[js.index("var ordered = off.slice().sort"):][:260]
     assert "b.is_self" in fn and "a.is_self" in fn
+
+
+# ── Unavailable marks on the booking calendar ───────────────────────────────
+
+MARKS = ROOT / "app" / "static" / "js" / "artist-availability-marks.js"
+
+
+def test_the_booking_calendar_shows_who_is_unavailable():
+    """The band calendar knew who could not play; the calendar an artist
+    actually books from did not. You could look straight at an open Saturday
+    with half the band away and only find out after applying."""
+    assert MARKS.exists()
+    html = (ROOT / "app" / "artist-book-gigs.html").read_text()
+    assert "artist-availability-marks.js" in html
+
+
+def test_marks_are_injected_not_built_into_the_render_loop():
+    """artist.book-gigs.js is ~127KB and already exposes
+    .calendar-day[data-date] as a decoration hook for external-gig bubbles."""
+    js = MARKS.read_text()
+    assert ".calendar-day[data-date]" in js
+    assert "MutationObserver" in js
+    # Without the guard the observer sees its own marks and loops.
+    assert "if (_injecting) return;" in js
+
+
+def test_marks_are_cleared_calendar_wide_before_reinjecting():
+    """Clearing only the dates in the fresh set strands a mark on a day whose
+    last absence was just undone."""
+    js = MARKS.read_text()
+    fn = js[js.index("function inject()"):][:900]
+    assert 'cal.querySelectorAll("." + MARK).forEach' in fn
+
+
+def test_a_member_is_the_same_colour_in_both_calendars():
+    js = MARKS.read_text()
+    band = (ROOT / "app" / "static" / "js" / "band-calendar.js").read_text()
+    assert "(Number(id) * 47) % 360" in js
+    assert "(Number(id) * 47) % 360" in band
+
+
+def test_a_crowded_day_collapses_to_a_count():
+    """Three 16px squares already crowd a cell that may also carry gig
+    bubbles."""
+    js = MARKS.read_text()
+    assert "off.slice(0, 2)" in js and '"+" + (off.length - 2)' in js
