@@ -321,7 +321,11 @@ def test_both_calendars_offer_the_list():
     tpl = js[js.index("this.root.innerHTML ="):]
     tpl = tpl[:tpl.index('"</div>";') if '"</div>";' in tpl[:4000] else 4000]
     assert "data-list" in tpl, "button is not in the shared header markup"
-    assert 'mode === "band"' not in tpl, "button is mode-gated"
+    # The button itself must not sit inside a mode branch. Other parts of the
+    # template legitimately are — the multi-band sub-note, for one — so check
+    # only the markup up to the button.
+    before = tpl[:tpl.index("data-list")]
+    assert 'mode === "band"' not in before, "button is mode-gated"
 
 
 def test_the_list_uses_columns_not_a_flex_row():
@@ -608,3 +612,64 @@ def test_each_mark_says_what_it_means_on_hover():
     assert "b.title = m.name" in js and "unavailable" in js
     # The "+N" chip names the people it is standing in for.
     assert "more.title = off.slice(2)" in js
+
+
+# ── Telling a multi-band member which bands a click covers ──────────────────
+
+def test_the_band_calendar_states_what_a_click_covers():
+    """The two calendars behaved differently with nothing saying so: a click
+    here means this band only, a click on the profile means every band. The
+    difference was only discoverable by noticing a day had not changed
+    somewhere else."""
+    js = JS.read_text()
+    assert "gfbc-subnote" in js
+    # 2026-10-09: both calendars now default to all bands, so the note says
+    # that and points at the way to narrow it. Previously they disagreed —
+    # band-only here, all-bands on the profile — with nothing saying so.
+    assert "all your bands" in js and "limit it to this band" in js
+    # Only worth saying to someone actually in more than one band.
+    assert "myBands || []).length > 1" in js
+
+
+def test_a_multi_band_member_can_widen_a_day_from_the_band_calendar():
+    js = JS.read_text()
+    assert 'name="gfbcMine"' in js
+    fn = js[js.index('input[name="gfbcMine"]'):][:600]
+    assert "saveScope" in fn
+    # Both choices go through the one endpoint, so the two calendars cannot
+    # disagree about what a scope is.
+    assert '"all" : [self2.data.artistId]' in fn
+
+
+def test_the_choice_is_hidden_when_it_cannot_matter():
+    """Someone in one band has nothing to choose between, and a derived
+    cross-band gig is not theirs to re-scope."""
+    js = JS.read_text()
+    guard = js[js.index("var scopePick ="):][:300]
+    assert "myBands.length > 1" in guard
+    assert "!meEntry.locked" in guard
+
+
+def test_the_band_calendar_returns_the_viewers_own_bands():
+    src = ROUTES.read_text()
+    fn = _func(src, "get_band_calendar")
+    assert '"my_bands"' in fn and '"artist_id": artist_id' in fn
+
+
+def test_a_fresh_mark_covers_every_band_wherever_it_was_made():
+    """Being unavailable is almost always about the person, not one band. The
+    band calendar defaulting to band-only made the same click mean different
+    things on two screens."""
+    src = ROUTES.read_text()
+    fn = _func(src, "toggle_band_day_off")
+    assert "mark_scope=0" in fn, "a band click no longer defaults to all bands"
+    tog = _func(src, "_toggle_day")
+    # mark_scope is separate from artist_id on purpose: artist_id still says
+    # which calendar the click came from, and so which band a CLEAR frees up.
+    assert "_scope = artist_id if mark_scope is None else mark_scope" in tog
+
+
+def test_clearing_still_frees_only_the_band_you_clicked_from():
+    src = ROUTES.read_text()
+    tog = _func(src, "_toggle_day")
+    assert "_other_artist_ids" in tog

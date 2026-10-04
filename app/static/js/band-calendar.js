@@ -78,6 +78,11 @@
       "  background:rgba(239,68,68,0.14); border:1px solid rgba(239,68,68,0.5);",
       "  color:#fca5a5; font-size:0.82rem; font-weight:600; text-align:center; }",
       ".gfbc-banner b { color:#fff; text-decoration:underline; }",
+      ".gfbc-subnote { margin:-4px 0 8px; font-size:0.74rem; color:var(--text-gray);",
+      "  text-align:center; }",
+      ".gfbc-subnote b { color:var(--text); }",
+      ".gfbc-scope-band { margin-top:8px; padding-top:8px;",
+      "  border-top:1px solid rgba(148,163,184,0.16); }",
       ".gfbc-dow { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:4px; }",
       ".gfbc-dow span { text-align:center; font-size:0.68rem; color:var(--text-gray); font-weight:600;",
       "  text-transform:uppercase; letter-spacing:0.04em; }",
@@ -209,8 +214,11 @@
       this.data = {
         days: j.days || {},
         members: j.members || [],
-        // Personal calendar only: which bands this day could apply to.
-        bands: j.bands || []
+        // Personal calendar: which bands a day could apply to.
+        bands: j.bands || [],
+        // Band calendar: the viewer's own bands, for the scope choice.
+        myBands: j.my_bands || [],
+        artistId: j.artist_id || (this.o && this.o.artistId)
       };
     } catch (e) {
       this.data = { days: {}, members: [] };
@@ -314,6 +322,10 @@
           "</span>" +
         "</div>" +
         '<div class="gfbc-banner">Click the days you <b>can\u2019t</b> play</div>' +
+        (this.o.mode === "band" && (this.data.myBands || []).length > 1
+          ? '<div class="gfbc-subnote">Marks you out for <b>all your bands</b>. ' +
+            "Open a day to limit it to this band.</div>"
+          : "") +
         '<div class="gfbc-dow">' + DOW.map(function (x) { return "<span>" + x + "</span>"; }).join("") + "</div>" +
         '<div class="gfbc-grid">' + cells + "</div>" +
         '<div class="gfbc-status">' + (this.err ? esc(this.err) : "") + "</div>" +
@@ -523,15 +535,36 @@
     } else if (!off.length) {
       who = '<div class="gfbc-free">Everyone is available.</div>';
     } else {
+      var self3 = this;
       // Current member first. In a list of their own band, the one name
       // someone scans for is their own, and alphabetical order buries it.
       var ordered = off.slice().sort(function (a, b) {
         return (b.is_self ? 1 : 0) - (a.is_self ? 1 : 0);
       });
+      // The scope control, shown only when it could actually matter: the
+      // viewer is one of the people off, and plays in more than one band.
+      var meEntry = off.filter(function (m) { return m.is_self; })[0];
+      var myBands = this.data.myBands || [];
+      var scopePick = "";
+      if (meEntry && !meEntry.locked && myBands.length > 1) {
+        var thisBand = myBands.filter(function (b) {
+          return Number(b.id) === Number(self3.data.artistId);
+        })[0];
+        var isAll = meEntry.scope === "all";
+        scopePick =
+          '<div class="gfbc-scope gfbc-scope-band">' +
+            '<label><input type="radio" name="gfbcMine" value="band"' +
+              (isAll ? "" : " checked") + "> Just " +
+              esc(thisBand ? thisBand.name : "this band") + "</label>" +
+            '<label><input type="radio" name="gfbcMine" value="all"' +
+              (isAll ? " checked" : "") + "> All " + myBands.length + " of my bands</label>" +
+          "</div>";
+      }
+
       who = '<div class="gfbc-unavail">Unavailable:</div>' +
             '<div class="gfbc-who">' + ordered.map(function (m) {
         return "<span>" + esc(m.name) + "</span>";
-      }).join("") + "</div>" +
+      }).join("") + "</div>" + scopePick +
       '<p style="margin:8px 0 0;color:var(--text-gray);font-size:0.76rem;">' +
       "Bookings on this date still go through \u2014 you'll see a warning naming " +
       "whoever is away, and can book anyway if the line-up still works." + "</p>";
@@ -543,6 +576,15 @@
     box.innerHTML = "<h4>" + esc(pretty) + "</h4>" + who + act;
 
     var self2 = this;
+    box.querySelectorAll('input[name="gfbcMine"]').forEach(function (el) {
+      el.addEventListener("change", function () {
+        // "All my bands" is the same global row the profile calendar writes;
+        // "just this band" is the single-band row. Both go through the one
+        // endpoint so the two calendars cannot disagree about what a scope is.
+        self2.saveScope(day, el.value === "all" ? "all" : [self2.data.artistId]);
+      });
+    });
+
     box.querySelectorAll(".gfbc-band").forEach(function (el) {
       el.addEventListener("change", function () {
         var picks = Array.prototype.slice

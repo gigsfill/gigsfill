@@ -274,10 +274,26 @@ def get_band_calendar(artist_id: int, start: str = None, end: str = None,
         FROM users u WHERE u.id IN ({ph})
     """), binds).mappings().all()
 
+    # The viewer's own bands, so the day panel can offer "just this band" or
+    # "all my bands". A click here defaults to this band only, while a click on
+    # their profile calendar means every band — an asymmetry that was invisible
+    # until you noticed the day had not changed somewhere else.
+    my_bands = db.execute(text("""
+        SELECT a.id, a.name FROM artists a
+        WHERE a.user_id = :u AND a.deleted_at IS NULL
+        UNION
+        SELECT a.id, a.name FROM artists a
+        JOIN entity_users e ON e.entity_id = a.id AND e.entity_type = 'artist'
+        WHERE e.user_id = :u AND a.deleted_at IS NULL
+        ORDER BY 2
+    """), {"u": user.id}).mappings().all()
+
     return {
         "days": days,
         "members": [{"user_id": r["id"], "name": r["name"],
                      "is_self": r["id"] == user.id} for r in roster],
+        "my_bands": [{"id": b["id"], "name": b["name"]} for b in my_bands],
+        "artist_id": artist_id,
     }
 
 
@@ -294,7 +310,7 @@ def _other_artist_ids(db, user_id: int, exclude_artist_id: int):
     return [r[0] for r in rows if r[0] != exclude_artist_id]
 
 
-def _toggle_day(db, user_id: int, artist_id: int, day: str):
+def _toggle_day(db, user_id: int, artist_id: int, day: str, mark_scope=None):
     """Toggle a day, acting on whatever is actually making it unavailable.
 
     The subtlety is scope. A day marked from someone's profile is stored once
@@ -345,9 +361,17 @@ def _toggle_day(db, user_id: int, artist_id: int, day: str):
         db.commit()
         return False
 
+    # A fresh mark defaults to EVERY band (artist_id 0), wherever it was made.
+    # Being unavailable is almost always about the person, not one band, and
+    # having the band calendar default to band-only made the two screens mean
+    # different things for the same click. Narrowing to one band is a deliberate
+    # choice in the day panel. `mark_scope` carries that; it is not the same as
+    # `artist_id`, which still says which calendar the click came from and so
+    # which band a *clear* should free up.
+    _scope = artist_id if mark_scope is None else mark_scope
     db.execute(text("""
         INSERT INTO member_days_off (user_id, artist_id, day) VALUES (:u, :a, :d)
-    """), {"u": user_id, "a": artist_id, "d": d})
+    """), {"u": user_id, "a": _scope, "d": d})
     # They engaged, so the unanswered-reminder counter starts over; otherwise a
     # member who ignored five emails then finally updated would be silenced
     # after one more lapse.
@@ -363,8 +387,11 @@ def toggle_band_day_off(artist_id: int, payload: dict,
     this for themselves — it is a soft signal, not a block."""
     if user.id not in _member_ids_for_artist(db, artist_id):
         raise HTTPException(403, "You are not a member of this artist")
-    on = _toggle_day(db, user.id, artist_id, payload.get("day"))
-    return {"day": str(payload.get("day"))[:10], "off": on, "scope": "band"}
+    # mark_scope=0: a new mark covers every band this member plays in, the
+    # same as a click on their own profile calendar. They can narrow it to this
+    # band from the day panel.
+    on = _toggle_day(db, user.id, artist_id, payload.get("day"), mark_scope=0)
+    return {"day": str(payload.get("day"))[:10], "off": on, "scope": "all" if on else None}
 
 
 @router.post("/api/me/days-off/toggle")
