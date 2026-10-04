@@ -90,7 +90,9 @@
          one you can change by clicking. */
       ".gfbc-cell.gfbc-mine { background:rgba(245,158,11,0.16); border-color:rgba(245,158,11,0.55); }",
       ".gfbc-dots { display:flex; flex-wrap:wrap; gap:2px; margin-top:auto; }",
-      ".gfbc-dot { width:15px; height:15px; border-radius:50%; font-size:0.52rem; font-weight:700;",
+      /* One small square per member, carrying their initials in their own
+         colour, so a day's line-up reads at a glance. */
+      ".gfbc-dot { width:16px; height:16px; border-radius:4px; font-size:0.52rem; font-weight:700;",
       "  display:flex; align-items:center; justify-content:center; color:#0b0f17; letter-spacing:-0.02em; }",
       ".gfbc-more { font-size:0.56rem; color:var(--text-gray); align-self:center; }",
       ".gfbc-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:0.72rem; color:var(--text-gray); }",
@@ -128,14 +130,22 @@
       ".gfbc-sheet-body { padding:6px 17px 16px; overflow-y:auto; }",
       /* One row per run of consecutive days. Dates left, who is out right, so
          the eye runs down a single column of dates. */
-      ".gfbc-li { display:flex; gap:12px; align-items:baseline; padding:8px 0;",
-      "  border-bottom:1px solid rgba(148,163,184,0.14); font-size:0.84rem; }",
+      /* A grid, not a flex row: with min-width the longest range ("Sat, Jan 30,
+         2027 - Mon, Feb 1, 2027") pushed its own names column right and every
+         line started somewhere different. Fixed tracks keep the three columns
+         in line down the sheet. */
+      ".gfbc-li { display:grid; grid-template-columns:252px 1fr auto; gap:14px;",
+      "  align-items:baseline; padding:8px 0; font-size:0.84rem;",
+      "  border-bottom:1px solid rgba(148,163,184,0.14); }",
       ".gfbc-li:last-child { border-bottom:none; }",
-      ".gfbc-li-d { color:var(--text); font-weight:600; white-space:nowrap; min-width:172px; }",
+      ".gfbc-li-d { color:var(--text); font-weight:600; white-space:nowrap;",
+      "  font-variant-numeric:tabular-nums; }",
       ".gfbc-li-n { color:var(--text-gray); font-size:0.79rem; }",
-      ".gfbc-li-c { margin-left:auto; color:var(--text-muted); font-size:0.72rem; white-space:nowrap; }",
+      ".gfbc-li-c { color:var(--text-muted); font-size:0.72rem; white-space:nowrap;",
+      "  text-align:right; font-variant-numeric:tabular-nums; }",
       ".gfbc-empty { color:var(--text-gray); font-size:0.84rem; padding:14px 0; }",
-      "@media (max-width:520px) { .gfbc-li { flex-wrap:wrap; } .gfbc-li-d { min-width:0; } }",
+      "@media (max-width:520px) { .gfbc-li { grid-template-columns:1fr auto; }",
+      "  .gfbc-li-d { grid-column:1 / -1; } }",
       "@media (max-width:520px) { .gfbc-cell { height:50px; } .gfbc-dot { width:13px; height:13px; } }"
     ].join("\n");
     document.head.appendChild(css);
@@ -494,10 +504,12 @@
             return esc(m.name) + (m.is_self ? " (you)" : "");
           }).join(", ")
         : "";
+      // All three cells always, even when empty: a skipped cell would slide the
+      // next row's content into the wrong column.
       return '<div class="gfbc-li">' +
                '<span class="gfbc-li-d">' + esc(when) + "</span>" +
-               (who ? '<span class="gfbc-li-n">' + who + "</span>" : "") +
-               (r.count > 1 ? '<span class="gfbc-li-c">' + r.count + " days</span>" : "") +
+               '<span class="gfbc-li-n">' + who + "</span>" +
+               '<span class="gfbc-li-c">' + (r.count > 1 ? r.count + " days" : "") + "</span>" +
              "</div>";
     }).join("");
   };

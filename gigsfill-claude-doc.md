@@ -8,6 +8,10 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-06b (List columns aligned; one square per member):** The list rows were a flex row with `min-width` on the date cell, so the longest range ("Sat, Jan 30, 2027 – Mon, Feb 1, 2027") overflowed it and pushed its own names column right — every line started somewhere different. Now a three-track grid (`252px 1fr auto`), and every row emits all three cells even when empty, since a skipped cell slides the next row into the wrong column. Measured in-browser: dates, names and counts each start at an identical x on all rows.
+
+  Day cells now draw **one rounded square per member** (16px, 4px radius) rather than a circle, each carrying that member's initials in a colour derived from their user id so the same person reads the same across months.
+
 - **2026-10-06 ("All dates" snapshot on both calendars):** A button in the calendar header opens a sheet listing every marked day in order, consecutive days collapsed onto one line.
 
   A month grid answers "is the 14th free". It is poor at "when are we out over the next year", which is the question when someone is planning — hence the list.

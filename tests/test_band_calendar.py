@@ -308,3 +308,33 @@ def test_both_calendars_offer_the_list():
     # Available in both modes: the button lives in the shared header.
     hdr = js[js.index("var legend"):js.index("this.root.innerHTML")]
     assert "data-list" not in hdr, "button should not be mode-gated"
+
+
+def test_the_list_uses_columns_not_a_flex_row():
+    """With min-width, the longest range ("Sat, Jan 30, 2027 - Mon, Feb 1,
+    2027") pushed its own names column right and every line started somewhere
+    different. Fixed grid tracks keep the three columns in line."""
+    js = JS.read_text()
+    rule = js[js.index('".gfbc-li {'):][:420]
+    assert "display:grid" in rule and "grid-template-columns:252px" in rule
+    assert "min-width:172px" not in js
+
+
+def test_every_list_row_emits_all_three_cells():
+    """A skipped cell slides the next row's content into the wrong column."""
+    js = JS.read_text()
+    row = js[js.index("return '<div class=\"gfbc-li\">'"):][:460]
+    for cls in ("gfbc-li-d", "gfbc-li-n", "gfbc-li-c"):
+        assert cls in row, cls
+    assert "(who ?" not in row, "names cell is conditional"
+
+
+def test_each_member_gets_their_own_square():
+    """One marker per member on a day, carrying their initials in a colour
+    that stays the same for them across months."""
+    js = JS.read_text()
+    rule = js[js.index('".gfbc-dot {'):][:260]
+    assert "border-radius:4px" in rule, "still a circle"
+    # One span per member in the day cell, not a single merged badge.
+    assert "shown.map(function (m)" in js
+    assert "hueFor(m.user_id)" in js
