@@ -8,6 +8,12 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-09b (Booking-calendar marks: red for everyone, and hover text):** The per-member hues on the artist booking calendar became a single red, matching "cannot play" everywhere else — on that calendar the question is "can we take this gig", not "which member". The band calendar keeps its per-member colours, where telling members apart is the point.
+
+  **The red did not apply at first.** `artist-book-gigs.html` carries a blanket `.calendar > * * { background: transparent !important }`, and its own comment a few hundred lines above warns that this "nukes the gradient background → invisible text". The chips had been fine only because the previous version set an inline `style.background`, which outranked it; dropping that for a stylesheet rule left them transparent with white text. Matched the `!important`.
+
+  Each chip now carries its own `title` — "Scott Larson — unavailable" — because initials alone do not say what they mean and hovering the square is what someone will try; the row-level tooltip is not reachable that way. The "+N" chip names the people it stands in for.
+
 - **2026-10-09 (Per-band scope on the personal calendar; red for "can't play"):** Three changes to the member's own calendar.
 
   **A day can now be scoped to chosen bands.** A member in several bands saw only "all bands" or an opaque **"1 band"**, with no way to change it — the only route to a per-band day was to open that band's calendar and click there. The day panel now lists the member's bands as checkboxes, **all ticked by default**, and the cell names the band rather than counting it. New `POST /api/me/days-off/scope`, which rewrites the day rather than diffing: a diff would have to reason about the global row shadowing per-band rows, which is exactly where the earlier scope bug came from. Every band ticked is stored as the single "all bands" row, so it stays correct if they later join another band.

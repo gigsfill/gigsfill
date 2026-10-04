@@ -465,11 +465,18 @@ def test_marks_are_cleared_calendar_wide_before_reinjecting():
     assert 'cal.querySelectorAll("." + MARK).forEach' in fn
 
 
-def test_a_member_is_the_same_colour_in_both_calendars():
+def test_the_booking_calendar_marks_are_red_for_everyone():
+    """On the booking calendar the question is "can we take this gig", so the
+    marks use the same red as "cannot play" elsewhere rather than a colour per
+    member — per-member hues read as decoration, and the darker ones looked
+    black at 16px. The band calendar keeps its per-member colours, where
+    telling members apart is the point."""
     js = MARKS.read_text()
+    assert "hueFor" not in js, "per-member hues are back on the booking calendar"
+    rule = js[js.index('MARK + " b {'):][:300]
+    assert "background:#ef4444" in rule and "color:#fff" in rule
     band = (ROOT / "app" / "static" / "js" / "band-calendar.js").read_text()
-    assert "(Number(id) * 47) % 360" in js
-    assert "(Number(id) * 47) % 360" in band
+    assert "(Number(id) * 47) % 360" in band, "band calendar lost its per-member colours"
 
 
 def test_a_crowded_day_collapses_to_a_count():
@@ -573,3 +580,22 @@ def test_the_instruction_sits_against_the_grid():
     # should not say different things.
     rule = js[js.index(".gfbc-banner {"):][:260]
     assert "239,68,68" in rule, "banner is not red"
+
+
+def test_the_marks_survive_the_calendar_background_reset():
+    """artist-book-gigs.html carries a blanket
+    `.calendar > * * { background: transparent !important }` — its own comment
+    warns it "nukes the background -> invisible text". The chips rendered
+    transparent with white text until the rule matched that force."""
+    js = MARKS.read_text()
+    rule = js[js.index('MARK + " b {'):][:420]
+    assert "background:#ef4444 !important" in rule
+
+
+def test_each_mark_says_what_it_means_on_hover():
+    """Initials alone do not say what they mean, and hovering the square is
+    what someone will try — the row-level title is not reachable that way."""
+    js = MARKS.read_text()
+    assert "b.title = m.name" in js and "unavailable" in js
+    # The "+N" chip names the people it is standing in for.
+    assert "more.title = off.slice(2)" in js

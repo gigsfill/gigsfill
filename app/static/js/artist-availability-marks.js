@@ -32,10 +32,6 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
-  // Same derivation as band-calendar.js, so a member is the same colour in
-  // both places. Changing one without the other would be worse than no colour.
-  function hueFor(id) { return (Number(id) * 47) % 360; }
-
   function initials(name) {
     var p = String(name || "").trim().split(/\s+/).filter(Boolean);
     if (!p.length) return "?";
@@ -57,8 +53,13 @@
          member should be the same mark in both places. */
       "." + MARK + " b { width:16px; height:16px; border-radius:4px;",
       "  font-size:0.52rem; font-weight:700; line-height:16px; text-align:center;",
-      "  color:#0b0f17; letter-spacing:-0.02em; display:block; }",
-      "." + MARK + " i { font-style:normal; font-size:0.54rem; color:var(--text-gray); }",
+      /* !important because artist-book-gigs.html carries a blanket
+         `.calendar > * * { background: transparent !important }` reset. Its
+         own comment warns this "nukes the background -> invisible text"; the
+         chips rendered transparent with white text until this matched it. */
+      "  background:#ef4444 !important; color:#fff; letter-spacing:-0.02em;",
+      "  display:block; }",
+      "." + MARK + " i { font-style:normal; font-size:0.54rem; color:#fca5a5; }",
       "@media (max-width:620px) { ." + MARK + " b { width:11px; height:11px;",
       "  line-height:11px; font-size:0.42rem; } }"
     ].join("\n");
@@ -121,15 +122,23 @@
 
         // Two initials then a count: three 14px squares already crowd a cell
         // that may also be carrying gig bubbles.
+        // Red for everyone, not a colour per member. On this calendar the
+        // question is "can we take this gig", and red is the same "cannot
+        // play" the availability calendar uses. Per-member hues made the
+        // marks read as decoration and the darker ones looked black at 16px.
         off.slice(0, 2).forEach(function (m) {
           var b = document.createElement("b");
-          b.style.background = "hsl(" + hueFor(m.user_id) + ",70%,62%)";
           b.textContent = initials(m.name);
+          // Per chip, not only on the row: initials alone do not say what
+          // they mean, and hovering the square is what someone will try.
+          b.title = m.name + " \u2014 unavailable";
           wrap.appendChild(b);
         });
         if (off.length > 2) {
           var more = document.createElement("i");
           more.textContent = "+" + (off.length - 2);
+          more.title = off.slice(2).map(function (m) { return m.name; })
+                          .join(", ") + " \u2014 unavailable";
           wrap.appendChild(more);
         }
         cell.appendChild(wrap);
