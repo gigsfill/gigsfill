@@ -501,8 +501,7 @@ def test_clearing_one_band_preserves_the_others():
     everywhere from one band's screen — the opposite data loss."""
     src = ROUTES.read_text()
     fn = _func(src, "_toggle_day")
-    i = fn.index("glob = _row(0)")
-    blk = fn[i:i + 700]
+    blk = fn[fn.index("if own or glob:"):fn.index("return False")]
     assert "for other in _other_artist_ids" in blk
     assert "INSERT OR IGNORE INTO member_days_off" in blk
 
@@ -512,4 +511,7 @@ def test_the_profile_calendar_toggle_stays_simple():
     convert anything."""
     src = ROUTES.read_text()
     fn = _func(src, "_toggle_day")
-    assert "if artist_id != 0:" in fn, "the conversion is not gated to band calendars"
+    # artist_id 0 has no second scope to fall back to, so `glob` must be None
+    # there and the conversion branch must not run.
+    assert "_row(0) if artist_id != 0 else None" in fn, \
+        "the conversion is not gated to band calendars"
