@@ -85,8 +85,14 @@ def _validate_payload(data: dict, require_all: bool = True) -> dict:
             out[col] = v or None
     if require_all and not out.get("venue_name"):
         raise HTTPException(400, "Venue name is required")
-    if require_all and not out.get("venue_address"):
-        raise HTTPException(400, "Address is required")
+    # 2026-10-06: was `venue_address` specifically. An external gig is the
+    # artist's own record of a show elsewhere — "Hermosa Beach, CA" identifies
+    # it perfectly well, and the display paths only ever render city + state
+    # anyway. A street address is still accepted and still stored; it is just
+    # no longer the only way to say where a gig was. Some location is still
+    # required, or the row is a date with nothing attached to it.
+    if require_all and not (out.get("venue_address") or out.get("venue_city")):
+        raise HTTPException(400, "Add an address or a city so you know where this gig was")
 
     # Date — YYYY-MM-DD only. Reject anything else so calendar queries stay safe.
     if "date" in data:

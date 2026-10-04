@@ -8,6 +8,22 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-06d (External gig: address no longer required; city list rebuilt from the Census):** Two fixes to the same report.
+
+  **"Address is required" on an external gig.** Both the client and `_validate_payload` demanded `venue_address` specifically. An external gig is the artist's own record of a show elsewhere — "Hermosa Beach, CA" identifies it fine, and the calendar and list views only ever render city + state. Now **either** an address or a city satisfies it; both are still stored. Whitespace-only values are rejected, so the row can never be a date with nothing attached.
+
+  **`us_cities.py` regenerated** from the US Census 2023 Gazetteer "Places" file (public domain, includes coordinates): **4,792 → 32,306** cities, CA **202 → 1,619**, all 50 states + DC + PR.
+
+  Two generator traps, both now pinned by test:
+  - The Census appends the place type to `NAME` ("Abbeville city", "Abanda CDP"), so it is stripped — **case-sensitively**. The appended term is lowercase while a name genuinely ending in that word capitalises it; a blind strip turned Nevada's **"Carson City" into "Carson"**.
+  - Consolidated city-counties are filed under a joined name nobody types. **Nashville is "Nashville-Davidson"**, Athens is "Athens-Clarke County". The everyday name is added as its own entry at the same coordinates.
+
+  **Lookups are now indexed.** At 32k rows a linear `find_city` cost 0.4ms on every blur; it is 0.0005ms against a dict. `search_cities` precomputes lowercase names (6.5ms → 4.7ms per keystroke). Memory is +6MB per worker, measured at 129MB — unchanged in practice.
+
+  **Measured cost:** `/api/cities/all` is now 2.0MB raw / **428KB gzipped**, cached 24h. Coordinates cannot be stripped from it — `artist.book-gigs.js` and `public-gigs.js` filter by radius client-side off that payload. Moving the autocomplete to the existing server-side `/api/cities/search` would remove the download entirely; not done.
+
+  **Caused a brief outage doing this.** The regenerated module dropped `calculate_distance`, `find_nearest_cities` and `get_cities_by_state`, which `routes/cities.py` imports at module level — so the API failed to boot. `tests/test_us_cities.py` now pins every exported name. The lesson is to diff a generated module's public surface against the original *before* writing it, not after restarting.
+
 - **2026-10-06c (External-gig form unusable for cities missing from the list):** Typing "Hermosa Beach" and then clicking Notes bounced focus back to City, with nothing on screen explaining why.
 
   **Cause:** `attachCityValidation` in [city-autocomplete.js](app/static/js/city-autocomplete.js) installs a **capture-phase `document` click handler** (`blockClicks`) that swallows every click outside the city input and refocuses it until the value matches `us_cities.py`. Not scoped to the field or its form — the whole page.

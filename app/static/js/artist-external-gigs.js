@@ -949,7 +949,12 @@
       flyer_public:  flyerPublic,
     };
     if (!payload.venue_name)    return _status('Venue name is required.', '#ef4444');
-    if (!payload.venue_address) return _status('Address is required.', '#ef4444');
+    // Matches the server: a location, not a street address specifically.
+    // "Hermosa Beach, CA" is enough to know where a gig was, and the calendar
+    // and list views only ever show city + state.
+    if (!payload.venue_address && !payload.venue_city) {
+      return _status('Add an address or a city so you know where this gig was.', '#ef4444');
+    }
     if (!payload.date)          return _status('Date is required.', '#ef4444');
     const btn = document.getElementById('extGigSaveBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
