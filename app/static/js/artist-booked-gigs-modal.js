@@ -464,7 +464,7 @@
     overlay = document.createElement('div');
     overlay.id = 'artistBookedGigsOverlay';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;padding:20px;';
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) e.stopPropagation(); });
     overlay.innerHTML = `
       <div style="background:#1a1f2e;border:1px solid #2a3040;border-radius:14px;width:100%;max-width:1100px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.55);">
         <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 22px;border-bottom:1px solid #2a3040;flex-wrap:wrap;gap:10px;">

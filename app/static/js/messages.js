@@ -335,7 +335,7 @@ function openMessageModal(gigId, title, artistId, venueId) {
 
   // Close on backdrop click
   modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeMessageModal();
+    if (e.target === modal) e.stopPropagation();
   });
 }
 
@@ -385,7 +385,7 @@ window.openInboxModal = async function({ side = 'venue', artistId = null, venueI
     </div>
   `;
   document.body.appendChild(modal);
-  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  modal.addEventListener('click', e => { if (e.target === modal) e.stopPropagation(); });
 
   // Toggle re-opens the modal with the new state.
   window._msgInboxToggleHidden = function (checked) {

@@ -1378,7 +1378,7 @@ async function loadArtist() {
     document.getElementById("_urlEditCloseX").onclick = close;
     document.getElementById("_urlEditCancel").onclick = close;
     document.getElementById("_urlEditSave").onclick   = submit;
-    overlay.onclick = e => { if (e.target === overlay) close(); };
+    overlay.onclick = e => { if (e.target === overlay) e.stopPropagation(); };
     input.addEventListener("keydown", e => {
       if (e.key === "Enter") { e.preventDefault(); submit(); }
       else if (e.key === "Escape") { e.preventDefault(); close(); }

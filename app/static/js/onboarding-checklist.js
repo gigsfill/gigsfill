@@ -287,7 +287,7 @@
       // checkArtistPaymentMethod → showOnboardingChecklist).
       document.getElementById('obClose').addEventListener('click', closeModal);
       overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) closeModal();
+        if (e.target === overlay) e.stopPropagation();
       });
     }
 

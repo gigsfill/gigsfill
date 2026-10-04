@@ -869,12 +869,11 @@ class ActivityCenter {
       if (onClose) onClose();
     };
     
-    // Click outside to close
+    // No backdrop dismiss (2026-10-08). A stray click outside threw the modal
+    // away with no warning and no undo; closing is deliberate now. The
+    // listener stays so the click cannot fall through to whatever is beneath.
     overlay.onclick = (e) => {
-      if (e.target === overlay) {
-        document.body.removeChild(overlay);
-        if (onClose) onClose();
-      }
+      if (e.target === overlay) e.stopPropagation();
     };
   }
 

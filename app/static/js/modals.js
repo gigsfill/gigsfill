@@ -27,7 +27,7 @@ function _renderModal(titleHtml, bodyHtml, buttons) {
   // Create modal
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
+  overlay.onclick = (e) => { if (e.target === overlay) e.stopPropagation(); };
 
   const modal = document.createElement('div');
   modal.className = 'modal-content';

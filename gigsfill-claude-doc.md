@@ -8,6 +8,18 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-08b (No modal closes on a backdrop click):** A venue opened Venue Gig Details, clicked outside it by mistake, and the modal vanished. The pattern was everywhere — **34 sites across 25 files** — and in a modal holding typed input or something being read mid-way, one stray click threw it away with no warning and no undo.
+
+  Every one now ignores the backdrop. The listeners are **kept rather than deleted**: a backdrop click still has to be swallowed, or it falls through to whatever sits underneath, which is how a single misclick ended up dismissing two things at once.
+
+  Six of them were inline `onclick="if(event.target===this)…"` in generated HTML strings, invisible to a search for `e.target === overlay` — found only because a test swept every file rather than the ones already known about.
+
+  **Audited for traps first.** Removing backdrop dismiss from a modal with no close control would lock the user in; all 25 were checked for a close button or an Escape handler before the change, and a test keeps that true.
+
+  Also fixed in `venue-gig-details-modal.js`: `_closeModal()` removed the overlay but the Escape handler was unbound only inside the Escape branch itself, so closing by any other route left a listener attached — one more per open, each holding a closure over a modal that no longer existed.
+
+  **25 JS files changed, so every `?v=` reference across 18 pages was bumped** and four unversioned `modals.js` references were given one. A fix nobody receives is not a fix; `/app/` is cached for 24h.
+
 - **2026-10-08 (Per-gig overrides of the venue room spec):** A venue can now set stage, PA, sound engineer, lighting, load-in, arrival window and bar/food tabs **per gig**, instead of every gig inheriting the venue's standing answer through a live JOIN.
 
   **The bug this fixes is not cosmetic.** `artist.book-gigs.js` filters gig search on `g.has_sound_equipment`, joined straight off the venue row. A venue defaulting to "no PA" that was bringing one for a big night had that gig **filtered out of search** for every artist requiring sound equipment — losing applicants on the gig it cared most about, with nothing on screen explaining it. The reverse was worse: a venue defaulting to "PA provided" that was not providing one had artists apply believing there was one.

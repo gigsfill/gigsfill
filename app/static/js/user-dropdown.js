@@ -375,7 +375,7 @@ function injectGlobalModals() {
   container.id = 'gf-global-modals';
   container.innerHTML = `
     <!-- HELP / SUPPORT MODAL -->
-    <div class="gf-modal-overlay" id="helpModal" onclick="if(event.target===this)closeHelpModal()">
+    <div class="gf-modal-overlay" id="helpModal" onclick="if(event.target===this)event.stopPropagation()">
       <div class="gf-modal">
         <div class="gf-modal-header">
           <h2>Help & Support</h2>
@@ -411,7 +411,7 @@ function injectGlobalModals() {
     </div>
 
     <!-- FEEDBACK MODAL -->
-    <div class="gf-modal-overlay" id="feedbackModal" onclick="if(event.target===this)closeFeedbackModal()">
+    <div class="gf-modal-overlay" id="feedbackModal" onclick="if(event.target===this)event.stopPropagation()">
       <div class="gf-modal">
         <div class="gf-modal-header">
           <h2>Share Feedback</h2>
@@ -436,7 +436,7 @@ function injectGlobalModals() {
     </div>
 
     <!-- RECOMMEND GIGSFILL MODAL -->
-    <div class="gf-modal-overlay" id="recommendModal" onclick="if(event.target===this)closeRecommendModal()">
+    <div class="gf-modal-overlay" id="recommendModal" onclick="if(event.target===this)event.stopPropagation()">
       <div class="gf-modal">
         <div class="gf-modal-header">
           <h2>Recommend GigsFill</h2>
@@ -468,7 +468,7 @@ function injectGlobalModals() {
     </div>
 
     <!-- INVITE ARTISTS MODAL (part 10p: multi-venue) -->
-    <div class="gf-modal-overlay" id="inviteArtistsModal" onclick="if(event.target===this)closeInviteArtistsModal()">
+    <div class="gf-modal-overlay" id="inviteArtistsModal" onclick="if(event.target===this)event.stopPropagation()">
       <div class="gf-modal" style="max-width:600px;">
         <div class="gf-modal-header">
           <h2>Invite Artists to GigsFill</h2>

@@ -430,7 +430,7 @@
     overlay = document.createElement('div');
     overlay.id = 'publicGigsListOverlay';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;padding:20px;';
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) e.stopPropagation(); });
     // 2026-09-10: ID-scoped style block. Inline styles kept losing to
     // a global `a { text-decoration: none }` in gigsfill-modern.css
     // even with !important — the modal renders in a portaled overlay

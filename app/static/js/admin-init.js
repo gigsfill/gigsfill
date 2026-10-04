@@ -444,7 +444,7 @@ function showTicketDetail(ticketId) {
   const modal = document.createElement('div');
   modal.id = 'ticketModal';
   modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;';
-  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.onclick = (e) => { if (e.target === modal) e.stopPropagation(); };
   
   modal.innerHTML = `
     <div style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; max-width: 800px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">

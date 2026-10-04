@@ -135,7 +135,7 @@
     overlay = document.createElement('div');
     overlay.className = 'cn-overlay';
     overlay.addEventListener('click', function (e) {
-      if (e.target === overlay) window.closeContactModal();
+      if (e.target === overlay) e.stopPropagation();
     });
 
     overlay.innerHTML =

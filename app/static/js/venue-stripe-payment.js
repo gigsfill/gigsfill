@@ -21,7 +21,7 @@ function showPaymentModal(title, message, type) {
   var modal = document.createElement('div');
   modal.id = 'paymentModal';
   modal.innerHTML =
-    '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;" onclick="if(event.target===this)this.parentElement.remove()">' +
+    '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;" onclick="if(event.target===this)event.stopPropagation()">' +
       '<div style="background:#1a1f2e;border:1px solid ' + c.border + ';border-radius:12px;padding:28px;max-width:420px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">' +
         '<h3 style="color:' + c.title + ';font-size:1rem;font-weight:700;margin:0 0 12px 0;">' + title + '</h3>' +
         '<p style="color:#9ca3af;font-size:0.85rem;line-height:1.6;margin:0 0 20px 0;">' + message + '</p>' +
@@ -1008,7 +1008,7 @@ function showReinstatePaymentModal(txnId, slotId) {
   document.body.appendChild(overlay);
 
   overlay.querySelector('#reinstateClose').onclick = function() { overlay.remove(); };
-  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) e.stopPropagation(); });
 
   overlay.querySelector('#reinstateConfirm').onclick = async function() {
     var btn = overlay.querySelector('#reinstateConfirm');

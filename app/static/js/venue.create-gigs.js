@@ -3332,7 +3332,7 @@ async function renderCalendar() {
 
     const removeOverlay = () => { const el = document.getElementById('approvalOverlay'); if (el) el.remove(); };
     overlay.querySelector('#_approvalCloseBtn').onclick = removeOverlay;
-    overlay.addEventListener('click', e => { if (e.target === overlay) removeOverlay(); });
+    overlay.addEventListener('click', e => { if (e.target === overlay) e.stopPropagation(); });
 
     overlay.querySelector('#_approveBtn').onclick = async () => {
       try {
@@ -4789,7 +4789,7 @@ window.openWaitlistModal = async function(gigId, venueId, slotLabel) {
 
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
-  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  overlay.addEventListener('click', e => { if (e.target === overlay) e.stopPropagation(); });
 
   try {
     const res = await fetch(`/api/venues/${venueId}/gigs/${gigId}/waitlist`, { credentials: 'include' });
@@ -8035,7 +8035,7 @@ window._showCancelPaymentModal = async function(gigId) {
     if (gigModal) gigModal.classList.add('hidden');
   }
   overlay.querySelector('#cancelPayOverlayClose').onclick = closeCancelPaymentAndGigModal;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeCancelPaymentAndGigModal(); });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) e.stopPropagation(); });
 
   // Deadline timer — show "5h 23m left" countdown to the venue so they
   // understand the cancel window is finite. Refresh every minute. When
@@ -8399,7 +8399,7 @@ window.showCountersignModal = async function(gigId) {
         </div>
       `;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) e.stopPropagation(); });
     }
   } catch(e) {
     alert('Could not load contract: ' + e.message);

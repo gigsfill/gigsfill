@@ -246,7 +246,7 @@ function copyAffCode() {
     modal = document.createElement('div');
     modal.id = 'affCopyLinkModal';
     modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9000;align-items:center;justify-content:center;';
-    modal.addEventListener('click', function(e) { if (e.target === modal) modal.style.display = 'none'; });
+    modal.addEventListener('click', function(e) { if (e.target === modal) e.stopPropagation(); });
     modal.innerHTML = `
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:28px 28px 24px;max-width:480px;width:90%;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">

@@ -164,9 +164,18 @@
       : `<div style="color:var(--text-muted);font-style:italic;padding:12px 0;">This venue hasn't filled in gig details yet.</div>`;
   }
 
+  // Every close goes through here, so the Escape handler is always unbound.
+  // It used to be removed only inside the Escape branch itself, so closing by
+  // any other route left the listener attached — one more per open, each
+  // holding a closure over a modal that no longer exists.
+  let _onKey = null;
   function _closeModal() {
     const o = document.getElementById(OVERLAY_ID);
     if (o) o.remove();
+    if (_onKey) {
+      document.removeEventListener('keydown', _onKey);
+      _onKey = null;
+    }
   }
 
   async function showModal(venueId, venueName) {
@@ -179,7 +188,14 @@
     // z-index above other modals (gf-modals uses 10000, gig modal ~2000)
     // so this pops over anything already open.
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:11000;display:flex;align-items:center;justify-content:center;padding:20px;';
-    overlay.addEventListener('click', e => { if (e.target === overlay) _closeModal(); });
+    // No backdrop dismiss. This modal opens on top of the gig modal a venue is
+    // mid-way through reading, and a stray click outside it threw that away
+    // with no warning and no undo. Closing is deliberate: the × or Escape.
+    // The listener stays so the click cannot fall through to whatever is
+    // underneath — which is how a misclick ended up closing two things.
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) e.stopPropagation();
+    });
 
     const shell = document.createElement('div');
     shell.setAttribute('role', 'dialog');
@@ -201,8 +217,8 @@
     document.body.appendChild(overlay);
 
     // Escape closes; scoped so we remove the listener on close.
-    const onKey = e => { if (e.key === 'Escape') { _closeModal(); document.removeEventListener('keydown', onKey); } };
-    document.addEventListener('keydown', onKey);
+    _onKey = e => { if (e.key === 'Escape') _closeModal(); };
+    document.addEventListener('keydown', _onKey);
 
     // Fetch + render. Cached per venue for the session so re-opening
     // the same modal is instant.

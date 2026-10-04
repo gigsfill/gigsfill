@@ -127,7 +127,7 @@
 
     // Backdrop click (when dismissible)
     if (opts.dismissible !== false) {
-      overlay.onclick = (e) => { if (e.target === overlay) _closeOne(overlay, opts); };
+      overlay.onclick = (e) => { if (e.target === overlay) e.stopPropagation(); };
     }
 
     overlay.appendChild(modal);

@@ -293,7 +293,7 @@
         </div>
       </div>
     `;
-    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    modal.addEventListener('click', e => { if (e.target === modal) e.stopPropagation(); });
     document.body.appendChild(modal);
     // Escape to close.
     const escHandler = e => {

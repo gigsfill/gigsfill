@@ -302,7 +302,7 @@ async function showGigDetail(date, idx) {
 function modalRow(label, value) { return `<div class="gig-modal-row"><span class="gig-modal-label">${label}</span><span class="gig-modal-value">${esc(value)}</span></div>`; }
 function modalRowRaw(label, html) { return `<div class="gig-modal-row"><span class="gig-modal-label">${label}</span><span class="gig-modal-value">${html}</span></div>`; }
 function closeGigModal() { document.getElementById('gigModal').classList.add('hidden'); }
-document.getElementById('gigModal').addEventListener('click', function(e) { if (e.target === this) closeGigModal(); });
+document.getElementById('gigModal').addEventListener('click', function(e) { if (e.target === this) e.stopPropagation(); });
 
 // ========== MEDIA ==========
 // See artist-profile-init.js for the video-thumbnail helper strategy.
@@ -335,7 +335,9 @@ function openModal(src, type) {
   if (type === "image") content.innerHTML = `<img src="${escAttr(src)}" style="max-width:90vw;max-height:90vh;border-radius:12px;">`;
   else { const yt = src.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&]+)/); content.innerHTML = yt ? `<iframe width="800" height="450" src="https://www.youtube.com/embed/${escAttr(yt[1])}" frameborder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen style="border-radius:12px;"></iframe>` : `<video controls src="${escAttr(src)}" style="max-width:90vw;max-height:90vh;border-radius:12px;"></video>`; }
   modal.classList.remove("hidden"); modal.style.display = "flex";
-  modal.onclick = e => { if (e.target === modal) { modal.classList.add("hidden"); modal.style.display = "none"; content.innerHTML = ""; } };
+  // No backdrop dismiss: a stray click outside threw the modal away with no
+  // warning and no undo. Closing is deliberate — the close control or Escape.
+  modal.onclick = e => { if (e.target === modal) e.stopPropagation(); };
 }
 // esc() provided by security.js
   

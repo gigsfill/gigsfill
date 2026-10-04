@@ -680,7 +680,7 @@
     overlay = document.createElement('div');
     overlay.className = 'dr-overlay';
     overlay.addEventListener('click', function (e) {
-      if (e.target === overlay) window.closeDemoRequestModal();
+      if (e.target === overlay) e.stopPropagation();
     });
 
     overlay.innerHTML =
