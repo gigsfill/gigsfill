@@ -458,9 +458,25 @@
         US_STATES.map(s => `<option value="${s.code}">${s.code}</option>`).join('');
     }
 
-    // City autocomplete → auto-fills state on match
+    // City autocomplete → auto-fills state on match.
+    //
+    // validate:false (2026-10-06). The blocking validator installs a
+    // capture-phase document click handler that swallows every click outside
+    // the city field and refocuses it until the city matches us_cities.py.
+    // That list has real gaps — Hermosa Beach, Manhattan Beach, El Segundo and
+    // Culver City are all absent — so an artist logging a gig in one of them
+    // could not reach the Notes field, or any other, and nothing on screen
+    // explained why.
+    //
+    // It is the wrong gate for this form regardless of the list. An external
+    // gig is the artist's private record of a show that did not happen through
+    // GigsFill; the city is display-only and feeds no search, matching or
+    // radius query. The autocomplete still helps and still auto-fills state —
+    // it just no longer holds the form hostage.
     if (window.initCityAutocomplete) {
-      window.initCityAutocomplete({ inputId: 'extGigVenueCity', stateId: 'extGigVenueState' });
+      window.initCityAutocomplete({
+        inputId: 'extGigVenueCity', stateId: 'extGigVenueState', validate: false
+      });
     }
 
     // Dark date picker on the date field

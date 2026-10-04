@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-06c (External-gig form unusable for cities missing from the list):** Typing "Hermosa Beach" and then clicking Notes bounced focus back to City, with nothing on screen explaining why.
+
+  **Cause:** `attachCityValidation` in [city-autocomplete.js](app/static/js/city-autocomplete.js) installs a **capture-phase `document` click handler** (`blockClicks`) that swallows every click outside the city input and refocuses it until the value matches `us_cities.py`. Not scoped to the field or its form — the whole page.
+
+  `us_cities.py` holds 4,792 cities, of which **202 are in California** against roughly 480 incorporated cities. Hermosa Beach, Manhattan Beach, El Segundo, Culver City, Calabasas and Agoura Hills are all absent. Confirmed against the live validator: `Hermosa Beach,CA → {"valid": false}` while `Redondo Beach,CA → {"valid": true}`.
+
+  **Fix:** the external-gig modal now passes `validate: false` (an option `initCityAutocomplete` already supported). It is the wrong gate for this form regardless of the list — an external gig is the artist's private record of a show that did not happen through GigsFill, and the city is display-only, feeding no search, matching or radius query. The autocomplete and the state auto-fill are kept; only the blocking goes. A test asserts this opt-out stays scoped to this one file, since signup and profile cities *do* feed radius matching.
+
+  **Still open:** the city list itself. It affects real signups — a venue in Hermosa Beach cannot complete one — and that is a data task, not a code one.
+
 - **2026-10-06b (List columns aligned; one square per member):** The list rows were a flex row with `min-width` on the date cell, so the longest range ("Sat, Jan 30, 2027 – Mon, Feb 1, 2027") overflowed it and pushed its own names column right — every line started somewhere different. Now a three-track grid (`252px 1fr auto`), and every row emits all three cells even when empty, since a skipped cell slides the next row into the wrong column. Measured in-browser: dates, names and counts each start at an identical x on all rows.
 
   Day cells now draw **one rounded square per member** (16px, 4px radius) rather than a circle, each carrying that member's initials in a colour derived from their user id so the same person reads the same across months.
