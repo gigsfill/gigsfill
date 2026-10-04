@@ -75,8 +75,8 @@
       /* The one instruction that matters, against the grid rather than in
          the prose above the card — people start clicking before they read. */
       ".gfbc-banner { margin:0 0 8px; padding:7px 12px; border-radius:7px;",
-      "  background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4);",
-      "  color:#fbbf24; font-size:0.82rem; font-weight:600; text-align:center; }",
+      "  background:rgba(239,68,68,0.14); border:1px solid rgba(239,68,68,0.5);",
+      "  color:#fca5a5; font-size:0.82rem; font-weight:600; text-align:center; }",
       ".gfbc-banner b { color:#fff; text-decoration:underline; }",
       ".gfbc-dow { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:4px; }",
       ".gfbc-dow span { text-align:center; font-size:0.68rem; color:var(--text-gray); font-weight:600;",

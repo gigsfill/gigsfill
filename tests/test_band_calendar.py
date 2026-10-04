@@ -569,3 +569,7 @@ def test_the_instruction_sits_against_the_grid():
     js = JS.read_text()
     assert "gfbc-banner" in js
     assert "can\\u2019t</b> play" in js or "can’t</b> play" in js
+    # Red, matching the colour a marked day takes — instruction and result
+    # should not say different things.
+    rule = js[js.index(".gfbc-banner {"):][:260]
+    assert "239,68,68" in rule, "banner is not red"
