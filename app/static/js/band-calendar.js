@@ -470,10 +470,20 @@
       '</div><div class="gfbc-sheet-body"><p class="gfbc-empty">Loading\u2026</p></div></div>';
     host.classList.add("open");
 
-    // The grid holds three months; a snapshot wants the year ahead, so this
-    // asks for its own range rather than listing whatever happens to be loaded.
-    var from = iso(new Date());
-    var to = addDays(from, 365);
+    // The grid holds three months; the snapshot asks for its own range rather
+    // than listing whatever happens to be loaded.
+    //
+    // Starts at the 1st of the current month, not today: a day marked earlier
+    // this month is still on the grid, and a list that silently omitted it
+    // would not be "all dates". Runs 13 months, so the same month next year is
+    // included rather than falling just outside the window.
+    //
+    // Month arithmetic via Date, not a day count — `new Date(y, m + 13, 0)` is
+    // the last day of the 13th month and handles month lengths, year rollover
+    // and leap years without any of it being spelled out here.
+    var _now = new Date();
+    var from = iso(new Date(_now.getFullYear(), _now.getMonth(), 1));
+    var to = iso(new Date(_now.getFullYear(), _now.getMonth() + 13, 0));
     var days = {};
     try {
       var url = this.o.mode === "band"
@@ -492,7 +502,7 @@
 
     var body = host.querySelector(".gfbc-sheet-body");
     if (!runs.length) {
-      body.innerHTML = '<p class="gfbc-empty">Nothing marked in the next 12 months.</p>';
+      body.innerHTML = '<p class="gfbc-empty">Nothing marked in the next 13 months.</p>';
       return;
     }
     body.innerHTML = runs.map(function (r) {

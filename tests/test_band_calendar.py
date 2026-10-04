@@ -287,10 +287,19 @@ def test_consecutive_days_merge_only_when_the_same_people_are_out():
 
 def test_the_snapshot_asks_for_its_own_range():
     """The grid holds three months; a snapshot is useless if it only lists
-    whatever the user happened to page to."""
+    whatever the user happened to page to.
+
+    It starts at the 1st of the current month rather than today — a day
+    marked earlier this month is still on the grid, and a list that omitted
+    it would not be "all dates" — and runs 13 months so the same month next
+    year is inside the window rather than just outside it."""
     js = JS.read_text()
-    fn = js[js.index("Cal.prototype.openList"):][:1800]
-    assert "addDays(from, 365)" in fn
+    fn = js[js.index("Cal.prototype.openList"):][:2600]
+    assert "_now.getMonth(), 1" in fn, "does not start at the 1st"
+    assert "_now.getMonth() + 13, 0" in fn, "not a 13-month window"
+    # Month arithmetic, not a day count: day counts drift on leap years and
+    # cannot express "the same month next year".
+    assert "addDays(from, 365)" not in fn
 
 
 def test_the_sheet_is_not_parented_to_the_redrawn_grid():
