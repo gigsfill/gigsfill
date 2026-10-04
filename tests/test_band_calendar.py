@@ -477,3 +477,39 @@ def test_a_crowded_day_collapses_to_a_count():
     bubbles."""
     js = MARKS.read_text()
     assert "off.slice(0, 2)" in js and '"+" + (off.length - 2)' in js
+
+
+def test_clearing_a_globally_marked_day_from_a_band_calendar_works():
+    """Reported 2026-10-08: a member marked days from his profile, then could
+    not un-mark them on the band calendar — "it's not saving".
+
+    A profile day is stored once with artist_id 0 and shows on every band's
+    calendar. The toggle only ever created or deleted a band-scoped row, so
+    the global one was never touched: the day never cleared, and the first
+    click made it MORE unavailable by adding a band row on top."""
+    src = ROUTES.read_text()
+    fn = _func(src, "_toggle_day")
+    assert "_row(0)" in fn, "a band click still ignores the global row"
+    assert "_other_artist_ids" in fn, "clearing would silently un-mark every band"
+    # Both rows can exist at once — the old bug added a band row on every
+    # failed attempt — so one click has to clear whichever are present.
+    assert "if own or glob:" in fn, "a day with both rows still needs two clicks"
+
+
+def test_clearing_one_band_preserves_the_others():
+    """Dropping the global row alone would make the member available
+    everywhere from one band's screen — the opposite data loss."""
+    src = ROUTES.read_text()
+    fn = _func(src, "_toggle_day")
+    i = fn.index("glob = _row(0)")
+    blk = fn[i:i + 700]
+    assert "for other in _other_artist_ids" in blk
+    assert "INSERT OR IGNORE INTO member_days_off" in blk
+
+
+def test_the_profile_calendar_toggle_stays_simple():
+    """artist_id 0 has no second scope to fall back to; it must not try to
+    convert anything."""
+    src = ROUTES.read_text()
+    fn = _func(src, "_toggle_day")
+    assert "if artist_id != 0:" in fn, "the conversion is not gated to band calendars"

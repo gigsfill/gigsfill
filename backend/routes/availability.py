@@ -281,28 +281,77 @@ def get_band_calendar(artist_id: int, start: str = None, end: str = None,
     }
 
 
+def _other_artist_ids(db, user_id: int, exclude_artist_id: int):
+    """Every band this user plays in except one."""
+    rows = db.execute(text("""
+        SELECT a.id FROM artists a
+        WHERE a.user_id = :u AND a.deleted_at IS NULL
+        UNION
+        SELECT a.id FROM artists a
+        JOIN entity_users e ON e.entity_id = a.id AND e.entity_type = 'artist'
+        WHERE e.user_id = :u AND a.deleted_at IS NULL
+    """), {"u": user_id}).fetchall()
+    return [r[0] for r in rows if r[0] != exclude_artist_id]
+
+
 def _toggle_day(db, user_id: int, artist_id: int, day: str):
-    """Insert the day, or delete it if it is already there. Returns the new
-    state so the caller does not have to re-read."""
-    d = _parse_date(day)
-    existing = db.execute(text("""
-        SELECT id FROM member_days_off
-        WHERE user_id = :u AND artist_id = :a AND date(day) = date(:d)
-    """), {"u": user_id, "a": artist_id, "d": d.isoformat()}).first()
-    if existing:
-        db.execute(text("DELETE FROM member_days_off WHERE id = :i"), {"i": existing[0]})
+    """Toggle a day, acting on whatever is actually making it unavailable.
+
+    The subtlety is scope. A day marked from someone's profile is stored once
+    with artist_id 0 and shows on every band's calendar. Clicking it on a band
+    calendar used to create or delete only a band-scoped row, leaving the
+    global one untouched — so the day never cleared, and the first click made
+    it *more* unavailable rather than less. From the user's side it simply did
+    not save.
+
+    A click now always does what it looks like it does. Clearing a globally
+    marked day from one band's calendar converts it: the global row is dropped
+    and band rows are written for the user's OTHER bands, so this band becomes
+    available while the rest keep exactly what they had. Silently un-marking
+    every band from one band's screen would be the other way to lose data.
+    """
+    d = _parse_date(day).isoformat()
+
+    def _row(scope):
+        return db.execute(text("""
+            SELECT id FROM member_days_off
+            WHERE user_id = :u AND artist_id = :a AND date(day) = date(:d)
+        """), {"u": user_id, "a": scope, "d": d}).first()
+
+    def _touch_reminder():
+        db.execute(text("""
+            INSERT INTO availability_reminders (user_id, send_count) VALUES (:u, 0)
+            ON CONFLICT(user_id) DO UPDATE SET send_count = 0
+        """), {"u": user_id})
+
+    own = _row(artist_id)
+    glob = _row(0) if artist_id != 0 else None
+
+    # Unavailable here for any reason -> this click makes them available here,
+    # in one click. Both rows can exist at once: the earlier bug added a band
+    # row every time someone tried to clear a globally-marked day, so handling
+    # only one of them would still take two clicks to clear.
+    if own or glob:
+        if own:
+            db.execute(text("DELETE FROM member_days_off WHERE id = :i"), {"i": own[0]})
+        if glob:
+            db.execute(text("DELETE FROM member_days_off WHERE id = :i"), {"i": glob[0]})
+            for other in _other_artist_ids(db, user_id, artist_id):
+                db.execute(text("""
+                    INSERT OR IGNORE INTO member_days_off (user_id, artist_id, day)
+                    VALUES (:u, :a, :d)
+                """), {"u": user_id, "a": other, "d": d})
+        _touch_reminder()
         db.commit()
         return False
+
     db.execute(text("""
         INSERT INTO member_days_off (user_id, artist_id, day) VALUES (:u, :a, :d)
-    """), {"u": user_id, "a": artist_id, "d": d.isoformat()})
+    """), {"u": user_id, "a": artist_id, "d": d})
     # They engaged, so the unanswered-reminder counter starts over; otherwise a
     # member who ignored five emails then finally updated would be silenced
     # after one more lapse.
-    db.execute(text("""
-        INSERT INTO availability_reminders (user_id, send_count) VALUES (:u, 0)
-        ON CONFLICT(user_id) DO UPDATE SET send_count = 0
-    """), {"u": user_id})
+    _touch_reminder()
     db.commit()
     return True
 

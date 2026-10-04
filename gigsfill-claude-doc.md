@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-08f (Un-marking a day did not save):** Reported: a member marked a run of days unavailable, then could not reverse it on the band calendar.
+
+  **Cause: scope.** A day marked from someone's **profile** is stored once with `artist_id = 0` and shows on every band's calendar. `_toggle_day` only ever created or deleted a **band-scoped** row, so the global row was never touched — the day never cleared, and the first click made it *more* unavailable by stacking a band row on top. From the member's side it simply did not save. Reproduced exactly against the reporter's own account.
+
+  **Fix: a click acts on whatever is actually making the day unavailable.** On a band calendar, clearing a globally-marked day converts it — the global row is dropped and band rows are written for the member's **other** bands, so this band becomes available while the rest keep what they had. Dropping the global row alone would make them available everywhere from one band's screen, which is the opposite data loss.
+
+  Both rows can exist at once, because the old bug added a band row on every failed attempt, so one click now clears whichever are present. Verified end to end: the stuck state (`global + band`) clears in a single click, the other band keeps its day, and re-clicking re-marks only this band.
+
+  Existing redundant rows are left alone — they resolve themselves on the next click and are harmless meanwhile.
+
 - **2026-10-08e (Unavailable members shown on the artist booking calendar):** The band calendar knew who could not play on which days; the calendar an artist actually books from knew nothing about it. You could be looking straight at an open Saturday with half the band away and not find out until after applying.
 
   Each day cell now carries a small square per absent member in the **bottom-left**, with their initials in the same `hueFor(user_id)` colour the band calendar uses — a member should be the same mark in both places. Two squares then a `+N`, because three already crowd a cell that may also be carrying gig bubbles. The tooltip names everyone and gets the verb right for one versus several.
