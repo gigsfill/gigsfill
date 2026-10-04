@@ -181,3 +181,58 @@ def test_the_warning_hooks_fetch_not_one_save_handler():
     js = (ROOT / "app" / "static" / "js" / "venue-spec-drift.js").read_text()
     assert "window.fetch = function" in js
     assert "res && res.ok" in js, "warns even when the save failed"
+
+
+def test_the_controls_match_the_venue_edit_page():
+    """A venue filling this in should be using the form they already know.
+    venue-edit.html uses Yes/No selects, not checkboxes, a 1..12 hour select
+    and an AM/PM select — so this does too."""
+    js = (ROOT / "app" / "static" / "js" / "gig-spec-overrides.js").read_text()
+    ve = (ROOT / "app" / "venue-edit.html").read_text()
+    # Yes/No as a select with the same option values.
+    assert '<option value="false">No</option>' in ve
+    assert '<option value="false">No</option>' in js
+    assert '"yesno"' in js and "checkbox" not in js.split("function control")[1][:900]
+    # The arrival trio.
+    assert "no_earlier_than" in js and '"hour"' in js and '"ampm"' in js
+
+
+def test_controls_do_not_stretch_the_full_row():
+    """A Yes/No select stretched edge to edge reads as a text field and made
+    the panel hard to scan."""
+    js = (ROOT / "app" / "static" / "js" / "gig-spec-overrides.js").read_text()
+    assert ".gf-spec-ctrl select { width:auto;" in js
+    assert ".gf-spec-ctrl .gf-narrow { width:84px;" in js
+
+
+def test_the_panel_spans_the_modal_not_the_control_column():
+    """Inside the label/control grid the panel had 354px, which auto-fit
+    resolved to one column sixteen rows tall — taller than the screen, pushing
+    Save out of reach."""
+    html = (ROOT / "app" / "venue-create-gigs.html").read_text()
+    between = html[html.index('id="gigSpecOn"'):html.index('id="gigSpecPanel"')]
+    # The checkbox sits in a <label> inside .modal-control inside .modal-row;
+    # the panel is only outside the grid if both of those divs close first.
+    opens = between.count("<div")
+    closes = between.count("</div>")
+    assert closes - opens >= 1, "panel is still nested in the control column"
+    assert "modal-control" not in between.split("</div>")[-1], \
+        "panel re-entered a control column"
+    js = (ROOT / "app" / "static" / "js" / "gig-spec-overrides.js").read_text()
+    assert "repeat(auto-fit, minmax(290px, 1fr))" in js
+
+
+def test_fields_are_measured_once_the_panel_is_visible():
+    """scrollHeight is 0 while display:none, so sizing during prefill was a
+    no-op and every field stayed one line tall, clipping its own content."""
+    js = (ROOT / "app" / "static" / "js" / "gig-spec-overrides.js").read_text()
+    fn = js[js.index("function syncPanel"):][:500]
+    assert "els().forEach(autoGrow)" in fn
+
+
+def test_selects_that_the_venue_never_set_still_show_a_value():
+    """An unset arrival type is "" which matches no option, rendering an empty
+    select that would save "" over the venue's answer."""
+    js = (ROOT / "app" / "static" / "js" / "gig-spec-overrides.js").read_text()
+    fn = js[js.index("function setVal"):][:800]
+    assert '"flexible"' in fn and '"PM"' in fn

@@ -27,30 +27,38 @@
 
   // Grouped the way a venue thinks about the room, not the way the columns
   // happen to be ordered.
+  // Control kinds mirror the venue edit page one-for-one, so a venue is
+  // filling in the form they already know:
+  //   yesno  — a Yes/No <select> (venue edit uses selects, not checkboxes)
+  //   num    — a short numeric box, 80px like "Width / Depth" there
+  //   line   — a single-line textarea, the .single-line treatment there
+  //   arrive — the Flexible / No Earlier Than select
+  //   hour   — the 1..12 select, 85px
+  //   ampm   — the AM/PM select, 85px
   var GROUPS = [
     ["Stage", [
-      ["has_stage", "bool", "Stage"],
-      ["stage_width_ft", "num", "Stage width (ft)"],
-      ["stage_depth_ft", "num", "Stage depth (ft)"],
-      ["setup_location_description", "text", "Where they set up"]
+      ["has_stage", "yesno", "Stage?"],
+      ["stage_width_ft", "num", "Width (ft)"],
+      ["stage_depth_ft", "num", "Depth (ft)"],
+      ["setup_location_description", "line", "Setup location"]
     ]],
     ["Sound & light", [
-      ["has_sound_equipment", "bool", "Sound equipment provided"],
-      ["sound_equipment_description", "text", "What's provided"],
-      ["has_sound_engineer", "bool", "Sound engineer"],
-      ["sound_engineer_details", "text", "Engineer details"],
-      ["has_lighting", "bool", "Lighting"],
-      ["lighting_description", "text", "Lighting details"]
+      ["has_sound_equipment", "yesno", "Sound equipment?"],
+      ["sound_equipment_description", "line", "What's provided"],
+      ["has_sound_engineer", "yesno", "Sound engineer?"],
+      ["sound_engineer_details", "line", "Engineer details"],
+      ["has_lighting", "yesno", "Lighting?"],
+      ["lighting_description", "line", "Lighting details"]
     ]],
     ["Getting in", [
-      ["load_in_out_details", "text", "Load in / out"],
-      ["arrival_time_type", "text", "Arrival"],
-      ["arrival_no_earlier_than_hour", "text", "No earlier than (hour)"],
-      ["arrival_no_earlier_than_period", "text", "AM / PM"]
+      ["load_in_out_details", "line", "Load in / out"],
+      ["arrival_time_type", "arrive", "Arrival"],
+      ["arrival_no_earlier_than_hour", "hour", "No earlier than"],
+      ["arrival_no_earlier_than_period", "ampm", "AM / PM"]
     ]],
     ["Hospitality", [
-      ["bar_tab_details", "text", "Bar tab"],
-      ["food_tab_details", "text", "Food"]
+      ["bar_tab_details", "line", "Bar tab"],
+      ["food_tab_details", "line", "Food"]
     ]]
   ];
 
@@ -76,30 +84,47 @@
     return String(v).length > 34 ? String(v).slice(0, 34) + "…" : String(v);
   }
 
+  function control(key, kind) {
+    var id = "ovr_" + key;
+    var a = 'id="' + id + '" data-k="' + key + '" data-t="' + kind + '"';
+    if (kind === "yesno") {
+      return "<select " + a + '><option value="false">No</option>' +
+             '<option value="true">Yes</option></select>';
+    }
+    if (kind === "arrive") {
+      return "<select " + a + '><option value="flexible">Flexible</option>' +
+             '<option value="no_earlier_than">No Earlier Than:</option></select>';
+    }
+    if (kind === "hour") {
+      var o = '<option value="">--</option>';
+      for (var h = 1; h <= 12; h++) o += "<option>" + h + "</option>";
+      return "<select " + a + ' class="gf-narrow">' + o + "</select>";
+    }
+    if (kind === "ampm") {
+      return "<select " + a + ' class="gf-narrow"><option value="PM">PM</option>' +
+             '<option value="AM">AM</option></select>';
+    }
+    if (kind === "num") {
+      return '<input type="text" inputmode="numeric" placeholder="feet" ' + a +
+             ' class="gf-narrow">';
+    }
+    return "<textarea rows=\"1\" " + a + "></textarea>";
+  }
+
   function render() {
     var host = document.getElementById("gigSpecFields");
     if (!host) return;
     host.innerHTML = GROUPS.map(function (grp) {
       var rows = grp[1].map(function (f) {
-        var key = f[0], kind = f[1], label = f[2];
-        var id = "ovr_" + key;
-        var ctrl;
-        if (kind === "bool") {
-          ctrl = '<label class="gf-spec-yn"><input type="checkbox" id="' + id +
-                 '" data-k="' + key + '" data-t="bool"> Yes</label>';
-        } else {
-          ctrl = '<input type="' + (kind === "num" ? "number" : "text") + '" id="' + id +
-                 '" data-k="' + key + '" data-t="' + kind + '"' +
-                 (kind === "num" ? ' step="0.5" min="0"' : "") + ">";
-        }
         return '<div class="gf-spec-row">' +
-                 '<label for="' + id + '">' + esc(label) + "</label>" +
-                 '<div class="gf-spec-ctrl">' + ctrl + "</div>" +
+                 '<label for="ovr_' + f[0] + '">' + esc(f[2]) + "</label>" +
+                 '<div class="gf-spec-ctrl">' + control(f[0], f[1]) + "</div>" +
                "</div>";
       }).join("");
       return '<div class="gf-spec-group"><h4>' + esc(grp[0]) + "</h4>" + rows + "</div>";
     }).join("");
     injectStyles();
+    host.addEventListener("input", function (e) { autoGrow(e.target); });
     prefill();
   }
 
@@ -108,10 +133,47 @@
   // rather than a blank form they would have to retype.
   function prefill() {
     els().forEach(function (el) {
-      var v = venueRow[el.dataset.k];
-      if (el.dataset.t === "bool") el.checked = truthy(v);
-      else el.value = (v === null || v === undefined) ? "" : String(v);
+      setVal(el, venueRow[el.dataset.k]);
     });
+  }
+
+  // One place that knows how each control carries a value, so prefill, load
+  // and payload cannot drift on what "yes" looks like.
+  function setVal(el, v) {
+    var t = el.dataset.t;
+    if (t === "yesno") { el.value = truthy(v) ? "true" : "false"; return; }
+    if (t === "ampm") {
+      // Venue edit defaults to PM; an empty select here would save "".
+      el.value = (String(v).toUpperCase() === "AM") ? "AM" : "PM";
+      return;
+    }
+    if (t === "arrive") {
+      // A venue that never set this has "" stored, which matches no option and
+      // renders an empty select. Flexible is the venue-edit default too.
+      el.value = (v === "no_earlier_than") ? "no_earlier_than" : "flexible";
+      return;
+    }
+    el.value = (v === null || v === undefined) ? "" : String(v);
+    autoGrow(el);
+  }
+
+  // One-line textareas clipped anything longer than the box, with no scrollbar
+  // — a venue could not read back what their own bar tab said. Grow to fit,
+  // capped so one long paragraph cannot push Save off the screen.
+  function autoGrow(el) {
+    if (el.tagName !== "TEXTAREA") return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 76) + "px";
+  }
+
+  function getVal(el) {
+    var t = el.dataset.t;
+    if (t === "yesno") return el.value === "true" ? 1 : 0;
+    if (t === "num") {
+      var n = parseFloat(String(el.value).replace(/[^0-9.]/g, ""));
+      return isNaN(n) ? null : n;
+    }
+    return String(el.value).trim();
   }
 
   function injectStyles() {
@@ -119,21 +181,40 @@
     var css = document.createElement("style");
     css.id = "gfSpecStyles";
     css.textContent = [
-      ".gf-spec-group { margin-bottom:14px; }",
-      ".gf-spec-group:last-child { margin-bottom:0; }",
-      ".gf-spec-group h4 { margin:0 0 7px; font-size:0.74rem; font-weight:700;",
-      "  text-transform:uppercase; letter-spacing:0.06em; color:var(--cyan); }",
-      ".gf-spec-row { display:grid; grid-template-columns:168px 1fr; gap:10px;",
-      "  align-items:center; margin-bottom:6px; }",
-      ".gf-spec-row label { font-size:0.78rem; color:var(--text-gray); }",
-      ".gf-spec-ctrl input, .gf-spec-ctrl select { width:100%; padding:5px 8px;",
-      "  font-size:0.78rem; background:#151b28; border:1px solid var(--border);",
-      "  border-radius:6px; color:var(--text); }",
-      /* An overridden field should be obvious at a glance when scanning back
-         over the panel. */
-      ".gf-spec-ctrl input.on, .gf-spec-ctrl select.on { border-color:var(--cyan);",
-      "  background:rgba(6,182,212,0.08); }",
-      "@media (max-width:560px) { .gf-spec-row { grid-template-columns:1fr; gap:3px; } }"
+      /* Two columns on a wide modal — sixteen single-file rows made the panel
+         taller than the screen and pushed Save out of reach. */
+      /* auto-fit, not a fixed 2, and keyed off the container rather than the
+         viewport: the modal is narrower than the window, so a viewport media
+         query gave two columns of 164px and squeezed the text fields to 38px. */
+      "#gigSpecFields { display:grid;",
+      "  grid-template-columns:repeat(auto-fit, minmax(290px, 1fr));",
+      "  gap:4px 26px; align-items:start; }",
+      ".gf-spec-group { grid-column:span 1; margin:0 0 10px; }",
+      ".gf-spec-group h4 { margin:0 0 6px; font-size:0.7rem; font-weight:700;",
+      "  text-transform:uppercase; letter-spacing:0.07em; color:var(--cyan);",
+      "  padding-bottom:4px; border-bottom:1px solid rgba(148,163,184,0.22); }",
+      ".gf-spec-row { display:grid; grid-template-columns:116px minmax(0,1fr);",
+      "  gap:10px; align-items:center; margin-bottom:5px; min-height:28px; }",
+      ".gf-spec-row label { font-size:0.76rem; color:var(--text-gray); line-height:1.3; }",
+      /* Controls size to their content rather than filling the row. A Yes/No
+         select stretched edge to edge reads as a text field and made the panel
+         hard to scan. */
+      ".gf-spec-ctrl { min-width:0; }",
+      ".gf-spec-ctrl select, .gf-spec-ctrl input, .gf-spec-ctrl textarea {",
+      "  padding:4px 8px; font-size:0.78rem; background:#151b28;",
+      "  border:1px solid var(--border); border-radius:6px; color:var(--text);",
+      "  font-family:inherit; }",
+      ".gf-spec-ctrl select { width:auto; min-width:84px; }",
+      ".gf-spec-ctrl .gf-narrow { width:84px; text-align:center; }",
+      ".gf-spec-ctrl input.gf-narrow { text-align:left; }",
+      /* Single-line textareas, matching .single-line on the venue edit page —
+         they grow if someone pastes a paragraph but start one line tall. */
+      ".gf-spec-ctrl textarea { width:100%; resize:vertical; min-height:28px;",
+      "  max-height:76px; overflow-y:auto; line-height:1.35; }",
+      ".gf-spec-ctrl select:focus, .gf-spec-ctrl input:focus,",
+      ".gf-spec-ctrl textarea:focus { outline:none; border-color:var(--cyan); }",
+      "@media (max-width:620px) { .gf-spec-row {",
+      "  grid-template-columns:100px minmax(0,1fr); } }"
     ].join("\n");
     document.head.appendChild(css);
   }
@@ -152,6 +233,10 @@
     var on = enabled();
     var p = document.getElementById("gigSpecPanel");
     if (p) p.style.display = on ? "block" : "none";
+    // scrollHeight is 0 while the panel is display:none, so sizing done during
+    // prefill was a no-op and every field stayed one line tall, clipping its
+    // own content. Re-measure once it is actually on screen.
+    if (on) els().forEach(autoGrow);
     var badge = document.getElementById("gigSpecCount");
     if (badge) badge.textContent = on ? "" : "";
   }
@@ -185,11 +270,7 @@
       var chk = document.getElementById("gigSpecOn");
       if (chk) chk.checked = on;
       if (on) {
-        els().forEach(function (el) {
-          var v = gig["ovr_" + el.dataset.k];
-          if (el.dataset.t === "bool") el.checked = truthy(v);
-          else el.value = (v === null || v === undefined) ? "" : String(v);
-        });
+        els().forEach(function (el) { setVal(el, gig["ovr_" + el.dataset.k]); });
       } else {
         prefill();
       }
@@ -210,11 +291,7 @@
     payload: function () {
       var out = { ovr_enabled: enabled() ? 1 : 0 };
       if (!out.ovr_enabled) return out;
-      els().forEach(function (el) {
-        out["ovr_" + el.dataset.k] = el.dataset.t === "bool"
-          ? (el.checked ? 1 : 0)
-          : String(el.value).trim();
-      });
+      els().forEach(function (el) { out["ovr_" + el.dataset.k] = getVal(el); });
       return out;
     },
 

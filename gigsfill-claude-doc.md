@@ -18,6 +18,12 @@ The list below tracks meaningful changes after the initial sync from the codebas
 
   **`resolve()` treats only None as absent.** An override of `0` or `""` is a real answer — "no stage tonight", "no bar tab" — and `or` would fall back to the venue default for exactly the values a venue is most likely to be overriding.
 
+  **Panel styled to match the venue edit page.** The first pass used checkboxes and full-width controls; venue-edit uses Yes/No **selects**, a 1–12 hour select and an AM/PM select, so the panel now builds the same controls with the same option values. Selects size to their content instead of stretching edge to edge, which had made a Yes/No read like a text field.
+
+  The panel also moved **outside** the label/control grid. Inside it, it had 354px, which `auto-fit minmax(290px)` resolved to a single column sixteen rows tall — taller than the screen, pushing Save out of reach. At the modal's full width it lays out in two 291px columns, halving the height. Columns are container-driven (`auto-fit`), not a viewport media query: the modal is narrower than the window, so a viewport breakpoint gave two 164px columns and squeezed the text fields to 38px.
+
+  Two small bugs found while styling: textareas were sized during `prefill()` while the panel was still `display:none`, where `scrollHeight` is 0, so every field stayed one line tall and clipped its own content — they are re-measured when the panel opens. And an arrival type or AM/PM the venue never set is `""`, which matches no option and rendered an empty select that would have saved `""` over the venue's answer; both now fall back to the venue-edit defaults (Flexible, PM).
+
   **Reworked same day to an all-or-nothing model** (`ovr_enabled`). One checkbox — "This gig differs from my usual venue setup" — then the same form the venue edit page shows, **prefilled with the venue's current answers**. Tick it, change whatever differs, and the gig keeps its own complete copy.
 
   The first cut made each control tri-state ("use my venue default" / Yes / No) so only genuinely changed fields were pinned. It was replaced because it asked venues to learn a control they see nowhere else to solve a problem they do not have. Resolution is now `CASE WHEN COALESCE(g.ovr_enabled,0)=1 THEN g.ovr_x ELSE v.x END`, not a per-field COALESCE — with prefill, a field left exactly as the venue had it is still that gig's own answer, and a COALESCE would silently re-point it at the venue on the next profile edit, leaving the gig half snapshot and half live.

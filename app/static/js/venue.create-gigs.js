@@ -3370,6 +3370,12 @@ async function renderCalendar() {
     }
     selectedGig = gig;
     selectedDate = gig.date;
+
+    // Per-gig room spec. Called for EVERY path through this modal, not just
+    // the booked-gig editor: the save always posts ovr_enabled, so a gig with
+    // its own setup opened on a path that never loaded it would show the box
+    // unticked and wipe its overrides on save.
+    if (window.gfGigSpec) window.gfGigSpec.load(gig || {});
     // Purge any leftover CANCELLED watermark from a previous modal
     // open — the cancelled-gig branch re-adds it below.
     document.querySelectorAll('#modalOverlay .gf-modal-cancelled-watermark')

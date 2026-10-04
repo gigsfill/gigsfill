@@ -3752,7 +3752,7 @@
            of the time, and an always-open block of sixteen controls would
            invite fiddling with settings that should rarely move.
       ──────────────────────────────────────────────────────────────────── -->
-      <div class="modal-row" style="align-items:flex-start;">
+      <div class="modal-row">
         <label>This Gig&rsquo;s Setup</label>
         <div class="modal-control" style="flex:1;">
           <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;
@@ -3761,22 +3761,27 @@
             This gig differs from my usual venue setup
             <span id="gigSpecCount"></span>
           </label>
-          <div id="gigSpecPanel" style="display:none;margin-top:12px;border:1px solid var(--border);
-               border-radius:8px;padding:14px;background:rgba(255,255,255,0.02);">
-            <p style="margin:0 0 12px;font-size:0.78rem;color:var(--text-gray);line-height:1.55;">
-              Pre-filled with your venue&rsquo;s current settings. Change whatever is
-              different for this gig &mdash; artists see these details, and they filter
-              searches on them. Untick the box above to go back to your venue defaults.
-            </p>
-            <div id="gigSpecFields"></div>
-            <button type="button" id="gigSpecReset"
-                    style="margin-top:12px;background:none;border:1px solid var(--border);
-                           color:var(--text-gray);border-radius:6px;padding:5px 11px;
-                           font-size:0.74rem;cursor:pointer;">
-              Re-copy my venue settings
-            </button>
-          </div>
         </div>
+      </div>
+
+      <!-- The panel sits OUTSIDE the label/control grid so it gets the modal's
+           full width. Inside it, the ~200px label column left only 354px, which
+           auto-fit resolved to a single column 16 rows tall — taller than the
+           screen, pushing Save out of reach. -->
+      <div id="gigSpecPanel" style="display:none;margin:0 0 14px;border:1px solid var(--border);
+           border-radius:8px;padding:14px;background:rgba(255,255,255,0.02);">
+        <p style="margin:0 0 12px;font-size:0.78rem;color:var(--text-gray);line-height:1.55;">
+          Pre-filled with your venue&rsquo;s current settings. Change whatever is
+          different for this gig &mdash; artists see these details, and they filter
+          searches on them. Untick the box above to go back to your venue defaults.
+        </p>
+        <div id="gigSpecFields"></div>
+        <button type="button" id="gigSpecReset"
+                style="margin-top:12px;background:none;border:1px solid var(--border);
+                       color:var(--text-gray);border-radius:6px;padding:5px 11px;
+                       font-size:0.74rem;cursor:pointer;">
+          Re-copy my venue settings
+        </button>
       </div>
 
       <!-- ── HOLD GIG (Jun 2026) ──────────────────────────────────────────
@@ -3996,8 +4001,8 @@
 <script src="/app/static/js/venue-gig-details-modal.js?v=3"></script>
 <script src="/app/static/js/gf-modals.js?v=8"></script>
 <script src="/app/static/js/hold-mgmt.js?v=13"></script>
-<script src="/app/static/js/gig-spec-overrides.js?v=2"></script>
-<script src="/app/static/js/venue.create-gigs.js?v=268"></script>
+<script src="/app/static/js/gig-spec-overrides.js?v=7"></script>
+<script src="/app/static/js/venue.create-gigs.js?v=269"></script>
 <script src="/app/static/js/gf-tooltip.js?v=4"></script>
 <script src="/app/static/js/venue.contracts.js?v=4" defer></script>
 <script src="/app/static/js/flyer-editor.js?v=27" defer></script>
