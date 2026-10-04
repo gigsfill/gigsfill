@@ -437,6 +437,15 @@ def test_the_current_member_is_listed_first():
 
 MARKS = ROOT / "app" / "static" / "js" / "artist-availability-marks.js"
 
+def _css_rule(js: str, start_marker: str) -> str:
+    """A CSS rule out of the injected style string, bounded by its closing
+    brace rather than a character count — comments get added between the
+    selector and its declarations, which silently shortens a fixed window."""
+    i = js.index(start_marker)
+    j = js.index('}"', i)
+    return js[i:j]
+
+
 
 def test_the_booking_calendar_shows_who_is_unavailable():
     """The band calendar knew who could not play; the calendar an artist
@@ -473,7 +482,7 @@ def test_the_booking_calendar_marks_are_red_for_everyone():
     telling members apart is the point."""
     js = MARKS.read_text()
     assert "hueFor" not in js, "per-member hues are back on the booking calendar"
-    rule = js[js.index('MARK + " b {'):][:300]
+    rule = _css_rule(js, 'MARK + " b {')
     assert "background:#ef4444" in rule and "color:#fff" in rule
     band = (ROOT / "app" / "static" / "js" / "band-calendar.js").read_text()
     assert "(Number(id) * 47) % 360" in band, "band calendar lost its per-member colours"
@@ -588,7 +597,7 @@ def test_the_marks_survive_the_calendar_background_reset():
     warns it "nukes the background -> invisible text". The chips rendered
     transparent with white text until the rule matched that force."""
     js = MARKS.read_text()
-    rule = js[js.index('MARK + " b {'):][:420]
+    rule = _css_rule(js, 'MARK + " b {')
     assert "background:#ef4444 !important" in rule
 
 
