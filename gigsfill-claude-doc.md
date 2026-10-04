@@ -8,6 +8,16 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-09d (Availability scope made consistent; the member's own page shows both halves):** Reported as confusing: the two calendars meant different things for the same click and nothing said so.
+
+  **One default everywhere.** A fresh mark now covers **every band**, wherever it was made — being unavailable is almost always about the person, not one band. `mark_scope` is deliberately separate from `artist_id` in `_toggle_day`: `artist_id` still records which calendar the click came from, and therefore which band a **clear** frees up, so un-marking on band A still leaves band B as it was.
+
+  **Narrowing is a deliberate choice.** A multi-band member sees a note on the band calendar stating the default, and the day panel offers "Just &lt;band&gt;" or "All N of my bands". Both go through the same `/api/me/days-off/scope` endpoint the profile calendar uses, so the two screens cannot disagree about what a scope is. Hidden for single-band members, and for derived cross-band gig conflicts, which are not theirs to re-scope.
+
+  **Their own page is the only place both halves meet.** Band A's calendar shows its gig; band B's shows the member as unavailable; neither explains the other. `GET /api/me/days-off` now also returns the member's committed gigs across every band, and their calendar renders both on one cell — *out: Fifty Proof | booked: Fridays Past*. A booking is drawn green, not red: it is a different kind of fact from an absence.
+
+  Two bugs caught by tests while doing it. The cell rendering **assigned `dots` twice**, so a booked day hid the absence or the reverse — they append now. And an existing test forbade the string "booked with" anywhere in the calendar; that rule was about what **band A** is told, not what a member sees on their own page, so it was rescoped to the band panel rather than deleted.
+
 - **2026-10-09c (All artist users now get all artist emails):** Audited who actually receives each artist-addressed email. Booking, cancellation, gig-edited, hold offers and payouts already resolved **all** users via `get_all_entity_users`. Three paths did not, and went to the owner alone:
 
   - `scheduler.process_gig_confirmation` — the gig-confirmation reminder

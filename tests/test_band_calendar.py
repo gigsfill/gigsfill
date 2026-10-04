@@ -191,9 +191,13 @@ def test_the_reason_someone_is_away_is_never_shown():
     # Not even fetched, which is the surest way not to leak it.
     q = _func(src, "_other_band_commitments")
     assert "a2.name" not in q and "venue_name" not in q
+    # The rule is about what BAND A is told, not what the member sees on their
+    # own page: showing someone their own bookings is the point of that screen
+    # (2026-10-09). So the check is on the band-calendar payload and panel.
     js = JS.read_text()
-    for leak in ("booked with", "with_artist", "gfbc-gig", "gigchip"):
-        assert leak not in js, f"calendar still shows {leak}"
+    band_panel = js[js.index('who = \'<div class="gfbc-unavail">Unavailable:'):][:900]
+    for leak in ("booked with", "with_artist", "artist_name"):
+        assert leak not in band_panel, f"band panel still shows {leak}"
     mod = (ROOT / "backend" / "services" / "member_availability.py").read_text()
     assert "playing with" not in mod
     # Not even as a scope value in the payload: that would tell band B the
@@ -551,8 +555,8 @@ def test_a_day_can_be_scoped_to_chosen_bands():
 
 def test_the_cell_names_the_band_instead_of_counting_it():
     js = JS.read_text()
-    assert '"1 band"' in js and "artist_name" in js
-    fn = js[js.index("Personal view: say where the day applies"):][:600]
+    assert '"1 band"' in js
+    fn = js[js.index("Personal view. Two independent facts"):][:900]
     assert "off[0].artist_name" in fn
 
 
@@ -673,3 +677,31 @@ def test_clearing_still_frees_only_the_band_you_clicked_from():
     src = ROUTES.read_text()
     tog = _func(src, "_toggle_day")
     assert "_other_artist_ids" in tog
+
+
+def test_the_members_own_page_shows_both_halves():
+    """Band A's calendar shows its gig; band B's shows the member as out.
+    Neither says why. The member's own page is the one screen where both
+    meet — "out for Fifty Proof, booked with Fridays Past"."""
+    src = ROUTES.read_text()
+    fn = _func(src, "get_my_days_off")
+    assert '"gigs": gigs' in fn
+    assert "gs.status IN" in fn, "bookings are not resolved"
+    js = JS.read_text()
+    assert "gfbc-gig-tag" in js
+
+
+def test_an_absence_and_a_booking_can_share_a_day():
+    """Two independent facts: an earlier version assigned `dots` twice and the
+    second silently won, so a booked day hid the absence or vice versa."""
+    js = JS.read_text()
+    blk = js[js.index("Personal view. Two independent facts"):][:900]
+    assert blk.count("dots +=") == 2, "one of them still overwrites"
+    assert "dots =" not in blk.replace("dots +=", "")
+
+
+def test_a_booking_is_not_drawn_as_an_absence():
+    """Red means "cannot play". A gig is a different kind of fact."""
+    js = JS.read_text()
+    rule = _css_rule(js, '".gfbc-gig-tag {')
+    assert "239,68,68" not in rule

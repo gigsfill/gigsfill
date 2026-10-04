@@ -117,6 +117,14 @@
       ".gfbc-dot { width:16px; height:16px; border-radius:4px; font-size:0.52rem; font-weight:700;",
       "  display:flex; align-items:center; justify-content:center; color:#0b0f17; letter-spacing:-0.02em; }",
       ".gfbc-more { font-size:0.56rem; color:var(--text-gray); align-self:center; }",
+      /* A booking is a different kind of fact from an absence, so it does
+         not borrow the red. */
+      ".gfbc-gig-tag { font-size:0.54rem; font-weight:700; color:#6ee7b7;",
+      "  background:rgba(52,211,153,0.14); border:1px solid rgba(52,211,153,0.33);",
+      "  border-radius:3px; padding:0 3px; max-width:100%; overflow:hidden;",
+      "  text-overflow:ellipsis; white-space:nowrap; }",
+      ".gfbc-who span.gfbc-gigchip { background:rgba(52,211,153,0.13); color:#6ee7b7;",
+      "  border-color:rgba(52,211,153,0.33); }",
       ".gfbc-detail { margin-top:12px; padding:11px 13px; border:1px solid var(--border); border-radius:8px;",
       "  background:rgba(255,255,255,0.02); font-size:0.82rem; }",
       ".gfbc-detail h4 { margin:0 0 7px; font-size:0.82rem; color:var(--text); font-weight:700; }",
@@ -216,6 +224,8 @@
         members: j.members || [],
         // Personal calendar: which bands a day could apply to.
         bands: j.bands || [],
+        // Personal calendar: gigs this member is committed to, by band.
+        gigs: j.gigs || {},
         // Band calendar: the viewer's own bands, for the scope choice.
         myBands: j.my_bands || [],
         artistId: j.artist_id || (this.o && this.o.artistId)
@@ -282,20 +292,27 @@
         if (off.length > shown.length) {
           dots += '<span class="gfbc-more">+' + (off.length - shown.length) + "</span>";
         }
-      } else if (off.length) {
-        // Personal view: say where the day applies. "1 band" told the member
-        // nothing — which band was only discoverable by opening that band's
-        // own calendar.
-        var anyGlobal = off.some(function (x) { return x.scope === "all"; });
-        var label;
-        if (anyGlobal) {
-          label = "all bands";
-        } else if (off.length === 1) {
-          label = off[0].artist_name || "1 band";
-        } else {
-          label = off.length + " bands";
+      } else {
+        // Personal view. Two independent facts can sit on one day — "out for
+        // every band" and "booked with Fridays Past" — so they append rather
+        // than overwrite: an earlier version assigned `dots` twice and the
+        // second silently won.
+        if (off.length) {
+          var anyGlobal = off.some(function (x) { return x.scope === "all"; });
+          var label = anyGlobal ? "all bands"
+                    : off.length === 1 ? (off[0].artist_name || "1 band")
+                    : off.length + " bands";
+          dots += '<span class="gfbc-more">' + esc(label) + "</span>";
         }
-        dots = '<span class="gfbc-more">' + esc(label) + "</span>";
+        var booked = (this.data.gigs || {})[day] || [];
+        if (booked.length) {
+          // Band A's calendar shows only its gig, band B's only the absence.
+          // This is the one screen where both halves meet.
+          dots += '<span class="gfbc-gig-tag" title="Playing with ' +
+                  esc(booked.map(function (g) { return g.artist_name; }).join(", ")) +
+                  '">' + esc(booked[0].artist_name) +
+                  (booked.length > 1 ? " +" + (booked.length - 1) : "") + "</span>";
+        }
       }
 
       cells += '<button type="button" class="' + cls + '" data-day="' + day + '">' +
@@ -502,8 +519,18 @@
 
     var who;
         if (this.o.mode !== "band") {
+      var bookedToday = (this.data.gigs || {})[day] || [];
+      var gigLine = bookedToday.length
+        ? '<div class="gfbc-unavail" style="margin-top:10px;">Booked</div>' +
+          '<div class="gfbc-who">' + bookedToday.map(function (g) {
+            return '<span class="gfbc-gigchip">' + esc(g.artist_name) +
+                   (g.venue_name ? " at " + esc(g.venue_name) : "") + "</span>";
+          }).join("") + "</div>"
+        : "";
       if (!off.length) {
-        who = '<div class="gfbc-free">You are available.</div>';
+        who = (bookedToday.length
+                ? '<div class="gfbc-free">Available \u2014 nothing marked off.</div>'
+                : '<div class="gfbc-free">You are available.</div>') + gigLine;
       } else {
         // A member in several bands used to see only "all bands" or an opaque
         // "1 band", with no way to change it here — the only route to a
@@ -530,7 +557,7 @@
                        "Applies to every band you play in.</div>") +
               (opts ? '<p style="margin:8px 0 0;color:var(--text-gray);font-size:0.74rem;">' +
                       "All ticked means every band. Untick them all to clear the day." +
-                      "</p>" : "");
+                      "</p>" : "") + gigLine;
       }
     } else if (!off.length) {
       who = '<div class="gfbc-free">Everyone is available.</div>';

@@ -430,6 +430,37 @@ def get_my_days_off(start: str = None, end: str = None,
             "artist_name": r["artist_name"] if r["artist_id"] else None,
             "scope": "all" if not r["artist_id"] else "band",
         })
+    # Gigs this person is committed to, across every band they play in.
+    # Their own calendar is the only place both halves of the picture meet:
+    # band A's calendar shows the gig, band B's shows them as unavailable, and
+    # neither says why. Here it reads "booked with A, out for B".
+    gig_rows = db.execute(text(f"""
+        SELECT date(g.date) AS day, a.id AS artist_id, a.name AS artist_name,
+               v.venue_name AS venue_name
+        FROM gig_slots gs
+        JOIN gigs g ON g.id = gs.gig_id
+        JOIN artists a ON a.id = gs.artist_id AND a.deleted_at IS NULL
+        LEFT JOIN venues v ON v.id = g.venue_id
+        WHERE gs.status IN {_COMMITTED}
+          AND date(g.date) BETWEEN date(:s) AND date(:e)
+          AND a.id IN (
+            SELECT id FROM artists WHERE user_id = :u AND deleted_at IS NULL
+            UNION
+            SELECT e.entity_id FROM entity_users e
+            WHERE e.entity_type = 'artist' AND e.user_id = :u
+          )
+        ORDER BY g.date
+    """), {"u": user.id, "s": s.isoformat(), "e": e.isoformat()}).mappings().all()
+    gigs = {}
+    for r in gig_rows:
+        key = str(r["day"])[:10]
+        bucket = gigs.setdefault(key, [])
+        if any(x["artist_id"] == r["artist_id"] for x in bucket):
+            continue                       # one entry per band per day
+        bucket.append({"artist_id": r["artist_id"],
+                       "artist_name": r["artist_name"],
+                       "venue_name": r["venue_name"]})
+
     # The bands this person plays in, so the calendar can offer "which of
     # these?" rather than only "all" or an opaque "1 band".
     bands = db.execute(text("""
@@ -441,7 +472,7 @@ def get_my_days_off(start: str = None, end: str = None,
         WHERE e.user_id = :u AND a.deleted_at IS NULL
         ORDER BY 2
     """), {"u": user.id}).mappings().all()
-    return {"days": days,
+    return {"days": days, "gigs": gigs,
             "bands": [{"id": b["id"], "name": b["name"]} for b in bands]}
 
 
