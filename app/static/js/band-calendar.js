@@ -298,8 +298,18 @@
       });
     });
 
+    // Click toggles, hover inspects. One gesture cannot do both: the panel
+    // used to appear only after a click, so the only way to read who was away
+    // was to mark yourself away and then click again to undo it — and the help
+    // text cheerfully told people to do exactly that.
+    //
+    // Marking days is the frequent, bulk action, so it keeps the click.
+    // Reading a day is occasional, so it moves to hover and keyboard focus,
+    // neither of which changes anything.
     this.root.querySelectorAll(".gfbc-cell[data-day]").forEach(function (c) {
       c.addEventListener("click", function () { self.onDay(c.dataset.day); });
+      c.addEventListener("mouseenter", function () { self.peek(c.dataset.day); });
+      c.addEventListener("focus", function () { self.peek(c.dataset.day); });
     });
 
     if (this.selected) this.showDetail(this.selected);
@@ -367,6 +377,13 @@
   Cal.prototype.meName = function () {
     var me = (this.data.members || []).filter(function (m) { return m.is_self; })[0];
     return me ? me.name : "You";
+  };
+
+  // Read-only. Deliberately does NOT set this.selected: a hovered day must not
+  // survive a re-render as though the user had chosen it.
+  Cal.prototype.peek = function (day) {
+    if (this.busy) return;          // mid-save, the panel is about to redraw
+    this.showDetail(day);
   };
 
   Cal.prototype.showDetail = function (day) {

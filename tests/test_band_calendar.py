@@ -347,3 +347,29 @@ def test_each_member_gets_their_own_square():
     # One span per member in the day cell, not a single merged badge.
     assert "shown.map(function (m)" in js
     assert "hueFor(m.user_id)" in js
+
+
+def test_inspecting_a_day_does_not_mark_you_off():
+    """The panel used to appear only after a click, so the only way to read
+    who was away was to mark yourself away and click again to undo it — and
+    the help text told people to do exactly that.
+
+    Click stays with the frequent action (marking days in bulk). Reading a day
+    moved to hover and keyboard focus, neither of which changes state."""
+    js = JS.read_text()
+    assert "mouseenter" in js and 'c.addEventListener("focus"' in js
+    peek = js[js.index("Cal.prototype.peek"):]
+    peek = peek[:peek.index("Cal.prototype.showDetail")]
+    # A hovered day must not be recorded as a chosen one, or it would survive
+    # the next re-render as though it had been clicked.
+    assert "this.selected" not in peek, "hover sets selection"
+    assert "onDay" not in peek and "saveFraming" not in peek, "hover writes"
+    assert "this.busy" in peek, "hover can redraw mid-save"
+
+
+def test_the_help_text_no_longer_tells_people_to_click_to_inspect():
+    html = (ROOT / "app" / "artist-book-gigs.html").read_text()
+    panel = html[html.index('id="availabilitySection"'):]
+    panel = panel[:panel.index("</div>", panel.index("bandCalendar"))]
+    assert "Click a day to see who" not in panel, "still advertises the destructive path"
+    assert "Hover a day" in panel

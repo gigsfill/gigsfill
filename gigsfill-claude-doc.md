@@ -8,6 +8,14 @@
 
 The list below tracks meaningful changes after the initial sync from the codebase. Each entry covers what changed in the code AND the doc sections updated to reflect it. Whenever code changes, update the relevant doc sections AND add an entry here.
 
+- **2026-10-06e (Inspecting a day no longer marks you off):** The day panel appeared only after a click, and the click toggled your own availability. So the only way to read who was away was to mark yourself away and click again to undo it — and the help text said "Click a day to see who's away", instructing people to do exactly that.
+
+  One gesture cannot do both jobs unambiguously, so they split by frequency. **Click keeps the toggle**, because marking days is the bulk action the calendar exists for. **Hover and keyboard focus now inspect**, and neither writes anything: `peek()` deliberately does not set `this.selected`, or a hovered day would survive the next re-render as though it had been chosen, and it no-ops while a save is in flight.
+
+  Copy corrected, and it now points at the two things that answer "who's away" without any interaction at all: the per-member initial squares on each day, and the **All dates** list.
+
+  **Touch has no hover.** A tap still toggles and reveals, so inspecting costs a tap and an undo-tap. The squares and the All dates list are the touch-friendly paths; this is a known gap rather than a solved one.
+
 - **2026-10-06d (External gig: address no longer required; city list rebuilt from the Census):** Two fixes to the same report.
 
   **"Address is required" on an external gig.** Both the client and `_validate_payload` demanded `venue_address` specifically. An external gig is the artist's own record of a show elsewhere — "Hermosa Beach, CA" identifies it fine, and the calendar and list views only ever render city + state. Now **either** an address or a city satisfies it; both are still stored. Whitespace-only values are rejected, so the row can never be a date with nothing attached.
